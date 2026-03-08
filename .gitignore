@@ -123,3 +123,16 @@ kernel/configs/android-*.cfg
 #Ignoring Android.bp link file
 #
 Android.bp
+
+# log
+*.log
+# cache
+.cache/
+node_modules/
+# clang
+clang/
+#kernelsu
+KernelSU/
+# temp
+out/
+AnyKernel3/Image.gz-dtb
