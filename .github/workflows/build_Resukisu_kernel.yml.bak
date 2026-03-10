@@ -1,0 +1,93 @@
+name: Build Kernel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      CROSS_COMPILE: aarch64-linux-gnu-
+      CROSS_COMPILE_ARM32: arm-none-eabi-
+      ARCH: arm64
+      SUBARCH: arm64
+      KBUILD_BUILD_USER: Lcryolite
+      KBUILD_BUILD_HOST: Lcryolite
+      LLVM: 1
+      LLVM_IAS: 1
+      LD: ld.lld
+      KBUILD_LTO_CLANG: 1
+      HOST_ARGS: HOSTCC=/usr/bin/gcc HOSTCXX=/usr/bin/g++ HOSTLD=/usr/bin/ld HOSTAR=/usr/bin/ar
+      KERNEL_DEFCONFIG: sdm710_defconfig
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu gcc-arm-none-eabi ccache zip
+
+      - name: Clone Proton Clang
+        run: |
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
+
+      - name: Build Kernel
+        run: |
+          set -e
+
+          export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
+          export KERNEL_CMDLINE="ARCH=arm64 CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 O=out"
+          TIME=$(TZ=GMT+08 date +%m%d%H%M)
+
+          rm -f clang/bin/as clang/bin/ld clang/bin/ld.bfd clang/bin/ld.gold
+
+          git checkout arch/arm64/kernel/vdso32/Makefile 2>/dev/null || true
+          echo "ccflags-y += -fuse-ld=lld" >> arch/arm64/kernel/vdso32/Makefile
+          echo "VDSO_LDFLAGS += -fuse-ld=lld" >> arch/arm64/kernel/vdso32/Makefile
+
+          rm -rf out/
+          rm -f AnyKernel3/Image.gz-dtb
+
+          if [ ! -d "drivers/kernelsu" ]; then
+            git clone --depth=1 https://github.com/ReSukiSU/ReSukiSU.git KernelSU
+            bash KernelSU/kernel/setup.sh main
+          fi
+
+          sed -i '/CONFIG_KSU/d' arch/arm64/configs/$KERNEL_DEFCONFIG
+          echo "CONFIG_KSU=y" >> arch/arm64/configs/$KERNEL_DEFCONFIG
+          echo "CONFIG_KSU_MANUAL_HOOK=y" >> arch/arm64/configs/$KERNEL_DEFCONFIG
+          echo "CONFIG_KSU_MANUAL_HOOK_AUTO_SETUID_HOOK=y" >> arch/arm64/configs/$KERNEL_DEFCONFIG
+          echo "CONFIG_KSU_MANUAL_HOOK_AUTO_INITRC_HOOK=y" >> arch/arm64/configs/$KERNEL_DEFCONFIG
+          echo "CONFIG_KSU_MANUAL_HOOK_AUTO_INPUT_HOOK=y" >> arch/arm64/configs/$KERNEL_DEFCONFIG
+
+          make $KERNEL_CMDLINE $KERNEL_DEFCONFIG CC="ccache clang" $HOST_ARGS
+
+          sed -i 's/CONFIG_VDSO32=y/# CONFIG_VDSO32 is not set/g' out/.config
+
+          make $KERNEL_CMDLINE CC="ccache clang" -j$(nproc) $HOST_ARGS
+
+          if [ -f "out/arch/arm64/boot/Image.gz-dtb" ]; then
+            cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
+            cd AnyKernel3
+            ZIP_NAME="RMX1901-ReSukiSU-Lcryolite-${TIME}.zip"
+            zip -r9 "../${ZIP_NAME}" * -x .git README.md *placeholder
+            cd ..
+            echo "ZIP_NAME=${ZIP_NAME}" >> $GITHUB_ENV
+            echo "RELEASE_TAG=v${TIME}" >> $GITHUB_ENV
+          else
+            exit 1
+          fi
+
+      - name: Create Release and Upload
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Kernel Release ${{ env.RELEASE_TAG }}
+          files: ${{ env.ZIP_NAME }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
