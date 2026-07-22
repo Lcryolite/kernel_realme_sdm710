@@ -4,7 +4,7 @@
 ### AnyKernel setup
 # global properties
 properties() { '
-kernel.string=BloodMoon A17 + ReSukiSU for Realme X (RMX1901/RMX1901CN)
+kernel.string=BloodMoon A17 + ReSukiSU (Clang 22) for Realme X (RMX1901/RMX1901CN)
 do.devicecheck=1
 do.modules=0
 do.systemless=1

@@ -1,4 +1,4 @@
-name: Build BloodMoon A17 ReSukiSU Kernel
+name: Build BloodMoon A17 ReSukiSU Kernel with Clang 22
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       CROSS_COMPILE: aarch64-linux-gnu-
       CROSS_COMPILE_ARM32: arm-linux-gnueabi-
@@ -17,7 +17,8 @@ jobs:
       KBUILD_BUILD_USER: Lcryolite
       KBUILD_BUILD_HOST: Lcryolite
       KERNEL_DEFCONFIG: sdm670-perf_defconfig
-      PROTON_CLANG_COMMIT: 9fb011b183fe7e69b04b873ef6533b4b077e3c5e
+      LLVM_VERSION: 22.1.8
+      LLVM_ARCHIVE_SHA256: 8d5d1e52a06e1c10e457fd36489047053ac451ddad9c88017b0d0fc6b8e5d4c0
 
     steps:
       - name: Checkout Code
@@ -28,47 +29,42 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ccache zip
+          sudo apt-get install -y \
+            binutils-aarch64-linux-gnu \
+            binutils-arm-linux-gnueabi \
+            ccache curl xz-utils zip
 
       - name: Setup ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           max-size: 2G
-          key: ${{ runner.os }}-kernel-ccache
+          key: ${{ runner.os }}-clang22-kernel-ccache
 
-      - name: Clone Proton Clang
+      - name: Install pinned LLVM 22 toolchain
         run: |
-          git init clang
-          git -C clang remote add origin https://github.com/kdrag0n/proton-clang.git
-          git -C clang fetch --depth=1 origin "$PROTON_CLANG_COMMIT"
-          git -C clang checkout --detach FETCH_HEAD
-          rm -f clang/bin/as clang/bin/ld clang/bin/ld.bfd
+          LLVM_ARCHIVE="llvm-${LLVM_VERSION}-x86_64.tar.xz"
+          LLVM_URL="https://www.kernel.org/pub/tools/llvm/files/${LLVM_ARCHIVE}"
+          LLVM_DIR="${RUNNER_TEMP}/llvm-${LLVM_VERSION}"
+          curl -fL --retry 3 -o "${RUNNER_TEMP}/${LLVM_ARCHIVE}" "${LLVM_URL}"
+          echo "${LLVM_ARCHIVE_SHA256}  ${RUNNER_TEMP}/${LLVM_ARCHIVE}" | sha256sum -c -
+          mkdir -p "${LLVM_DIR}"
+          tar -xJf "${RUNNER_TEMP}/${LLVM_ARCHIVE}" -C "${LLVM_DIR}" --strip-components=1
+          "${LLVM_DIR}/bin/clang" --version | head -n 1 | grep -F "clang version ${LLVM_VERSION}"
+          "${LLVM_DIR}/bin/ld.lld" --version | head -n 1 | grep -F "LLD ${LLVM_VERSION}"
+          echo "${LLVM_DIR}/bin" >> "$GITHUB_PATH"
 
       - name: Verify pinned ReSukiSU
         run: |
           test "$(git -C KernelSU rev-parse HEAD)" = "97163bdc8ad2ee59b523e9e34edeb4c286eceb04"
           test "$(readlink drivers/kernelsu)" = "../KernelSU/kernel"
 
-      - name: Generate defconfig
+      - name: Compile kernel with Clang 22
         run: |
-          export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
-          rm -rf out/
-          make O=out ARCH=$ARCH CC="ccache clang" CLANG_TRIPLE=$CROSS_COMPILE \
-            CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 \
-            $KERNEL_DEFCONFIG
-          grep -q '^CONFIG_KSU_MANUAL_HOOK=y$' out/.config
-          grep -q '^# CONFIG_KSU_SUSFS is not set$' out/.config
-          grep -q '^# CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE is not set$' out/.config
-
-      - name: Compile Kernel
-        run: |
-          export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
-          make -j$(nproc) O=out ARCH=$ARCH CC="ccache clang" CLANG_TRIPLE=$CROSS_COMPILE \
-            CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 \
-            Image.gz
-          test -f out/arch/arm64/boot/Image.gz
-          strings out/vmlinux | grep -q 'v4.1.0-97163bdc@ReSukiSU'
-          test "$(make -s O=out ARCH=$ARCH kernelrelease)" = "4.9.337+67-BloodMoon"
+          OUT_DIR=out ./build-clang22.sh
+          test -s out/arch/arm64/boot/Image.gz
+          grep -aFq 'clang version 22.1.8' out/vmlinux
+          grep -aFq 'v4.1.0-97163bdc@ReSukiSU' out/vmlinux
+          test "$(cat out/include/config/kernel.release)" = "4.9.337+67-BloodMoon"
 
       - name: Package with AnyKernel3
         run: |
@@ -76,11 +72,11 @@ jobs:
           rm -f AnyKernel3/Image.gz AnyKernel3/Image.gz-dtb
           cp out/arch/arm64/boot/Image.gz AnyKernel3/
           cd AnyKernel3
-          ZIP_NAME="RMX1901-BloodMoon-A17-ReSukiSU-${TIME}.zip"
+          ZIP_NAME="RMX1901-BloodMoon-A17-ReSukiSU-Clang22-${TIME}.zip"
           zip -r9 "../${ZIP_NAME}" . -x '.git/*' 'README.md' '*placeholder'
           cd ..
           echo "ZIP_NAME=${ZIP_NAME}" >> "$GITHUB_ENV"
-          echo "RELEASE_TAG=a17-${TIME}" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=a17-clang22-${TIME}" >> "$GITHUB_ENV"
 
       - name: Upload Artifact (Fallback)
         uses: actions/upload-artifact@v4

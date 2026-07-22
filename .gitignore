@@ -124,3 +124,6 @@ kernel/configs/android-*.cfg
 #
 Android.bp
 drivers/kernelsu
+
+# Out-of-tree Clang/LLVM build directories
+/out*/
