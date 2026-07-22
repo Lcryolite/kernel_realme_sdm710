@@ -4,7 +4,7 @@
 ### AnyKernel setup
 # global properties
 properties() { '
-kernel.string=ReSukiSU for Realme X by @Lcryolite (RMX1901/RMX1901CN)
+kernel.string=BloodMoon A17 + ReSukiSU for Realme X (RMX1901/RMX1901CN)
 do.devicecheck=1
 do.modules=0
 do.systemless=1
@@ -15,7 +15,7 @@ device.name2=RMX1901CN
 device.name3=realme_sdm710
 device.name4=nicky
 device.name5=xandxt
-supported.versions=11 - 16
+supported.versions=11 - 17
 '; } # end properties
 
 
@@ -31,19 +31,15 @@ block=/dev/block/bootdevice/by-name/boot;
 is_slot_device=0;
 ramdisk_compression=auto;
 patch_vbmeta_flag=auto;
+no_magisk_check=1;
 
 # import functions/variables and setup patching - see for reference (DO NOT REMOVE)
 . tools/ak3-core.sh;
 
-# boot install
-dump_boot; # use split_boot to skip ramdisk unpack, e.g. for devices with init_boot ramdisk
-
-# migrate from /overlay to /overlay.d to enable SAR Magisk
-if [ -d $RAMDISK/overlay ]; then
-  rm -rf $RAMDISK/overlay;
-fi;
-
-write_boot; # use flash_boot to skip ramdisk repack, e.g. for devices with init_boot ramdisk
+# Preserve the known-good Android 17 ramdisk and detached kernel_dtb exactly.
+# Image.gz replaces only the kernel payload; dtbo is never touched.
+split_boot;
+flash_boot;
 ## end boot install
 
 
@@ -105,4 +101,3 @@ write_boot; # use flash_boot to skip ramdisk repack, e.g. for devices with init_
 
 #write_boot; # use flash_boot to skip ramdisk repack, e.g. for dtb on devices with hdr v4 but no vendor_kernel_boot
 ## end vendor_boot install
-

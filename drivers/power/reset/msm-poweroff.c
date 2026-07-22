@@ -331,13 +331,12 @@ static void msm_restart_prepare(const char *cmd)
 {
 	bool need_warm_reset = false;
 #ifdef CONFIG_QCOM_DLOAD_MODE
-	/* Write download mode flags if we're panic'ing
-	 * Write download mode flags if restart_mode says so
+	/* Write download mode flags if restart_mode says so
 	 * Kill download mode if master-kill switch is set
 	 */
 
 	set_dload_mode(download_mode &&
-			(in_panic || restart_mode == RESTART_DLOAD));
+			(restart_mode == RESTART_DLOAD));
 #endif
 
 	if (qpnp_pon_check_hard_reset_stored()) {
@@ -351,22 +350,8 @@ static void msm_restart_prepare(const char *cmd)
 				(cmd != NULL && cmd[0] != '\0'));
 	}
 
-#ifdef OPLUS_BUG_STABILITY
-//Fanhong.Kong@PSW.BSP.CHG,add 2018/3/25 panic reboot reason as kernel for hotfix
-	if (in_panic){
-		//warm reset
-		qpnp_pon_system_pwr_off(PON_POWER_OFF_WARM_RESET);
-		qpnp_pon_set_restart_reason(
-					PON_RESTART_REASON_KERNEL);
-		flush_cache_all();
 
-		/*outer_flush_all is not supported by 64bit kernel*/
-#ifndef CONFIG_ARM64
-		outer_flush_all();
-#endif
-		return;
-	}
-#endif /* OPLUS_BUG_STABILITY */
+	force_warm_reboot = true;
 
 	if (force_warm_reboot)
 		pr_info("Forcing a warm reset of the system\n");
@@ -376,6 +361,14 @@ static void msm_restart_prepare(const char *cmd)
 		qpnp_pon_system_pwr_off(PON_POWER_OFF_WARM_RESET);
 	else
 		qpnp_pon_system_pwr_off(PON_POWER_OFF_HARD_RESET);
+
+	if (in_panic) {
+		// Reboot to recovery
+		qpnp_pon_set_restart_reason(
+			PON_RESTART_REASON_RECOVERY);
+		__raw_writel(0x77665502, restart_reason);
+		goto finish_set_restart_reason;
+	}
 
 #ifndef VENDOR_EDIT
 /* OPLUS 2013.07.09 hewei modify begin for restart mode*/
@@ -516,6 +509,7 @@ static void msm_restart_prepare(const char *cmd)
 /* OPLUS 2013.07.09 hewei modify en for restart mode*/
 #endif //VENDOR_EDIT
 
+finish_set_restart_reason:
 	flush_cache_all();
 
 	/*outer_flush_all is not supported by 64bit kernel*/

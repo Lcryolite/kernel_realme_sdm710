@@ -48,4 +48,7 @@ if FB || SGI_NEWPORT_CONSOLE
 endif
 
 source "drivers/video/klapse/Kconfig"
+
+source "drivers/gpu/trace/Kconfig"
+
 endmenu

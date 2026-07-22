@@ -160,8 +160,8 @@ do {                                                    \
 #define HS_VREF_MIN_VAL 1400
 #define FW_READ_ATTEMPTS 15
 #define FW_READ_TIMEOUT 4000000
-#define FAKE_REM_RETRY_ATTEMPTS 3
-#define MAX_IMPED 60000
+#define FAKE_REM_RETRY_ATTEMPTS 10
+#define MAX_IMPED 100000
 //#ifdef OPLUS_ARCH_EXTENDS
 /* Huiqun.Han@PSW.MM.AudioDriver.Machine, 2018/06/29, Add for headset detect */
 #define HP_DETECT_WORK_DELAY_MS 400

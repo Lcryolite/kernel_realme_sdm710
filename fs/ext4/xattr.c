@@ -1076,7 +1076,7 @@ int ext4_xattr_ibody_inline_set(handle_t *handle, struct inode *inode,
 	struct ext4_xattr_search *s = &is->s;
 	int error;
 
-	if (EXT4_I(inode)->i_extra_isize == 0)
+	if (!EXT4_INODE_HAS_XATTR_SPACE(inode))
 		return -ENOSPC;
 	error = ext4_xattr_set_entry(i, s, inode);
 	if (error)
@@ -1561,6 +1561,9 @@ shift:
 out:
 	ext4_write_unlock_xattr(inode, &no_expand);
 	return 0;
+
+	if (ext4_has_inline_data(inode))
+		error = ext4_find_inline_data_nolock(inode);
 
 cleanup:
 	brelse(bh);

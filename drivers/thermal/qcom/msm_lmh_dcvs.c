@@ -60,8 +60,8 @@
 
 #define LIMITS_FREQ_CAP             0x46434150
 
-#define LIMITS_TEMP_DEFAULT         75000
-#define LIMITS_TEMP_HIGH_THRESH_MAX 120000
+#define LIMITS_TEMP_DEFAULT         95000
+#define LIMITS_TEMP_HIGH_THRESH_MAX 140000
 #define LIMITS_LOW_THRESHOLD_OFFSET 500
 #define LIMITS_POLLING_DELAY_MS     10
 #define LIMITS_CLUSTER_0_REQ        0x17D43704
@@ -88,6 +88,8 @@ struct __limits_cdev_data {
 	u32 max_freq;
 	u32 min_freq;
 };
+
+static bool lmh_enabled = false;
 
 struct limits_dcvs_hw {
 	char sensor_name[THERMAL_NAME_LENGTH];
@@ -341,6 +343,9 @@ static int enable_lmh(void)
 	int ret = 0;
 	struct scm_desc desc_arg;
 
+	if (lmh_enabled)
+		return 0;
+
 	desc_arg.args[0] = 1;
 	desc_arg.arginfo = SCM_ARGS(1, SCM_VAL);
 	ret = scm_call2(SCM_SIP_FNID(SCM_SVC_LMH, LIMITS_PROFILE_CHANGE),
@@ -349,6 +354,8 @@ static int enable_lmh(void)
 		pr_err("Error switching profile:[1]. err:%d\n", ret);
 		return ret;
 	}
+
+	lmh_enabled = true;
 
 	return ret;
 }
@@ -659,6 +666,7 @@ static int limits_dcvs_probe(struct platform_device *pdev)
 		goto probe_exit;
 	}
 	limits_isens_vref_ldo_init(pdev, hw);
+	sysfs_attr_init(&hw->lmh_freq_attr.attr);
 	hw->lmh_freq_attr.attr.name = "lmh_freq_limit";
 	hw->lmh_freq_attr.show = lmh_freq_limit_show;
 	hw->lmh_freq_attr.attr.mode = 0444;

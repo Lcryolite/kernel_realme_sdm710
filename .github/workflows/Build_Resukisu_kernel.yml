@@ -1,4 +1,4 @@
-name: Build Resukisu Kernel
+name: Build BloodMoon A17 ReSukiSU Kernel
 
 on:
   workflow_dispatch:
@@ -11,26 +11,24 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CROSS_COMPILE: aarch64-linux-gnu-
-      CROSS_COMPILE_ARM32: arm-none-eabi-
+      CROSS_COMPILE_ARM32: arm-linux-gnueabi-
       ARCH: arm64
       SUBARCH: arm64
       KBUILD_BUILD_USER: Lcryolite
       KBUILD_BUILD_HOST: Lcryolite
-      LLVM: 1
-      LLVM_IAS: 1
-      LD: ld.lld
-      KBUILD_LTO_CLANG: 1
-      HOST_ARGS: HOSTCC=/usr/bin/gcc HOSTCXX=/usr/bin/g++ HOSTLD=/usr/bin/ld HOSTAR=/usr/bin/ar
-      KERNEL_DEFCONFIG: sdm710_defconfig
+      KERNEL_DEFCONFIG: sdm670-perf_defconfig
+      PROTON_CLANG_COMMIT: 9fb011b183fe7e69b04b873ef6533b4b077e3c5e
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu gcc-arm-none-eabi ccache zip
+          sudo apt-get install -y ccache zip
 
       - name: Setup ccache
         uses: hendrikmuhs/ccache-action@v1.2
@@ -40,61 +38,49 @@ jobs:
 
       - name: Clone Proton Clang
         run: |
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
-          rm -f clang/bin/as clang/bin/ld clang/bin/ld.bfd clang/bin/ld.gold
+          git init clang
+          git -C clang remote add origin https://github.com/kdrag0n/proton-clang.git
+          git -C clang fetch --depth=1 origin "$PROTON_CLANG_COMMIT"
+          git -C clang checkout --detach FETCH_HEAD
+          rm -f clang/bin/as clang/bin/ld clang/bin/ld.bfd
 
-      - name: Fetch KernelSU
+      - name: Verify pinned ReSukiSU
         run: |
-          if [ ! -d "drivers/kernelsu" ]; then
-            git clone --depth=1 https://github.com/ReSukiSU/ReSukiSU.git KernelSU
-            bash KernelSU/kernel/setup.sh main
-          fi
-
-      - name: Patch vDSO & Config
-        run: |
-          git checkout arch/arm64/kernel/vdso32/Makefile 2>/dev/null || true
-          echo "ccflags-y += -fuse-ld=lld" >> arch/arm64/kernel/vdso32/Makefile
-          echo "VDSO_LDFLAGS += -fuse-ld=lld" >> arch/arm64/kernel/vdso32/Makefile
-
-          sed -i '/CONFIG_KSU/d' arch/arm64/configs/$KERNEL_DEFCONFIG
-          echo "CONFIG_KSU=y" >> arch/arm64/configs/$KERNEL_DEFCONFIG
-          echo "CONFIG_KSU_MANUAL_HOOK=y" >> arch/arm64/configs/$KERNEL_DEFCONFIG
-          echo "CONFIG_KSU_MANUAL_HOOK_AUTO_SETUID_HOOK=y" >> arch/arm64/configs/$KERNEL_DEFCONFIG
-          echo "CONFIG_KSU_MANUAL_HOOK_AUTO_INITRC_HOOK=y" >> arch/arm64/configs/$KERNEL_DEFCONFIG
-          echo "CONFIG_KSU_MANUAL_HOOK_AUTO_INPUT_HOOK=y" >> arch/arm64/configs/$KERNEL_DEFCONFIG
+          test "$(git -C KernelSU rev-parse HEAD)" = "97163bdc8ad2ee59b523e9e34edeb4c286eceb04"
+          test "$(readlink drivers/kernelsu)" = "../KernelSU/kernel"
 
       - name: Generate defconfig
         run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
-          export KERNEL_CMDLINE="ARCH=arm64 CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 O=out"
-
           rm -rf out/
-          make $KERNEL_CMDLINE $KERNEL_DEFCONFIG CC="ccache clang" $HOST_ARGS
-          sed -i 's/CONFIG_VDSO32=y/# CONFIG_VDSO32 is not set/g' out/.config
+          make O=out ARCH=$ARCH CC="ccache clang" CLANG_TRIPLE=$CROSS_COMPILE \
+            CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 \
+            $KERNEL_DEFCONFIG
+          grep -q '^CONFIG_KSU_MANUAL_HOOK=y$' out/.config
+          grep -q '^# CONFIG_KSU_SUSFS is not set$' out/.config
+          grep -q '^# CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE is not set$' out/.config
 
       - name: Compile Kernel
         run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
-          export KERNEL_CMDLINE="ARCH=arm64 CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 O=out"
-
-          make $KERNEL_CMDLINE CC="ccache clang" -j$(nproc) $HOST_ARGS
+          make -j$(nproc) O=out ARCH=$ARCH CC="ccache clang" CLANG_TRIPLE=$CROSS_COMPILE \
+            CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 \
+            Image.gz
+          test -f out/arch/arm64/boot/Image.gz
+          strings out/vmlinux | grep -q 'v4.1.0-97163bdc@ReSukiSU'
+          test "$(make -s O=out ARCH=$ARCH kernelrelease)" = "4.9.337+67-BloodMoon"
 
       - name: Package with AnyKernel3
         run: |
-          if [ -f "out/arch/arm64/boot/Image.gz-dtb" ]; then
-            TIME=$(TZ=GMT+08 date +%m%d%H%M)
-            rm -f AnyKernel3/Image.gz-dtb
-            cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
-            cd AnyKernel3
-            ZIP_NAME="RMX1901-ReSuki-GitHub-${TIME}.zip"
-            zip -r9 "../${ZIP_NAME}" * -x .git README.md *placeholder
-            cd ..
-            echo "ZIP_NAME=${ZIP_NAME}" >> $GITHUB_ENV
-            echo "RELEASE_TAG=v${TIME}" >> $GITHUB_ENV
-          else
-            echo "Kernel compilation failed! Image.gz-dtb not found."
-            exit 1
-          fi
+          TIME=$(TZ=Asia/Shanghai date +%Y%m%d-%H%M)
+          rm -f AnyKernel3/Image.gz AnyKernel3/Image.gz-dtb
+          cp out/arch/arm64/boot/Image.gz AnyKernel3/
+          cd AnyKernel3
+          ZIP_NAME="RMX1901-BloodMoon-A17-ReSukiSU-${TIME}.zip"
+          zip -r9 "../${ZIP_NAME}" . -x '.git/*' 'README.md' '*placeholder'
+          cd ..
+          echo "ZIP_NAME=${ZIP_NAME}" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=a17-${TIME}" >> "$GITHUB_ENV"
 
       - name: Upload Artifact (Fallback)
         uses: actions/upload-artifact@v4

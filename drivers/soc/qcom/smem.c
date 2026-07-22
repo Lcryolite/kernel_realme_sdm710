@@ -1,7 +1,6 @@
 /*
  * Copyright (c) 2015, Sony Mobile Communications AB.
  * Copyright (c) 2012-2013, 2019 The Linux Foundation. All rights reserved.
- * Copyright (c) 2024, Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -313,7 +312,6 @@ static int qcom_smem_alloc_private(struct qcom_smem *smem,
 				   size_t size)
 {
 	struct smem_private_entry *hdr, *end;
-	struct smem_private_entry *next_hdr;
 	struct smem_partition_header *phdr;
 	size_t alloc_size;
 	void *cached;
@@ -330,7 +328,7 @@ static int qcom_smem_alloc_private(struct qcom_smem *smem,
 						cached > p_end))
 		return -EINVAL;
 
-	while ((hdr < end) && ((hdr + 1) < end)) {
+	while (hdr < end) {
 		if (hdr->canary != SMEM_PRIVATE_CANARY) {
 			dev_err(smem->dev,
 				"Found invalid canary in host %d:%d partition\n",
@@ -341,15 +339,9 @@ static int qcom_smem_alloc_private(struct qcom_smem *smem,
 		if (le16_to_cpu(hdr->item) == item)
 			return -EEXIST;
 
-		next_hdr = private_entry_next(hdr);
-
-		if (WARN_ON(next_hdr <= hdr))
-			return -EINVAL;
-
-		hdr = next_hdr;
+		hdr = private_entry_next(hdr);
 	}
-
-	if (WARN_ON((void *)hdr > (void *)end))
+	if (WARN_ON((void *)hdr > p_end))
 		return -EINVAL;
 
 	/* Check that we don't grow into the cached region */
@@ -506,7 +498,6 @@ static void *qcom_smem_get_private(struct qcom_smem *smem,
 	struct smem_private_entry *e, *end;
 	struct smem_private_entry *next_e;
 	void *item_ptr, *p_end;
-	size_t entry_size = 0;
 	u32 partition_size;
 	u32 padding_data;
 	u32 e_size;
@@ -550,11 +541,7 @@ static void *qcom_smem_get_private(struct qcom_smem *smem,
 			return item_ptr;
 		}
 
-		next_e = private_entry_next(e);
-		if (WARN_ON(next_e <= e))
-			return ERR_PTR(-EINVAL);
-
-		e = next_e;
+		e = private_entry_next(e);
 	}
 	if (WARN_ON((void *)e > p_end))
 		return ERR_PTR(-EINVAL);

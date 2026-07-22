@@ -324,10 +324,7 @@ static int fec_alloc_bufs(struct dm_verity *v, struct dm_verity_fec_io *fio)
 			continue;
 
 		fio->bufs[n] = mempool_alloc(v->fec->prealloc_pool, GFP_NOIO);
-		if (unlikely(!fio->bufs[n])) {
-			DMERR("failed to allocate FEC buffer");
-			return -ENOMEM;
-		}
+
 	}
 
 	/* try to allocate the maximum number of buffers */

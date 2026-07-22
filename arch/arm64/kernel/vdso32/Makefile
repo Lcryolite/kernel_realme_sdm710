@@ -6,6 +6,9 @@
 
 ifeq ($(cc-name),clang)
   CC_ARM32 := $(CC) $(CLANG_TARGET_ARM32) $(CLANG_GCC32_TC) $(CLANG_PREFIX32)
+  ifneq ($(LLVM_IAS),1)
+    CC_ARM32 += -no-integrated-as
+  endif
 else
   CC_ARM32 := $(CROSS_COMPILE_ARM32)$(cc-name)
 endif
@@ -25,11 +28,10 @@ cc32-ldoption = $(call try-run,\
 # arm64 one.
 # As a result we set our own flags here.
 
-# From top-level Makefile
-# NOSTDINC_FLAGS
-VDSO_CPPFLAGS := -nostdinc -isystem $(shell $(CC_ARM32) -print-file-name=include)
+# KBUILD_CPPFLAGS from top-level Makefile
+VDSO_CPPFLAGS := -D__KERNEL__
+VDSO_CPPFLAGS += -isystem $(shell $(CC_ARM32) -print-file-name=include 2>/dev/null)
 VDSO_CPPFLAGS += $(LINUXINCLUDE)
-VDSO_CPPFLAGS += $(KBUILD_CPPFLAGS)
 
 # Common C and assembly flags
 # From top-level Makefile
@@ -37,9 +39,6 @@ VDSO_CAFLAGS := $(VDSO_CPPFLAGS)
 VDSO_CAFLAGS += $(call cc32-option,-fno-PIE)
 ifdef CONFIG_DEBUG_INFO
 VDSO_CAFLAGS += -g
-endif
-ifeq ($(shell $(CONFIG_SHELL) $(srctree)/scripts/gcc-goto.sh $(CC_ARM32)), y)
-VDSO_CAFLAGS += -DCC_HAVE_ASM_GOTO
 endif
 
 # From arm Makefile
@@ -54,6 +53,10 @@ endif
 # From arm vDSO Makefile
 VDSO_CAFLAGS += -fPIC -fno-builtin -fno-stack-protector
 VDSO_CAFLAGS += -DDISABLE_BRANCH_PROFILING
+
+ifeq ($(cc-name),clang)
+VDSO_CAFLAGS += $(call cc32-disable-warning,unused-command-line-argument)
+endif
 
 # Try to compile for ARMv8. If the compiler is too old and doesn't support it,
 # fall back to v7. There is no easy way to check for what architecture the code
@@ -95,12 +98,15 @@ VDSO_AFLAGS := $(VDSO_CAFLAGS)
 VDSO_AFLAGS += -D__ASSEMBLY__
 
 VDSO_LDFLAGS := $(VDSO_CPPFLAGS)
+ifeq ($(cc-name),clang)
+VDSO_LDFLAGS += $(call cc32-disable-warning,unused-command-line-argument)
+endif
 # From arm vDSO Makefile
 VDSO_LDFLAGS += -Wl,-Bsymbolic -Wl,--no-undefined -Wl,-soname=linux-vdso.so.1
-VDSO_LDFLAGS += -Wl,-z,max-page-size=4096 -Wl,-z,common-page-size=4096,-zexecstack
-VDSO_LDFLAGS += -nostdlib -shared -mfloat-abi=soft -z noexecstack
-VDSO_LDFLAGS += $(call cc32-ldoption,-Wl$(comma)--hash-style=sysv)
-VDSO_LDFLAGS += $(call cc32-ldoption,-Wl$(comma)--build-id)
+VDSO_LDFLAGS += -Wl,-z,max-page-size=4096 -Wl,-z,common-page-size=4096 -Wl,-z,noexecstack
+VDSO_LDFLAGS += -nostdlib -shared -mfloat-abi=soft
+VDSO_LDFLAGS += -Wl,--hash-style=sysv
+VDSO_LDFLAGS += -Wl,--build-id
 VDSO_LDFLAGS += $(call cc32-ldoption,-fuse-ld=bfd)
 
 
@@ -166,7 +172,7 @@ quiet_cmd_vdsosym = VDSOSYM $@
       cmd_vdsosym = $(NM) $< | $(gen-vdsosym) | LC_ALL=C sort > $@
 
 # Install commands for the unstripped file
-quiet_cmd_vdso_install = INSTALL $@
+quiet_cmd_vdso_install = INSTALL32 $@
       cmd_vdso_install = cp $(obj)/$@.dbg $(MODLIB)/vdso/vdso32.so
 
 vdso.so: $(obj)/vdso.so.dbg
@@ -174,5 +180,3 @@ vdso.so: $(obj)/vdso.so.dbg
 	$(call cmd,vdso_install)
 
 vdso_install: vdso.so
-ccflags-y += -fuse-ld=lld
-VDSO_LDFLAGS += -fuse-ld=lld

@@ -1,5 +1,4 @@
 /* Copyright (c) 2002,2007-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -480,9 +479,6 @@ done:
 
 static void kgsl_page_alloc_free(struct kgsl_memdesc *memdesc)
 {
-	if (memdesc->priv & KGSL_MEMDESC_MAPPED)
-		return;
-
 	kgsl_page_alloc_unmap_kernel(memdesc);
 	/* we certainly do not expect the hostptr to still be mapped */
 	BUG_ON(memdesc->hostptr);
@@ -504,7 +500,8 @@ static void kgsl_page_alloc_free(struct kgsl_memdesc *memdesc)
 
 		atomic_long_sub(memdesc->size, &kgsl_driver.stats.secure);
 	} else {
-		atomic_long_sub(memdesc->size, &kgsl_driver.stats.page_alloc);
+		atomic_long_add(memdesc->size,
+			&kgsl_driver.stats.page_free_pending);
 	}
 
 	if (memdesc->priv & KGSL_MEMDESC_TZ_LOCKED) {
@@ -522,6 +519,11 @@ static void kgsl_page_alloc_free(struct kgsl_memdesc *memdesc)
 	else
 		kgsl_pool_free_sgt(memdesc->sgt);
 
+	if (!(memdesc->priv & KGSL_MEMDESC_TZ_LOCKED)) {
+		atomic_long_sub(memdesc->size, &kgsl_driver.stats.page_alloc);
+		atomic_long_sub(memdesc->size,
+			&kgsl_driver.stats.page_free_pending);
+	}
 }
 
 /*
@@ -585,9 +587,6 @@ static int kgsl_contiguous_vmfault(struct kgsl_memdesc *memdesc,
 static void kgsl_cma_coherent_free(struct kgsl_memdesc *memdesc)
 {
 	unsigned long attrs = 0;
-
-	if (memdesc->priv & KGSL_MEMDESC_MAPPED)
-		return;
 
 	if (memdesc->hostptr) {
 		if (memdesc->priv & KGSL_MEMDESC_SECURE) {
@@ -867,6 +866,8 @@ kgsl_sharedmem_page_alloc_user(struct kgsl_memdesc *memdesc,
 	 * are allocated by kgsl. This helps with improving the vm fault
 	 * routine by finding the faulted page in constant time.
 	 */
+	if (!(memdesc->flags & KGSL_MEMFLAGS_SECURE))
+		atomic_long_add(size, &kgsl_driver.stats.page_alloc_pending);
 
 	memdesc->pages = kgsl_malloc(len_alloc * sizeof(struct page *));
 	memdesc->page_count = 0;
@@ -972,6 +973,9 @@ kgsl_sharedmem_page_alloc_user(struct kgsl_memdesc *memdesc,
 		&kgsl_driver.stats.page_alloc_max);
 
 done:
+	if (!(memdesc->flags & KGSL_MEMFLAGS_SECURE))
+		atomic_long_sub(size, &kgsl_driver.stats.page_alloc_pending);
+
 	if (ret) {
 		if (memdesc->pages) {
 			unsigned int count = 1;

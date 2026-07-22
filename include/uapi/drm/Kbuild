@@ -23,3 +23,5 @@ header-y += virtgpu_drm.h
 header-y += armada_drm.h
 header-y += etnaviv_drm.h
 header-y += vgem_drm.h
+header-y += msm_drm_pp.h
+header-y += sde_drm.h

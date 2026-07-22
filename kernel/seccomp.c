@@ -196,12 +196,14 @@ static u32 seccomp_run_filters(const struct seccomp_data *sd)
 	 * All filters in the list are evaluated and the lowest BPF return
 	 * value always takes priority (ignoring the DATA).
 	 */
+	preempt_disable();
 	for (; f; f = f->prev) {
-		u32 cur_ret = BPF_PROG_RUN(f->prog, (void *)sd);
+		u32 cur_ret = BPF_PROG_RUN(f->prog, sd);
 
 		if ((cur_ret & SECCOMP_RET_ACTION) < (ret & SECCOMP_RET_ACTION))
 			ret = cur_ret;
 	}
+	preempt_enable();
 	return ret;
 }
 #endif /* CONFIG_SECCOMP_FILTER */
@@ -324,6 +326,8 @@ static inline void seccomp_sync_threads(unsigned long flags)
 		put_seccomp_filter(thread);
 		smp_store_release(&thread->seccomp.filter,
 				  caller->seccomp.filter);
+		atomic_set(&thread->seccomp.filter_count,
+			   atomic_read(&thread->seccomp.filter_count));
 
 		/*
 		 * Don't let an unprivileged task work around
@@ -458,6 +462,7 @@ static long seccomp_attach_filter(unsigned int flags,
 	 */
 	filter->prev = current->seccomp.filter;
 	current->seccomp.filter = filter;
+	atomic_inc(&current->seccomp.filter_count);
 
 	/* Now that the new filter is in place, synchronize to all threads. */
 	if (flags & SECCOMP_FILTER_FLAG_TSYNC)
@@ -685,8 +690,7 @@ int __secure_computing(const struct seccomp_data *sd)
 
 	this_syscall = sd ? sd->nr :
 		syscall_get_nr(current, task_pt_regs(current));
-	if (this_syscall == 142 || this_syscall == 88)
-			return 0;
+
 	switch (mode) {
 	case SECCOMP_MODE_STRICT:
 		__secure_computing_strict(this_syscall);  /* may call do_exit */

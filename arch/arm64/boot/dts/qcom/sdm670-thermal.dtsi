@@ -640,22 +640,22 @@
 				type = "passive";
 			};
 			modem_trip0: modem-trip0 {
-				temperature = <48000>;
+				temperature = <56000>;
 				hysteresis = <4000>;
 				type = "passive";
 			};
 			modem_trip1: modem-trip1 {
-				temperature = <50000>;
+				temperature = <58000>;
 				hysteresis = <4000>;
 				type = "passive";
 			};
 			modem_trip2: modem-trip2 {
-				temperature = <52000>;
+				temperature = <60000>;
 				hysteresis = <2000>;
 				type = "passive";
 			};
 			modem_trip3: modem-trip3 {
-				temperature = <56000>;
+				temperature = <64000>;
 				hysteresis = <4000>;
 				type = "passive";
 			};

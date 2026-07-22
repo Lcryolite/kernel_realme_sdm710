@@ -61,6 +61,12 @@
  * bitmap_allocate_region(bitmap, pos, order)	Allocate specified bit region
  * bitmap_from_u32array(dst, nbits, buf, nwords) *dst = *buf (nwords 32b words)
  * bitmap_to_u32array(buf, nwords, src, nbits)	*buf = *dst (nwords 32b words)
+ *
+ * Note, bitmap_zero() and bitmap_fill() operate over the region of
+ * unsigned longs, that is, bits behind bitmap till the unsigned long
+ * boundary will be zeroed or filled as well. Consider to use
+ * bitmap_clear() or bitmap_set() to make explicit zeroing or filling
+ * respectively.
  */
 
 /*
@@ -213,12 +219,12 @@ static inline void bitmap_zero(unsigned long *dst, unsigned int nbits)
 
 static inline void bitmap_fill(unsigned long *dst, unsigned int nbits)
 {
-	unsigned int nlongs = BITS_TO_LONGS(nbits);
-	if (!small_const_nbits(nbits)) {
-		unsigned int len = (nlongs - 1) * sizeof(unsigned long);
-		memset(dst, 0xff,  len);
+	if (small_const_nbits(nbits))
+		*dst = ~0UL;
+	else {
+		unsigned int len = BITS_TO_LONGS(nbits) * sizeof(unsigned long);
+		memset(dst, 0xff, len);
 	}
-	dst[nlongs - 1] = BITMAP_LAST_WORD_MASK(nbits);
 }
 
 static inline void bitmap_copy(unsigned long *dst, const unsigned long *src,
@@ -351,6 +357,38 @@ static inline int bitmap_parse(const char *buf, unsigned int buflen,
 {
 	return __bitmap_parse(buf, buflen, 0, maskp, nmaskbits);
 }
+
+/*
+ * BITMAP_FROM_U64() - Represent u64 value in the format suitable for bitmap.
+ *
+ * Linux bitmaps are internally arrays of unsigned longs, i.e. 32-bit
+ * integers in 32-bit environment, and 64-bit integers in 64-bit one.
+ *
+ * There are four combinations of endianness and length of the word in linux
+ * ABIs: LE64, BE64, LE32 and BE32.
+ *
+ * On 64-bit kernels 64-bit LE and BE numbers are naturally ordered in
+ * bitmaps and therefore don't require any special handling.
+ *
+ * On 32-bit kernels 32-bit LE ABI orders lo word of 64-bit number in memory
+ * prior to hi, and 32-bit BE orders hi word prior to lo. The bitmap on the
+ * other hand is represented as an array of 32-bit words and the position of
+ * bit N may therefore be calculated as: word #(N/32) and bit #(N%32) in that
+ * word.  For example, bit #42 is located at 10th position of 2nd word.
+ * It matches 32-bit LE ABI, and we can simply let the compiler store 64-bit
+ * values in memory as it usually does. But for BE we need to swap hi and lo
+ * words manually.
+ *
+ * With all that, the macro BITMAP_FROM_U64() does explicit reordering of hi and
+ * lo parts of u64.  For LE32 it does nothing, and for BE environment it swaps
+ * hi and lo words, as is expected by bitmap.
+ */
+#if __BITS_PER_LONG == 64
+#define BITMAP_FROM_U64(n) (n)
+#else
+#define BITMAP_FROM_U64(n) ((unsigned long) ((u64)(n) & ULONG_MAX)), \
+				((unsigned long) ((u64)(n) >> 32))
+#endif
 
 /*
  * bitmap_from_u64 - Check and swap words within u64.

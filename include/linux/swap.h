@@ -286,7 +286,6 @@ static inline void workingset_node_shadows_dec(struct radix_tree_node *node)
 }
 
 /* linux/mm/page_alloc.c */
-extern unsigned long totalram_pages;
 extern unsigned long totalreserve_pages;
 extern unsigned long nr_free_buffer_pages(void);
 extern unsigned long nr_free_pagecache_pages(void);
@@ -370,6 +369,8 @@ int add_swap_extent(struct swap_info_struct *sis, unsigned long start_page,
 		unsigned long nr_pages, sector_t start_block);
 int generic_swapfile_activate(struct swap_info_struct *, struct file *,
 		sector_t *);
+
+int kcompressd(void *p);
 
 /* linux/mm/swap_state.c */
 extern struct address_space swapper_spaces[];
@@ -540,6 +541,11 @@ static inline swp_entry_t get_swap_page(void)
 	swp_entry_t entry;
 	entry.val = 0;
 	return entry;
+}
+
+static inline int kcompressd(void *p)
+{
+	return 0;
 }
 
 #endif /* CONFIG_SWAP */
