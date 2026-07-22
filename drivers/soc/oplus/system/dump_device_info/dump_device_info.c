@@ -23,11 +23,12 @@
 
 
 #define SMEM_CHIP_INFO 137
+#define BOOT_PARAM_VALUE_LEN 32
 
 extern struct pstore_info *psinfo;
-char console[8];
-char baseband[8];
-char serialno[8];
+char console[BOOT_PARAM_VALUE_LEN];
+char baseband[BOOT_PARAM_VALUE_LEN];
+char serialno[BOOT_PARAM_VALUE_LEN];
 static char project_version[8];
 static char pcb_version[8];
 char soc_serialno[16];
@@ -52,7 +53,7 @@ struct get_version_info g_version_info;
 
 static int __init get_console_init(char *str)
 {
-        strcpy(console, str);
+        strlcpy(console, str, sizeof(console));
         return 0;
 }
 
@@ -61,7 +62,7 @@ __setup("androidboot.console=", get_console_init);
 
 static int __init get_baseband_init(char *str)
 {
-        strcpy(baseband,str);
+        strlcpy(baseband, str, sizeof(baseband));
         return 0;
 }
 
@@ -69,7 +70,7 @@ __setup("androidboot.baseband=", get_baseband_init);
 
 static int __init get_serialno_init(char *str)
 {
-        strcpy(serialno,str);
+        strlcpy(serialno, str, sizeof(serialno));
         pr_info("kernel serialno %s\n",str);
         return 0;
 }
