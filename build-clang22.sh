@@ -53,7 +53,8 @@ make_args=(
 	"CROSS_COMPILE_ARM32=${cross_compile_arm32}"
 )
 
-echo "Building BloodMoon A17 ReSukiSU with $(clang --version | head -n 1)"
+echo "Building RMX1901 A17 ReSukiSU"
+echo "Compiler: $(clang --version | head -n 1)"
 echo "Output: ${build_output}"
 
 make -C "${kernel_root}" "${make_args[@]}" "${kernel_defconfig}"
@@ -71,7 +72,7 @@ grep -aFq "clang version ${clang_version}" "${build_output}/vmlinux"
 grep -aFq 'v4.1.0-97163bdc@ReSukiSU' "${build_output}/vmlinux"
 
 kernel_release="$(make -s -C "${kernel_root}" "${make_args[@]}" kernelrelease)"
-if [[ "${kernel_release}" != "4.9.337+67-BloodMoon" ]]; then
+if [[ "${kernel_release}" != "4.9.337+67-RMX1901-A17-ReSukiSU" ]]; then
 	echo "Unexpected kernel release: ${kernel_release}" >&2
 	exit 1
 fi

@@ -1,4 +1,4 @@
-name: Build BloodMoon A17 ReSukiSU Kernel with Clang 22
+name: Build RMX1901 A17 ReSukiSU Kernel
 
 on:
   workflow_dispatch:
@@ -64,7 +64,7 @@ jobs:
           test -s out/arch/arm64/boot/Image.gz
           grep -aFq 'clang version 22.1.8' out/vmlinux
           grep -aFq 'v4.1.0-97163bdc@ReSukiSU' out/vmlinux
-          test "$(cat out/include/config/kernel.release)" = "4.9.337+67-BloodMoon"
+          test "$(cat out/include/config/kernel.release)" = "4.9.337+67-RMX1901-A17-ReSukiSU"
 
       - name: Package with AnyKernel3
         run: |
@@ -72,7 +72,7 @@ jobs:
           rm -f AnyKernel3/Image.gz AnyKernel3/Image.gz-dtb
           cp out/arch/arm64/boot/Image.gz AnyKernel3/
           cd AnyKernel3
-          ZIP_NAME="RMX1901-BloodMoon-A17-ReSukiSU-Clang22-${TIME}.zip"
+          ZIP_NAME="RMX1901-A17-ReSukiSU-${TIME}.zip"
           zip -r9 "../${ZIP_NAME}" . -x '.git/*' 'README.md' '*placeholder'
           cd ..
           echo "ZIP_NAME=${ZIP_NAME}" >> "$GITHUB_ENV"
