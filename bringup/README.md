@@ -21,7 +21,7 @@ The source of truth is split deliberately:
 | M0 UAPI oracle | PASS | All 35,664 measured 4.9 values match on arm64 and arm32; 2,745 candidate-only additions are permitted. |
 | M1 donor control | PASS | Clean Image/Image.gz/dtbs/modules build reproduced with pinned tools. |
 | M2 SDM670 static port | PASS | The current d13ec62 candidate passes two clean, byte-identical builds plus config, warning, certificate and DT gates. |
-| M3 device boot | R012 FLASHED / FULL READBACK PASS / PREBOOT | r012 fixes only the legacy `CTL_TOP[7:4]` conversion and logs the raw register. The boot-only write, device SHA and complete 64 MiB host readback passed; all protected partitions stayed unchanged. Repeated-write approval is cleared pending runtime evidence. |
+| M3 device boot | R012 TESTED / CTL + SPLASH VALIDATION PASS / CPU2 SERROR / 900E | r012 proved the legacy `CTL_TOP[7:4]` fix: CTL0 decoded as INTF2 and continuous-splash validation reached `actual=expected=1, rc=0`. Boot then hit a trustworthy CPU2 SError immediately after DRM vblank initialization and entered 900e after 51 seconds. No candidate is approved for another write. |
 
 ## Reproduction
 
@@ -99,7 +99,7 @@ candidate-only interfaces where they do not mutate a baseline value.  IPA QMI
 keeps the legacy userspace layout and its required 16-bit wire encoding as
 separate concerns.  All 35,664 baseline values now match on both ABIs.
 
-The M3 boot candidates, results through r011 and the exact write policy are
+The M3 boot candidates, results through r012 and the exact write policy are
 recorded in `bringup/manifests/M3-boot-candidates-20260723.json`.  r010 is the
 previous diagnostic mapping checkpoint.  r011 was packaged, statically
 verified and device-tested.  Its fresh Recovery preflight, boot-only write,
@@ -115,10 +115,19 @@ semantics while preserving the newer bitmap API, and adds a raw `CTL_TOP`
 marker.  Two clean builds are byte-identical and the 64 MiB boot package passes
 AVB, unpack/repack, ramdisk and six-DTB gates.  Its boot SHA-256 is
 `12595057d7e662c9211a66d480cbc67f4326c5908c7f6c190792e3cff65862cd`;
-the 2026-07-24 Recovery preflight passed with the exact r011 boot still installed,
-100% battery, empty pstore and unchanged protected partitions.  The manifest now
-allows only the r012 candidate to be written to boot; it remains untested until
-the write, full readback and reboot evidence are captured.
+the 2026-07-24 Recovery preflight, boot-only write, device SHA and complete 64
+MiB host readback all passed.  Runtime KMSG then proved CTL0 raw
+`0x00020020` decodes to INTF2/bitmap `0x2`, continuous-splash validation passes
+with `actual=1 expected=1 rc=0`, and the valid splash mapping remains present.
+The next failure is a trustworthy CPU2 SError at 4.749989 seconds, immediately
+after DRM vblank initialization; the device entered 900e after 51 seconds.  The
+trusted 566-line KMSG prefix has SHA-256
+`7b6e85680000f390f5821c4a354a99fca9dd3e7aba6e82dbb54713b6203d8b84`;
+the full Sahara evidence-list hash is
+`26232b9c0718208523f6dc97d6ea465dde1bca1b0c93f1d311d277064dcd0acd`.
+No candidate is approved for another write; r013 is limited to boundary
+instrumentation around vblank, runtime PM, IRQ install, device registration and
+mode-config reset.
 
 The public `A17-ResukiSU-4.14-bringup` branch uses an exact-tree snapshot commit
 instead of importing the unrelated 810,594-commit upstream history into the

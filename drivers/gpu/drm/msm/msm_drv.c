@@ -659,7 +659,7 @@ static int msm_drm_init(struct device *dev, struct drm_driver *drv)
 	struct msm_drm_private *priv;
 	struct msm_kms *kms;
 	struct sde_dbg_power_ctrl dbg_power_ctrl = { 0 };
-	int ret, i;
+	int ret, i, irq, pm_rc;
 	struct sched_param param;
 
 	ddev = drm_dev_alloc(drv, dev);
@@ -872,31 +872,54 @@ static int msm_drm_init(struct device *dev, struct drm_driver *drv)
 		goto fail;
 	}
 
+	pr_info("RMX1901-R013: drm-init stage=before-vblank-init crtcs=%d\n",
+		priv->num_crtcs);
 	ret = drm_vblank_init(ddev, priv->num_crtcs);
+	pr_info("RMX1901-R013: drm-init stage=after-vblank-init rc=%d\n",
+		ret);
 	if (ret < 0) {
 		dev_err(dev, "failed to initialize vblank\n");
 		goto fail;
 	}
 
 	if (kms) {
-		pm_runtime_get_sync(dev);
-		ret = drm_irq_install(ddev, platform_get_irq(pdev, 0));
-		pm_runtime_put_sync(dev);
+		pr_info("RMX1901-R013: drm-init stage=before-runtime-pm-get\n");
+		pm_rc = pm_runtime_get_sync(dev);
+		pr_info("RMX1901-R013: drm-init stage=after-runtime-pm-get rc=%d\n",
+			pm_rc);
+		irq = platform_get_irq(pdev, 0);
+		pr_info("RMX1901-R013: drm-init stage=before-irq-install irq=%d\n",
+			irq);
+		ret = drm_irq_install(ddev, irq);
+		pr_info("RMX1901-R013: drm-init stage=after-irq-install rc=%d irq=%d\n",
+			ret, irq);
+		pr_info("RMX1901-R013: drm-init stage=before-runtime-pm-put\n");
+		pm_rc = pm_runtime_put_sync(dev);
+		pr_info("RMX1901-R013: drm-init stage=after-runtime-pm-put rc=%d\n",
+			pm_rc);
 		if (ret < 0) {
 			dev_err(dev, "failed to install IRQ handler\n");
 			goto fail;
 		}
 	}
 
+	pr_info("RMX1901-R013: drm-init stage=before-drm-dev-register\n");
 	ret = drm_dev_register(ddev, 0);
+	pr_info("RMX1901-R013: drm-init stage=after-drm-dev-register rc=%d\n",
+		ret);
 	if (ret)
 		goto fail;
 	priv->registered = true;
 
+	pr_info("RMX1901-R013: drm-init stage=before-mode-config-reset\n");
 	drm_mode_config_reset(ddev);
+	pr_info("RMX1901-R013: drm-init stage=after-mode-config-reset\n");
 
 	if (kms && kms->funcs && kms->funcs->cont_splash_config) {
+		pr_info("RMX1901-R013: drm-init stage=before-cont-splash-config\n");
 		ret = kms->funcs->cont_splash_config(kms);
+		pr_info("RMX1901-R013: drm-init stage=after-cont-splash-config rc=%d\n",
+			ret);
 		if (ret) {
 			dev_err(dev, "kms cont_splash config failed.\n");
 			goto fail;
@@ -1190,9 +1213,13 @@ static irqreturn_t msm_irq(int irq, void *arg)
 	struct drm_device *dev = arg;
 	struct msm_drm_private *priv = dev->dev_private;
 	struct msm_kms *kms = priv->kms;
+	irqreturn_t rc;
 
 	BUG_ON(!kms);
-	return kms->funcs->irq(kms);
+	pr_info_once("RMX1901-R013: irq-handler stage=first-entry irq=%d\n", irq);
+	rc = kms->funcs->irq(kms);
+	pr_info_once("RMX1901-R013: irq-handler stage=first-return rc=%d\n", rc);
+	return rc;
 }
 
 static void msm_irq_preinstall(struct drm_device *dev)
@@ -1201,16 +1228,23 @@ static void msm_irq_preinstall(struct drm_device *dev)
 	struct msm_kms *kms = priv->kms;
 
 	BUG_ON(!kms);
+	pr_info("RMX1901-R013: msm-irq-preinstall stage=entry\n");
 	kms->funcs->irq_preinstall(kms);
+	pr_info("RMX1901-R013: msm-irq-preinstall stage=return\n");
 }
 
 static int msm_irq_postinstall(struct drm_device *dev)
 {
 	struct msm_drm_private *priv = dev->dev_private;
 	struct msm_kms *kms = priv->kms;
+	int rc;
 
 	BUG_ON(!kms);
-	return kms->funcs->irq_postinstall(kms);
+	pr_info("RMX1901-R013: msm-irq-postinstall stage=entry\n");
+	rc = kms->funcs->irq_postinstall(kms);
+	pr_info("RMX1901-R013: msm-irq-postinstall stage=return rc=%d\n",
+		rc);
+	return rc;
 }
 
 static void msm_irq_uninstall(struct drm_device *dev)

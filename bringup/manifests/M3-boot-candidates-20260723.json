@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "milestone": "M3-device-boot-entry",
-  "status": "R012_FLASHED_READBACK_PASS_PREBOOT",
+  "status": "R012_TESTED_CTL_DECODE_VALIDATION_PASS_CPU2_SERROR_900E",
   "source": {
     "kernel_commit": "7c127cccc809e370406ff1d88f5ee1989c085672",
     "kernel_tree": "92eb263c0b3010d3af730518ba643cdf27a6dcc1",
@@ -770,7 +770,7 @@
       "success_gate": "stable OrangeFox Recovery ADB"
     },
     "B14-M03-r012-legacy-ctl-decode": {
-      "status": "PASS_STATIC_NOT_TESTED",
+      "status": "TESTED_CTL_DECODE_VALIDATION_PASS_CPU2_SERROR_900E",
       "purpose": "decode the SDM670 legacy CTL_TOP interface field into the active-interface bitmap and expose the raw register value",
       "directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/BOOT-CANDIDATES-20260723/B14-M03-r012-legacy-ctl-decode",
       "source_commit": "7c127cccc809e370406ff1d88f5ee1989c085672",
@@ -874,7 +874,60 @@
         "rawdump_sha256_after_write": "ae46e57009f4b027563ca4b72e69b0f944875efddf273fd845f98aa67ef25378",
         "evidence_directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260724/B14-M03-r012-legacy-ctl-decode-preboot",
         "evidence_sha256s_sha256": "440e7baa5c4cec2eb3d9b696f27ce724dec4e0e902fd87cfc3dd1faa8201ebba",
-        "automatic_reboot_issued": false
+        "automatic_reboot_issued": true,
+        "automatic_reboot_issued_at": "2026-07-24T02:01:51+08:00"
+      },
+      "runtime_result": {
+        "result": "FAIL_CPU2_SERROR_900E",
+        "reboot_issued_at": "2026-07-24T02:01:51+08:00",
+        "qualcomm_900e_first_observed_at": "2026-07-24T02:02:43+08:00",
+        "qualcomm_900e_elapsed_seconds": 51,
+        "runtime_observation_directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260724/B14-M03-r012-runtime-observation",
+        "runtime_observation_sha256": "139a3b70dc10216263fb658185d1e91c2ae107365be21ed7ed8779806838ce3e",
+        "runtime_observation_sha256s_sha256": "0050eb2b38091e0d0965b24bfe3634798fc95c7123febf9c7294d42c9b53c57d",
+        "sahara_evidence_directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260724/B14-M03-r012-legacy-ctl-decode-900e",
+        "sahara_evidence_sha256s_sha256": "26232b9c0718208523f6dc97d6ea465dde1bca1b0c93f1d311d277064dcd0acd",
+        "raw_kmsg_bytes": 262132,
+        "raw_kmsg_sha256": "9686829e95035e3af0d5bf8ca06971e94832c740736fbb6729a9d5cfad7346b6",
+        "trusted_kmsg_lines": 566,
+        "trusted_kmsg_last_timestamp_seconds": "4.772530",
+        "trusted_kmsg_sha256": "7b6e85680000f390f5821c4a354a99fca9dd3e7aba6e82dbb54713b6203d8b84",
+        "raw_kmsg_corruption_begins_at_line": 567,
+        "legacy_ctl_decode": {
+          "ctl0_raw": "0x00020020",
+          "ctl0_interface": 2,
+          "ctl0_active_bitmap": "0x2",
+          "ctl1_to_ctl4_raw": "0x00001f00",
+          "ctl1_to_ctl4_active_bitmap": "0x0"
+        },
+        "continuous_splash": {
+          "actual": 1,
+          "expected": 1,
+          "validation_rc": 0,
+          "lm_count": 1,
+          "pipe_count": 1,
+          "real_dsi": 1,
+          "regions": 1,
+          "mapping_first": "0x000000009c000000",
+          "mapping_last": "0x000000009e2ff000"
+        },
+        "fatal": {
+          "type": "SError",
+          "cpu": 2,
+          "pid": 252,
+          "comm": "kworker/u16:8",
+          "serror_timestamp_seconds": "4.749989",
+          "panic_timestamp_seconds": "4.757680",
+          "last_trusted_line": "Hardware name: Qualcomm Technologies, Inc. SDM710 PM660 + PM660A MTP (DT)"
+        },
+        "trusted_counts": {
+          "invalid_vsync_source": 1,
+          "unhandled_fault": 0,
+          "identity_unmap": 0,
+          "smmu_fault": 0
+        },
+        "qdl_scope": "Sahara crashdump filter only; no firehose upload, no UFS access and no partition write",
+        "conclusion": "r012 proves that the r011 all-zero CTL result was a software decode error. CTL0 decodes to INTF2, continuous-splash resource validation passes with actual=expected=1, and boot advances to a trustworthy CPU2 SError immediately after DRM vblank initialization."
       },
       "recovery_partition_write": false,
       "dtbo_partition_write": false,
@@ -1181,7 +1234,7 @@
   "write_policy": {
     "approved_partition": "boot",
     "approved_candidate": null,
-    "candidate_approval_basis": "r012 boot-only authorization was consumed by the verified write and full readback; any later write requires a fresh Recovery preflight",
+    "candidate_approval_basis": "r012 was device-tested and failed with a trustworthy CPU2 SError after successful CTL decode and continuous-splash validation; any r013 write requires a fresh Recovery preflight and a separately approved exact candidate",
     "push_sha256_must_match": true,
     "full_partition_readback_sha256_must_match": true,
     "automatic_reboot_allowed": true,

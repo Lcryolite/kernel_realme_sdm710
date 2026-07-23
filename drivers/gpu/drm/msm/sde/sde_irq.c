@@ -92,16 +92,25 @@ void sde_irq_preinstall(struct msm_kms *kms)
 {
 	struct sde_kms *sde_kms = to_sde_kms(kms);
 
+	pr_info("RMX1901-R013: sde-irq-preinstall stage=entry splash_displays=%u irq_enabled=%d irq_num_before=%d\n",
+		sde_kms->splash_data.num_splash_displays,
+		sde_kms->irq_enabled, sde_kms->irq_num);
+
 	if (!sde_kms->dev || !sde_kms->dev->dev) {
 		pr_err("invalid device handles\n");
 		return;
 	}
 
+	pr_info("RMX1901-R013: sde-irq-preinstall stage=before-core\n");
 	sde_core_irq_preinstall(sde_kms);
+	pr_info("RMX1901-R013: sde-irq-preinstall stage=after-core\n");
 
+	pr_info("RMX1901-R013: sde-irq-preinstall stage=before-platform-get-irq\n");
 	sde_kms->irq_num = platform_get_irq(
 				to_platform_device(sde_kms->dev->dev),
 				0);
+	pr_info("RMX1901-R013: sde-irq-preinstall stage=after-platform-get-irq irq=%d\n",
+		sde_kms->irq_num);
 	if (sde_kms->irq_num < 0) {
 		SDE_ERROR("invalid irq number %d\n", sde_kms->irq_num);
 		return;
@@ -110,6 +119,11 @@ void sde_irq_preinstall(struct msm_kms *kms)
 	/* disable irq until power event enables it */
 	if (!sde_kms->splash_data.num_splash_displays && !sde_kms->irq_enabled)
 		irq_set_status_flags(sde_kms->irq_num, IRQ_NOAUTOEN);
+
+	pr_info("RMX1901-R013: sde-irq-preinstall stage=return irq=%d noautoen=%d\n",
+		sde_kms->irq_num,
+		!sde_kms->splash_data.num_splash_displays &&
+		!sde_kms->irq_enabled);
 }
 
 int sde_irq_postinstall(struct msm_kms *kms)
@@ -122,7 +136,10 @@ int sde_irq_postinstall(struct msm_kms *kms)
 		return -EINVAL;
 	}
 
+	pr_info("RMX1901-R013: sde-irq-postinstall stage=before-core\n");
 	rc = sde_core_irq_postinstall(sde_kms);
+	pr_info("RMX1901-R013: sde-irq-postinstall stage=after-core rc=%d\n",
+		rc);
 
 	return rc;
 }

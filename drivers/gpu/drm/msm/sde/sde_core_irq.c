@@ -474,17 +474,27 @@ void sde_core_irq_preinstall(struct sde_kms *sde_kms)
 	}
 	priv = sde_kms->dev->dev_private;
 
+	pr_info("RMX1901-R013: sde-core-irq-preinstall stage=before-power-enable\n");
 	rc = sde_power_resource_enable(&priv->phandle, sde_kms->core_client,
 			true);
+	pr_info("RMX1901-R013: sde-core-irq-preinstall stage=after-power-enable rc=%d\n",
+		rc);
 	if (rc) {
 		SDE_ERROR("failed to enable power resource %d\n", rc);
 		SDE_EVT32(rc, SDE_EVTLOG_ERROR);
 		return;
 	}
 
+	pr_info("RMX1901-R013: sde-core-irq-preinstall stage=before-clear-all\n");
 	sde_clear_all_irqs(sde_kms);
+	pr_info("RMX1901-R013: sde-core-irq-preinstall stage=after-clear-all\n");
+	pr_info("RMX1901-R013: sde-core-irq-preinstall stage=before-disable-all\n");
 	sde_disable_all_irqs(sde_kms);
-	sde_power_resource_enable(&priv->phandle, sde_kms->core_client, false);
+	pr_info("RMX1901-R013: sde-core-irq-preinstall stage=after-disable-all\n");
+	pr_info("RMX1901-R013: sde-core-irq-preinstall stage=before-power-disable\n");
+	rc = sde_power_resource_enable(&priv->phandle, sde_kms->core_client, false);
+	pr_info("RMX1901-R013: sde-core-irq-preinstall stage=after-power-disable rc=%d\n",
+		rc);
 
 	spin_lock_init(&sde_kms->irq_obj.cb_lock);
 
@@ -508,6 +518,9 @@ void sde_core_irq_preinstall(struct sde_kms *sde_kms)
 		if (sde_kms->irq_obj.irq_counts)
 			atomic_set(&sde_kms->irq_obj.irq_counts[i], 0);
 	}
+
+	pr_info("RMX1901-R013: sde-core-irq-preinstall stage=return total_irqs=%d\n",
+		sde_kms->irq_obj.total_irqs);
 }
 
 int sde_core_irq_postinstall(struct sde_kms *sde_kms)
