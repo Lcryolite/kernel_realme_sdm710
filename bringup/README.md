@@ -21,7 +21,7 @@ The source of truth is split deliberately:
 | M0 UAPI oracle | PASS | All 35,664 measured 4.9 values match on arm64 and arm32; 2,745 candidate-only additions are permitted. |
 | M1 donor control | PASS | Clean Image/Image.gz/dtbs/modules build reproduced with pinned tools. |
 | M2 SDM670 static port | PASS | The current d13ec62 candidate passes two clean, byte-identical builds plus config, warning, certificate and DT gates. |
-| M3 device boot | R015 STATIC PASS / NOT TESTED | r014 proved that IRQ-bank indices 0–9 complete and execution stops at index 10, `MDSS_INTF_TEAR_1_INTR` clear offset `0x6e808`; it then entered 900e and did not return to Recovery. r015 removes the SDE 5.x interface-TE banks from the SDM670 SDE 4.1 catalog and bypasses the forced watchdog bite when panic automatic-Recovery is enabled. Two clean builds and the A17 boot package pass; no new write is approved. |
+| M3 device boot | R015 FLASHED / FULL READBACK PASS / PREBOOT | r014 proved that IRQ-bank indices 0–9 complete and execution stops at index 10, `MDSS_INTF_TEAR_1_INTR` clear offset `0x6e808`; it then entered 900e and did not return to Recovery. r015 removes the SDE 5.x interface-TE banks from the SDM670 SDE 4.1 catalog and bypasses the forced watchdog bite when panic automatic-Recovery is enabled. Recovery preflight, boot-only write, device SHA and full 64 MiB readback pass; approval is consumed and no reboot has yet been issued. |
 
 ## Reproduction
 
@@ -240,8 +240,23 @@ six DTBs, passes AVB, unpack/repack and gzip round-trip gates, and has SHA-256
 `683ac664dd971541540ac60db967fd6f40dfcddddb289a9e5d7ab5493de6e19e`.
 Its candidate SHA-list hash is
 `d4bdb4ea378a16274392f9e34421d949af90c0c6e043530d570223b12a917666`.
-It remains `PASS_STATIC_NOT_TESTED`: a fresh root-ADB Recovery preflight and a
-separately bound exact-candidate approval are required before any boot write.
+The 2026-07-24 06:42:50 +08:00 root-ADB Recovery preflight passed with Android
+17, 100% battery, exact r014 boot installed, empty pstore, and frozen
+recovery/dtbo/vbmeta/rawdump hashes.  Candidate SHA and AVB checks passed; the
+preflight evidence-list SHA-256 is
+`ce9298d45c4d6da8260535a74a94981496fef6fe0a3404784a5132a4545940b5`.
+The first write attempt safely stopped before push or partition access because
+the approval flag had been attached to the r011 manifest entry; the manifest
+was corrected and republished with r011 false and r015 true.  At 06:47 the
+exact r015 image was then written only to `/dev/block/sde10`.  Pushed-file SHA,
+device partition SHA and the complete 64 MiB host readback all equal
+`683ac664dd971541540ac60db967fd6f40dfcddddb289a9e5d7ab5493de6e19e`,
+and byte comparison passed.  Recovery, dtbo, vbmeta and rawdump remain frozen;
+userdata was untouched.  The write evidence-list SHA-256 is
+`3d48ac8670b1ca788749ca4d0abee0ef838e7aa6882f6806116a989167c8a3d8`.
+The one-write authorization is consumed and cleared.  r015 has not yet been
+rebooted; the next action is one monitored system reboot with no further
+partition write approved.
 
 The public `A17-ResukiSU-4.14-bringup` branch uses exact-tree snapshot commits
 instead of importing the unrelated 810,594-commit upstream history into the

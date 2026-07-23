@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "milestone": "M3-device-boot-entry",
-  "status": "R015_APPROVED_BOOT_ONLY_AWAITING_WRITE",
+  "status": "R015_FLASHED_READBACK_PASS_PREBOOT",
   "source": {
     "kernel_commit": "b370467eb4173f2ece4faa4a4bbd2692735917b0",
     "kernel_tree": "bc68a8670eaf523f2f44f19068128816111254cd",
@@ -1270,7 +1270,7 @@
       "success_gate": "FAILED: stable OrangeFox Recovery ADB was not reached automatically"
     },
     "B14-M03-r015-sdm670-irq-catalog-pshold": {
-      "status": "PASS_STATIC_NOT_TESTED",
+      "status": "FLASHED_READBACK_PASS_PREBOOT",
       "purpose": "remove SDE 5.x interface-TE IRQ banks from the SDM670 SDE 4.1 capability bitmap and route Linux panic automatic-Recovery through PS_HOLD instead of the forced watchdog bite",
       "directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/BOOT-CANDIDATES-20260724/B14-M03-r015-sdm670-irq-catalog-pshold",
       "source_commit": "b370467eb4173f2ece4faa4a4bbd2692735917b0",
@@ -1364,13 +1364,41 @@
         "device_write_performed": false,
         "approval_granted_by_preflight": false
       },
-      "controlled_flash_allowed": true,
+      "flash_execution": {
+        "captured_at": "2026-07-24T06:46:59+08:00",
+        "write_completed_at": "2026-07-24T06:47:02+08:00",
+        "result": "PASS",
+        "mode_during_write": "recovery",
+        "approval_snapshot": "29b857792b22af77fa4b136c2b9e2d4fd5e8d4d8",
+        "target": "/dev/block/sde10",
+        "bytes_written": 67108864,
+        "previous_boot_sha256": "183bc4cd74ea223889116081636d62b16ed935788021539fb947fb6bf11818b3",
+        "pushed_file_sha256": "683ac664dd971541540ac60db967fd6f40dfcddddb289a9e5d7ab5493de6e19e",
+        "device_partition_sha256_after_write": "683ac664dd971541540ac60db967fd6f40dfcddddb289a9e5d7ab5493de6e19e",
+        "host_full_partition_readback_sha256": "683ac664dd971541540ac60db967fd6f40dfcddddb289a9e5d7ab5493de6e19e",
+        "host_full_partition_readback_cmp": "PASS",
+        "recovery_sha256_after_write": "66ef2bd883ef8b5e2d471dbc5965686c726263dc35d0394f8e72c790affca0fc",
+        "dtbo_sha256_after_write": "73d9d36f775ef041e9d9db748eff5502bec7e5ee8efe0f352c9ac19015ff9b13",
+        "vbmeta_sha256_after_write": "9a88f344fdb9a3851a42599fe3da96306dd2e978fdfac67c53c2445801435fff",
+        "rawdump_sha256_after_write": "ae46e57009f4b027563ca4b72e69b0f944875efddf273fd845f98aa67ef25378",
+        "evidence_directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260724/B14-M03-r015-sdm670-irq-catalog-pshold-preboot",
+        "evidence_sha256s_sha256": "3d48ac8670b1ca788749ca4d0abee0ef838e7aa6882f6806116a989167c8a3d8",
+        "flash_state_sha256": "80a6e75b4a122ab568aeeb3dd0a8e414003ca58a1a2660600511dba54ce1bfc5",
+        "write_transcript_sha256": "22d3f54d0b14ae4e55995ccbd7dd463a04ca41dbdeabfca9bbafe248683d66a4",
+        "pre_write_gate_failure_sha256": "37687a902944a3eb3ee2d02434b53c0b273c78fd8edc27394b78b1d8f90de17a",
+        "recovery_partition_write": false,
+        "dtbo_partition_write": false,
+        "vbmeta_partition_write": false,
+        "userdata_write": false,
+        "automatic_reboot_issued": false
+      },
+      "controlled_flash_allowed": false,
       "controlled_flash_target": "boot_only",
       "recovery_partition_write": false,
       "dtbo_partition_write": false,
       "vbmeta_partition_write": false,
       "userdata_write": false,
-      "next_gate": "write only the exact approved image to /dev/block/sde10, then require device SHA and complete 64 MiB host readback before reboot"
+      "next_gate": "publish the consumed write state, then issue one monitored system reboot and distinguish Android boot, automatic Recovery, fastboot or 900e"
     }
   },
   "host_fastboot_recovery_diagnostic": {
@@ -1663,11 +1691,11 @@
   },
   "write_policy": {
     "approved_partition": "boot",
-    "approved_candidate": "B14-M03-r015-sdm670-irq-catalog-pshold",
-    "approved_candidate_boot_sha256": "683ac664dd971541540ac60db967fd6f40dfcddddb289a9e5d7ab5493de6e19e",
-    "approved_target": "/dev/block/sde10",
-    "approved_public_head": "31d264248b90ebdadc445f465c7ec621011f235c",
-    "candidate_approval_basis": "user explicitly instructed continuation of the unattended repair/test cycle; approval is bound after the passing 2026-07-24 06:42:50 Recovery preflight to this exact r015 boot SHA and /dev/block/sde10 only",
+    "approved_candidate": null,
+    "approved_candidate_boot_sha256": null,
+    "approved_target": null,
+    "approved_public_head": null,
+    "candidate_approval_basis": "the r015 one-write boot-only authorization was consumed by the verified /dev/block/sde10 write, device SHA and complete 64 MiB host readback; no further partition write is approved",
     "push_sha256_must_match": true,
     "full_partition_readback_sha256_must_match": true,
     "automatic_reboot_allowed": true,
