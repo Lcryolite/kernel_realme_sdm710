@@ -1493,7 +1493,7 @@
       "unpack_repack_verify": "PASS",
       "gzip_expands_to_built_Image": "PASS",
       "avb_verify": "PASS",
-      "candidate_sha256s_sha256": "61e63fbff64124b3ef03cd7127610edc66a648c2b3dcddc3fd39af22b5bb73ca",
+      "candidate_sha256s_sha256": "b10da03ad5bb057bd11d14d7a00c2acd9038bf8c992a8ca6e1a79b4bcd917959",
       "candidate_state_sha256": "e4c4ea056e0e394693076b548253d5b54533afe284c5367222ce3de5bdac25a9",
       "controlled_flash_allowed": false,
       "controlled_flash_target": "boot_only",

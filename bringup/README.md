@@ -295,7 +295,7 @@ The complete 64 MiB A17 boot image keeps the exact r015 OrangeFox ramdisk and
 six DTBs, passes AVB, unpack/repack, gzip and DTB gates, and has SHA-256
 `9c4e3063919f9675358977b32a525f1f3b75fcd6424971f2e95d6671dfd8f57e`.
 Its candidate SHA-list hash is
-`61e63fbff64124b3ef03cd7127610edc66a648c2b3dcddc3fd39af22b5bb73ca`.
+`b10da03ad5bb057bd11d14d7a00c2acd9038bf8c992a8ca6e1a79b4bcd917959`.
 r016 is static-pass/not-tested; no partition write is currently approved.
 
 The public `A17-ResukiSU-4.14-bringup` branch uses exact-tree snapshot commits
