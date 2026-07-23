@@ -191,6 +191,11 @@ recovery/dtbo/vbmeta/rawdump hashes and empty pstore.  Candidate SHA and AVB
 checks passed; its evidence-list SHA-256 is
 `77fcb72fb2eec9dce93a982e6276c757877deba3832a21c79dda4cceb0629651`.
 The preflight performed no device write and does not itself grant approval.
+The separately granted one-write authorization is now bound to exact candidate
+`B14-M03-r016-boot-guard`, boot SHA-256 `9c4e3063…f57e`, public preflight head
+`b87cfa6d27c4…f0dde` and `/dev/block/sde10` only.  It does not authorize any
+recovery, dtbo, vbmeta or userdata write and is consumed after one verified
+boot write.
 The user's 2026-07-24 request to continue and make the cycle unattended binds
 one write authorization to candidate `B14-M03-r014-irq-bank-autorecovery`, boot
 SHA-256 `183bc4cd74ea223889116081636d62b16ed935788021539fb947fb6bf11818b3`

@@ -1,12 +1,12 @@
 {
   "schema": 1,
   "milestone": "M3-device-boot-entry",
-  "status": "R016_PREFLIGHT_PASS_AWAITING_BOUND_APPROVAL",
+  "status": "R016_APPROVED_BOOT_ONLY_AWAITING_WRITE",
   "source": {
     "kernel_commit": "dbaf10527d515546628afb5adfbda2c2dc19467e",
     "kernel_tree": "336a5bdfbda7a7ce57bb2bb26a5fc735ef47f4df",
-    "published_snapshot_commit": "69e0eb2ee48bcbcda284a31de6697dddc689f3d3",
-    "published_snapshot_parent": "68b7e148e4817bfaf592e5a98f781cd11cc71731",
+    "published_snapshot_commit": "b87cfa6d27c4721d112ae5568e55ba6e1a5f0dde",
+    "published_snapshot_parent": "69e0eb2ee48bcbcda284a31de6697dddc689f3d3",
     "publication_state": "PASS_R016_EXACT_TREE_SNAPSHOT",
     "publication_mode": "exact-tree snapshot without unrelated upstream history",
     "kernel_release": "4.14.357-openela-RMX1901-A17-M2",
@@ -1518,7 +1518,7 @@
         "device_write_performed": false,
         "approval_granted_by_preflight": false
       },
-      "controlled_flash_allowed": false,
+      "controlled_flash_allowed": true,
       "controlled_flash_target": "boot_only",
       "recovery_partition_write": false,
       "dtbo_partition_write": false,
@@ -1530,7 +1530,8 @@
         "capture pstore, bootreason and immutable partition hashes before any later boot write",
         "do not interpret absence of the deadline as proof when scheduler or workqueue execution is stalled"
       ],
-      "success_gate": "stable Android or diagnostic Recovery ADB, otherwise automatic OrangeFox with durable failure evidence"
+      "success_gate": "stable Android or diagnostic Recovery ADB, otherwise automatic OrangeFox with durable failure evidence",
+      "next_gate": "write only the exact approved image to /dev/block/sde10, then require pushed-file SHA, device SHA and complete 64 MiB host readback before reboot"
     }
   },
   "host_fastboot_recovery_diagnostic": {
@@ -1823,11 +1824,11 @@
   },
   "write_policy": {
     "approved_partition": "boot",
-    "approved_candidate": null,
-    "approved_candidate_boot_sha256": null,
-    "approved_target": null,
-    "approved_public_head": null,
-    "candidate_approval_basis": "the r015 one-write boot-only authorization was consumed by the verified /dev/block/sde10 write, device SHA and complete 64 MiB host readback; no further partition write is approved",
+    "approved_candidate": "B14-M03-r016-boot-guard",
+    "approved_candidate_boot_sha256": "9c4e3063919f9675358977b32a525f1f3b75fcd6424971f2e95d6671dfd8f57e",
+    "approved_target": "/dev/block/sde10",
+    "approved_public_head": "b87cfa6d27c4721d112ae5568e55ba6e1a5f0dde",
+    "candidate_approval_basis": "user explicitly instructed continuation of the unattended repair/test cycle; approval is bound after the passing 2026-07-24 07:34:39 Recovery preflight to this exact r016 boot SHA and /dev/block/sde10 only",
     "push_sha256_must_match": true,
     "full_partition_readback_sha256_must_match": true,
     "automatic_reboot_allowed": true,
