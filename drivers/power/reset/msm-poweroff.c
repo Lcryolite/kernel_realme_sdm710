@@ -15,6 +15,7 @@
 #include <linux/err.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
+#include <linux/jiffies.h>
 
 #include <linux/io.h>
 #include <linux/of.h>
@@ -27,6 +28,7 @@
 #include <linux/of_address.h>
 #include <linux/syscore_ops.h>
 #include <linux/crash_dump.h>
+#include <linux/workqueue.h>
 
 #include <asm/cacheflush.h>
 #include <asm/system_misc.h>
@@ -80,11 +82,65 @@ module_param_named(bringup_panic_recovery, bringup_panic_recovery, bool, 0644);
 MODULE_PARM_DESC(bringup_panic_recovery,
 	"route a kernel panic to Recovery instead of Qualcomm download mode");
 
+/*
+ * A register-access hang does not necessarily reach the panic path.  Keep a
+ * diagnostic-only deadline armed while the 4.14 Recovery bring-up is under
+ * test so a still-schedulable kernel first takes the normal panic/kmsg_dump
+ * path and then uses the Recovery reset policy above.  Root Recovery ADB can
+ * disarm the deadline after a successful boot by writing Y to the parameter.
+ */
+#define RMX1901_BOOT_GUARD_DEFAULT_SECONDS	90
+#define RMX1901_BOOT_GUARD_MAX_SECONDS		600
+
+static unsigned int bringup_boot_guard_seconds =
+	RMX1901_BOOT_GUARD_DEFAULT_SECONDS;
+static bool bringup_boot_guard_disarmed;
+
+module_param_named(bringup_boot_guard_seconds, bringup_boot_guard_seconds,
+	uint, 0444);
+MODULE_PARM_DESC(bringup_boot_guard_seconds,
+	"diagnostic boot deadline in seconds; set rmx1901.boot_guard_seconds=0 to disable");
+module_param_named(bringup_boot_guard_disarmed, bringup_boot_guard_disarmed,
+	bool, 0644);
+MODULE_PARM_DESC(bringup_boot_guard_disarmed,
+	"disarm the diagnostic boot deadline after stable root ADB appears");
+
 static int __init bringup_panic_recovery_setup(char *str)
 {
 	return kstrtobool(str, &bringup_panic_recovery);
 }
 early_param("rmx1901.panic_recovery", bringup_panic_recovery_setup);
+
+static int __init bringup_boot_guard_setup(char *str)
+{
+	unsigned int seconds;
+	int ret;
+
+	ret = kstrtouint(str, 0, &seconds);
+	if (ret)
+		return ret;
+	if (seconds > RMX1901_BOOT_GUARD_MAX_SECONDS)
+		return -ERANGE;
+
+	bringup_boot_guard_seconds = seconds;
+	return 0;
+}
+early_param("rmx1901.boot_guard_seconds", bringup_boot_guard_setup);
+
+static void bringup_boot_guard_timeout(struct work_struct *work)
+{
+	if (READ_ONCE(bringup_boot_guard_disarmed)) {
+		pr_notice("RMX1901-R016-BOOT-GUARD: stage=deadline disarmed=1\n");
+		return;
+	}
+
+	pr_emerg("RMX1901-R016-BOOT-GUARD: stage=deadline seconds=%u action=panic\n",
+		bringup_boot_guard_seconds);
+	panic("RMX1901 r016 diagnostic boot deadline expired");
+}
+
+static DECLARE_DELAYED_WORK(bringup_boot_guard_work,
+	bringup_boot_guard_timeout);
 
 static int panic_prep_restart(struct notifier_block *this,
 			      unsigned long event, void *ptr)
@@ -621,6 +677,7 @@ static int msm_restart_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct resource *mem;
 	struct device_node *np;
+	bool boot_guard_scheduled = false;
 	int ret = 0;
 
 	atomic_notifier_chain_register(&panic_notifier_list, &panic_blk);
@@ -734,6 +791,19 @@ skip_sysfs_create:
 		set_dload_mode(download_mode);
 	if (!download_mode)
 		scm_disable_sdi();
+
+	if (bringup_boot_guard_seconds && bringup_panic_recovery &&
+	    !is_kdump_kernel()) {
+		boot_guard_scheduled = schedule_delayed_work(
+			&bringup_boot_guard_work,
+			msecs_to_jiffies(bringup_boot_guard_seconds * MSEC_PER_SEC));
+		pr_notice("RMX1901-R016-BOOT-GUARD: stage=armed seconds=%u scheduled=%d disarm=/sys/module/msm_poweroff/parameters/bringup_boot_guard_disarmed\n",
+			bringup_boot_guard_seconds, boot_guard_scheduled);
+	} else {
+		pr_notice("RMX1901-R016-BOOT-GUARD: stage=disabled seconds=%u panic-recovery=%d kdump=%d\n",
+			bringup_boot_guard_seconds, bringup_panic_recovery,
+			is_kdump_kernel());
+	}
 
 	force_warm_reboot = of_property_read_bool(dev->of_node,
 						"qcom,force-warm-reboot");

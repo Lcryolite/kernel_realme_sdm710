@@ -21,7 +21,7 @@ The source of truth is split deliberately:
 | M0 UAPI oracle | PASS | All 35,664 measured 4.9 values match on arm64 and arm32; 2,745 candidate-only additions are permitted. |
 | M1 donor control | PASS | Clean Image/Image.gz/dtbs/modules build reproduced with pinned tools. |
 | M2 SDM670 static port | PASS | The current d13ec62 candidate passes two clean, byte-identical builds plus config, warning, certificate and DT gates. |
-| M3 device boot | R015 BOOT FAIL / AUTOMATIC RECOVERY PASS | r014 proved that IRQ-bank indices 0–9 complete and execution stops at index 10, `MDSS_INTF_TEAR_1_INTR` clear offset `0x6e808`; it then entered 900e and did not return to Recovery. r015 removes the SDE 5.x interface-TE banks from the SDM670 SDE 4.1 catalog and bypasses the forced watchdog bite when panic automatic-Recovery is enabled. It did not boot, but avoided the prior 51-second 900e and returned unattended to stable OrangeFox after approximately 146 seconds. |
+| M3 device boot | R015 BOOT FAIL / AUTOMATIC RECOVERY PASS; R016 STATIC PASS | r014 proved that IRQ-bank indices 0–9 complete and execution stops at index 10, `MDSS_INTF_TEAR_1_INTR` clear offset `0x6e808`; it then entered 900e and did not return to Recovery. r015 removes the SDE 5.x interface-TE banks from the SDM670 SDE 4.1 catalog and bypasses the forced watchdog bite when panic automatic-Recovery is enabled. It did not boot, but avoided the prior 51-second 900e and returned unattended to stable OrangeFox after approximately 146 seconds. r016 preserves that baseline and adds a bounded 90-second diagnostic panic deadline; its two clean builds and A17 boot package pass static gates but have not yet been written or run. |
 
 ## Reproduction
 
@@ -272,6 +272,31 @@ mean the evidence cannot attribute the Recovery selection specifically to the
 Linux panic PS_HOLD branch, nor prove that the clear-all loop completed.  No
 further partition write is approved until a durable pre-reset progress record
 can be collected without losing this recovery behavior.
+
+r016 implements that bounded diagnostic record attempt without changing the
+DT, ramdisk, kernel config or r015 display fix.  Commit
+`dbaf10527d515546628afb5adfbda2c2dc19467e` schedules a delayed-work boot
+guard from the Qualcomm restart driver.  Its default deadline is 90 seconds;
+if stable root ADB appears first it can be disarmed through
+`/sys/module/msm_poweroff/parameters/bringup_boot_guard_disarmed`.  Otherwise
+it explicitly panics so the console is passed to kmsg_dump before the r015
+Recovery reason and PS_HOLD path.  `rmx1901.boot_guard_seconds=0` disables the
+diagnostic guard, values above 600 seconds are rejected, and kdump kernels do
+not arm it.  If the scheduler or workqueue itself stalls, the already-observed
+approximately 146-second non-Linux fallback remains the final recovery layer.
+
+Two independent clean Clang 11.0.1 + ThinLTO r016 builds are byte-identical
+across config, Module.symvers, vmlinux, System.map, Image, Image.gz and
+base/merged DTB.  Build ID is `db79ea494c148b5f`; Image.gz SHA-256 is
+`b1787bedb1a18d4b280273713e62219f403329e5cd8e8be497a2a34cf93843cf`;
+the reproducibility evidence-list SHA-256 is
+`923aa690d4fe7e88315ae4742b3f1a0de1ad73cbcf3622a0747ef009b40d2026`.
+The complete 64 MiB A17 boot image keeps the exact r015 OrangeFox ramdisk and
+six DTBs, passes AVB, unpack/repack, gzip and DTB gates, and has SHA-256
+`9c4e3063919f9675358977b32a525f1f3b75fcd6424971f2e95d6671dfd8f57e`.
+Its candidate SHA-list hash is
+`61e63fbff64124b3ef03cd7127610edc66a648c2b3dcddc3fd39af22b5bb73ca`.
+r016 is static-pass/not-tested; no partition write is currently approved.
 
 The public `A17-ResukiSU-4.14-bringup` branch uses exact-tree snapshot commits
 instead of importing the unrelated 810,594-commit upstream history into the
