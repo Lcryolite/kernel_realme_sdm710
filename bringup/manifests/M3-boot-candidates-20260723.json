@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "milestone": "M3-device-boot-entry",
-  "status": "R013_FLASHED_READBACK_PASS_PREBOOT",
+  "status": "R013_TESTED_FAILURE_BOUNDARY_WITHIN_SDE_CLEAR_ALL_IRQS_900E",
   "source": {
     "kernel_commit": "603134d8422f0242c736cefb96fcc0d5ed06f21b",
     "kernel_tree": "16a8a939ada3d953661d3fd0db95f8f2ce4cbd62",
@@ -943,7 +943,7 @@
       "success_gate": "stable OrangeFox Recovery ADB"
     },
     "B14-M03-r013-drm-irq-boundary": {
-      "status": "FLASHED_READBACK_PASS_PREBOOT",
+      "status": "TESTED_FAILURE_BOUNDARY_WITHIN_SDE_CLEAR_ALL_IRQS_900E",
       "purpose": "locate the trustworthy CPU2 SError boundary after r012 successfully decoded CTL0 and passed continuous-splash validation",
       "directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/BOOT-CANDIDATES-20260724/B14-M03-r013-drm-irq-boundary",
       "source_commit": "603134d8422f0242c736cefb96fcc0d5ed06f21b",
@@ -1052,7 +1052,46 @@
         "evidence_directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260724/B14-M03-r013-drm-irq-boundary-preboot",
         "evidence_sha256s_sha256": "747368a35c4f8427ecf21a1ee3b25c7ef2a8a2b29447644e9c6c11ef2799ea04",
         "write_transcript_sha256": "5ff5471fb60baa29f1edba475959ea57dbc2b2e8c66b3e6579d82ebfe7da069f",
-        "automatic_reboot_issued": false
+        "automatic_reboot_issued": true,
+        "automatic_reboot_issued_at": "2026-07-24T03:05:27+08:00"
+      },
+      "runtime_result": {
+        "result": "FAIL_QUALCOMM_900E",
+        "reboot_issued_at": "2026-07-24T03:05:27+08:00",
+        "qualcomm_900e_first_observed_at": "2026-07-24T03:06:22+08:00",
+        "qualcomm_900e_elapsed_seconds": 54,
+        "runtime_observation_directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260724/B14-M03-r013-runtime-observation",
+        "runtime_observation_sha256": "2df88a990c0d557c70477d44ad46fbdcff08e65d0f01af6bccb9353cf4ff7bf1",
+        "runtime_observation_sha256s_sha256": "ec2027ec5df37df28548deef37fa134bc2517159cf973b97ff49d5e6e141aca8",
+        "sahara_evidence_directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260724/B14-M03-r013-drm-irq-boundary-900e",
+        "sahara_evidence_sha256s_sha256": "4de4ead815d7e5edfd9f43f33172ce62fa1ef336245bb04a18e4c0ad286c0aa8",
+        "raw_kmsg_sha256": "53f523be61aa8c7056c1ceaedc3888d3b06b9373ffe2fe03e3b017ff9ce9d68d",
+        "trusted_kmsg_lines": "1-573",
+        "trusted_kmsg_sha256": "ac0325636a9e03fd0e545f81b7fa75c008a01fa2d1b4ff685210c8ea0d281a55",
+        "raw_kmsg_corruption_begins_at_line": 574,
+        "last_trustworthy_timestamp_seconds": 4.815979,
+        "r012_behavior_preserved": "CTL0 raw 0x00020020 decodes to INTF2 bitmap 0x2; continuous-splash actual=expected=1 rc=0, real_dsi=1, regions=1",
+        "completed_boundaries": [
+          "drm_vblank_init rc=0",
+          "pm_runtime_get_sync rc=0",
+          "drm_irq_install entry irq=18",
+          "MSM and SDE IRQ preinstall entry",
+          "SDE core IRQ power enable rc=0",
+          "immediately before sde_clear_all_irqs"
+        ],
+        "not_reached_boundaries": [
+          "after sde_clear_all_irqs",
+          "disable-all IRQ registers",
+          "request_irq and IRQ postinstall",
+          "first IRQ handler",
+          "drm_dev_register",
+          "drm_mode_config_reset"
+        ],
+        "trustworthy_serror_text_count": 0,
+        "trustworthy_panic_text_count": 0,
+        "verdict": "R013_TESTED_FAILURE_BOUNDARY_WITHIN_SDE_CLEAR_ALL_IRQS_900E",
+        "conclusion": "vblank initialization and runtime PM return successfully. DRM IRQ install reaches SDE core preinstall and power enable returns zero. The last trustworthy marker is immediately before sde_clear_all_irqs; the failure is bounded to its register loop or an asynchronous hardware error delivered during that loop, before request_irq, IRQ postinstall, the first IRQ handler, DRM device registration or mode-config reset.",
+        "next_probe": "r014 boundary-only per-register-bank instrumentation in sde_hw_intr_clear_irqs, logging index, IRQ table id and clear offset before and after each write, plus before and after wmb, without changing register values or control flow"
       },
       "controlled_flash_allowed": false,
       "controlled_flash_target": "boot_only",

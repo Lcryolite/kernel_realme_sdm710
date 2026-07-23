@@ -21,7 +21,7 @@ The source of truth is split deliberately:
 | M0 UAPI oracle | PASS | All 35,664 measured 4.9 values match on arm64 and arm32; 2,745 candidate-only additions are permitted. |
 | M1 donor control | PASS | Clean Image/Image.gz/dtbs/modules build reproduced with pinned tools. |
 | M2 SDM670 static port | PASS | The current d13ec62 candidate passes two clean, byte-identical builds plus config, warning, certificate and DT gates. |
-| M3 device boot | R013 FLASHED / FULL READBACK PASS / PREBOOT | r012 proved the legacy `CTL_TOP[7:4]` fix and passed continuous-splash validation before a trustworthy CPU2 SError. r013 preserves that behavior and adds 37 boundary markers around vblank, runtime PM, SDE IRQ register access, `request_irq`, first IRQ handling, DRM registration and mode reset. The boot-only write, device SHA and complete 64 MiB host readback pass; repeated-write approval is cleared pending runtime evidence. |
+| M3 device boot | R013 TESTED / FAILURE BOUNDED TO SDE CLEAR-ALL IRQ LOOP / 900E | r012 proved the legacy `CTL_TOP[7:4]` fix and passed continuous-splash validation. r013 preserves that behavior and proves vblank, runtime PM and SDE IRQ power enable return successfully. The last trustworthy marker is immediately before `sde_clear_all_irqs()`; `request_irq`, first IRQ handling and DRM registration are not reached. Repeated-write approval remains cleared. |
 
 ## Reproduction
 
@@ -151,7 +151,24 @@ complete 64 MiB host readback all equal
 Recovery, dtbo, vbmeta and rawdump hashes remained frozen and userdata was not
 touched.  The write/readback evidence-list SHA-256 is
 `747368a35c4f8427ecf21a1ee3b25c7ef2a8a2b29447644e9c6c11ef2799ea04`.
-The one-write approval is consumed and cleared; r013 has not yet been rebooted.
+The one-write approval is consumed and cleared.  r013 was rebooted at
+2026-07-24 03:05:27 +08:00 and Qualcomm 900e was first observed 54 seconds
+later.  Sahara captured a 573-line trustworthy KMSG prefix (SHA-256
+`ac0325636a9e03fd0e545f81b7fa75c008a01fa2d1b4ff685210c8ea0d281a55`);
+the raw log becomes corrupt at line 574 and therefore supplies no trustworthy
+SError or panic text.  The trusted sequence proves `drm_vblank_init()` and
+`pm_runtime_get_sync()` return zero, enters DRM IRQ install with IRQ 18, enters
+MSM/SDE preinstall, and returns zero from SDE core IRQ power enable.  Its last
+complete marker is immediately before `sde_clear_all_irqs()` at 4.815979
+seconds.  No after-clear marker, disable-all access, `request_irq`, IRQ
+postinstall, first handler, DRM device registration or mode reset is reached.
+The failure is therefore bounded to the clear-all register loop or an
+asynchronous hardware error delivered during that loop.  The Sahara evidence
+list SHA-256 is
+`4de4ead815d7e5edfd9f43f33172ce62fa1ef336245bb04a18e4c0ad286c0aa8`.
+The next single-variable probe is r014: log each IRQ bank index, table ID and
+clear offset immediately before and after its unchanged `0xffffffff` write,
+then log both sides of the existing `wmb()`.
 
 The public `A17-ResukiSU-4.14-bringup` branch uses exact-tree snapshot commits
 instead of importing the unrelated 810,594-commit upstream history into the
