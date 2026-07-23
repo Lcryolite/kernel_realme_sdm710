@@ -1065,12 +1065,25 @@ static int sde_hw_intr_clear_irqs(struct sde_hw_intr *intr)
 	if (!intr)
 		return -EINVAL;
 
-	for (i = 0; i < intr->sde_irq_size; i++)
+	for (i = 0; i < intr->sde_irq_size; i++) {
+		pr_info("RMX1901-R014: clear-all stage=before-write index=%d total=%u irq-table-id=%d clear-offset=0x%08x value=0xffffffff\n",
+			i, intr->sde_irq_size,
+			intr->sde_irq_tbl[i].sde_irq_idx,
+			intr->sde_irq_tbl[i].clr_off);
 		SDE_REG_WRITE(&intr->hw, intr->sde_irq_tbl[i].clr_off,
 				0xffffffff);
+		pr_info("RMX1901-R014: clear-all stage=after-write index=%d total=%u irq-table-id=%d clear-offset=0x%08x\n",
+			i, intr->sde_irq_size,
+			intr->sde_irq_tbl[i].sde_irq_idx,
+			intr->sde_irq_tbl[i].clr_off);
+	}
 
 	/* ensure register writes go through */
+	pr_info("RMX1901-R014: clear-all stage=before-wmb total=%u\n",
+		intr->sde_irq_size);
 	wmb();
+	pr_info("RMX1901-R014: clear-all stage=after-wmb total=%u\n",
+		intr->sde_irq_size);
 
 	return 0;
 }
@@ -1596,4 +1609,3 @@ exit:
 	kfree(intr);
 	return ERR_PTR(ret);
 }
-
