@@ -296,7 +296,13 @@ six DTBs, passes AVB, unpack/repack, gzip and DTB gates, and has SHA-256
 `9c4e3063919f9675358977b32a525f1f3b75fcd6424971f2e95d6671dfd8f57e`.
 Its candidate SHA-list hash is
 `b10da03ad5bb057bd11d14d7a00c2acd9038bf8c992a8ca6e1a79b4bcd917959`.
-r016 is static-pass/not-tested; no partition write is currently approved.
+r016 is static-pass/not-tested.  A fresh read-only root-ADB Recovery preflight
+passed at 2026-07-24 07:34:39 +08:00 with Android 17, 100% battery, the exact
+r015 boot still installed, empty pstore, unchanged rawdump and frozen
+recovery/dtbo/vbmeta hashes.  Candidate SHA and AVB gates passed; the preflight
+evidence-list SHA-256 is
+`706f0deb95dbcde5e5a9d875dc0d097009a9928475a33b56ce56cb72be3f2bdb`.
+The preflight performed no device write and does not itself grant approval.
 
 The public `A17-ResukiSU-4.14-bringup` branch uses exact-tree snapshot commits
 instead of importing the unrelated 810,594-commit upstream history into the
