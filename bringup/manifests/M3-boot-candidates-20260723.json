@@ -1,12 +1,12 @@
 {
   "schema": 1,
   "milestone": "M3-device-boot-entry",
-  "status": "R016_APPROVED_BOOT_ONLY_AWAITING_WRITE",
+  "status": "R016_BOOT_WRITE_VERIFIED_AWAITING_RUNTIME",
   "source": {
     "kernel_commit": "dbaf10527d515546628afb5adfbda2c2dc19467e",
     "kernel_tree": "336a5bdfbda7a7ce57bb2bb26a5fc735ef47f4df",
-    "published_snapshot_commit": "b87cfa6d27c4721d112ae5568e55ba6e1a5f0dde",
-    "published_snapshot_parent": "69e0eb2ee48bcbcda284a31de6697dddc689f3d3",
+    "published_snapshot_commit": "f07b429bac1ce3267a069e2ea2863d71c13f03d5",
+    "published_snapshot_parent": "b87cfa6d27c4721d112ae5568e55ba6e1a5f0dde",
     "publication_state": "PASS_R016_EXACT_TREE_SNAPSHOT",
     "publication_mode": "exact-tree snapshot without unrelated upstream history",
     "kernel_release": "4.14.357-openela-RMX1901-A17-M2",
@@ -1429,7 +1429,7 @@
       "next_gate": "preserve the working unattended Recovery outcome and obtain a durable pre-reset progress record before another functional candidate or partition write"
     },
     "B14-M03-r016-boot-guard": {
-      "status": "PASS_STATIC_NOT_TESTED",
+      "status": "BOOT_WRITE_VERIFIED_AWAITING_RUNTIME",
       "purpose": "add a bounded diagnostic boot deadline so a still-schedulable 4.14 kernel panics after 90 seconds, captures the console through kmsg_dump and returns through the r015 Recovery reset policy",
       "directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/BOOT-CANDIDATES-20260724/B14-M03-r016-boot-guard",
       "source_commit": "dbaf10527d515546628afb5adfbda2c2dc19467e",
@@ -1518,7 +1518,35 @@
         "device_write_performed": false,
         "approval_granted_by_preflight": false
       },
-      "controlled_flash_allowed": true,
+      "flash_execution": {
+        "captured_at": "2026-07-24T07:40:45+08:00",
+        "write_completed_at": "2026-07-24T07:40:47+08:00",
+        "result": "PASS",
+        "mode_during_write": "recovery",
+        "approval_snapshot": "f07b429bac1ce3267a069e2ea2863d71c13f03d5",
+        "approved_preflight_head": "b87cfa6d27c4721d112ae5568e55ba6e1a5f0dde",
+        "target": "/dev/block/sde10",
+        "bytes_written": 67108864,
+        "previous_boot_sha256": "683ac664dd971541540ac60db967fd6f40dfcddddb289a9e5d7ab5493de6e19e",
+        "pushed_file_sha256": "9c4e3063919f9675358977b32a525f1f3b75fcd6424971f2e95d6671dfd8f57e",
+        "device_partition_sha256_after_write": "9c4e3063919f9675358977b32a525f1f3b75fcd6424971f2e95d6671dfd8f57e",
+        "host_full_partition_readback_sha256": "9c4e3063919f9675358977b32a525f1f3b75fcd6424971f2e95d6671dfd8f57e",
+        "host_full_partition_readback_cmp": "PASS",
+        "recovery_sha256_after_write": "66ef2bd883ef8b5e2d471dbc5965686c726263dc35d0394f8e72c790affca0fc",
+        "dtbo_sha256_after_write": "73d9d36f775ef041e9d9db748eff5502bec7e5ee8efe0f352c9ac19015ff9b13",
+        "vbmeta_sha256_after_write": "9a88f344fdb9a3851a42599fe3da96306dd2e978fdfac67c53c2445801435fff",
+        "rawdump_sha256_after_write": "ae46e57009f4b027563ca4b72e69b0f944875efddf273fd845f98aa67ef25378",
+        "evidence_directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260724/B14-M03-r016-boot-guard-preboot",
+        "evidence_sha256s_sha256": "338dc387aa24da1bd619f6ea9eae4ca9b6d664cf9e73261946fb6e5913737a3c",
+        "flash_state_sha256": "f36fdf57333891994e2644cbd3ac9f4412c8b96a41e36278c9cdd544cc4a5b60",
+        "write_transcript_sha256": "67e09960fde20418207e526f5a07758000cca9c0cdcafd4c5b14db0681c631e1",
+        "recovery_partition_write": false,
+        "dtbo_partition_write": false,
+        "vbmeta_partition_write": false,
+        "userdata_write": false,
+        "automatic_reboot_issued": false
+      },
+      "controlled_flash_allowed": false,
       "controlled_flash_target": "boot_only",
       "recovery_partition_write": false,
       "dtbo_partition_write": false,
@@ -1531,7 +1559,7 @@
         "do not interpret absence of the deadline as proof when scheduler or workqueue execution is stalled"
       ],
       "success_gate": "stable Android or diagnostic Recovery ADB, otherwise automatic OrangeFox with durable failure evidence",
-      "next_gate": "write only the exact approved image to /dev/block/sde10, then require pushed-file SHA, device SHA and complete 64 MiB host readback before reboot"
+      "next_gate": "publish the verified write and consumed authorization, then reboot once and monitor for 4.14 ADB, a 90-second diagnostic panic return, Qualcomm 900e or the approximately 146-second fallback"
     }
   },
   "host_fastboot_recovery_diagnostic": {
@@ -1824,11 +1852,11 @@
   },
   "write_policy": {
     "approved_partition": "boot",
-    "approved_candidate": "B14-M03-r016-boot-guard",
-    "approved_candidate_boot_sha256": "9c4e3063919f9675358977b32a525f1f3b75fcd6424971f2e95d6671dfd8f57e",
-    "approved_target": "/dev/block/sde10",
-    "approved_public_head": "b87cfa6d27c4721d112ae5568e55ba6e1a5f0dde",
-    "candidate_approval_basis": "user explicitly instructed continuation of the unattended repair/test cycle; approval is bound after the passing 2026-07-24 07:34:39 Recovery preflight to this exact r016 boot SHA and /dev/block/sde10 only",
+    "approved_candidate": null,
+    "approved_candidate_boot_sha256": null,
+    "approved_target": null,
+    "approved_public_head": null,
+    "candidate_approval_basis": "the r016 one-write boot-only authorization was consumed by the verified /dev/block/sde10 write, device SHA and complete 64 MiB host readback; no further partition write is approved",
     "push_sha256_must_match": true,
     "full_partition_readback_sha256_must_match": true,
     "automatic_reboot_allowed": true,

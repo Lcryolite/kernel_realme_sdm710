@@ -196,6 +196,16 @@ The separately granted one-write authorization is now bound to exact candidate
 `b87cfa6d27c4…f0dde` and `/dev/block/sde10` only.  It does not authorize any
 recovery, dtbo, vbmeta or userdata write and is consumed after one verified
 boot write.
+
+At 2026-07-24 07:40:45 +08:00 the exact approved r016 image was written only
+to `/dev/block/sde10`.  The pushed file, device partition and complete 64 MiB
+host readback all have SHA-256 `9c4e3063…f57e`, and byte comparison passed.
+Recovery, dtbo, vbmeta and rawdump remain at their frozen hashes; userdata was
+untouched.  The write evidence-list SHA-256 is
+`338dc387aa24da1bd619f6ea9eae4ca9b6d664cf9e73261946fb6e5913737a3c`.
+The one-write authorization is consumed and cleared.  The device remains in
+Recovery pending publication of this verified preboot state and one controlled
+runtime test.
 The user's 2026-07-24 request to continue and make the cycle unattended binds
 one write authorization to candidate `B14-M03-r014-irq-bank-autorecovery`, boot
 SHA-256 `183bc4cd74ea223889116081636d62b16ed935788021539fb947fb6bf11818b3`
