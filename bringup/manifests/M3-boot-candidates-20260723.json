@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "milestone": "M3-device-boot-entry",
-  "status": "R012_APPROVED_BOOT_ONLY_NOT_FLASHED",
+  "status": "R012_FLASHED_READBACK_PASS_PREBOOT",
   "source": {
     "kernel_commit": "7c127cccc809e370406ff1d88f5ee1989c085672",
     "kernel_tree": "92eb263c0b3010d3af730518ba643cdf27a6dcc1",
@@ -836,7 +836,7 @@
       "avb_verify": "PASS",
       "candidate_sha256s_sha256": "1b33911b9070c55f44eebd7f816a1076ba24e9ea20000db339832ec90a7e8a42",
       "candidate_state_sha256": "2d0c0f7fa87f70ea14e5e327ed0f60cb1356023a7f1417106c62445b8bd404cd",
-      "controlled_flash_allowed": true,
+      "controlled_flash_allowed": false,
       "controlled_flash_target": "boot_only",
       "live_preflight": {
         "captured_at": "2026-07-24T01:51:41+08:00",
@@ -856,6 +856,25 @@
         "vbmeta_sha256": "9a88f344fdb9a3851a42599fe3da96306dd2e978fdfac67c53c2445801435fff",
         "rawdump_sha256": "ae46e57009f4b027563ca4b72e69b0f944875efddf273fd845f98aa67ef25378",
         "pstore_files": 0
+      },
+      "flash_execution": {
+        "captured_at": "2026-07-24T01:58:11+08:00",
+        "result": "PASS",
+        "mode_during_write": "recovery",
+        "target": "/dev/block/sde10",
+        "bytes_written": 67108864,
+        "previous_boot_sha256": "420254ab26fbf3ba9e8d1c930d4bcd0c615f977fd01ceef2068a77db42aee5e9",
+        "pushed_file_sha256": "12595057d7e662c9211a66d480cbc67f4326c5908c7f6c190792e3cff65862cd",
+        "device_partition_sha256_after_write": "12595057d7e662c9211a66d480cbc67f4326c5908c7f6c190792e3cff65862cd",
+        "host_full_partition_readback_sha256": "12595057d7e662c9211a66d480cbc67f4326c5908c7f6c190792e3cff65862cd",
+        "host_full_partition_readback_cmp": "PASS",
+        "recovery_sha256_after_write": "66ef2bd883ef8b5e2d471dbc5965686c726263dc35d0394f8e72c790affca0fc",
+        "dtbo_sha256_after_write": "73d9d36f775ef041e9d9db748eff5502bec7e5ee8efe0f352c9ac19015ff9b13",
+        "vbmeta_sha256_after_write": "9a88f344fdb9a3851a42599fe3da96306dd2e978fdfac67c53c2445801435fff",
+        "rawdump_sha256_after_write": "ae46e57009f4b027563ca4b72e69b0f944875efddf273fd845f98aa67ef25378",
+        "evidence_directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260724/B14-M03-r012-legacy-ctl-decode-preboot",
+        "evidence_sha256s_sha256": "440e7baa5c4cec2eb3d9b696f27ce724dec4e0e902fd87cfc3dd1faa8201ebba",
+        "automatic_reboot_issued": false
       },
       "recovery_partition_write": false,
       "dtbo_partition_write": false,
@@ -1161,8 +1180,8 @@
   },
   "write_policy": {
     "approved_partition": "boot",
-    "approved_candidate": "B14-M03-r012-legacy-ctl-decode",
-    "candidate_approval_basis": "fresh 2026-07-24 Recovery preflight passed and the user explicitly resumed the controlled boot-only test after manually entering Recovery",
+    "approved_candidate": null,
+    "candidate_approval_basis": "r012 boot-only authorization was consumed by the verified write and full readback; any later write requires a fresh Recovery preflight",
     "push_sha256_must_match": true,
     "full_partition_readback_sha256_must_match": true,
     "automatic_reboot_allowed": true,

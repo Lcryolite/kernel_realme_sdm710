@@ -21,7 +21,7 @@ The source of truth is split deliberately:
 | M0 UAPI oracle | PASS | All 35,664 measured 4.9 values match on arm64 and arm32; 2,745 candidate-only additions are permitted. |
 | M1 donor control | PASS | Clean Image/Image.gz/dtbs/modules build reproduced with pinned tools. |
 | M2 SDM670 static port | PASS | The current d13ec62 candidate passes two clean, byte-identical builds plus config, warning, certificate and DT gates. |
-| M3 device boot | R012 APPROVED / BOOT ONLY / NOT FLASHED | r012 fixes only the legacy `CTL_TOP[7:4]` conversion and logs the raw register. Two byte-identical clean builds, the verified boot package and the fresh 2026-07-24 Recovery preflight pass; only this candidate may be written to boot. |
+| M3 device boot | R012 FLASHED / FULL READBACK PASS / PREBOOT | r012 fixes only the legacy `CTL_TOP[7:4]` conversion and logs the raw register. The boot-only write, device SHA and complete 64 MiB host readback passed; all protected partitions stayed unchanged. Repeated-write approval is cleared pending runtime evidence. |
 
 ## Reproduction
 
