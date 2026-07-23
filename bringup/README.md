@@ -21,7 +21,7 @@ The source of truth is split deliberately:
 | M0 UAPI oracle | PASS | All 35,664 measured 4.9 values match on arm64 and arm32; 2,745 candidate-only additions are permitted. |
 | M1 donor control | PASS | Clean Image/Image.gz/dtbs/modules build reproduced with pinned tools. |
 | M2 SDM670 static port | PASS | The current d13ec62 candidate passes two clean, byte-identical builds plus config, warning, certificate and DT gates. |
-| M3 device boot | R012 STATIC PASS / WAITING RECOVERY | r011 proved the exact direct DSI bind slice but entered 900e. Source audit then found that the 4.14 non-ACTIVE_CFG path fed the complete legacy `CTL_TOP` value to `BIT()` instead of decoding bits 7:4. r012 fixes only that conversion, logs the raw register and has two byte-identical clean builds plus a verified boot package; it is not device-tested. |
+| M3 device boot | R012 APPROVED / BOOT ONLY / NOT FLASHED | r012 fixes only the legacy `CTL_TOP[7:4]` conversion and logs the raw register. Two byte-identical clean builds, the verified boot package and the fresh 2026-07-24 Recovery preflight pass; only this candidate may be written to boot. |
 
 ## Reproduction
 
@@ -115,7 +115,10 @@ semantics while preserving the newer bitmap API, and adds a raw `CTL_TOP`
 marker.  Two clean builds are byte-identical and the 64 MiB boot package passes
 AVB, unpack/repack, ramdisk and six-DTB gates.  Its boot SHA-256 is
 `12595057d7e662c9211a66d480cbc67f4326c5908c7f6c190792e3cff65862cd`;
-it remains `PASS_STATIC_NOT_TESTED` until a new Recovery preflight is captured.
+the 2026-07-24 Recovery preflight passed with the exact r011 boot still installed,
+100% battery, empty pstore and unchanged protected partitions.  The manifest now
+allows only the r012 candidate to be written to boot; it remains untested until
+the write, full readback and reboot evidence are captured.
 
 The public `A17-ResukiSU-4.14-bringup` branch uses an exact-tree snapshot commit
 instead of importing the unrelated 810,594-commit upstream history into the

@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "milestone": "M3-device-boot-entry",
-  "status": "R012_PASS_STATIC_NOT_TESTED_WAITING_RECOVERY",
+  "status": "R012_APPROVED_BOOT_ONLY_NOT_FLASHED",
   "source": {
     "kernel_commit": "7c127cccc809e370406ff1d88f5ee1989c085672",
     "kernel_tree": "92eb263c0b3010d3af730518ba643cdf27a6dcc1",
@@ -836,8 +836,27 @@
       "avb_verify": "PASS",
       "candidate_sha256s_sha256": "1b33911b9070c55f44eebd7f816a1076ba24e9ea20000db339832ec90a7e8a42",
       "candidate_state_sha256": "2d0c0f7fa87f70ea14e5e327ed0f60cb1356023a7f1417106c62445b8bd404cd",
-      "controlled_flash_allowed": false,
+      "controlled_flash_allowed": true,
       "controlled_flash_target": "boot_only",
+      "live_preflight": {
+        "captured_at": "2026-07-24T01:51:41+08:00",
+        "result": "PASS",
+        "evidence_directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260724/B14-M03-r012-return-preflight",
+        "evidence_sha256s_sha256": "00644884a641dc260eca91460d4a8f0a9f9275f039c6ce08eca54767accf2d63",
+        "validated_record_sha256": "ea7ad83d5a49a763cf38ff4151473bec6893ef6bea62c9850275b9e513d5e16c",
+        "verdict_sha256": "6b13e09ba6b9cd8ac5c368a76ac3c5a8e9b1e5d4ace5bcf78d640250639de270",
+        "mode": "recovery",
+        "adb_uid": 0,
+        "battery_percent": 100,
+        "boot_before_identity": "B14-M03-r011-legacy-direct-dsi",
+        "boot_before_sha256": "420254ab26fbf3ba9e8d1c930d4bcd0c615f977fd01ceef2068a77db42aee5e9",
+        "candidate_sha256s_check": "PASS",
+        "recovery_sha256": "66ef2bd883ef8b5e2d471dbc5965686c726263dc35d0394f8e72c790affca0fc",
+        "dtbo_sha256": "73d9d36f775ef041e9d9db748eff5502bec7e5ee8efe0f352c9ac19015ff9b13",
+        "vbmeta_sha256": "9a88f344fdb9a3851a42599fe3da96306dd2e978fdfac67c53c2445801435fff",
+        "rawdump_sha256": "ae46e57009f4b027563ca4b72e69b0f944875efddf273fd845f98aa67ef25378",
+        "pstore_files": 0
+      },
       "recovery_partition_write": false,
       "dtbo_partition_write": false,
       "vbmeta_partition_write": false,
@@ -865,15 +884,15 @@
     "next_live_test": "A/B fastboot 35.0.2 versus 36.0.1 on the next automatic fastboot entry before using the r005 warm-recovery fallback"
   },
   "live_preflight": {
-    "captured_at": "2026-07-23T22:41:44+08:00",
+    "captured_at": "2026-07-24T01:51:41+08:00",
     "result": "PASS",
-    "candidate": "B14-M03-r011-legacy-direct-dsi",
+    "candidate": "B14-M03-r012-legacy-ctl-decode",
     "mode": "recovery",
     "adb_uid": 0,
     "battery_percent": 100,
     "boot_device": "/dev/block/sde10",
     "boot_bytes": 67108864,
-    "boot_sha256": "2dc43e3ec0048a64d4c922b02a747458bc890833776795c6a57890c8d63609f4",
+    "boot_sha256": "420254ab26fbf3ba9e8d1c930d4bcd0c615f977fd01ceef2068a77db42aee5e9",
     "recovery_sha256": "66ef2bd883ef8b5e2d471dbc5965686c726263dc35d0394f8e72c790affca0fc",
     "dtbo_sha256": "73d9d36f775ef041e9d9db748eff5502bec7e5ee8efe0f352c9ac19015ff9b13",
     "vbmeta_sha256": "9a88f344fdb9a3851a42599fe3da96306dd2e978fdfac67c53c2445801435fff",
@@ -881,8 +900,8 @@
     "rawdump_bytes": 134217728,
     "rawdump_sha256": "ae46e57009f4b027563ca4b72e69b0f944875efddf273fd845f98aa67ef25378",
     "pstore_files": 0,
-    "evidence_directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260723/B14-M03-r010-return-before-r011",
-    "evidence_sha256s_sha256": "d0c6fb642e6226fce2298131f317dc943ed89fdb18588f093a92ae6b49e38f53"
+    "evidence_directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260724/B14-M03-r012-return-preflight",
+    "evidence_sha256s_sha256": "00644884a641dc260eca91460d4a8f0a9f9275f039c6ce08eca54767accf2d63"
   },
   "flash_execution": {
     "captured_at": "2026-07-23T08:04:17+08:00",
@@ -1142,8 +1161,8 @@
   },
   "write_policy": {
     "approved_partition": "boot",
-    "approved_candidate": null,
-    "candidate_approval_basis": "fresh Recovery preflight passed and the user had explicitly authorized host-performed boot-only candidate flashes during this bring-up session",
+    "approved_candidate": "B14-M03-r012-legacy-ctl-decode",
+    "candidate_approval_basis": "fresh 2026-07-24 Recovery preflight passed and the user explicitly resumed the controlled boot-only test after manually entering Recovery",
     "push_sha256_must_match": true,
     "full_partition_readback_sha256_must_match": true,
     "automatic_reboot_allowed": true,
