@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "milestone": "M3-device-boot-entry",
-  "status": "R015_FLASHED_READBACK_PASS_PREBOOT",
+  "status": "R015_RUNTIME_FAIL_AUTOMATIC_RECOVERY_PASS",
   "source": {
     "kernel_commit": "b370467eb4173f2ece4faa4a4bbd2692735917b0",
     "kernel_tree": "bc68a8670eaf523f2f44f19068128816111254cd",
@@ -1270,7 +1270,7 @@
       "success_gate": "FAILED: stable OrangeFox Recovery ADB was not reached automatically"
     },
     "B14-M03-r015-sdm670-irq-catalog-pshold": {
-      "status": "FLASHED_READBACK_PASS_PREBOOT",
+      "status": "RUNTIME_FAIL_AUTOMATIC_RECOVERY_PASS",
       "purpose": "remove SDE 5.x interface-TE IRQ banks from the SDM670 SDE 4.1 capability bitmap and route Linux panic automatic-Recovery through PS_HOLD instead of the forced watchdog bite",
       "directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/BOOT-CANDIDATES-20260724/B14-M03-r015-sdm670-irq-catalog-pshold",
       "source_commit": "b370467eb4173f2ece4faa4a4bbd2692735917b0",
@@ -1300,6 +1300,8 @@
         "pmic_restart_reason": "PON_RESTART_REASON_RECOVERY",
         "imem_restart_reason": "0x77665502",
         "runtime_validated": false,
+        "operational_unattended_recovery_result": "PASS_AFTER_APPROXIMATELY_146_SECONDS",
+        "exact_kernel_reset_path_proven": false,
         "limitation": "cannot guarantee Recovery if firmware takes a fatal path that bypasses Linux panic and restart code"
       },
       "build_outputs": [
@@ -1390,7 +1392,33 @@
         "dtbo_partition_write": false,
         "vbmeta_partition_write": false,
         "userdata_write": false,
-        "automatic_reboot_issued": false
+        "automatic_reboot_issued": true,
+        "reboot_issued_at": "2026-07-24T06:52:47+08:00"
+      },
+      "runtime_observation": {
+        "initial_monitor_stop_seconds": 120,
+        "initial_monitor_result": "TIMEOUT_NO_ENUMERATION",
+        "adb_seen_during_initial_monitor": false,
+        "fastboot_seen": false,
+        "qualcomm_900e_seen": false,
+        "automatic_recovery_first_host_observed_at": "2026-07-24T06:55:48+08:00",
+        "automatic_recovery_first_measured_uptime_seconds": 52.33,
+        "automatic_recovery_inferred_kernel_start_at_approximately": "2026-07-24T06:55:13+08:00",
+        "automatic_recovery_inferred_elapsed_seconds_approximately": 146,
+        "human_recovery_command_issued": false,
+        "overall_result": "BOOT_FAILED_BUT_AUTOMATIC_RECOVERY_OPERATIONALLY_PASS",
+        "runtime_observation_directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260724/B14-M03-r015-runtime-observation",
+        "runtime_observation_sha256s_sha256": "591684515ea63dcfb39ff1d927ad74ea82c2e389da0cd679f6295da84bb0d821",
+        "automatic_recovery_evidence_directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260724/B14-M03-r015-sdm670-irq-catalog-pshold-auto-recovery",
+        "automatic_recovery_evidence_sha256s_sha256": "d915201d3bfa7ccc39148db2ae22006c7c756abf13c393a9cd74d056c685e3ef",
+        "recovery_boot_readback_sha256": "683ac664dd971541540ac60db967fd6f40dfcddddb289a9e5d7ab5493de6e19e",
+        "rawdump_changed": false,
+        "pstore_files": 0,
+        "power_on_reason": "Hard Reset and cold boot",
+        "power_off_reason": "PS_HOLD",
+        "clear_loop_passed_proven": false,
+        "panic_ps_hold_path_proven": false,
+        "path_attribution_limit": "empty pstore and unchanged rawdump cannot distinguish Linux panic PS_HOLD from bootloader failure fallback or another controlled reset"
       },
       "controlled_flash_allowed": false,
       "controlled_flash_target": "boot_only",
@@ -1398,7 +1426,7 @@
       "dtbo_partition_write": false,
       "vbmeta_partition_write": false,
       "userdata_write": false,
-      "next_gate": "publish the consumed write state, then issue one monitored system reboot and distinguish Android boot, automatic Recovery, fastboot or 900e"
+      "next_gate": "preserve the working unattended Recovery outcome and obtain a durable pre-reset progress record before another functional candidate or partition write"
     }
   },
   "host_fastboot_recovery_diagnostic": {

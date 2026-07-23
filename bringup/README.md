@@ -21,7 +21,7 @@ The source of truth is split deliberately:
 | M0 UAPI oracle | PASS | All 35,664 measured 4.9 values match on arm64 and arm32; 2,745 candidate-only additions are permitted. |
 | M1 donor control | PASS | Clean Image/Image.gz/dtbs/modules build reproduced with pinned tools. |
 | M2 SDM670 static port | PASS | The current d13ec62 candidate passes two clean, byte-identical builds plus config, warning, certificate and DT gates. |
-| M3 device boot | R015 FLASHED / FULL READBACK PASS / PREBOOT | r014 proved that IRQ-bank indices 0–9 complete and execution stops at index 10, `MDSS_INTF_TEAR_1_INTR` clear offset `0x6e808`; it then entered 900e and did not return to Recovery. r015 removes the SDE 5.x interface-TE banks from the SDM670 SDE 4.1 catalog and bypasses the forced watchdog bite when panic automatic-Recovery is enabled. Recovery preflight, boot-only write, device SHA and full 64 MiB readback pass; approval is consumed and no reboot has yet been issued. |
+| M3 device boot | R015 BOOT FAIL / AUTOMATIC RECOVERY PASS | r014 proved that IRQ-bank indices 0–9 complete and execution stops at index 10, `MDSS_INTF_TEAR_1_INTR` clear offset `0x6e808`; it then entered 900e and did not return to Recovery. r015 removes the SDE 5.x interface-TE banks from the SDM670 SDE 4.1 catalog and bypasses the forced watchdog bite when panic automatic-Recovery is enabled. It did not boot, but avoided the prior 51-second 900e and returned unattended to stable OrangeFox after approximately 146 seconds. |
 
 ## Reproduction
 
@@ -254,9 +254,24 @@ device partition SHA and the complete 64 MiB host readback all equal
 and byte comparison passed.  Recovery, dtbo, vbmeta and rawdump remain frozen;
 userdata was untouched.  The write evidence-list SHA-256 is
 `3d48ac8670b1ca788749ca4d0abee0ef838e7aa6882f6806116a989167c8a3d8`.
-The one-write authorization is consumed and cleared.  r015 has not yet been
-rebooted; the next action is one monitored system reboot with no further
-partition write approved.
+The one-write authorization is consumed and cleared.  r015 was rebooted at
+2026-07-24 06:52:47 +08:00.  The initial 120-second monitor saw no ADB,
+Fastboot or Qualcomm 900e, but stable OrangeFox Recovery subsequently appeared
+without a human or host recovery command.  Recovery uptime places its kernel
+start at approximately 06:55:13, about 146 seconds after the test reboot; the
+first host observation was at 06:55:48.  The boot partition still matched
+`683ac664…e19e`, rawdump was unchanged, pstore was empty and the power reasons
+reported a hard/cold start after PS_HOLD.  The runtime observation-list
+SHA-256 is
+`591684515ea63dcfb39ff1d927ad74ea82c2e389da0cd679f6295da84bb0d821`;
+the automatic-Recovery capture-list SHA-256 is
+`d915201d3bfa7ccc39148db2ae22006c7c756abf13c393a9cd74d056c685e3ef`.
+This is an operational unattended-Recovery pass and an observable improvement
+over r014, but it is still a boot failure.  Empty pstore and unchanged rawdump
+mean the evidence cannot attribute the Recovery selection specifically to the
+Linux panic PS_HOLD branch, nor prove that the clear-all loop completed.  No
+further partition write is approved until a durable pre-reset progress record
+can be collected without losing this recovery behavior.
 
 The public `A17-ResukiSU-4.14-bringup` branch uses exact-tree snapshot commits
 instead of importing the unrelated 810,594-commit upstream history into the
