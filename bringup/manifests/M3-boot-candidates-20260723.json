@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "milestone": "M3-device-boot-entry",
-  "status": "R011_PREFLIGHT_PASS_APPROVED_BOOT_ONLY",
+  "status": "R011_FLASHED_VERIFIED_AWAITING_REBOOT",
   "source": {
     "kernel_commit": "2ffb7ab18194fbb81220600e0679dd116cdffd91",
     "kernel_tree": "f354992746e972d87af86adac6db4a0283a673dc",
@@ -609,7 +609,7 @@
       }
     },
     "B14-M03-r011-legacy-direct-dsi": {
-      "status": "PREFLIGHT_PASS_APPROVED_BOOT_ONLY_NOT_TESTED",
+      "status": "FLASHED_VERIFIED_AWAITING_REBOOT",
       "purpose": "enumerate and bind the exact RMX1901 legacy direct DSI display while retaining the diagnostic splash mapping whenever continuous-splash validation fails",
       "directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/BOOT-CANDIDATES-20260723/B14-M03-r011-legacy-direct-dsi",
       "source_commit": "2ffb7ab18194fbb81220600e0679dd116cdffd91",
@@ -686,7 +686,7 @@
       "avb_verify": "PASS",
       "candidate_sha256s_sha256": "fe30a49376874315b92862996f6e56266535117a05eb1480fbbaaaa3b906504e",
       "candidate_state_sha256": "70c06af6beba362a18ec360ece225f598d98484b265d1d4507920396c70d91d2",
-      "controlled_flash_allowed": true,
+      "controlled_flash_allowed": false,
       "controlled_flash_target": "boot_only",
       "live_preflight": {
         "captured_at": "2026-07-23T22:41:44+08:00",
@@ -705,6 +705,24 @@
         "vbmeta_sha256": "9a88f344fdb9a3851a42599fe3da96306dd2e978fdfac67c53c2445801435fff",
         "rawdump_sha256": "ae46e57009f4b027563ca4b72e69b0f944875efddf273fd845f98aa67ef25378",
         "pstore_files": 0
+      },
+      "flash_execution": {
+        "captured_at": "2026-07-23T22:49:05+08:00",
+        "result": "PASS",
+        "mode_during_write": "recovery",
+        "target": "/dev/block/sde10",
+        "bytes_written": 67108864,
+        "pushed_file_sha256": "420254ab26fbf3ba9e8d1c930d4bcd0c615f977fd01ceef2068a77db42aee5e9",
+        "device_partition_sha256_after_write": "420254ab26fbf3ba9e8d1c930d4bcd0c615f977fd01ceef2068a77db42aee5e9",
+        "host_full_partition_readback_sha256": "420254ab26fbf3ba9e8d1c930d4bcd0c615f977fd01ceef2068a77db42aee5e9",
+        "host_full_partition_readback_cmp": "PASS",
+        "recovery_sha256_after_write": "66ef2bd883ef8b5e2d471dbc5965686c726263dc35d0394f8e72c790affca0fc",
+        "dtbo_sha256_after_write": "73d9d36f775ef041e9d9db748eff5502bec7e5ee8efe0f352c9ac19015ff9b13",
+        "vbmeta_sha256_after_write": "9a88f344fdb9a3851a42599fe3da96306dd2e978fdfac67c53c2445801435fff",
+        "rawdump_sha256_after_write": "ae46e57009f4b027563ca4b72e69b0f944875efddf273fd845f98aa67ef25378",
+        "evidence_directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260723/B14-M03-r011-legacy-direct-dsi-preboot",
+        "evidence_sha256s_sha256": "5828e67c6ea66644d7964a36cbc38a94870ca310cbae12a7bcfc54bf59810d99",
+        "automatic_reboot_issued": false
       },
       "recovery_partition_write": false,
       "dtbo_partition_write": false,
@@ -980,6 +998,32 @@
     "reboot_issued_at": "2026-07-23T21:07:48+08:00",
     "qualcomm_900e_observed_at": "2026-07-23T21:08:41+08:00",
     "test_evidence_directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260723/B14-M03-r010-splash-cleanup-guard-900e"
+  },
+  "r011_flash_execution": {
+    "captured_at": "2026-07-23T22:49:05+08:00",
+    "candidate": "B14-M03-r011-legacy-direct-dsi",
+    "mode_during_write": "recovery",
+    "target_symlink": "/dev/block/by-name/boot",
+    "resolved_target": "/dev/block/sde10",
+    "bytes_written": 67108864,
+    "previous_boot_sha256": "2dc43e3ec0048a64d4c922b02a747458bc890833776795c6a57890c8d63609f4",
+    "pushed_file_sha256": "420254ab26fbf3ba9e8d1c930d4bcd0c615f977fd01ceef2068a77db42aee5e9",
+    "device_partition_sha256_after_write": "420254ab26fbf3ba9e8d1c930d4bcd0c615f977fd01ceef2068a77db42aee5e9",
+    "host_streamed_full_partition_sha256": "420254ab26fbf3ba9e8d1c930d4bcd0c615f977fd01ceef2068a77db42aee5e9",
+    "host_streamed_readback_cmp": "PASS",
+    "recovery_partition_sha256_after_write": "66ef2bd883ef8b5e2d471dbc5965686c726263dc35d0394f8e72c790affca0fc",
+    "dtbo_partition_sha256_after_write": "73d9d36f775ef041e9d9db748eff5502bec7e5ee8efe0f352c9ac19015ff9b13",
+    "vbmeta_partition_sha256_after_write": "9a88f344fdb9a3851a42599fe3da96306dd2e978fdfac67c53c2445801435fff",
+    "rawdump_sha256_after_write": "ae46e57009f4b027563ca4b72e69b0f944875efddf273fd845f98aa67ef25378",
+    "preboot_evidence_directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260723/B14-M03-r011-legacy-direct-dsi-preboot",
+    "preboot_evidence_sha256s_sha256": "5828e67c6ea66644d7964a36cbc38a94870ca310cbae12a7bcfc54bf59810d99",
+    "recovery_partition_write": false,
+    "dtbo_partition_write": false,
+    "vbmeta_partition_write": false,
+    "userdata_write": false,
+    "automatic_reboot_issued": false,
+    "reboot_issued_at": null,
+    "test_evidence_directory": null
   },
   "write_policy": {
     "approved_partition": "boot",
