@@ -21,7 +21,7 @@ The source of truth is split deliberately:
 | M0 UAPI oracle | PASS | All 35,664 measured 4.9 values match on arm64 and arm32; 2,745 candidate-only additions are permitted. |
 | M1 donor control | PASS | Clean Image/Image.gz/dtbs/modules build reproduced with pinned tools. |
 | M2 SDM670 static port | PASS | The current d13ec62 candidate passes two clean, byte-identical builds plus config, warning, certificate and DT gates. |
-| M3 device boot | R012 TESTED / CTL + SPLASH VALIDATION PASS / CPU2 SERROR / 900E | r012 proved the legacy `CTL_TOP[7:4]` fix: CTL0 decoded as INTF2 and continuous-splash validation reached `actual=expected=1, rc=0`. Boot then hit a trustworthy CPU2 SError immediately after DRM vblank initialization and entered 900e after 51 seconds. No candidate is approved for another write. |
+| M3 device boot | R013 APPROVED / BOOT ONLY / NOT TESTED | r012 proved the legacy `CTL_TOP[7:4]` fix and passed continuous-splash validation before a trustworthy CPU2 SError. r013 preserves that behavior and adds 37 boundary markers around vblank, runtime PM, SDE IRQ register access, `request_irq`, first IRQ handling, DRM registration and mode reset. Two clean builds, boot package and the candidate-bound full Recovery preflight pass; only the exact r013 boot SHA is approved. |
 
 ## Reproduction
 
@@ -127,13 +127,36 @@ the full Sahara evidence-list hash is
 `26232b9c0718208523f6dc97d6ea465dde1bca1b0c93f1d311d277064dcd0acd`.
 No candidate is approved for another write; r013 is limited to boundary
 instrumentation around vblank, runtime PM, IRQ install, device registration and
-mode-config reset.
+mode-config reset.  Source commit `603134d8422f0242c736cefb96fcc0d5ed06f21b`
+contains 37 tagged probes and no intended functional change.  Two clean Clang
+11.0.1 + ThinLTO builds are byte-identical across config, Module.symvers,
+vmlinux, System.map, Image, Image.gz, base/merged DTB and signing key; build ID
+is `fc6fc3377b1585b9`.  The r013 64 MiB boot image preserves the exact r012
+OrangeFox ramdisk and all six DTBs, passes AVB Android 17 and unpack/repack
+checks, and has SHA-256
+`ed1e688b4ddf2f519611f0b1d9f24d978e06e0bc8fb9b65b4e8f5c75759c6589`.
+Its candidate SHA list is
+`0febd25d6c51f7febc395fe075188ebc6e9ff1e888664eb3cc57fb9238e59b97`;
+the reproducibility evidence list is
+`71723827fd8668967e10ea86452fd029f28ef50a0e80adc3689165e3275fa963`.
+A fresh full Recovery preflight passed at 2026-07-24 02:50 +08:00: root ADB,
+Android 17 Recovery, 100% battery, the exact tested r012 boot installed, empty
+pstore, and frozen recovery/dtbo/vbmeta/rawdump hashes.  Its evidence-list
+SHA-256 is
+`a81bce955178deb6d00369269c5d9ee35389dda14cb6ec089a2aa1f86b6df360`.
+The preflight was read-only.  A separate policy update now approves only
+`B14-M03-r013-drm-irq-boundary` and only the boot partition; the exact approved
+SHA-256 is
+`ed1e688b4ddf2f519611f0b1d9f24d978e06e0bc8fb9b65b4e8f5c75759c6589`.
+Recovery, dtbo, vbmeta and userdata writes remain forbidden.  The approval is
+consumed after one verified write and full 64 MiB readback.
 
-The public `A17-ResukiSU-4.14-bringup` branch uses an exact-tree snapshot commit
+The public `A17-ResukiSU-4.14-bringup` branch uses exact-tree snapshot commits
 instead of importing the unrelated 810,594-commit upstream history into the
-RMX1901 repository.  Snapshot `bb0ccd6b2b14fdace659666666820295eb387432`
-has tree `92eb263c0b3010d3af730518ba643cdf27a6dcc1`, byte-for-byte identical to the
-local r012 runtime source commit `7c127cccc809e370406ff1d88f5ee1989c085672`.
+RMX1901 repository.  r013 source snapshot
+`8c3f63e461ba5f1307978e46096b88e798567db7` has tree
+`16a8a939ada3d953661d3fd0db95f8f2ce4cbd62`, byte-for-byte identical to the
+local r013 runtime source commit `603134d8422f0242c736cefb96fcc0d5ed06f21b`.
 
 After a failed boot has returned to Recovery, capture the immutable failure
 state before any rollback with `scripts/bringup/capture-m3-recovery-evidence.sh`.
