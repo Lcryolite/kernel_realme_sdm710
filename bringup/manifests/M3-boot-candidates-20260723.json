@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "milestone": "M3-device-boot-entry",
-  "status": "R014_APPROVED_BOOT_ONLY_AWAITING_FLASH",
+  "status": "R014_FLASHED_READBACK_PASS_PREBOOT",
   "source": {
     "kernel_commit": "6c36cb5da81d61fc061e8e74604541685da89d32",
     "kernel_tree": "5d30841c8acc3ed87b1218bd3809d53e4e4e51b4",
@@ -1109,7 +1109,7 @@
       "success_gate": "stable OrangeFox Recovery ADB"
     },
     "B14-M03-r014-irq-bank-autorecovery": {
-      "status": "APPROVED_BOOT_ONLY_AWAITING_FLASH",
+      "status": "FLASHED_READBACK_PASS_PREBOOT",
       "purpose": "identify the exact SDE clear-all IRQ bank or barrier boundary and automatically return a panicked bring-up kernel to Recovery",
       "directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/BOOT-CANDIDATES-20260724/B14-M03-r014-irq-bank-autorecovery",
       "source_commit": "6c36cb5da81d61fc061e8e74604541685da89d32",
@@ -1208,7 +1208,29 @@
         "device_write_performed": false,
         "approval_granted_by_preflight": false
       },
-      "controlled_flash_allowed": true,
+      "flash_execution": {
+        "captured_at": "2026-07-24T05:28:26+08:00",
+        "result": "PASS",
+        "mode_during_write": "recovery",
+        "approved_remote_head": "94d13b152aeb0a36e6f149baacdfaf13eeff2ca9",
+        "target": "/dev/block/sde10",
+        "bytes_written": 67108864,
+        "previous_boot_sha256": "ed1e688b4ddf2f519611f0b1d9f24d978e06e0bc8fb9b65b4e8f5c75759c6589",
+        "pushed_file_sha256": "183bc4cd74ea223889116081636d62b16ed935788021539fb947fb6bf11818b3",
+        "device_partition_sha256_after_write": "183bc4cd74ea223889116081636d62b16ed935788021539fb947fb6bf11818b3",
+        "host_full_partition_readback_sha256": "183bc4cd74ea223889116081636d62b16ed935788021539fb947fb6bf11818b3",
+        "host_full_partition_readback_cmp": "PASS",
+        "recovery_sha256_after_write": "66ef2bd883ef8b5e2d471dbc5965686c726263dc35d0394f8e72c790affca0fc",
+        "dtbo_sha256_after_write": "73d9d36f775ef041e9d9db748eff5502bec7e5ee8efe0f352c9ac19015ff9b13",
+        "vbmeta_sha256_after_write": "9a88f344fdb9a3851a42599fe3da96306dd2e978fdfac67c53c2445801435fff",
+        "rawdump_sha256_after_write": "ae46e57009f4b027563ca4b72e69b0f944875efddf273fd845f98aa67ef25378",
+        "evidence_directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260724/B14-M03-r014-irq-bank-autorecovery-preboot",
+        "evidence_sha256s_sha256": "d4d99d35fada8f48ff1b00bb62e12f0e664b034e9e95ef2c4b28ce46c55f5c34",
+        "flash_state_sha256": "ca65bd8d3bd72e0dc0276d5792c83afe88496c96bd1c3744829a53037293f7d5",
+        "write_transcript_sha256": "2ea8747726f5c1953ce0633b650eb33e91a48d8bac4e3dd328ed6fe901c65276",
+        "automatic_reboot_issued": false
+      },
+      "controlled_flash_allowed": false,
       "controlled_flash_target": "boot_only",
       "recovery_partition_write": false,
       "dtbo_partition_write": false,
@@ -1514,9 +1536,9 @@
   },
   "write_policy": {
     "approved_partition": "boot",
-    "approved_candidate": "B14-M03-r014-irq-bank-autorecovery",
-    "approved_candidate_boot_sha256": "183bc4cd74ea223889116081636d62b16ed935788021539fb947fb6bf11818b3",
-    "candidate_approval_basis": "user explicitly requested continuation and an unattended automatic-Recovery process on 2026-07-24 after the exact r014 candidate passed clean builds, packaging and a fresh read-only Recovery preflight; approval is consumed by one verified boot-only write",
+    "approved_candidate": null,
+    "approved_candidate_boot_sha256": null,
+    "candidate_approval_basis": "r014 boot-only authorization was consumed by the verified write, device SHA and complete 64 MiB host readback; any later write requires a fresh Recovery preflight and a separate exact-candidate approval",
     "push_sha256_must_match": true,
     "full_partition_readback_sha256_must_match": true,
     "automatic_reboot_allowed": true,
