@@ -21,7 +21,7 @@ The source of truth is split deliberately:
 | M0 UAPI oracle | PASS | All 35,664 measured 4.9 values match on arm64 and arm32; 2,745 candidate-only additions are permitted. |
 | M1 donor control | PASS | Clean Image/Image.gz/dtbs/modules build reproduced with pinned tools. |
 | M2 SDM670 static port | PASS | The current d13ec62 candidate passes two clean, byte-identical builds plus config, warning, certificate and DT gates. |
-| M3 device boot | R013 TESTED / FAILURE BOUNDED TO SDE CLEAR-ALL IRQ LOOP / 900E | r012 proved the legacy `CTL_TOP[7:4]` fix and passed continuous-splash validation. r013 preserves that behavior and proves vblank, runtime PM and SDE IRQ power enable return successfully. The last trustworthy marker is immediately before `sde_clear_all_irqs()`; `request_irq`, first IRQ handling and DRM registration are not reached. Repeated-write approval remains cleared. |
+| M3 device boot | R014 AUTO-RECOVERY CANDIDATE / STATIC PASS / NOT TESTED | r013 bounded the failure to `sde_clear_all_irqs()`. r014 logs each unchanged IRQ-bank clear write and the existing `wmb()`. It also restores the known-good RMX1901 4.9 panic-to-Recovery policy after KMSG dumping. Two clean builds are byte-identical and the A17 boot package passes; no write is approved before a fresh Recovery preflight. |
 
 ## Reproduction
 
@@ -169,6 +169,21 @@ list SHA-256 is
 The next single-variable probe is r014: log each IRQ bank index, table ID and
 clear offset immediately before and after its unchanged `0xffffffff` write,
 then log both sides of the existing `wmb()`.
+
+r014 source commit `6c36cb5da81d61fc061e8e74604541685da89d32`
+adds those four per-bank/barrier marker classes.  It also restores the
+RMX1901 known-good 4.9 panic restart policy that the 4.14 donor lacked: after
+panic notifiers and `kmsg_dump`, panic download mode is disabled, PMIC and
+IMEM Recovery reasons are written and a warm reset is requested.  Normal
+restart commands are unchanged, and `rmx1901.panic_recovery=0` disables the
+bring-up safety path when a Sahara capture is explicitly required.  Two fresh
+Clang 11.0.1 + ThinLTO builds are byte-identical; build ID is
+`e8591983d70e62c4` and their evidence-list SHA-256 is
+`8dbdc4c25d78cab948ceca018e0a786440b6815fc807ab833e5975746e725d41`.
+The complete 64 MiB A17 boot image preserves the exact r013 OrangeFox ramdisk
+and all six DTBs, passes AVB and unpack/repack verification, and has SHA-256
+`183bc4cd74ea223889116081636d62b16ed935788021539fb947fb6bf11818b3`.
+It is a static candidate only and has not yet been approved or written.
 
 The public `A17-ResukiSU-4.14-bringup` branch uses exact-tree snapshot commits
 instead of importing the unrelated 810,594-commit upstream history into the
