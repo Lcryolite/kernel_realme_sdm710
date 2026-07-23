@@ -69,11 +69,29 @@ static int download_mode = 1;
 static bool force_warm_reboot;
 
 static int in_panic;
+/*
+ * RMX1901's known-good 4.9 poweroff driver routes a kernel panic to
+ * Recovery instead of Qualcomm download mode.  Keep that bring-up safety
+ * behavior enabled by default, while retaining an escape hatch for tests
+ * that explicitly require Sahara crashdump.
+ */
+static bool bringup_panic_recovery = true;
+module_param_named(bringup_panic_recovery, bringup_panic_recovery, bool, 0644);
+MODULE_PARM_DESC(bringup_panic_recovery,
+	"route a kernel panic to Recovery instead of Qualcomm download mode");
+
+static int __init bringup_panic_recovery_setup(char *str)
+{
+	return kstrtobool(str, &bringup_panic_recovery);
+}
+early_param("rmx1901.panic_recovery", bringup_panic_recovery_setup);
 
 static int panic_prep_restart(struct notifier_block *this,
 			      unsigned long event, void *ptr)
 {
 	in_panic = 1;
+	pr_emerg("RMX1901-AUTORECOVERY: stage=panic-notifier enabled=%d\n",
+		bringup_panic_recovery);
 	return NOTIFY_DONE;
 }
 
@@ -290,13 +308,14 @@ static void msm_restart_prepare(const char *cmd)
 {
 	bool need_warm_reset = false;
 #ifdef CONFIG_QCOM_DLOAD_MODE
-	/* Write download mode flags if we're panic'ing
+	/* Write download mode flags if we're panic'ing without auto-Recovery
 	 * Write download mode flags if restart_mode says so
 	 * Kill download mode if master-kill switch is set
 	 */
 	if (!is_kdump_kernel())
 		set_dload_mode(download_mode &&
-			(in_panic || restart_mode == RESTART_DLOAD));
+			((in_panic && !bringup_panic_recovery) ||
+			restart_mode == RESTART_DLOAD));
 #endif
 
 	if (qpnp_pon_check_hard_reset_stored()) {
@@ -309,6 +328,8 @@ static void msm_restart_prepare(const char *cmd)
 		need_warm_reset = (get_dload_mode() ||
 				(cmd != NULL && cmd[0] != '\0'));
 	}
+	if (in_panic && bringup_panic_recovery)
+		need_warm_reset = true;
 
 	if (force_warm_reboot)
 		pr_info("Forcing a warm reset of the system\n");
@@ -318,6 +339,15 @@ static void msm_restart_prepare(const char *cmd)
 		qpnp_pon_system_pwr_off(PON_POWER_OFF_WARM_RESET);
 	else
 		qpnp_pon_system_pwr_off(PON_POWER_OFF_HARD_RESET);
+
+	if (in_panic && bringup_panic_recovery) {
+		qpnp_pon_set_restart_reason(PON_RESTART_REASON_RECOVERY);
+		if (restart_reason)
+			__raw_writel(0x77665502, restart_reason);
+		pr_emerg("RMX1901-AUTORECOVERY: stage=restart-prepare target=recovery dload=%d warm-reset=1\n",
+			get_dload_mode());
+		goto finish_set_restart_reason;
+	}
 
 	if (cmd != NULL) {
 		if (!strncmp(cmd, "bootloader", 10)) {
@@ -359,6 +389,7 @@ static void msm_restart_prepare(const char *cmd)
 		}
 	}
 
+finish_set_restart_reason:
 	flush_cache_all();
 
 	/*outer_flush_all is not supported by 64bit kernel*/
