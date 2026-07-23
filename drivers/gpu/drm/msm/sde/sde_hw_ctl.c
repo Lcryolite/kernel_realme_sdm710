@@ -660,6 +660,7 @@ static inline u32 sde_hw_ctl_get_intf(struct sde_hw_ctl *ctx)
 {
 	struct sde_hw_blk_reg_map *c;
 	u32 ctl_top;
+	u32 intf_sel;
 	u32 intf_active = 0;
 
 	if (!ctx) {
@@ -670,8 +671,21 @@ static inline u32 sde_hw_ctl_get_intf(struct sde_hw_ctl *ctx)
 	c = &ctx->hw;
 	ctl_top = SDE_REG_READ(c, CTL_TOP);
 
-	intf_active = (ctl_top > 0) ?
-		BIT(ctl_top - 1) : 0;
+	/*
+	 * Legacy CTL hardware stores the one-based INTF enum in
+	 * CTL_TOP[7:4].  Convert that field to the active-interface bitmap
+	 * returned by the v1 implementation.  Using the complete CTL_TOP as
+	 * a bit number loses command-mode CTLs because their mode bit is set.
+	 */
+	intf_sel = (ctl_top >> 4) & 0xf;
+	if (intf_sel >= INTF_0 && intf_sel < INTF_MAX)
+		intf_active = BIT(intf_sel - INTF_0);
+	else if (intf_sel)
+		pr_warn("RMX1901-R012: ctl=%d invalid legacy intf=%u ctl_top=0x%08x\n",
+			ctx->idx - CTL_0, intf_sel, ctl_top);
+
+	pr_info("RMX1901-R012: ctl=%d legacy ctl_top=0x%08x intf=%u active=0x%x\n",
+		ctx->idx - CTL_0, ctl_top, intf_sel, intf_active);
 
 	return intf_active;
 }

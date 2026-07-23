@@ -1378,7 +1378,7 @@ int sde_rm_cont_splash_res_init(struct msm_drm_private *priv,
 		}
 
 		intf_sel = ctl->ops.get_ctl_intf(ctl);
-		pr_info("RMX1901-R010: cont-splash ctl=%d intf_sel=0x%x index_before=%d\n",
+		pr_info("RMX1901-R012: cont-splash ctl=%d intf_active=0x%x index_before=%d\n",
 			iter_c.blk->id - CTL_0, intf_sel, index_before);
 		if (intf_sel) {
 			splash_display =  &splash_data->splash_display[index];
