@@ -21,7 +21,7 @@ The source of truth is split deliberately:
 | M0 UAPI oracle | PASS | All 35,664 measured 4.9 values match on arm64 and arm32; 2,745 candidate-only additions are permitted. |
 | M1 donor control | PASS | Clean Image/Image.gz/dtbs/modules build reproduced with pinned tools. |
 | M2 SDM670 static port | PASS | The current d13ec62 candidate passes two clean, byte-identical builds plus config, warning, certificate and DT gates. |
-| M3 device boot | R011 TESTED / DSI BOUND / CTL ZERO / 900E | r011 selected and bound the exact direct DSI once, changed `real_dsi` from zero to one and removed all ten GPIO54 errors. All five boot CTLs still reported `intf_sel=0`, continuous-splash validation still failed and the device entered 900e after about 59 seconds. |
+| M3 device boot | R012 STATIC PASS / WAITING RECOVERY | r011 proved the exact direct DSI bind slice but entered 900e. Source audit then found that the 4.14 non-ACTIVE_CFG path fed the complete legacy `CTL_TOP` value to `BIT()` instead of decoding bits 7:4. r012 fixes only that conversion, logs the raw register and has two byte-identical clean builds plus a verified boot package; it is not device-tested. |
 
 ## Reproduction
 
@@ -99,9 +99,9 @@ candidate-only interfaces where they do not mutate a baseline value.  IPA QMI
 keeps the legacy userspace layout and its required 16-bit wire encoding as
 separate concerns.  All 35,664 baseline values now match on both ABIs.
 
-The M3 boot candidates, results through r010 and the exact write policy are
+The M3 boot candidates, results through r011 and the exact write policy are
 recorded in `bringup/manifests/M3-boot-candidates-20260723.json`.  r010 is the
-currently installed failed candidate.  r011 is packaged and statically
+previous diagnostic mapping checkpoint.  r011 was packaged, statically
 verified and device-tested.  Its fresh Recovery preflight, boot-only write,
 device SHA and full 64 MiB host readback passed.  Runtime logs then proved the
 exact direct DSI selection, resources, component publication, post-bind marker
@@ -110,13 +110,18 @@ still entered 900e after about 59 seconds because the next boundary remains
 open: every CTL reports `intf_sel=0`, validation remains `actual=0 expected=1
 rc=-22`, and one `invalid vsync source selection` error remains.  The approved
 candidate is cleared; Recovery, dtbo, vbmeta and userdata writes remain
-forbidden and unchanged.
+forbidden and unchanged.  r012 restores the 4.9 legacy CTL interface-field
+semantics while preserving the newer bitmap API, and adds a raw `CTL_TOP`
+marker.  Two clean builds are byte-identical and the 64 MiB boot package passes
+AVB, unpack/repack, ramdisk and six-DTB gates.  Its boot SHA-256 is
+`12595057d7e662c9211a66d480cbc67f4326c5908c7f6c190792e3cff65862cd`;
+it remains `PASS_STATIC_NOT_TESTED` until a new Recovery preflight is captured.
 
 The public `A17-ResukiSU-4.14-bringup` branch uses an exact-tree snapshot commit
 instead of importing the unrelated 810,594-commit upstream history into the
-RMX1901 repository.  Snapshot `6e1457ef1a1452f30f3fafc5500bdfbc3501229b`
-has tree `f354992746e972d87af86adac6db4a0283a673dc`, byte-for-byte identical to the
-local runtime source commit `2ffb7ab18194fbb81220600e0679dd116cdffd91`.
+RMX1901 repository.  Snapshot `bb0ccd6b2b14fdace659666666820295eb387432`
+has tree `92eb263c0b3010d3af730518ba643cdf27a6dcc1`, byte-for-byte identical to the
+local r012 runtime source commit `7c127cccc809e370406ff1d88f5ee1989c085672`.
 
 After a failed boot has returned to Recovery, capture the immutable failure
 state before any rollback with `scripts/bringup/capture-m3-recovery-evidence.sh`.
