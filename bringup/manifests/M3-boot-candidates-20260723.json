@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "milestone": "M3-device-boot-entry",
-  "status": "R014_AUTORECOVERY_CANDIDATE_PASS_STATIC_NOT_TESTED",
+  "status": "R014_RETURN_PREFLIGHT_PASS_AWAITING_WRITE_APPROVAL",
   "source": {
     "kernel_commit": "6c36cb5da81d61fc061e8e74604541685da89d32",
     "kernel_tree": "5d30841c8acc3ed87b1218bd3809d53e4e4e51b4",
@@ -1186,6 +1186,28 @@
       "avb_verify": "PASS",
       "candidate_sha256s_sha256": "f0109adbb0374c64014a49c9da802e4729a73e5109d5054fb5ed1f57f885ceae",
       "candidate_state_sha256": "d279e51151876b7efa33b74c667fdbcc6cb1a164ea41c1bc2a5de80e6919127e",
+      "live_preflight": {
+        "captured_at": "2026-07-24T03:52:58+08:00",
+        "result": "PASS",
+        "evidence_directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260724/B14-M03-r014-return-preflight",
+        "evidence_sha256s_sha256": "77fcb72fb2eec9dce93a982e6276c757877deba3832a21c79dda4cceb0629651",
+        "validated_record_sha256": "311e2aefc956c9983908df5c7b7168ca5ba9d2405a87881c1406157f4a6bf1fb",
+        "verdict_sha256": "de93fc679eca7adbf8c9fc485229a25e57e81e2c25c310e8a90656ae9d88bf3e",
+        "mode": "recovery",
+        "adb_uid": 0,
+        "battery_percent": 100,
+        "boot_before_identity": "B14-M03-r013-drm-irq-boundary",
+        "boot_before_sha256": "ed1e688b4ddf2f519611f0b1d9f24d978e06e0bc8fb9b65b4e8f5c75759c6589",
+        "candidate_sha256s_check": "PASS",
+        "candidate_avb_check": "PASS",
+        "recovery_sha256": "66ef2bd883ef8b5e2d471dbc5965686c726263dc35d0394f8e72c790affca0fc",
+        "dtbo_sha256": "73d9d36f775ef041e9d9db748eff5502bec7e5ee8efe0f352c9ac19015ff9b13",
+        "vbmeta_sha256": "9a88f344fdb9a3851a42599fe3da96306dd2e978fdfac67c53c2445801435fff",
+        "rawdump_sha256": "ae46e57009f4b027563ca4b72e69b0f944875efddf273fd845f98aa67ef25378",
+        "pstore_files": 0,
+        "device_write_performed": false,
+        "approval_granted_by_preflight": false
+      },
       "controlled_flash_allowed": false,
       "controlled_flash_target": "boot_only",
       "recovery_partition_write": false,
@@ -1215,15 +1237,15 @@
     "next_live_test": "A/B fastboot 35.0.2 versus 36.0.1 on the next automatic fastboot entry before using the r005 warm-recovery fallback"
   },
   "live_preflight": {
-    "captured_at": "2026-07-24T02:50:00+08:00",
+    "captured_at": "2026-07-24T03:52:58+08:00",
     "result": "PASS",
-    "candidate": "B14-M03-r013-drm-irq-boundary",
+    "candidate": "B14-M03-r014-irq-bank-autorecovery",
     "mode": "recovery",
     "adb_uid": 0,
     "battery_percent": 100,
     "boot_device": "/dev/block/sde10",
     "boot_bytes": 67108864,
-    "boot_sha256": "12595057d7e662c9211a66d480cbc67f4326c5908c7f6c190792e3cff65862cd",
+    "boot_sha256": "ed1e688b4ddf2f519611f0b1d9f24d978e06e0bc8fb9b65b4e8f5c75759c6589",
     "recovery_sha256": "66ef2bd883ef8b5e2d471dbc5965686c726263dc35d0394f8e72c790affca0fc",
     "dtbo_sha256": "73d9d36f775ef041e9d9db748eff5502bec7e5ee8efe0f352c9ac19015ff9b13",
     "vbmeta_sha256": "9a88f344fdb9a3851a42599fe3da96306dd2e978fdfac67c53c2445801435fff",
@@ -1231,8 +1253,8 @@
     "rawdump_bytes": 134217728,
     "rawdump_sha256": "ae46e57009f4b027563ca4b72e69b0f944875efddf273fd845f98aa67ef25378",
     "pstore_files": 0,
-    "evidence_directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260724/B14-M03-r013-return-preflight",
-    "evidence_sha256s_sha256": "a81bce955178deb6d00369269c5d9ee35389dda14cb6ec089a2aa1f86b6df360"
+    "evidence_directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260724/B14-M03-r014-return-preflight",
+    "evidence_sha256s_sha256": "77fcb72fb2eec9dce93a982e6276c757877deba3832a21c79dda4cceb0629651"
   },
   "flash_execution": {
     "captured_at": "2026-07-23T08:04:17+08:00",
