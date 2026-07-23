@@ -21,7 +21,7 @@ The source of truth is split deliberately:
 | M0 UAPI oracle | PASS | All 35,664 measured 4.9 values match on arm64 and arm32; 2,745 candidate-only additions are permitted. |
 | M1 donor control | PASS | Clean Image/Image.gz/dtbs/modules build reproduced with pinned tools. |
 | M2 SDM670 static port | PASS | The current d13ec62 candidate passes two clean, byte-identical builds plus config, warning, certificate and DT gates. |
-| M3 device boot | R010 TESTED / R011 BUILD PENDING | r010 confirmed the failed continuous-splash cleanup source and removed the old translation-fault chain, but still panicked. r011 legacy direct-DSI and GPIO10-only TE changes passed review; no r011 boot candidate exists yet. |
+| M3 device boot | R011 PASS_STATIC_NOT_TESTED | r010 confirmed the failed continuous-splash cleanup source but still panicked. Reviewed r011 passed two clean byte-identical builds and boot-image verification; the manifest still forbids flashing until a fresh Recovery preflight and explicit candidate approval. |
 
 ## Reproduction
 
@@ -101,10 +101,17 @@ separate concerns.  All 35,664 baseline values now match on both ABIs.
 
 The M3 boot candidates, results through r010 and the exact write policy are
 recorded in `bringup/manifests/M3-boot-candidates-20260723.json`.  r010 is the
-currently installed failed candidate.  r011 is still source-only: it must be
-committed, rebuilt from a clean tree, packaged and added to the manifest before
-it can be considered for a boot-only controlled test.  Recovery, dtbo, vbmeta
-and userdata writes remain forbidden.
+currently installed failed candidate.  r011 is packaged and statically
+verified but not device-tested; `controlled_flash_allowed` remains false and
+`write_policy.approved_candidate` remains null until a fresh Recovery preflight
+closes the live-state gate.  Recovery, dtbo, vbmeta and userdata writes remain
+forbidden.
+
+The public `A17-ResukiSU-4.14-bringup` branch uses an exact-tree snapshot commit
+instead of importing the unrelated 810,594-commit upstream history into the
+RMX1901 repository.  Snapshot `6e1457ef1a1452f30f3fafc5500bdfbc3501229b`
+has tree `f354992746e972d87af86adac6db4a0283a673dc`, byte-for-byte identical to the
+local runtime source commit `2ffb7ab18194fbb81220600e0679dd116cdffd91`.
 
 After a failed boot has returned to Recovery, capture the immutable failure
 state before any rollback with `scripts/bringup/capture-m3-recovery-evidence.sh`.
