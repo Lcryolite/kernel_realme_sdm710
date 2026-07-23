@@ -21,7 +21,7 @@ The source of truth is split deliberately:
 | M0 UAPI oracle | PASS | All 35,664 measured 4.9 values match on arm64 and arm32; 2,745 candidate-only additions are permitted. |
 | M1 donor control | PASS | Clean Image/Image.gz/dtbs/modules build reproduced with pinned tools. |
 | M2 SDM670 static port | PASS | The current d13ec62 candidate passes two clean, byte-identical builds plus config, warning, certificate and DT gates. |
-| M3 device boot | R013 APPROVED / BOOT ONLY / NOT TESTED | r012 proved the legacy `CTL_TOP[7:4]` fix and passed continuous-splash validation before a trustworthy CPU2 SError. r013 preserves that behavior and adds 37 boundary markers around vblank, runtime PM, SDE IRQ register access, `request_irq`, first IRQ handling, DRM registration and mode reset. Two clean builds, boot package and the candidate-bound full Recovery preflight pass; only the exact r013 boot SHA is approved. |
+| M3 device boot | R013 FLASHED / FULL READBACK PASS / PREBOOT | r012 proved the legacy `CTL_TOP[7:4]` fix and passed continuous-splash validation before a trustworthy CPU2 SError. r013 preserves that behavior and adds 37 boundary markers around vblank, runtime PM, SDE IRQ register access, `request_irq`, first IRQ handling, DRM registration and mode reset. The boot-only write, device SHA and complete 64 MiB host readback pass; repeated-write approval is cleared pending runtime evidence. |
 
 ## Reproduction
 
@@ -144,12 +144,14 @@ Android 17 Recovery, 100% battery, the exact tested r012 boot installed, empty
 pstore, and frozen recovery/dtbo/vbmeta/rawdump hashes.  Its evidence-list
 SHA-256 is
 `a81bce955178deb6d00369269c5d9ee35389dda14cb6ec089a2aa1f86b6df360`.
-The preflight was read-only.  A separate policy update now approves only
-`B14-M03-r013-drm-irq-boundary` and only the boot partition; the exact approved
-SHA-256 is
+The preflight was read-only.  The separately approved r013 image was then
+written only to `/dev/block/sde10`; the pushed file, device partition SHA and
+complete 64 MiB host readback all equal
 `ed1e688b4ddf2f519611f0b1d9f24d978e06e0bc8fb9b65b4e8f5c75759c6589`.
-Recovery, dtbo, vbmeta and userdata writes remain forbidden.  The approval is
-consumed after one verified write and full 64 MiB readback.
+Recovery, dtbo, vbmeta and rawdump hashes remained frozen and userdata was not
+touched.  The write/readback evidence-list SHA-256 is
+`747368a35c4f8427ecf21a1ee3b25c7ef2a8a2b29447644e9c6c11ef2799ea04`.
+The one-write approval is consumed and cleared; r013 has not yet been rebooted.
 
 The public `A17-ResukiSU-4.14-bringup` branch uses exact-tree snapshot commits
 instead of importing the unrelated 810,594-commit upstream history into the

@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "milestone": "M3-device-boot-entry",
-  "status": "R013_APPROVED_BOOT_ONLY_RECOVERY_PREFLIGHT_PASS",
+  "status": "R013_FLASHED_READBACK_PASS_PREBOOT",
   "source": {
     "kernel_commit": "603134d8422f0242c736cefb96fcc0d5ed06f21b",
     "kernel_tree": "16a8a939ada3d953661d3fd0db95f8f2ce4cbd62",
@@ -943,7 +943,7 @@
       "success_gate": "stable OrangeFox Recovery ADB"
     },
     "B14-M03-r013-drm-irq-boundary": {
-      "status": "APPROVED_BOOT_ONLY_NOT_TESTED",
+      "status": "FLASHED_READBACK_PASS_PREBOOT",
       "purpose": "locate the trustworthy CPU2 SError boundary after r012 successfully decoded CTL0 and passed continuous-splash validation",
       "directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/BOOT-CANDIDATES-20260724/B14-M03-r013-drm-irq-boundary",
       "source_commit": "603134d8422f0242c736cefb96fcc0d5ed06f21b",
@@ -1033,7 +1033,28 @@
         "device_write_performed": false,
         "approval_granted_by_preflight": false
       },
-      "controlled_flash_allowed": true,
+      "flash_execution": {
+        "captured_at": "2026-07-24T03:01:06+08:00",
+        "result": "PASS",
+        "mode_during_write": "recovery",
+        "approved_remote_head": "39e781f6e8a5aaa8043fe6b21b214c2ead009f54",
+        "target": "/dev/block/sde10",
+        "bytes_written": 67108864,
+        "previous_boot_sha256": "12595057d7e662c9211a66d480cbc67f4326c5908c7f6c190792e3cff65862cd",
+        "pushed_file_sha256": "ed1e688b4ddf2f519611f0b1d9f24d978e06e0bc8fb9b65b4e8f5c75759c6589",
+        "device_partition_sha256_after_write": "ed1e688b4ddf2f519611f0b1d9f24d978e06e0bc8fb9b65b4e8f5c75759c6589",
+        "host_full_partition_readback_sha256": "ed1e688b4ddf2f519611f0b1d9f24d978e06e0bc8fb9b65b4e8f5c75759c6589",
+        "host_full_partition_readback_cmp": "PASS",
+        "recovery_sha256_after_write": "66ef2bd883ef8b5e2d471dbc5965686c726263dc35d0394f8e72c790affca0fc",
+        "dtbo_sha256_after_write": "73d9d36f775ef041e9d9db748eff5502bec7e5ee8efe0f352c9ac19015ff9b13",
+        "vbmeta_sha256_after_write": "9a88f344fdb9a3851a42599fe3da96306dd2e978fdfac67c53c2445801435fff",
+        "rawdump_sha256_after_write": "ae46e57009f4b027563ca4b72e69b0f944875efddf273fd845f98aa67ef25378",
+        "evidence_directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260724/B14-M03-r013-drm-irq-boundary-preboot",
+        "evidence_sha256s_sha256": "747368a35c4f8427ecf21a1ee3b25c7ef2a8a2b29447644e9c6c11ef2799ea04",
+        "write_transcript_sha256": "5ff5471fb60baa29f1edba475959ea57dbc2b2e8c66b3e6579d82ebfe7da069f",
+        "automatic_reboot_issued": false
+      },
+      "controlled_flash_allowed": false,
       "controlled_flash_target": "boot_only",
       "recovery_partition_write": false,
       "dtbo_partition_write": false,
@@ -1339,8 +1360,8 @@
   },
   "write_policy": {
     "approved_partition": "boot",
-    "approved_candidate": "B14-M03-r013-drm-irq-boundary",
-    "candidate_approval_basis": "r013 is boundary-only instrumentation on the proven r012 path; two clean builds are byte-identical, the A17 boot package preserves the exact r012 ramdisk and six DTBs, and the candidate-bound 2026-07-24 Recovery preflight passed with frozen protected-partition hashes",
+    "approved_candidate": null,
+    "candidate_approval_basis": "r013 boot-only authorization was consumed by the verified write, device SHA and complete 64 MiB host readback; any later write requires a fresh Recovery preflight and a separate exact-candidate approval",
     "push_sha256_must_match": true,
     "full_partition_readback_sha256_must_match": true,
     "automatic_reboot_allowed": true,
