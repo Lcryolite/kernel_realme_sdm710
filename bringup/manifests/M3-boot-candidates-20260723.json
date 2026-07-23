@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "milestone": "M3-device-boot-entry",
-  "status": "R011_FLASHED_VERIFIED_AWAITING_REBOOT",
+  "status": "R011_TESTED_DSI_BOUND_CTL_ZERO_900E",
   "source": {
     "kernel_commit": "2ffb7ab18194fbb81220600e0679dd116cdffd91",
     "kernel_tree": "f354992746e972d87af86adac6db4a0283a673dc",
@@ -609,7 +609,7 @@
       }
     },
     "B14-M03-r011-legacy-direct-dsi": {
-      "status": "FLASHED_VERIFIED_AWAITING_REBOOT",
+      "status": "TESTED_DSI_BOUND_CTL_ZERO_900E",
       "purpose": "enumerate and bind the exact RMX1901 legacy direct DSI display while retaining the diagnostic splash mapping whenever continuous-splash validation fails",
       "directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/BOOT-CANDIDATES-20260723/B14-M03-r011-legacy-direct-dsi",
       "source_commit": "2ffb7ab18194fbb81220600e0679dd116cdffd91",
@@ -722,7 +722,39 @@
         "rawdump_sha256_after_write": "ae46e57009f4b027563ca4b72e69b0f944875efddf273fd845f98aa67ef25378",
         "evidence_directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260723/B14-M03-r011-legacy-direct-dsi-preboot",
         "evidence_sha256s_sha256": "5828e67c6ea66644d7964a36cbc38a94870ca310cbae12a7bcfc54bf59810d99",
-        "automatic_reboot_issued": false
+        "automatic_reboot_issued": true,
+        "reboot_issued_at": "2026-07-23T22:57:19+08:00",
+        "qualcomm_900e_observed_at": "2026-07-23T22:58:18+08:00",
+        "test_evidence_directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260723/B14-M03-r011-legacy-direct-dsi-900e"
+      },
+      "device_test": {
+        "symptom": "entered Qualcomm 900e crash-dump mode approximately 59 seconds after reboot without Recovery ADB",
+        "reboot_to_900e_seconds": 59,
+        "exact_direct_display_selected_count": 1,
+        "direct_ctrl_count": 1,
+        "direct_phy_count": 1,
+        "direct_panel_count": 1,
+        "mux_clock_count": 2,
+        "component_registered_count": 1,
+        "component_published_count": 1,
+        "bind_complete_count": 1,
+        "drm_bound_exact_node_count": 1,
+        "real_dsi": 1,
+        "gpio54_mdp_vsync_invalid_group_count": 0,
+        "invalid_vsync_source_selection_count": 1,
+        "ctl_intf_sel_zero_count": 5,
+        "continuous_splash_validation": "actual=0 expected=1 rc=-22",
+        "failed_validation_mapping_preserved": true,
+        "trustworthy_smmu_fault_count": 0,
+        "trustworthy_log_end_seconds": 4.78004,
+        "post_trustworthy_tail": "corrupted; no exact fatal exception attribution",
+        "raw_kmsg_sha256": "28274608bbdc0680b09b4b28c789f6c605b7a871fb5886cbb0c02492afe3462f",
+        "trusted_kmsg_sha256": "389ad182ffde5677a93f90296d774278ec7b5fb7f7bfbbe43b7d75c0cbfd5ec7",
+        "sahara_evidence_directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260723/B14-M03-r011-legacy-direct-dsi-900e",
+        "evidence_sha256s_sha256": "7dda82eae18043585c642ab040c009579ee163de0aecd25cc90da575db3514e1",
+        "qdl_filter": "KMSG.txt,device_info.txt,PMIC_PON.BIN,RST_STAT.BIN",
+        "ufs_partition_accessed_by_qdl": false,
+        "conclusion": "r011 achieved the exact direct-DSI enumeration and bind slice, changed real_dsi from zero to one and removed all gpio54 mdp_vsync errors, but all five boot CTL intf_sel values remain zero and continuous-splash validation still fails; the next isolated investigation is the legacy TE/vsync-source ABI plus the DSI encoder or bridge takeover boundary"
       },
       "recovery_partition_write": false,
       "dtbo_partition_write": false,
@@ -1021,13 +1053,14 @@
     "dtbo_partition_write": false,
     "vbmeta_partition_write": false,
     "userdata_write": false,
-    "automatic_reboot_issued": false,
-    "reboot_issued_at": null,
-    "test_evidence_directory": null
+    "automatic_reboot_issued": true,
+    "reboot_issued_at": "2026-07-23T22:57:19+08:00",
+    "qualcomm_900e_observed_at": "2026-07-23T22:58:18+08:00",
+    "test_evidence_directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260723/B14-M03-r011-legacy-direct-dsi-900e"
   },
   "write_policy": {
     "approved_partition": "boot",
-    "approved_candidate": "B14-M03-r011-legacy-direct-dsi",
+    "approved_candidate": null,
     "candidate_approval_basis": "fresh Recovery preflight passed and the user had explicitly authorized host-performed boot-only candidate flashes during this bring-up session",
     "push_sha256_must_match": true,
     "full_partition_readback_sha256_must_match": true,

@@ -21,7 +21,7 @@ The source of truth is split deliberately:
 | M0 UAPI oracle | PASS | All 35,664 measured 4.9 values match on arm64 and arm32; 2,745 candidate-only additions are permitted. |
 | M1 donor control | PASS | Clean Image/Image.gz/dtbs/modules build reproduced with pinned tools. |
 | M2 SDM670 static port | PASS | The current d13ec62 candidate passes two clean, byte-identical builds plus config, warning, certificate and DT gates. |
-| M3 device boot | R011 FLASHED / VERIFIED / AWAITING REBOOT | r010 confirmed the failed continuous-splash cleanup source but still panicked. Reviewed r011 passed two clean byte-identical builds and the fresh Recovery preflight; its boot-only write, device SHA, full 64 MiB host readback and protected-partition checks passed. Runtime testing has not started. |
+| M3 device boot | R011 TESTED / DSI BOUND / CTL ZERO / 900E | r011 selected and bound the exact direct DSI once, changed `real_dsi` from zero to one and removed all ten GPIO54 errors. All five boot CTLs still reported `intf_sel=0`, continuous-splash validation still failed and the device entered 900e after about 59 seconds. |
 
 ## Reproduction
 
@@ -102,11 +102,15 @@ separate concerns.  All 35,664 baseline values now match on both ABIs.
 The M3 boot candidates, results through r010 and the exact write policy are
 recorded in `bringup/manifests/M3-boot-candidates-20260723.json`.  r010 is the
 currently installed failed candidate.  r011 is packaged and statically
-verified but not device-tested.  The fresh Recovery preflight captured at
-2026-07-23T22:41:44+08:00 passed.  The boot-only write then completed and both
-the device SHA plus a full 64 MiB host readback matched the candidate; repeat
-flashing is disabled while the runtime test is pending.  Recovery, dtbo, vbmeta
-and userdata writes remain forbidden and unchanged.
+verified and device-tested.  Its fresh Recovery preflight, boot-only write,
+device SHA and full 64 MiB host readback passed.  Runtime logs then proved the
+exact direct DSI selection, resources, component publication, post-bind marker
+and DRM bound path; `real_dsi=1` and the GPIO54 errors are gone.  The device
+still entered 900e after about 59 seconds because the next boundary remains
+open: every CTL reports `intf_sel=0`, validation remains `actual=0 expected=1
+rc=-22`, and one `invalid vsync source selection` error remains.  The approved
+candidate is cleared; Recovery, dtbo, vbmeta and userdata writes remain
+forbidden and unchanged.
 
 The public `A17-ResukiSU-4.14-bringup` branch uses an exact-tree snapshot commit
 instead of importing the unrelated 810,594-commit upstream history into the
