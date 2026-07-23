@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "milestone": "M3-device-boot-entry",
-  "status": "R014_RETURN_PREFLIGHT_PASS_AWAITING_WRITE_APPROVAL",
+  "status": "R014_APPROVED_BOOT_ONLY_AWAITING_FLASH",
   "source": {
     "kernel_commit": "6c36cb5da81d61fc061e8e74604541685da89d32",
     "kernel_tree": "5d30841c8acc3ed87b1218bd3809d53e4e4e51b4",
@@ -1109,7 +1109,7 @@
       "success_gate": "stable OrangeFox Recovery ADB"
     },
     "B14-M03-r014-irq-bank-autorecovery": {
-      "status": "PASS_STATIC_NOT_TESTED",
+      "status": "APPROVED_BOOT_ONLY_AWAITING_FLASH",
       "purpose": "identify the exact SDE clear-all IRQ bank or barrier boundary and automatically return a panicked bring-up kernel to Recovery",
       "directory": "/home/lknife/android/rmx1901-4.14-bringup-evidence/BOOT-CANDIDATES-20260724/B14-M03-r014-irq-bank-autorecovery",
       "source_commit": "6c36cb5da81d61fc061e8e74604541685da89d32",
@@ -1208,7 +1208,7 @@
         "device_write_performed": false,
         "approval_granted_by_preflight": false
       },
-      "controlled_flash_allowed": false,
+      "controlled_flash_allowed": true,
       "controlled_flash_target": "boot_only",
       "recovery_partition_write": false,
       "dtbo_partition_write": false,
@@ -1514,8 +1514,9 @@
   },
   "write_policy": {
     "approved_partition": "boot",
-    "approved_candidate": null,
-    "candidate_approval_basis": "r013 boot-only authorization was consumed by the verified write, device SHA and complete 64 MiB host readback; any later write requires a fresh Recovery preflight and a separate exact-candidate approval",
+    "approved_candidate": "B14-M03-r014-irq-bank-autorecovery",
+    "approved_candidate_boot_sha256": "183bc4cd74ea223889116081636d62b16ed935788021539fb947fb6bf11818b3",
+    "candidate_approval_basis": "user explicitly requested continuation and an unattended automatic-Recovery process on 2026-07-24 after the exact r014 candidate passed clean builds, packaging and a fresh read-only Recovery preflight; approval is consumed by one verified boot-only write",
     "push_sha256_must_match": true,
     "full_partition_readback_sha256_must_match": true,
     "automatic_reboot_allowed": true,

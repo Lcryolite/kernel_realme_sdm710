@@ -21,7 +21,7 @@ The source of truth is split deliberately:
 | M0 UAPI oracle | PASS | All 35,664 measured 4.9 values match on arm64 and arm32; 2,745 candidate-only additions are permitted. |
 | M1 donor control | PASS | Clean Image/Image.gz/dtbs/modules build reproduced with pinned tools. |
 | M2 SDM670 static port | PASS | The current d13ec62 candidate passes two clean, byte-identical builds plus config, warning, certificate and DT gates. |
-| M3 device boot | R014 RECOVERY PREFLIGHT PASS / AWAITING WRITE APPROVAL | r013 bounded the failure to `sde_clear_all_irqs()`. r014 logs each unchanged IRQ-bank clear write and restores the known-good 4.9 panic-to-Recovery policy after KMSG dumping. Two clean builds and the A17 boot package pass. A fresh read-only Recovery preflight confirms r013 boot and all frozen protected-partition hashes; no write is approved by preflight itself. |
+| M3 device boot | R014 APPROVED / BOOT ONLY / AWAITING FLASH | r013 bounded the failure to `sde_clear_all_irqs()`. r014 logs each unchanged IRQ-bank clear write and restores the known-good 4.9 panic-to-Recovery policy after KMSG dumping. Clean builds, A17 boot package and fresh read-only preflight pass. One write is bound to boot SHA `183bc4cd…18b3`; protected partitions remain forbidden. |
 
 ## Reproduction
 
@@ -190,6 +190,11 @@ recovery/dtbo/vbmeta/rawdump hashes and empty pstore.  Candidate SHA and AVB
 checks passed; its evidence-list SHA-256 is
 `77fcb72fb2eec9dce93a982e6276c757877deba3832a21c79dda4cceb0629651`.
 The preflight performed no device write and does not itself grant approval.
+The user's 2026-07-24 request to continue and make the cycle unattended binds
+one write authorization to candidate `B14-M03-r014-irq-bank-autorecovery`, boot
+SHA-256 `183bc4cd74ea223889116081636d62b16ed935788021539fb947fb6bf11818b3`
+and `/dev/block/sde10` only.  The authorization is consumed after the write;
+device SHA and a complete 64 MiB host readback must both match before reboot.
 
 The public `A17-ResukiSU-4.14-bringup` branch uses exact-tree snapshot commits
 instead of importing the unrelated 810,594-commit upstream history into the
