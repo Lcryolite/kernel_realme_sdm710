@@ -21,7 +21,7 @@ The source of truth is split deliberately:
 | M0 UAPI oracle | PASS | All 35,664 measured 4.9 values match on arm64 and arm32; 2,745 candidate-only additions are permitted. |
 | M1 donor control | PASS | Clean Image/Image.gz/dtbs/modules build reproduced with pinned tools. |
 | M2 SDM670 static port | PASS | The current d13ec62 candidate passes two clean, byte-identical builds plus config, warning, certificate and DT gates. |
-| M3 device boot | R014 FLASHED / FULL READBACK PASS / PREBOOT | r013 bounded the failure to `sde_clear_all_irqs()`. r014 logs each unchanged IRQ-bank clear write and restores the known-good 4.9 panic-to-Recovery policy after KMSG dumping. Boot-only write, device SHA and complete 64 MiB host readback all match `183bc4cd…18b3`; protected partitions are unchanged and approval is cleared. |
+| M3 device boot | R015 STATIC PASS / NOT TESTED | r014 proved that IRQ-bank indices 0–9 complete and execution stops at index 10, `MDSS_INTF_TEAR_1_INTR` clear offset `0x6e808`; it then entered 900e and did not return to Recovery. r015 removes the SDE 5.x interface-TE banks from the SDM670 SDE 4.1 catalog and bypasses the forced watchdog bite when panic automatic-Recovery is enabled. Two clean builds and the A17 boot package pass; no new write is approved. |
 
 ## Reproduction
 
@@ -99,7 +99,7 @@ candidate-only interfaces where they do not mutate a baseline value.  IPA QMI
 keeps the legacy userspace layout and its required 16-bit wire encoding as
 separate concerns.  All 35,664 baseline values now match on both ABIs.
 
-The M3 boot candidates, results through r012 and the exact write policy are
+The M3 boot candidates, results through r015 and the exact write policy are
 recorded in `bringup/manifests/M3-boot-candidates-20260723.json`.  r010 is the
 previous diagnostic mapping checkpoint.  r011 was packaged, statically
 verified and device-tested.  Its fresh Recovery preflight, boot-only write,
@@ -183,7 +183,8 @@ Clang 11.0.1 + ThinLTO builds are byte-identical; build ID is
 The complete 64 MiB A17 boot image preserves the exact r013 OrangeFox ramdisk
 and all six DTBs, passes AVB and unpack/repack verification, and has SHA-256
 `183bc4cd74ea223889116081636d62b16ed935788021539fb947fb6bf11818b3`.
-It is a static candidate only and has not yet been approved or written.
+At packaging time it was a static candidate only; the later preflight and
+explicitly bound write are recorded below.
 The fresh 2026-07-24 03:52:58 +08:00 Recovery preflight passed with root ADB,
 Android 17, 100% battery, exact r013 boot installed, frozen
 recovery/dtbo/vbmeta/rawdump hashes and empty pstore.  Candidate SHA and AVB
@@ -201,14 +202,51 @@ all `183bc4cd74ea223889116081636d62b16ed935788021539fb947fb6bf11818b3`,
 and byte comparison passed.  Recovery, dtbo, vbmeta and rawdump remain at
 their frozen hashes; userdata was untouched.  The write evidence-list SHA-256
 is `d4d99d35fada8f48ff1b00bb62e12f0e664b034e9e95ef2c4b28ce46c55f5c34`.
-The one-write approval is consumed and cleared; r014 has not yet rebooted.
+The one-write approval is consumed and cleared.  r014 was rebooted at
+2026-07-24 05:32:10 +08:00 and Qualcomm 900e was first observed about 51
+seconds later; automatic Recovery did not enumerate.  The trustworthy KMSG is
+594 lines (SHA-256
+`8750a8ddfc079dbce290704f13208df1072e1cc6bc93bbe020e1ea8c983bbcb9`).
+IRQ-bank indices 0–9 each have matching before/after writes.  The final trusted
+line is the before-write marker for index 10, table ID
+`MDSS_INTF_TEAR_1_INTR`, clear offset `0x0006e808`; there is no index-10
+after-write, index-11 marker, `wmb()` marker or r013 after-clear marker.  The
+runtime-observation evidence-list SHA-256 is
+`4a594449837126af87cd812749ba5a1eab32d3579f467739b54e4f34ad4cf7df`;
+the Sahara evidence-list SHA-256 is
+`41b2994fb43c0367f9bcb00a0c87901c83fbe12ed773001167c4a2d7c3e2f1d8`.
+
+r015 is the evidence-driven correction.  SDM670 is SDE 4.1 and uses the
+ping-pong TE path; separate interface-TE IRQ banks start at SDE 5.0.  Commit
+`19dda7fa5a4db0d0496e190084474523937ab3a7` clears only
+`MDSS_INTF_TEAR_1_INTR` and `MDSS_INTF_TEAR_2_INTR` from the SDM670 capability
+bitmap, restoring the ten-bank topology also present in the known-good 4.9
+tree.  Commit `b370467eb4173f2ece4faa4a4bbd2692735917b0` additionally prevents
+the forced panic watchdog bite while `rmx1901.panic_recovery` is enabled, so
+the existing PMIC/IMEM Recovery reasons proceed through the PS_HOLD reset path.
+The escape hatch `rmx1901.panic_recovery=0` preserves the old watchdog/900e
+capture behavior.  This improves unattended Linux-panic recovery but cannot
+guarantee Recovery when firmware takes a fatal path that bypasses Linux.
+
+Two independent clean Clang 11.0.1 + ThinLTO r015 builds on the Btrfs `/home`
+filesystem are byte-identical across config, Module.symvers, vmlinux,
+System.map, Image, Image.gz and base/merged DTB.  Build ID is
+`bb1c817e86a576c4`; Image.gz SHA-256 is
+`277fcc155120f1cd7be9811eb272b0e50fe048dddec454b963aa9d838a7cb933`;
+the reproducibility evidence-list SHA-256 is
+`8239e64ac26d70c87a296749ff742fabf79481e2b2c6f045bbb2123da47f18f0`.
+The complete 64 MiB A17 boot image keeps the exact r014 OrangeFox ramdisk and
+six DTBs, passes AVB, unpack/repack and gzip round-trip gates, and has SHA-256
+`683ac664dd971541540ac60db967fd6f40dfcddddb289a9e5d7ab5493de6e19e`.
+Its candidate SHA-list hash is
+`d4bdb4ea378a16274392f9e34421d949af90c0c6e043530d570223b12a917666`.
+It remains `PASS_STATIC_NOT_TESTED`: a fresh root-ADB Recovery preflight and a
+separately bound exact-candidate approval are required before any boot write.
 
 The public `A17-ResukiSU-4.14-bringup` branch uses exact-tree snapshot commits
 instead of importing the unrelated 810,594-commit upstream history into the
-RMX1901 repository.  r013 source snapshot
-`8c3f63e461ba5f1307978e46096b88e798567db7` has tree
-`16a8a939ada3d953661d3fd0db95f8f2ce4cbd62`, byte-for-byte identical to the
-local r013 runtime source commit `603134d8422f0242c736cefb96fcc0d5ed06f21b`.
+RMX1901 repository.  Publication state and the exact public snapshot commit
+are recorded in the M3 manifest after each evidence checkpoint.
 
 After a failed boot has returned to Recovery, capture the immutable failure
 state before any rollback with `scripts/bringup/capture-m3-recovery-evidence.sh`.

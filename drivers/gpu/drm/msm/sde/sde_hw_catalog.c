@@ -3898,6 +3898,14 @@ static int _sde_hardware_pre_caps(struct sde_mdss_cfg *sde_cfg, uint32_t hw_rev)
 		sde_cfg->vbif_qos_nlvl = 8;
 		sde_cfg->ts_prefill_rev = 2;
 		sde_cfg->has_decimation = true;
+		/*
+		 * SDE 4.1 keeps tear-effect handling in the ping-pong block.
+		 * The separate INTF TE IRQ banks were introduced for SDE 5.0
+		 * and are not present in the RMX1901 4.9 hardware baseline.
+		 */
+		clear_bit(MDSS_INTF_TEAR_1_INTR, sde_cfg->mdss_irqs);
+		clear_bit(MDSS_INTF_TEAR_2_INTR, sde_cfg->mdss_irqs);
+		SDE_INFO("RMX1901-R015: SDM670 interface-TE IRQ banks disabled\n");
 	} else if (IS_SM8150_TARGET(hw_rev)) {
 		sde_cfg->has_cwb_support = true;
 		sde_cfg->has_wb_ubwc = true;

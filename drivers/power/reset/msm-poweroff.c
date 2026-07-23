@@ -435,9 +435,11 @@ static void do_msm_restart(enum reboot_mode reboot_mode, const char *cmd)
 	 * device will take the usual restart path.
 	 */
 
-	if (WDOG_BITE_ON_PANIC && in_panic)
+	if (WDOG_BITE_ON_PANIC && in_panic && !bringup_panic_recovery)
 		msm_trigger_wdog_bite();
 #endif
+	if (in_panic && bringup_panic_recovery)
+		pr_emerg("RMX1901-AUTORECOVERY: stage=restart-execute path=ps-hold\n");
 
 	scm_disable_sdi();
 	halt_spmi_pmic_arbiter();
