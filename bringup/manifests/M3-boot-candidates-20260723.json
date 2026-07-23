@@ -5,9 +5,9 @@
   "source": {
     "kernel_commit": "b370467eb4173f2ece4faa4a4bbd2692735917b0",
     "kernel_tree": "bc68a8670eaf523f2f44f19068128816111254cd",
-    "published_snapshot_commit": null,
+    "published_snapshot_commit": "c2ce636ab6f5d3666e01c28906cbb11c2aa7cd01",
     "published_snapshot_parent": "2a0e1313012922f7dfc371a5b1fe8f2901c42f3e",
-    "publication_state": "PENDING_EXACT_TREE_SNAPSHOT",
+    "publication_state": "PASS_EXACT_TREE_SNAPSHOT",
     "publication_mode": "exact-tree snapshot without unrelated upstream history",
     "kernel_release": "4.14.357-openela-RMX1901-A17-M2",
     "vmlinux_build_id": "bb1c817e86a576c4",
