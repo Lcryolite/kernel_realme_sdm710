@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2016, 2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2016, 2018-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -12,13 +12,13 @@
  */
 
 #define pr_fmt(fmt) "mdss-dsi-clk:[%s] " fmt, __func__
-#include <linux/clk/msm-clk.h>
 #include <linux/clk.h>
 #include <linux/list.h>
 
 #include "mdss_dsi_clk.h"
 #include "mdss_dsi.h"
 #include "mdss_debug.h"
+#include "mdss_rgb.h"
 
 #define MAX_CLIENT_NAME_LEN 20
 struct dsi_core_clks {
@@ -75,10 +75,18 @@ static int dsi_core_clk_start(struct dsi_core_clks *c_clks)
 		goto error;
 	}
 
+	if (c_clks->clks.mnoc_clk) {
+		rc = clk_prepare_enable(c_clks->clks.mnoc_clk);
+		if (rc) {
+			pr_err("failed to enable mnoc clock. rc=%d\n", rc);
+			goto disable_core_clk;
+		}
+	}
+
 	rc = clk_prepare_enable(c_clks->clks.ahb_clk);
 	if (rc) {
-		pr_err("failed to enable ahb clock. rc=%d\n", rc);
-		goto disable_core_clk;
+		pr_err("%s: failed to enable ahb clock. rc=%d\n", __func__, rc);
+		goto disable_mnoc_clk;
 	}
 
 	rc = clk_prepare_enable(c_clks->clks.axi_clk);
@@ -112,6 +120,9 @@ disable_axi_clk:
 	clk_disable_unprepare(c_clks->clks.axi_clk);
 disable_ahb_clk:
 	clk_disable_unprepare(c_clks->clks.ahb_clk);
+disable_mnoc_clk:
+	if (c_clks->clks.mnoc_clk)
+		clk_disable_unprepare(c_clks->clks.mnoc_clk);
 disable_core_clk:
 	clk_disable_unprepare(c_clks->clks.mdp_core_clk);
 error:
@@ -131,6 +142,8 @@ static int dsi_core_clk_stop(struct dsi_core_clks *c_clks)
 		clk_disable_unprepare(c_clks->clks.mmss_misc_ahb_clk);
 	clk_disable_unprepare(c_clks->clks.axi_clk);
 	clk_disable_unprepare(c_clks->clks.ahb_clk);
+	if (c_clks->clks.mnoc_clk)
+		clk_disable_unprepare(c_clks->clks.mnoc_clk);
 	clk_disable_unprepare(c_clks->clks.mdp_core_clk);
 
 	pr_debug("%s: CORE CLOCK IS OFF\n", mngr->name);
@@ -172,6 +185,21 @@ static int dsi_link_hs_clk_set_rate(
 		goto error;
 	}
 
+	/*
+	 * If byte_intf_clk is present, set rate for that too.
+	 *  For DPHY:
+	 *        byte_intf_clk_rate = byte_clk_rate / 2
+	 *  todo: this needs to be revisited when support for CPHY is added
+	 */
+	if (link_hs_clks->byte_intf_clk) {
+		rc = clk_set_rate(link_hs_clks->byte_intf_clk,
+			link_hs_clks->byte_clk_rate / 2);
+		if (rc) {
+			pr_err("set rate failed for byte intf clk rc=%d\n", rc);
+			goto error;
+		}
+	}
+
 error:
 	return rc;
 }
@@ -193,8 +221,19 @@ static int dsi_link_hs_clk_prepare(
 		goto pixel_clk_err;
 	}
 
+	if (link_hs_clks->byte_intf_clk) {
+		rc = clk_prepare(link_hs_clks->byte_intf_clk);
+		if (rc) {
+			pr_err("%s: Failed to prepare dsi byte_intf clk\n",
+				__func__);
+			goto byte_intf_clk_err;
+		}
+	}
+
 	return rc;
 
+byte_intf_clk_err:
+	clk_unprepare(link_hs_clks->pixel_clk);
 pixel_clk_err:
 	clk_unprepare(link_hs_clks->byte_clk);
 byte_clk_err:
@@ -206,6 +245,8 @@ static int dsi_link_hs_clk_unprepare(
 {
 	int rc = 0;
 
+	if (link_hs_clks->byte_intf_clk)
+		clk_unprepare(link_hs_clks->byte_intf_clk);
 	clk_unprepare(link_hs_clks->pixel_clk);
 	clk_unprepare(link_hs_clks->byte_clk);
 
@@ -229,8 +270,19 @@ static int dsi_link_hs_clk_enable(
 		goto pixel_clk_err;
 	}
 
+	if (link_hs_clks->byte_intf_clk) {
+		rc = clk_enable(link_hs_clks->byte_intf_clk);
+		if (rc) {
+			pr_err("%s: Failed to enable dsi byte_intf clk\n",
+				__func__);
+			goto byte_intf_clk_err;
+		}
+	}
+
 	return rc;
 
+byte_intf_clk_err:
+	clk_disable(link_hs_clks->pixel_clk);
 pixel_clk_err:
 	clk_disable(link_hs_clks->byte_clk);
 byte_clk_err:
@@ -242,6 +294,8 @@ static int dsi_link_hs_clk_disable(
 {
 	int rc = 0;
 
+	if (link_hs_clks->byte_intf_clk)
+		clk_disable(link_hs_clks->byte_intf_clk);
 	clk_disable(link_hs_clks->pixel_clk);
 	clk_disable(link_hs_clks->byte_clk);
 
@@ -742,9 +796,27 @@ static int dsi_set_clk_rate(struct mdss_dsi_clk_mngr *mngr, int clk, u32 rate,
 		if (!flags) {
 			rc = clk_set_rate(mngr->link_clks.hs_clks.byte_clk,
 				rate);
-			if (rc)
+			if (rc) {
 				pr_err("set rate failed for byte clk rc=%d\n",
 				       rc);
+				goto error;
+			}
+
+			/*
+			 * If byte_intf_clk is present, set rate for that too.
+			 *  For DPHY:
+			 *        byte_intf_clk_rate = byte_clk_rate / 2
+			 *  todo: this needs to be revisited when support for
+			 *  CPHY is added.
+			 */
+			if (mngr->link_clks.hs_clks.byte_intf_clk) {
+				rc = clk_set_rate(
+					mngr->link_clks.hs_clks.byte_intf_clk,
+					rate / 2);
+				if (rc)
+					pr_err("set rate failed for byte intf clk rc=%d\n",
+					       rc);
+			}
 		}
 		break;
 	case MDSS_DSI_LINK_PIX_CLK:
@@ -763,6 +835,7 @@ static int dsi_set_clk_rate(struct mdss_dsi_clk_mngr *mngr, int clk, u32 rate,
 		break;
 	}
 
+error:
 	return rc;
 }
 
@@ -848,7 +921,6 @@ bool is_dsi_clk_in_ecg_state(void *client)
 	struct mdss_dsi_clk_client_info *c = client;
 	struct mdss_dsi_clk_mngr *mngr;
 	bool is_ecg = false;
-
 
 	if (!client) {
 		pr_err("Invalid client params\n");

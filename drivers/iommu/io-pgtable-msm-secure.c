@@ -47,11 +47,6 @@ struct msm_secure_io_pgtable {
 
 int msm_iommu_sec_pgtbl_init(void)
 {
-	struct msm_scm_ptbl_init {
-		unsigned int paddr;
-		unsigned int size;
-		unsigned int spare;
-	} pinit = {0};
 	int psize[2] = {0, 0};
 	unsigned int spare = 0;
 	int ret, ptbl_ret = 0;
@@ -60,12 +55,7 @@ int msm_iommu_sec_pgtbl_init(void)
 	dma_addr_t paddr;
 	unsigned long attrs = 0;
 
-	struct scm_desc desc = {0};
-
-	if (!is_scm_armv8()) {
-		ret = scm_call(SCM_SVC_MP, IOMMU_SECURE_PTBL_SIZE, &spare,
-				sizeof(spare), psize, sizeof(psize));
-	} else {
+	if (is_scm_armv8()) {
 		struct scm_desc desc = {0};
 
 		desc.args[0] = spare;
@@ -74,55 +64,48 @@ int msm_iommu_sec_pgtbl_init(void)
 				IOMMU_SECURE_PTBL_SIZE), &desc);
 		psize[0] = desc.ret[0];
 		psize[1] = desc.ret[1];
+		if (ret || psize[1]) {
+			pr_err("scm call IOMMU_SECURE_PTBL_SIZE failed\n");
+			return ret;
+		}
 	}
-	if (ret || psize[1]) {
-		pr_err("scm call IOMMU_SECURE_PTBL_SIZE failed\n");
-		goto fail;
-	}
+
 	/* Now allocate memory for the secure page tables */
 	attrs = DMA_ATTR_NO_KERNEL_MAPPING;
 	dev.coherent_dma_mask = DMA_BIT_MASK(sizeof(dma_addr_t) * 8);
-	arch_setup_dma_ops(&dev, 0, 0, NULL, 0);
+	arch_setup_dma_ops(&dev, 0, 0, NULL, 1);
 	cpu_addr = dma_alloc_attrs(&dev, psize[0], &paddr, GFP_KERNEL, attrs);
 	if (!cpu_addr) {
 		pr_err("%s: Failed to allocate %d bytes for PTBL\n",
 				__func__, psize[0]);
-		ret = -ENOMEM;
-		goto fail;
+		return -ENOMEM;
 	}
 
-	pinit.paddr = (unsigned int)paddr;
-	/* paddr may be a physical address > 4GB */
-	desc.args[0] = paddr;
-	desc.args[1] = pinit.size = psize[0];
-	desc.args[2] = pinit.spare;
-	desc.arginfo = SCM_ARGS(3, SCM_RW, SCM_VAL, SCM_VAL);
+	if (is_scm_armv8()) {
+		struct scm_desc desc = {0};
 
-	if (!is_scm_armv8()) {
-		ret = scm_call(SCM_SVC_MP, IOMMU_SECURE_PTBL_INIT, &pinit,
-				sizeof(pinit), &ptbl_ret, sizeof(ptbl_ret));
-	} else {
+		desc.args[0] = paddr;
+		desc.args[1] = psize[0];
+		desc.args[2] = 0;
+		desc.arginfo = SCM_ARGS(3, SCM_RW, SCM_VAL, SCM_VAL);
+
 		ret = scm_call2(SCM_SIP_FNID(SCM_SVC_MP,
 				IOMMU_SECURE_PTBL_INIT), &desc);
 		ptbl_ret = desc.ret[0];
-	}
-	if (ret) {
-		pr_err("scm call IOMMU_SECURE_PTBL_INIT failed\n");
-		goto fail_mem;
-	}
-	if (ptbl_ret) {
-		pr_err("scm call IOMMU_SECURE_PTBL_INIT extended ret fail\n");
-		goto fail_mem;
+
+		if (ret) {
+			pr_err("scm call IOMMU_SECURE_PTBL_INIT failed\n");
+			return ret;
+		}
+
+		if (ptbl_ret) {
+			pr_err("scm call IOMMU_SECURE_PTBL_INIT extended ret fail\n");
+			return ret;
+		}
 	}
 
 	return 0;
-
-fail_mem:
-	dma_free_attrs(&dev, psize[0], cpu_addr, paddr, attrs);
-fail:
-	return ret;
 }
-
 EXPORT_SYMBOL(msm_iommu_sec_pgtbl_init);
 
 static int msm_secure_map(struct io_pgtable_ops *ops, unsigned long iova,

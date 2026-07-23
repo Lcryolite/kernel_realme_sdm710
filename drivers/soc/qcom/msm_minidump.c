@@ -1,4 +1,4 @@
-/* Copyright (c) 2017-2018,2021, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017,2020,2021 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -19,7 +19,7 @@
 #include <linux/errno.h>
 #include <linux/string.h>
 #include <linux/slab.h>
-#include <soc/qcom/smem.h>
+#include <linux/soc/qcom/smem.h>
 #include <soc/qcom/minidump.h>
 #include "minidump_private.h"
 
@@ -40,7 +40,7 @@ struct md_table {
 	struct md_ss_toc	*md_ss_toc;
 	struct md_global_toc	*md_gbl_toc;
 	struct md_ss_region	*md_regions;
-	struct md_region	entry[MAX_NUM_ENTRIES];
+	struct md_region        entry[MAX_NUM_ENTRIES];
 };
 
 /**
@@ -169,10 +169,18 @@ bool msm_minidump_enabled(void)
 }
 EXPORT_SYMBOL(msm_minidump_enabled);
 
-static inline int validate_region(const struct md_region *entry)
+int msm_minidump_add_region(const struct md_region *entry)
 {
-	if (!entry || (strlen(entry->name) > MAX_NAME_LENGTH) ||
-		!entry->virt_addr) {
+	u32 entries;
+	u32 toc_init;
+	struct md_region *mdr;
+	int ret = 0;
+
+	if (!entry)
+		return -EINVAL;
+
+	if ((strlen(entry->name) > MAX_NAME_LENGTH) ||
+		md_check_name(entry->name) || !entry->virt_addr) {
 		pr_err("Invalid entry details\n");
 		return -EINVAL;
 	}
@@ -180,56 +188,6 @@ static inline int validate_region(const struct md_region *entry)
 	if (!IS_ALIGNED(entry->size, 4)) {
 		pr_err("size should be 4 byte aligned\n");
 		return -EINVAL;
-	}
-	return 0;
-}
-
-int msm_minidump_update_region(int regno, const struct md_region *entry)
-{
-	struct md_region *mdr;
-	struct md_ss_region *mdssr;
-	struct elfhdr *hdr = minidump_elfheader.ehdr;
-	struct elf_shdr *shdr;
-	struct elf_phdr *phdr;
-
-	if (validate_region(entry) || (regno >= MAX_NUM_ENTRIES))
-		return -EINVAL;
-
-	if (!md_check_name(entry->name)) {
-		pr_err("Region:[%s] does not exist to update.\n", entry->name);
-		return -ENOMEM;
-	}
-
-	mdr = &minidump_table.entry[regno];
-	mdr->virt_addr = entry->virt_addr;
-	mdr->phys_addr = entry->phys_addr;
-
-	mdssr = &minidump_table.md_regions[regno + 1];
-	mdssr->region_base_address = entry->phys_addr;
-
-	shdr = elf_section(hdr, regno + 4);
-	phdr = elf_program(hdr, regno + 1);
-
-	shdr->sh_addr = (elf_addr_t)entry->virt_addr;
-	phdr->p_vaddr = entry->virt_addr;
-	phdr->p_paddr = entry->phys_addr;
-
-	return 0;
-}
-EXPORT_SYMBOL(msm_minidump_update_region);
-
-int msm_minidump_add_region(const struct md_region *entry)
-{
-	u32 entries;
-	u32 toc_init;
-	struct md_region *mdr;
-
-	if (validate_region(entry))
-		return -EINVAL;
-
-	if (md_check_name(entry->name)) {
-		pr_err("Region name [%s] already registered\n", entry->name);
-		return -EEXIST;
 	}
 
 	spin_lock(&mdt_lock);
@@ -269,7 +227,7 @@ int msm_minidump_add_region(const struct md_region *entry)
 
 	spin_unlock(&mdt_lock);
 
-	return entries;
+	return ret;
 }
 EXPORT_SYMBOL(msm_minidump_add_region);
 
@@ -281,6 +239,7 @@ static int msm_minidump_add_header(void)
 	struct elf_phdr *phdr;
 	unsigned int strtbl_off, elfh_size, phdr_off;
 	char *banner;
+	size_t linux_banner_len = strlen(linux_banner);
 
 	/* Header buffer contains:
 	 * elf header, MAX_NUM_ENTRIES+4 of section and program elf headers,
@@ -348,7 +307,7 @@ static int msm_minidump_add_header(void)
 
 	/* 4th section is linux banner */
 	banner = (char *)ehdr + strtbl_off + MAX_STRTBL_SIZE;
-	strlcpy(banner, linux_banner, strlen(linux_banner) + 1);
+	strlcpy(banner, linux_banner, linux_banner_len + 1);
 
 	shdr->sh_type = SHT_PROGBITS;
 	shdr->sh_offset = (elf_addr_t)(strtbl_off + MAX_STRTBL_SIZE);
@@ -375,21 +334,22 @@ static int msm_minidump_add_header(void)
 
 static int __init msm_minidump_init(void)
 {
-	unsigned int i, size;
+	unsigned int i;
+	size_t size;
 	struct md_region *mdr;
 	struct md_global_toc *md_global_toc;
 	struct md_ss_toc *md_ss_toc;
 
 	/* Get Minidump table */
-	md_global_toc = smem_get_entry(SBL_MINIDUMP_SMEM_ID, &size, 0,
-					SMEM_ANY_HOST_FLAG);
+	md_global_toc = qcom_smem_get(QCOM_SMEM_HOST_ANY, SBL_MINIDUMP_SMEM_ID,
+				      &size);
 	if (IS_ERR_OR_NULL(md_global_toc)) {
 		pr_err("SMEM is not initialized.\n");
 		return -ENODEV;
 	}
 
 	/*Check global minidump support initialization */
-	if (!md_global_toc->md_toc_init) {
+	if (size < sizeof(*md_global_toc) || !md_global_toc->md_toc_init) {
 		pr_err("System Minidump TOC not initialized\n");
 		return -ENODEV;
 	}

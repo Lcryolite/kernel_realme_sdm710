@@ -94,7 +94,8 @@ defaultimage-$(CONFIG_SH_7206_SOLUTION_ENGINE)	:= vmlinux
 defaultimage-$(CONFIG_SH_7619_SOLUTION_ENGINE)	:= vmlinux
 
 # Set some sensible Kbuild defaults
-KBUILD_IMAGE		:= $(defaultimage-y)
+boot := arch/sh/boot
+KBUILD_IMAGE		:= $(boot)/$(defaultimage-y)
 
 #
 # Choosing incompatible machines durings configuration will result in
@@ -186,10 +187,8 @@ cpuincdir-y			+= cpu-common	# Must be last
 drivers-y			+= arch/sh/drivers/
 drivers-$(CONFIG_OPROFILE)	+= arch/sh/oprofile/
 
-boot := arch/sh/boot
-
-cflags-y	+= $(foreach d, $(cpuincdir-y), -Iarch/sh/include/$(d)) \
-		   $(foreach d, $(machdir-y), -Iarch/sh/include/$(d))
+cflags-y	+= $(foreach d, $(cpuincdir-y), -I $(srctree)/arch/sh/include/$(d)) \
+		   $(foreach d, $(machdir-y), -I $(srctree)/arch/sh/include/$(d))
 
 KBUILD_CFLAGS		+= -pipe $(cflags-y)
 KBUILD_CPPFLAGS		+= $(cflags-y)
@@ -211,7 +210,7 @@ BOOT_TARGETS = uImage uImage.bz2 uImage.gz uImage.lzma uImage.xz uImage.lzo \
 	       romImage
 PHONY += $(BOOT_TARGETS)
 
-all: $(KBUILD_IMAGE)
+all: $(notdir $(KBUILD_IMAGE))
 
 $(BOOT_TARGETS): vmlinux
 	$(Q)$(MAKE) $(build)=$(boot) $(boot)/$@

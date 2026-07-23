@@ -14,6 +14,7 @@
 #include <linux/delay.h>
 #include <linux/sched.h>
 #include <linux/msm_kgsl.h>
+#include <linux/clk/qcom.h>
 
 #include "kgsl.h"
 #include "adreno.h"
@@ -155,12 +156,6 @@ static void a3xx_efuse_speed_bin(struct adreno_device *adreno_dev)
 	unsigned int val;
 	unsigned int speed_bin[3];
 	struct kgsl_device *device = &adreno_dev->dev;
-
-	if (of_get_property(device->pdev->dev.of_node,
-		"qcom,gpu-speed-bin-vectors", NULL)) {
-		adreno_efuse_speed_bin_array(adreno_dev);
-		return;
-	}
 
 	if (of_property_read_u32_array(device->pdev->dev.of_node,
 		"qcom,gpu-speed-bin", speed_bin, 3))
@@ -1472,6 +1467,8 @@ static struct adreno_coresight a3xx_coresight = {
 	.registers = a3xx_coresight_registers,
 	.count = ARRAY_SIZE(a3xx_coresight_registers),
 	.groups = a3xx_coresight_groups,
+	.read = kgsl_regread,
+	.write = kgsl_regwrite,
 };
 
 static unsigned int a3xx_int_bits[ADRENO_INT_BITS_MAX] = {
@@ -1910,6 +1907,29 @@ int a3xx_microcode_load(struct adreno_device *adreno_dev,
 	return 0;
 }
 
+static void a3xx_clk_set_options(struct adreno_device *adreno_dev,
+	const char *name, struct clk *clk, bool on)
+{
+	if (!adreno_is_a306a(adreno_dev))
+		return;
+
+	/* Handle clock settings for GFX PSCBCs */
+	if (on) {
+		if (!strcmp(name, "mem_iface_clk")) {
+			clk_set_flags(clk, CLKFLAG_NORETAIN_PERIPH);
+			clk_set_flags(clk, CLKFLAG_NORETAIN_MEM);
+		} else if (!strcmp(name, "core_clk")) {
+			clk_set_flags(clk, CLKFLAG_RETAIN_PERIPH);
+			clk_set_flags(clk, CLKFLAG_RETAIN_MEM);
+		}
+	} else {
+		if (!strcmp(name, "core_clk")) {
+			clk_set_flags(clk, CLKFLAG_NORETAIN_PERIPH);
+			clk_set_flags(clk, CLKFLAG_NORETAIN_MEM);
+		}
+	}
+}
+
 struct adreno_gpudev adreno_a3xx_gpudev = {
 	.reg_offsets = &a3xx_reg_offsets,
 	.int_bits = a3xx_int_bits,
@@ -1930,4 +1950,5 @@ struct adreno_gpudev adreno_a3xx_gpudev = {
 	.start = a3xx_start,
 	.snapshot = a3xx_snapshot,
 	.coresight = {&a3xx_coresight},
+	.clk_set_options = a3xx_clk_set_options,
 };

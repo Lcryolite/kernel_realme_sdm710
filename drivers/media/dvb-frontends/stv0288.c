@@ -74,8 +74,8 @@ static int stv0288_writeregI(struct stv0288_state *state, u8 reg, u8 data)
 	ret = i2c_transfer(state->i2c, &msg, 1);
 
 	if (ret != 1)
-		dprintk("%s: writereg error (reg == 0x%02x, val == 0x%02x, "
-			"ret == %i)\n", __func__, reg, data, ret);
+		dprintk("%s: writereg error (reg == 0x%02x, val == 0x%02x, ret == %i)\n",
+			__func__, reg, data, ret);
 
 	return (ret != 1) ? -EREMOTEIO : 0;
 }
@@ -447,6 +447,12 @@ static int stv0288_read_ucblocks(struct dvb_frontend *fe, u32 *ucblocks)
 	return 0;
 }
 
+static int stv0288_set_property(struct dvb_frontend *fe, struct dtv_property *p)
+{
+	dprintk("%s(..)\n", __func__);
+	return 0;
+}
+
 static int stv0288_set_frontend(struct dvb_frontend *fe)
 {
 	struct stv0288_state *state = fe->demodulator_priv;
@@ -458,10 +464,9 @@ static int stv0288_set_frontend(struct dvb_frontend *fe)
 	dprintk("%s : FE_SET_FRONTEND\n", __func__);
 
 	if (c->delivery_system != SYS_DVBS) {
-			dprintk("%s: unsupported delivery "
-				"system selected (%d)\n",
-				__func__, c->delivery_system);
-			return -EOPNOTSUPP;
+		dprintk("%s: unsupported delivery system selected (%d)\n",
+			__func__, c->delivery_system);
+		return -EOPNOTSUPP;
 	}
 
 	if (state->config->set_ts_params)
@@ -529,7 +534,7 @@ static void stv0288_release(struct dvb_frontend *fe)
 	kfree(state);
 }
 
-static struct dvb_frontend_ops stv0288_ops = {
+static const struct dvb_frontend_ops stv0288_ops = {
 	.delsys = { SYS_DVBS },
 	.info = {
 		.name			= "ST STV0288 DVB-S",
@@ -561,6 +566,7 @@ static struct dvb_frontend_ops stv0288_ops = {
 	.set_tone = stv0288_set_tone,
 	.set_voltage = stv0288_set_voltage,
 
+	.set_property = stv0288_set_property,
 	.set_frontend = stv0288_set_frontend,
 };
 
@@ -604,7 +610,7 @@ error:
 
 	return NULL;
 }
-EXPORT_SYMBOL(stv0288_attach);
+EXPORT_SYMBOL_GPL(stv0288_attach);
 
 module_param(debug_legacy_dish_switch, int, 0444);
 MODULE_PARM_DESC(debug_legacy_dish_switch,

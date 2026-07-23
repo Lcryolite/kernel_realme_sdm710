@@ -67,6 +67,7 @@
 #define DIAG_IOCTL_REGISTER_CALLBACK	37
 #define DIAG_IOCTL_HDLC_TOGGLE	38
 #define DIAG_IOCTL_QUERY_PD_LOGGING	39
+#define DIAG_IOCTL_QUERY_CON_ALL	40
 #define DIAG_IOCTL_QUERY_MD_PID	41
 
 /* PC Tools IDs */
@@ -148,7 +149,7 @@
  * a new RANGE of SSIDs to the msg_mask_tbl.
  */
 #define MSG_MASK_TBL_CNT		26
-#define APPS_EVENT_LAST_ID		0xCC2
+#define APPS_EVENT_LAST_ID		0xCCD
 
 #define MSG_SSID_0			0
 #define MSG_SSID_0_LAST			134
@@ -927,7 +928,7 @@ static const uint32_t msg_bld_masks_25[] = {
 /* LOG CODES */
 static const uint32_t log_code_last_tbl[] = {
 	0x0,	/* EQUIP ID 0 */
-	0x1CDD,	/* EQUIP ID 1 */
+	0x1CE8,	/* EQUIP ID 1 */
 	0x0,	/* EQUIP ID 2 */
 	0x0,	/* EQUIP ID 3 */
 	0x4910,	/* EQUIP ID 4 */

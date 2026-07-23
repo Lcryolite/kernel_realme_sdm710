@@ -220,6 +220,14 @@ static void rxe_qp_init_misc(struct rxe_dev *rxe, struct rxe_qp *qp,
 	spin_lock_init(&qp->grp_lock);
 	spin_lock_init(&qp->state_lock);
 
+	spin_lock_init(&qp->req.task.state_lock);
+	spin_lock_init(&qp->resp.task.state_lock);
+	spin_lock_init(&qp->comp.task.state_lock);
+
+	spin_lock_init(&qp->sq.sq_lock);
+	spin_lock_init(&qp->rq.producer_lock);
+	spin_lock_init(&qp->rq.consumer_lock);
+
 	atomic_set(&qp->ssn, 0);
 	atomic_set(&qp->skb_out, 0);
 }
@@ -267,7 +275,6 @@ static int rxe_qp_init_req(struct rxe_dev *rxe, struct rxe_qp *qp,
 	qp->req.opcode		= -1;
 	qp->comp.opcode		= -1;
 
-	spin_lock_init(&qp->sq.sq_lock);
 	skb_queue_head_init(&qp->req_pkts);
 
 	rxe_init_task(rxe, &qp->req.task, qp,
@@ -275,15 +282,11 @@ static int rxe_qp_init_req(struct rxe_dev *rxe, struct rxe_qp *qp,
 	rxe_init_task(rxe, &qp->comp.task, qp,
 		      rxe_completer, "comp");
 
-	init_timer(&qp->rnr_nak_timer);
-	qp->rnr_nak_timer.function = rnr_nak_timer;
-	qp->rnr_nak_timer.data = (unsigned long)qp;
-
-	init_timer(&qp->retrans_timer);
-	qp->retrans_timer.function = retransmit_timer;
-	qp->retrans_timer.data = (unsigned long)qp;
 	qp->qp_timeout_jiffies = 0; /* Can't be set for UD/UC in modify_qp */
-
+	if (init->qp_type == IB_QPT_RC) {
+		setup_timer(&qp->rnr_nak_timer, rnr_nak_timer, (unsigned long)qp);
+		setup_timer(&qp->retrans_timer, retransmit_timer, (unsigned long)qp);
+	}
 	return 0;
 }
 
@@ -320,9 +323,6 @@ static int rxe_qp_init_resp(struct rxe_dev *rxe, struct rxe_qp *qp,
 			return err;
 		}
 	}
-
-	spin_lock_init(&qp->rq.producer_lock);
-	spin_lock_init(&qp->rq.consumer_lock);
 
 	skb_queue_head_init(&qp->resp_pkts);
 
@@ -644,8 +644,8 @@ int rxe_qp_from_attr(struct rxe_qp *qp, struct ib_qp_attr *attr, int mask,
 
 	if (mask & IB_QP_AV) {
 		ib_get_cached_gid(&rxe->ib_dev, 1,
-				  attr->ah_attr.grh.sgid_index, &sgid,
-				  &sgid_attr);
+				  rdma_ah_read_grh(&attr->ah_attr)->sgid_index,
+				  &sgid, &sgid_attr);
 		rxe_av_from_attr(rxe, attr->port_num, &qp->pri_av,
 				 &attr->ah_attr);
 		rxe_av_fill_ip_info(rxe, &qp->pri_av, &attr->ah_attr,
@@ -655,9 +655,11 @@ int rxe_qp_from_attr(struct rxe_qp *qp, struct ib_qp_attr *attr, int mask,
 	}
 
 	if (mask & IB_QP_ALT_PATH) {
-		ib_get_cached_gid(&rxe->ib_dev, 1,
-				  attr->alt_ah_attr.grh.sgid_index, &sgid,
-				  &sgid_attr);
+		u8 sgid_index =
+			rdma_ah_read_grh(&attr->alt_ah_attr)->sgid_index;
+
+		ib_get_cached_gid(&rxe->ib_dev, 1, sgid_index,
+				  &sgid, &sgid_attr);
 
 		rxe_av_from_attr(rxe, attr->alt_port_num, &qp->alt_av,
 				 &attr->alt_ah_attr);
@@ -818,8 +820,10 @@ void rxe_qp_destroy(struct rxe_qp *qp)
 	qp->qp_timeout_jiffies = 0;
 	rxe_cleanup_task(&qp->resp.task);
 
-	del_timer_sync(&qp->retrans_timer);
-	del_timer_sync(&qp->rnr_nak_timer);
+	if (qp_type(qp) == IB_QPT_RC) {
+		del_timer_sync(&qp->retrans_timer);
+		del_timer_sync(&qp->rnr_nak_timer);
+	}
 
 	rxe_cleanup_task(&qp->req.task);
 	rxe_cleanup_task(&qp->comp.task);
@@ -835,9 +839,9 @@ void rxe_qp_destroy(struct rxe_qp *qp)
 }
 
 /* called when the last reference to the qp is dropped */
-void rxe_qp_cleanup(void *arg)
+static void rxe_qp_do_cleanup(struct work_struct *work)
 {
-	struct rxe_qp *qp = arg;
+	struct rxe_qp *qp = container_of(work, typeof(*qp), cleanup_work.work);
 
 	rxe_drop_all_mcast_groups(qp);
 
@@ -865,7 +869,18 @@ void rxe_qp_cleanup(void *arg)
 	free_rd_atomic_resources(qp);
 
 	if (qp->sk) {
+		if (qp_type(qp) == IB_QPT_RC)
+			sk_dst_reset(qp->sk->sk);
+
 		kernel_sock_shutdown(qp->sk, SHUT_RDWR);
 		sock_release(qp->sk);
 	}
+}
+
+/* called when the last reference to the qp is dropped */
+void rxe_qp_cleanup(struct rxe_pool_entry *arg)
+{
+	struct rxe_qp *qp = container_of(arg, typeof(*qp), pelem);
+
+	execute_in_process_context(rxe_qp_do_cleanup, &qp->cleanup_work);
 }

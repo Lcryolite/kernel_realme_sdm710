@@ -74,6 +74,8 @@
 
 #define IPAHAL_IPC_LOG_PAGES 50
 
+#define IPAHAL_PKT_STATUS_FLTRT_RULE_MISS_ID 0x3ff
+
 /*
  * struct ipahal_context - HAL global context data
  * @hw_type: IPA H/W type/version.
@@ -545,6 +547,7 @@ struct ipa_imm_cmd_hw_dma_task_32b_addr {
  *  the global flt tbl? (if not, then the per endp tables)
  * @flt_ret_hdr: Retain header in filter rule flag: Does matching flt rule
  *  specifies to retain header?
+ *  Starting IPA4.5, this will be true only if packet has L2 header.
  * @flt_rule_id: The ID of the matching filter rule. This info can be combined
  *  with endp_src_idx to locate the exact rule. ID=0x3FF reserved to specify
  *  flt miss. In case of miss, all flt info to be ignored
@@ -618,9 +621,10 @@ struct ipa_pkt_status_hw {
 #define IPA_HDR_UCP_ETHII_TO_ETHII		9
 #define IPA_HDR_UCP_L2TP_HEADER_ADD		10
 #define IPA_HDR_UCP_L2TP_HEADER_REMOVE		11
-#define IPA_HDR_UCP_L2TP_UDP_HEADER_ADD	12
+#define IPA_HDR_UCP_L2TP_UDP_HEADER_ADD		12
 #define IPA_HDR_UCP_L2TP_UDP_HEADER_REMOVE	13
 #define IPA_HDR_UCP_ETHII_TO_ETHII_EX		14
+#define IPA_HDR_UCP_SET_DSCP		16
 
 /* Processing context TLV type */
 #define IPA_PROC_CTX_TLV_TYPE_END 0
@@ -758,8 +762,15 @@ struct ipa_hw_hdr_proc_ctx_add_hdr_cmd_seq_ex {
 	struct ipa_hw_hdr_proc_ctx_tlv end;
 };
 
-/* IPA HW DPS/HPS image memory sizes */
-#define IPA_HW_DPS_IMG_MEM_SIZE_V3_0 128
-#define IPA_HW_HPS_IMG_MEM_SIZE_V3_0 320
+/**
+ * struct ipa_hw_hdr_proc_ctx_remove_l2tp_udp_hdr_cmd_seq -
+ * IPA processing context header - process command sequence
+ * @l2tp_params: l2tp params for header removal
+ * @end: tlv end command (cmd.type must be 0)
+ */
+struct ipa_hw_hdr_proc_ctx_remove_l2tp_udp_hdr_cmd_seq {
+	struct ipa_hw_hdr_proc_ctx_l2tp_remove_hdr l2tp_params;
+	struct ipa_hw_hdr_proc_ctx_tlv end;
+};
 
 #endif /* _IPAHAL_I_H_ */

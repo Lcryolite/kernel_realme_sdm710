@@ -1,4 +1,4 @@
-/* Copyright (c) 2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -196,6 +196,7 @@ struct qpnp_lpg_chip {
 	struct qpnp_lpg_channel	*lpgs;
 	struct qpnp_lpg_lut	*lut;
 	struct mutex		bus_lock;
+	u32			*lpg_group;
 	struct nvmem_device	*sdam_nvmem;
 	struct device_node	*pbs_dev_node;
 	u32			num_lpgs;
@@ -365,7 +366,8 @@ static int qpnp_lut_sdam_write(struct qpnp_lpg_lut *lut,
 }
 
 static struct qpnp_lpg_channel *pwm_dev_to_qpnp_lpg(struct pwm_chip *pwm_chip,
-				struct pwm_device *pwm) {
+				struct pwm_device *pwm)
+{
 
 	struct qpnp_lpg_chip *chip = container_of(pwm_chip,
 			struct qpnp_lpg_chip, pwm_chip);
@@ -456,19 +458,19 @@ static int qpnp_lpg_set_pwm_config(struct qpnp_lpg_channel *lpg)
 	if (lpg->src_sel == LUT_PATTERN)
 		return 0;
 
-	val = lpg->pwm_config.pwm_value & LPG_PWM_VALUE_LSB_MASK;
-	rc = qpnp_lpg_write(lpg, REG_LPG_PWM_VALUE_LSB, val);
-	if (rc < 0) {
-		dev_err(lpg->chip->dev, "Write LPG_PWM_VALUE_LSB failed, rc=%d\n",
-							rc);
-		return rc;
-	}
-
 	val = lpg->pwm_config.pwm_value >> 8;
 	mask = LPG_PWM_VALUE_MSB_MASK;
 	rc = qpnp_lpg_masked_write(lpg, REG_LPG_PWM_VALUE_MSB, mask, val);
 	if (rc < 0) {
 		dev_err(lpg->chip->dev, "Write LPG_PWM_VALUE_MSB failed, rc=%d\n",
+							rc);
+		return rc;
+	}
+
+	val = lpg->pwm_config.pwm_value & LPG_PWM_VALUE_LSB_MASK;
+	rc = qpnp_lpg_write(lpg, REG_LPG_PWM_VALUE_LSB, val);
+	if (rc < 0) {
+		dev_err(lpg->chip->dev, "Write LPG_PWM_VALUE_LSB failed, rc=%d\n",
 							rc);
 		return rc;
 	}
@@ -896,7 +898,7 @@ static int qpnp_lpg_pwm_config_extend(struct pwm_chip *pwm_chip,
 	}
 
 	return qpnp_lpg_config(lpg, duty_ns, period_ns);
-}
+};
 
 static int qpnp_lpg_pbs_trigger_enable(struct qpnp_lpg_channel *lpg, bool en)
 {
@@ -941,8 +943,9 @@ static int qpnp_lpg_pwm_src_enable(struct qpnp_lpg_channel *lpg, bool en)
 {
 	struct qpnp_lpg_chip *chip = lpg->chip;
 	struct qpnp_lpg_lut *lut = chip->lut;
+	struct pwm_device *pwm;
 	u8 mask, val;
-	int rc;
+	int i, lpg_idx, rc;
 
 	mask = LPG_PWM_SRC_SELECT_MASK | LPG_EN_LPG_OUT_BIT |
 					LPG_EN_RAMP_GEN_MASK;
@@ -983,8 +986,31 @@ static int qpnp_lpg_pwm_src_enable(struct qpnp_lpg_channel *lpg, bool en)
 	}
 
 	if (lpg->src_sel == LUT_PATTERN && en) {
-		mutex_lock(&lut->lock);
 		val = 1 << lpg->lpg_idx;
+		for (i = 0; i < chip->num_lpgs; i++) {
+			if (chip->lpg_group == NULL)
+				break;
+			if (chip->lpg_group[i] == 0)
+				break;
+			lpg_idx = chip->lpg_group[i] - 1;
+			pwm = &chip->pwm_chip.pwms[lpg_idx];
+			if ((pwm_get_output_type(pwm) == PWM_OUTPUT_MODULATED)
+						&& pwm_is_enabled(pwm)) {
+				rc = qpnp_lpg_masked_write(&chip->lpgs[lpg_idx],
+						REG_LPG_ENABLE_CONTROL,
+						LPG_EN_LPG_OUT_BIT, 0);
+				if (rc < 0)
+					break;
+				rc = qpnp_lpg_masked_write(&chip->lpgs[lpg_idx],
+						REG_LPG_ENABLE_CONTROL,
+						LPG_EN_LPG_OUT_BIT,
+						LPG_EN_LPG_OUT_BIT);
+				if (rc < 0)
+					break;
+				val |= 1 << lpg_idx;
+			}
+		}
+		mutex_lock(&lut->lock);
 		rc = qpnp_lut_write(lut, REG_LPG_LUT_RAMP_CONTROL, val);
 		if (rc < 0)
 			dev_err(chip->dev, "Write LPG_LUT_RAMP_CONTROL failed, rc=%d\n",
@@ -1043,7 +1069,7 @@ static int qpnp_lpg_pwm_set_output_type(struct pwm_chip *pwm_chip,
 					lpg->ramp_config.pattern,
 					lpg->ramp_config.pattern_length);
 			if (rc < 0) {
-				dev_err(pwm_chip->dev, "set LUT pattern failed for LPG%d, rc=%d\n",
+				dev_err(lpg->chip->dev, "set LUT pattern failed for LPG%d, rc=%d\n",
 						lpg->lpg_idx, rc);
 				return rc;
 			}
@@ -1156,6 +1182,19 @@ static int qpnp_lpg_pwm_enable(struct pwm_chip *pwm_chip,
 	if (lpg == NULL) {
 		dev_err(pwm_chip->dev, "lpg not found\n");
 		return -ENODEV;
+	}
+
+	/*
+	 * Update PWM_VALUE_SYNC to make sure PWM_VALUE
+	 * will be updated everytime before enabling.
+	 */
+	if (lpg->src_sel == PWM_VALUE) {
+		rc = qpnp_lpg_write(lpg, REG_LPG_PWM_SYNC, LPG_PWM_VALUE_SYNC);
+		if (rc < 0) {
+			dev_err(lpg->chip->dev, "Write LPG_PWM_SYNC failed, rc=%d\n",
+					rc);
+			return rc;
+		}
 	}
 
 	rc = qpnp_lpg_set_glitch_removal(lpg, true);
@@ -1316,9 +1355,19 @@ static int qpnp_lpg_parse_dt(struct qpnp_lpg_chip *chip)
 	}
 
 	base = be32_to_cpu(addr[0]);
-	length = be32_to_cpu(addr[1]);
+	rc = of_property_read_u32(chip->dev->of_node, "qcom,num-lpg-channels",
+						&chip->num_lpgs);
+	if (rc < 0) {
+		dev_err(chip->dev, "Failed to get qcom,num-lpg-channels, rc=%d\n",
+				rc);
+		return rc;
+	}
 
-	chip->num_lpgs = length / REG_SIZE_PER_LPG;
+	if (chip->num_lpgs == 0) {
+		dev_err(chip->dev, "No LPG channels specified\n");
+		return -EINVAL;
+	}
+
 	chip->lpgs = devm_kcalloc(chip->dev, chip->num_lpgs,
 			sizeof(*chip->lpgs), GFP_KERNEL);
 	if (!chip->lpgs)
@@ -1514,6 +1563,53 @@ static int qpnp_lpg_parse_dt(struct qpnp_lpg_chip *chip)
 
 		ramp->toggle =  of_property_read_bool(child,
 				"qcom,ramp-toggle");
+	}
+
+	rc = of_property_count_elems_of_size(chip->dev->of_node,
+			"qcom,sync-channel-ids", sizeof(u32));
+	if (rc < 0)
+		return 0;
+
+	length = rc;
+	if (length > chip->num_lpgs) {
+		dev_err(chip->dev, "qcom,sync-channel-ids has too many channels: %d\n",
+				length);
+		return -EINVAL;
+	}
+
+	chip->lpg_group = devm_kcalloc(chip->dev, chip->num_lpgs,
+			sizeof(u32), GFP_KERNEL);
+	if (!chip->lpg_group)
+		return -ENOMEM;
+
+	rc = of_property_read_u32_array(chip->dev->of_node,
+			"qcom,sync-channel-ids", chip->lpg_group, length);
+	if (rc < 0) {
+		dev_err(chip->dev, "Get qcom,sync-channel-ids failed, rc=%d\n",
+				rc);
+		return rc;
+	}
+
+	for (i = 0; i < length; i++) {
+		if (chip->lpg_group[i] <= 0 ||
+				chip->lpg_group[i] > chip->num_lpgs) {
+			dev_err(chip->dev, "lpg_group[%d]: %d is not a valid channel\n",
+					i, chip->lpg_group[i]);
+			return -EINVAL;
+		}
+	}
+
+	/*
+	 * The LPG channel in the same group should have the same ramping
+	 * configuration, so force to use the ramping configuration of the
+	 * 1st LPG channel in the group for sychronization.
+	 */
+	lpg = &chip->lpgs[chip->lpg_group[0] - 1];
+	ramp = &lpg->ramp_config;
+
+	for (i = 1; i < length; i++) {
+		lpg = &chip->lpgs[chip->lpg_group[i] - 1];
+		memcpy(&lpg->ramp_config, ramp, sizeof(struct lpg_ramp_config));
 	}
 
 	return 0;

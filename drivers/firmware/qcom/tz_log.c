@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -23,14 +23,13 @@
 #include <linux/types.h>
 #include <linux/uaccess.h>
 #include <linux/of.h>
+#include <linux/dma-buf.h>
+#include <linux/ion_kernel.h>
+#include <linux/pm.h>
 
 #include <soc/qcom/scm.h>
 #include <soc/qcom/qseecomi.h>
 
-//#ifdef OPLUS_FEATURE_SECURITY_COMMON
-#include <linux/proc_fs.h>
-#define TZDBG_DIR_NAME "tzdbg"
-//#endif
 /* QSEE_LOG_BUF_SIZE = 32K */
 #define QSEE_LOG_BUF_SIZE 0x8000
 
@@ -327,7 +326,9 @@ static struct tzdbg tzdbg = {
 };
 
 static struct tzdbg_log_t *g_qsee_log;
+static dma_addr_t coh_pmem;
 static uint32_t debug_rw_buf_size;
+static bool restore_from_hibernation;
 
 /*
  * Debugfs data structure and functions
@@ -337,7 +338,7 @@ static int _disp_tz_general_stats(void)
 {
 	int len = 0;
 
-	len += snprintf(tzdbg.disp_buf + len, debug_rw_buf_size - 1,
+	len += scnprintf(tzdbg.disp_buf + len, debug_rw_buf_size - 1,
 			"   Version        : 0x%x\n"
 			"   Magic Number   : 0x%x\n"
 			"   Number of CPU  : %d\n",
@@ -362,7 +363,7 @@ static int _disp_tz_vmid_stats(void)
 
 	for (i = 0; i < num_vmid; i++) {
 		if (ptr->vmid < 0xFF) {
-			len += snprintf(tzdbg.disp_buf + len,
+			len += scnprintf(tzdbg.disp_buf + len,
 				(debug_rw_buf_size - 1) - len,
 				"   0x%x        %s\n",
 				(uint32_t)ptr->vmid, (uint8_t *)ptr->desc);
@@ -397,7 +398,7 @@ static int _disp_tz_boot_stats(void)
 
 	for (i = 0; i < tzdbg.diag_buf->cpu_count; i++) {
 		if (tzdbg.tz_version >= QSEE_VERSION_TZ_3_X) {
-			len += snprintf(tzdbg.disp_buf + len,
+			len += scnprintf(tzdbg.disp_buf + len,
 					(debug_rw_buf_size - 1) - len,
 					"  CPU #: %d\n"
 					"     Warmboot jump address : 0x%llx\n"
@@ -424,7 +425,7 @@ static int _disp_tz_boot_stats(void)
 			}
 			ptr_64++;
 		} else {
-			len += snprintf(tzdbg.disp_buf + len,
+			len += scnprintf(tzdbg.disp_buf + len,
 					(debug_rw_buf_size - 1) - len,
 					"  CPU #: %d\n"
 					"     Warmboot jump address     : 0x%x\n"
@@ -460,7 +461,7 @@ static int _disp_tz_reset_stats(void)
 					tzdbg.diag_buf->reset_info_off);
 
 	for (i = 0; i < tzdbg.diag_buf->cpu_count; i++) {
-		len += snprintf(tzdbg.disp_buf + len,
+		len += scnprintf(tzdbg.disp_buf + len,
 				(debug_rw_buf_size - 1) - len,
 				"  CPU #: %d\n"
 				"     Reset Type (reason)       : 0x%x\n"
@@ -498,7 +499,7 @@ static int _disp_tz_interrupt_stats(void)
 	if (tzdbg.tz_version < QSEE_VERSION_TZ_4_X) {
 		tzdbg_ptr = ptr;
 		for (i = 0; i < (*num_int); i++) {
-			len += snprintf(tzdbg.disp_buf + len,
+			len += scnprintf(tzdbg.disp_buf + len,
 				(debug_rw_buf_size - 1) - len,
 				"     Interrupt Number          : 0x%x\n"
 				"     Type of Interrupt         : 0x%x\n"
@@ -507,13 +508,13 @@ static int _disp_tz_interrupt_stats(void)
 				(uint32_t)tzdbg_ptr->int_info,
 				(uint8_t *)tzdbg_ptr->int_desc);
 			for (j = 0; j < tzdbg.diag_buf->cpu_count; j++) {
-				len += snprintf(tzdbg.disp_buf + len,
+				len += scnprintf(tzdbg.disp_buf + len,
 				(debug_rw_buf_size - 1) - len,
 				"     int_count on CPU # %d      : %u\n",
 				(uint32_t)j,
 				(uint32_t)tzdbg_ptr->int_count[j]);
 			}
-			len += snprintf(tzdbg.disp_buf + len,
+			len += scnprintf(tzdbg.disp_buf + len,
 					debug_rw_buf_size - 1, "\n");
 
 			if (len > (debug_rw_buf_size - 1)) {
@@ -526,7 +527,7 @@ static int _disp_tz_interrupt_stats(void)
 	} else {
 		tzdbg_ptr_tz40 = ptr;
 		for (i = 0; i < (*num_int); i++) {
-			len += snprintf(tzdbg.disp_buf + len,
+			len += scnprintf(tzdbg.disp_buf + len,
 				(debug_rw_buf_size - 1) - len,
 				"     Interrupt Number          : 0x%x\n"
 				"     Type of Interrupt         : 0x%x\n"
@@ -535,13 +536,13 @@ static int _disp_tz_interrupt_stats(void)
 				(uint32_t)tzdbg_ptr_tz40->int_info,
 				(uint8_t *)tzdbg_ptr_tz40->int_desc);
 			for (j = 0; j < tzdbg.diag_buf->cpu_count; j++) {
-				len += snprintf(tzdbg.disp_buf + len,
+				len += scnprintf(tzdbg.disp_buf + len,
 				(debug_rw_buf_size - 1) - len,
 				"     int_count on CPU # %d      : %u\n",
 				(uint32_t)j,
 				(uint32_t)tzdbg_ptr_tz40->int_count[j]);
 			}
-			len += snprintf(tzdbg.disp_buf + len,
+			len += scnprintf(tzdbg.disp_buf + len,
 					debug_rw_buf_size - 1, "\n");
 
 			if (len > (debug_rw_buf_size - 1)) {
@@ -564,7 +565,7 @@ static int _disp_tz_log_stats_legacy(void)
 
 	ptr = (unsigned char *)tzdbg.diag_buf +
 					tzdbg.diag_buf->ring_off;
-	len += snprintf(tzdbg.disp_buf, (debug_rw_buf_size - 1) - len,
+	len += scnprintf(tzdbg.disp_buf, (debug_rw_buf_size - 1) - len,
 							"%s\n", ptr);
 
 	tzdbg.stat[TZDBG_LOG].data = tzdbg.disp_buf;
@@ -718,6 +719,15 @@ static int _disp_tz_log_stats(size_t count)
 {
 	static struct tzdbg_log_pos_t log_start = {0};
 	struct tzdbg_log_t *log_ptr;
+	/* wrap and offset are initialized to zero since tz is coldboot
+	 * during restoration from hibernation.the reason to initialise
+	 * the wrap and offset to zero since it contains previous boot
+	 * values and which are invalid now.
+	 */
+	if (restore_from_hibernation) {
+		log_start.wrap = log_start.offset = 0;
+		return 0;
+	}
 
 	log_ptr = (struct tzdbg_log_t *)((unsigned char *)tzdbg.diag_buf +
 				tzdbg.diag_buf->ring_off -
@@ -743,6 +753,16 @@ static int _disp_qsee_log_stats(size_t count)
 {
 	static struct tzdbg_log_pos_t log_start = {0};
 
+	/* wrap and offset are initialized to zero since tz is coldboot
+	 * during restoration from hibernation. The reason to initialise
+	 * the wrap and offset to zero since it contains previous values
+	 * and which are invalid now.
+	 */
+	if (restore_from_hibernation) {
+		log_start.wrap = log_start.offset = 0;
+		return 0;
+	}
+
 	return _disp_log_stats(g_qsee_log, &log_start,
 			QSEE_LOG_BUF_SIZE - sizeof(struct tzdbg_log_pos_t),
 			count, TZDBG_QSEE_LOG);
@@ -754,7 +774,7 @@ static int _disp_hyp_general_stats(size_t count)
 	int i;
 	struct hypdbg_boot_info_t *ptr = NULL;
 
-	len += snprintf((unsigned char *)tzdbg.disp_buf + len,
+	len += scnprintf((unsigned char *)tzdbg.disp_buf + len,
 			tzdbg.hyp_debug_rw_buf_size - 1,
 			"   Magic Number    : 0x%x\n"
 			"   CPU Count       : 0x%x\n"
@@ -765,7 +785,7 @@ static int _disp_hyp_general_stats(size_t count)
 
 	ptr = tzdbg.hyp_diag_buf->boot_info;
 	for (i = 0; i < tzdbg.hyp_diag_buf->cpu_count; i++) {
-		len += snprintf((unsigned char *)tzdbg.disp_buf + len,
+		len += scnprintf((unsigned char *)tzdbg.disp_buf + len,
 				(tzdbg.hyp_debug_rw_buf_size - 1) - len,
 				"  CPU #: %d\n"
 				"     Warmboot entry CPU counter: 0x%x\n"
@@ -788,12 +808,7 @@ static ssize_t tzdbgfs_read(struct file *file, char __user *buf,
 	size_t count, loff_t *offp)
 {
 	int len = 0;
-//#ifdef OPLUS_FEATURE_SECURITY_COMMON
-	struct seq_file *seq = file->private_data;
-	int *tz_id = (int *)(seq->private);
-//else
-	//int *tz_id =  file->private_data;
-//#endif
+	int *tz_id =  file->private_data;
 
 	if (*tz_id == TZDBG_BOOT || *tz_id == TZDBG_RESET ||
 		*tz_id == TZDBG_INTERRUPT || *tz_id == TZDBG_GENERAL ||
@@ -852,186 +867,78 @@ static ssize_t tzdbgfs_read(struct file *file, char __user *buf,
 				tzdbg.stat[(*tz_id)].data, len);
 }
 
-//#ifdef OPLUS_FEATURE_SECURITY_COMMON
-static int tzdbg_proc_open(struct inode *inode, struct file *file)
-{
-    return single_open(file, NULL, PDE_DATA(inode));
-}
-
-/*
 static int tzdbgfs_open(struct inode *inode, struct file *pfile)
 {
 	pfile->private_data = inode->i_private;
 	return 0;
 }
-*/
-
-static int tzdbg_proc_release(struct inode *inode, struct file *file)
-{
-    return single_release(inode, file);
-}
-//#endif
 
 const struct file_operations tzdbg_fops = {
 	.owner   = THIS_MODULE,
 	.read    = tzdbgfs_read,
-//#ifdef OPLUS_FEATURE_SECURITY_COMMON
-	.open    = tzdbg_proc_open,
-	.release = tzdbg_proc_release,
-//else
-	//.open    = tzdbgfs_open,
-//#endif
+	.open    = tzdbgfs_open,
 };
 
-static struct ion_client  *g_ion_clnt;
-static struct ion_handle *g_ihandle;
 
 /*
  * Allocates log buffer from ION, registers the buffer at TZ
  */
-static void tzdbg_register_qsee_log_buf(void)
+static void tzdbg_register_qsee_log_buf(struct platform_device *pdev)
 {
 	/* register log buffer scm request */
-	struct qseecom_reg_log_buf_ireq req;
+	struct qseecom_reg_log_buf_ireq req = {};
 
 	/* scm response */
 	struct qseecom_command_scm_resp resp = {};
-	ion_phys_addr_t pa = 0;
 	size_t len;
 	int ret = 0;
+	struct scm_desc desc = {0};
+	void *buf = NULL;
 
-	/* Create ION msm client */
-	g_ion_clnt = msm_ion_client_create("qsee_log");
-	if (g_ion_clnt == NULL) {
-		pr_err("%s: Ion client cannot be created\n", __func__);
+	len = QSEE_LOG_BUF_SIZE;
+	buf = dma_alloc_coherent(&pdev->dev, len, &coh_pmem, GFP_KERNEL);
+	if (buf == NULL) {
+		pr_err("Failed to alloc memory for size %zu\n", len);
 		return;
 	}
 
-	g_ihandle = ion_alloc(g_ion_clnt, QSEE_LOG_BUF_SIZE,
-			4096, ION_HEAP(ION_QSECOM_HEAP_ID), 0);
-	if (IS_ERR_OR_NULL(g_ihandle)) {
-		pr_err("%s: Ion client could not retrieve the handle\n",
-			__func__);
-		goto err1;
-	}
-
-	ret = ion_phys(g_ion_clnt, g_ihandle, &pa, &len);
-	if (ret) {
-		pr_err("%s: Ion conversion to physical address failed\n",
-			__func__);
-		goto err2;
-	}
-
-	req.qsee_cmd_id = QSEOS_REGISTER_LOG_BUF_COMMAND;
-	req.phy_addr = (uint32_t)pa;
-	req.len = len;
+	g_qsee_log = (struct tzdbg_log_t *)buf;
 
 	if (!is_scm_armv8()) {
+		req.qsee_cmd_id = QSEOS_REGISTER_LOG_BUF_COMMAND;
+		req.phy_addr = (uint32_t)coh_pmem;
+		req.len = len;
 		/*  SCM_CALL  to register the log buffer */
 		ret = scm_call(SCM_SVC_TZSCHEDULER, 1,  &req, sizeof(req),
 			&resp, sizeof(resp));
 	} else {
-		struct scm_desc desc = {0};
-
-		desc.args[0] = pa;
+		desc.args[0] = coh_pmem;
 		desc.args[1] = len;
 		desc.arginfo = 0x22;
 		ret = scm_call2(SCM_QSEEOS_FNID(1, 6), &desc);
 		resp.result = desc.ret[0];
 	}
-
 	if (ret) {
 		pr_err("%s: scm_call to register log buffer failed\n",
 			__func__);
-		goto err2;
+		goto err;
 	}
 
 	if (resp.result != QSEOS_RESULT_SUCCESS) {
 		pr_err(
-		"%s: scm_call to register log buf failed, resp result =%d\n",
+		"%s: scm_call to register log buf failed, resp result =%llu\n",
 		__func__, resp.result);
-		goto err2;
-	}
-
-	g_qsee_log =
-		(struct tzdbg_log_t *)ion_map_kernel(g_ion_clnt, g_ihandle);
-
-	if (IS_ERR(g_qsee_log)) {
-		pr_err("%s: Couldn't map ion buffer to kernel\n",
-			__func__);
-		goto err2;
+		goto err;
 	}
 
 	g_qsee_log->log_pos.wrap = g_qsee_log->log_pos.offset = 0;
 	return;
 
-err2:
-	ion_free(g_ion_clnt, g_ihandle);
-	g_ihandle = NULL;
-err1:
-	ion_client_destroy(g_ion_clnt);
-	g_ion_clnt = NULL;
-}
-
-//#ifdef OPLUS_FEATURE_SECURITY_COMMON
-//change tzdbg node to proc.
-static int  tzdbg_procfs_init(struct platform_device *pdev)
-{
-	int rc = 0;
-	int i;
-	struct proc_dir_entry           *dent_dir;
-	struct proc_dir_entry           *dent;
-
-	dent_dir = proc_mkdir(TZDBG_DIR_NAME, NULL);
-	if (dent_dir == NULL) {
-		dev_err(&pdev->dev, "tzdbg proc_mkdir failed\n");
-		return -ENOMEM;
-	}
-
-	for (i = 0; i < TZDBG_STATS_MAX; i++) {
-		tzdbg.debug_tz[i] = i;
-		dent = proc_create_data(tzdbg.stat[i].name,
-				0444, dent_dir,
-				&tzdbg_fops, &tzdbg.debug_tz[i]);
-		if (dent == NULL) {
-			dev_err(&pdev->dev, "TZ proc_create_data failed\n");
-			rc = -ENOMEM;
-			goto err;
-		}
-	}
-	tzdbg.disp_buf = kzalloc(max(debug_rw_buf_size,
-			tzdbg.hyp_debug_rw_buf_size), GFP_KERNEL);
-	if (tzdbg.disp_buf == NULL)
-		goto err;
-	platform_set_drvdata(pdev, dent_dir);
-	return 0;
 err:
-	if(dent_dir){
-		remove_proc_entry(TZDBG_DIR_NAME, NULL);
-	}
-
-	return rc;
+	dma_free_coherent(&pdev->dev, len, (void *)g_qsee_log, coh_pmem);
+	return;
 }
 
-static void tzdbg_procfs_exit(struct platform_device *pdev)
-{
-	struct proc_dir_entry           *dent_dir;
-
-	kzfree(tzdbg.disp_buf);
-	dent_dir = platform_get_drvdata(pdev);
-	if(dent_dir){
-		remove_proc_entry(TZDBG_DIR_NAME, NULL);
-	}
-	if (g_ion_clnt != NULL) {
-		if (!IS_ERR_OR_NULL(g_ihandle)) {
-			ion_unmap_kernel(g_ion_clnt, g_ihandle);
-			ion_free(g_ion_clnt, g_ihandle);
-		}
-		ion_client_destroy(g_ion_clnt);
-	}
-}
-//else
-/*
 static int  tzdbgfs_init(struct platform_device *pdev)
 {
 	int rc = 0;
@@ -1075,16 +982,10 @@ static void tzdbgfs_exit(struct platform_device *pdev)
 	kzfree(tzdbg.disp_buf);
 	dent_dir = platform_get_drvdata(pdev);
 	debugfs_remove_recursive(dent_dir);
-	if (g_ion_clnt != NULL) {
-		if (!IS_ERR_OR_NULL(g_ihandle)) {
-			ion_unmap_kernel(g_ion_clnt, g_ihandle);
-			ion_free(g_ion_clnt, g_ihandle);
-		}
-		ion_client_destroy(g_ion_clnt);
-	}
+	if (g_qsee_log)
+		dma_free_coherent(&pdev->dev, QSEE_LOG_BUF_SIZE,
+					 (void *)g_qsee_log, coh_pmem);
 }
-*/
-//#endif
 
 static int __update_hypdbg_base(struct platform_device *pdev,
 			void __iomem *virt_iobase)
@@ -1237,14 +1138,10 @@ static int tz_log_probe(struct platform_device *pdev)
 
 	tzdbg.diag_buf = (struct tzdbg_t *)ptr;
 
-//#ifdef OPLUS_FEATURE_SECURITY_COMMON
-	if (tzdbg_procfs_init(pdev))
-//else
-	//if (tzdbgfs_init(pdev))
-//#endif
+	if (tzdbgfs_init(pdev))
 		goto err;
 
-	tzdbg_register_qsee_log_buf();
+	tzdbg_register_qsee_log_buf(pdev);
 
 	tzdbg_get_tz_version();
 
@@ -1254,20 +1151,61 @@ err:
 	return -ENXIO;
 }
 
-
 static int tz_log_remove(struct platform_device *pdev)
 {
 	kzfree(tzdbg.diag_buf);
 	if (tzdbg.hyp_diag_buf)
 		kzfree(tzdbg.hyp_diag_buf);
-	//#ifdef OPLUS_FEATURE_SECURITY_COMMON
-	tzdbg_procfs_exit(pdev);
-	//else
-	//tzdbgfs_exit(pdev);
-	//#endif
+	tzdbgfs_exit(pdev);
 
 	return 0;
 }
+
+#ifdef CONFIG_PM
+static int tz_log_freeze(struct device *dev)
+{
+	/* This Boolean variable is maintained to initialise the ring buffer
+	 * log pointer to zero during restoration from hibernation
+	 */
+	restore_from_hibernation = 1;
+	if (g_qsee_log)
+		dma_free_coherent(dev, QSEE_LOG_BUF_SIZE, (void *)g_qsee_log,
+					coh_pmem);
+	return 0;
+}
+
+static int tz_log_restore(struct device *dev)
+{
+	/* ring buffer log pointer needs to be re initialized
+	 * during restoration from hibernation.
+	 */
+	if (restore_from_hibernation) {
+		_disp_tz_log_stats(0);
+		_disp_qsee_log_stats(0);
+	}
+	/* Register the log bugger at TZ during hibernation resume.
+	 * After hibernation the log buffer is with HLOS as TZ encountered
+	 * a coldboot sequence.
+	 */
+	tzdbg_register_qsee_log_buf(to_platform_device(dev));
+	/* This is set back to zero after successful restoration
+	 * from hibernation.
+	 */
+	restore_from_hibernation = 0;
+	return 0;
+}
+
+static const struct dev_pm_ops tz_log_pmops = {
+	.freeze = tz_log_freeze,
+	.restore = tz_log_restore,
+	.thaw = tz_log_restore,
+};
+
+#define TZ_LOG_PMOPS (&tz_log_pmops)
+
+#else
+#define TZ_LOG_PMOPS NULL
+#endif
 
 static const struct of_device_id tzlog_match[] = {
 	{	.compatible = "qcom,tz-log",
@@ -1283,6 +1221,7 @@ static struct platform_driver tz_log_driver = {
 		.owner = THIS_MODULE,
 		.of_match_table = tzlog_match,
 		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
+		.pm = TZ_LOG_PMOPS,
 	},
 };
 

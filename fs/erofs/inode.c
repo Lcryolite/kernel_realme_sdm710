@@ -346,6 +346,8 @@ int erofs_getattr(const struct path *path, struct kstat *stat,
 		stat->attributes |= STATX_ATTR_COMPRESSED;
 
 	stat->attributes |= STATX_ATTR_IMMUTABLE;
+	stat->attributes_mask |= (STATX_ATTR_COMPRESSED |
+				  STATX_ATTR_IMMUTABLE);
 
 	generic_fillattr(inode, stat);
 	return 0;

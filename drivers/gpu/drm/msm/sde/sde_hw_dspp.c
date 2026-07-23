@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -45,7 +45,7 @@ static struct sde_dspp_cfg *_dspp_offset(enum sde_dspp dspp,
 
 static void _setup_dspp_ops(struct sde_hw_dspp *c, unsigned long features)
 {
-	int i = 0, ret;
+	int i = 0, ret = 0;
 
 	if (!c || !c->cap || !c->cap->sblk)
 		return;
@@ -60,7 +60,7 @@ static void _setup_dspp_ops(struct sde_hw_dspp *c, unsigned long features)
 				c->ops.setup_pcc = sde_setup_dspp_pcc_v1_7;
 			else if (c->cap->sblk->pcc.version ==
 					(SDE_COLOR_PROCESS_VER(0x4, 0x0))) {
-				ret = 1; // reg_dmav1_init_dspp_op_v4(i, c->idx); use the sde one instead, with correct hsic settings possibilities
+				ret = reg_dmav1_init_dspp_op_v4(i, c->idx);
 				if (!ret)
 					c->ops.setup_pcc =
 						reg_dmav1_setup_dspp_pccv4;
@@ -71,28 +71,52 @@ static void _setup_dspp_ops(struct sde_hw_dspp *c, unsigned long features)
 			break;
 		case SDE_DSPP_HSIC:
 			if (c->cap->sblk->hsic.version ==
-				SDE_COLOR_PROCESS_VER(0x1, 0x7))
-				c->ops.setup_pa_hsic =
-					sde_setup_dspp_pa_hsic_v17;
+				SDE_COLOR_PROCESS_VER(0x1, 0x7)) {
+				ret = reg_dmav1_init_dspp_op_v4(i, c->idx);
+				if (!ret)
+					c->ops.setup_pa_hsic =
+						reg_dmav1_setup_dspp_pa_hsicv17;
+				else
+					c->ops.setup_pa_hsic =
+						sde_setup_dspp_pa_hsic_v17;
+			}
 			break;
 		case SDE_DSPP_MEMCOLOR:
 			if (c->cap->sblk->memcolor.version ==
 				SDE_COLOR_PROCESS_VER(0x1, 0x7)) {
-				c->ops.setup_pa_memcol_skin =
-					sde_setup_dspp_memcol_skin_v17;
-				c->ops.setup_pa_memcol_sky =
-					sde_setup_dspp_memcol_sky_v17;
-				c->ops.setup_pa_memcol_foliage =
-					sde_setup_dspp_memcol_foliage_v17;
-				c->ops.setup_pa_memcol_prot =
-					sde_setup_dspp_memcol_prot_v17;
+				ret = reg_dmav1_init_dspp_op_v4(i, c->idx);
+				if (!ret) {
+					c->ops.setup_pa_memcol_skin =
+					    reg_dmav1_setup_dspp_memcol_skinv17;
+					c->ops.setup_pa_memcol_sky =
+					    reg_dmav1_setup_dspp_memcol_skyv17;
+					c->ops.setup_pa_memcol_foliage =
+					    reg_dmav1_setup_dspp_memcol_folv17;
+					c->ops.setup_pa_memcol_prot =
+					    reg_dmav1_setup_dspp_memcol_protv17;
+				} else {
+					c->ops.setup_pa_memcol_skin =
+					    sde_setup_dspp_memcol_skin_v17;
+					c->ops.setup_pa_memcol_sky =
+					    sde_setup_dspp_memcol_sky_v17;
+					c->ops.setup_pa_memcol_foliage =
+					    sde_setup_dspp_memcol_foliage_v17;
+					c->ops.setup_pa_memcol_prot =
+					    sde_setup_dspp_memcol_prot_v17;
+				}
 			}
 			break;
 		case SDE_DSPP_SIXZONE:
 			if (c->cap->sblk->sixzone.version ==
-				SDE_COLOR_PROCESS_VER(0x1, 0x7))
-				c->ops.setup_sixzone =
-					sde_setup_dspp_sixzone_v17;
+				SDE_COLOR_PROCESS_VER(0x1, 0x7)) {
+				ret = reg_dmav1_init_dspp_op_v4(i, c->idx);
+				if (!ret)
+					c->ops.setup_sixzone =
+						reg_dmav1_setup_dspp_sixzonev17;
+				else
+					c->ops.setup_sixzone =
+						sde_setup_dspp_sixzone_v17;
+			}
 			break;
 		case SDE_DSPP_DITHER:
 			if (c->cap->sblk->dither.version ==
@@ -137,6 +161,28 @@ static void _setup_dspp_ops(struct sde_hw_dspp *c, unsigned long features)
 				else
 					c->ops.setup_gamut =
 						sde_setup_dspp_3d_gamutv4;
+			} else if (c->cap->sblk->gamut.version ==
+					SDE_COLOR_PROCESS_VER(0x4, 1)) {
+				ret = reg_dmav1_init_dspp_op_v4(i, c->idx);
+				if (!ret) {
+					c->ops.setup_gamut =
+					    reg_dmav1_setup_dspp_3d_gamutv41;
+				} else {
+					c->ops.setup_gamut =
+					    sde_setup_dspp_3d_gamutv41;
+				}
+			} else if (c->cap->sblk->gamut.version ==
+					SDE_COLOR_PROCESS_VER(0x4, 2)) {
+				ret = reg_dmav1_init_dspp_op_v4(
+					SDE_DSPP_GAMUT, c->idx);
+				c->ops.setup_gamut = NULL;
+				if (!ret) {
+					c->ops.setup_gamut =
+					    reg_dmav1_setup_dspp_3d_gamutv42;
+				} else {
+					c->ops.setup_gamut =
+					    sde_setup_dspp_3d_gamutv41;
+				}
 			}
 			break;
 		case SDE_DSPP_GC:
@@ -227,6 +273,13 @@ struct sde_hw_dspp *sde_hw_dspp_init(enum sde_dspp idx,
 
 	sde_dbg_reg_register_dump_range(SDE_DBG_NAME, cfg->name, c->hw.blk_off,
 			c->hw.blk_off + c->hw.length, c->hw.xin_id);
+
+	if ((cfg->sblk->ad.id == SDE_DSPP_AD) && cfg->sblk->ad.base) {
+		sde_dbg_reg_register_dump_range(SDE_DBG_NAME, "ad4",
+			c->hw.blk_off + cfg->sblk->ad.base,
+			c->hw.blk_off + cfg->sblk->ad.base + SDE_AD4_REG_LEN,
+			c->hw.xin_id);
+	}
 
 	return c;
 

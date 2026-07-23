@@ -29,8 +29,8 @@
 #include <net/rose.h>
 
 static void rose_heartbeat_expiry(unsigned long);
-static void rose_timer_expiry(unsigned long);
-static void rose_idletimer_expiry(unsigned long);
+static void rose_timer_expiry(struct timer_list *);
+static void rose_idletimer_expiry(struct timer_list *);
 
 void rose_start_heartbeat(struct sock *sk)
 {
@@ -49,8 +49,7 @@ void rose_start_t1timer(struct sock *sk)
 
 	sk_stop_timer(sk, &rose->timer);
 
-	rose->timer.data     = (unsigned long)sk;
-	rose->timer.function = &rose_timer_expiry;
+	rose->timer.function = (TIMER_FUNC_TYPE)rose_timer_expiry;
 	rose->timer.expires  = jiffies + rose->t1;
 
 	sk_reset_timer(sk, &rose->timer, rose->timer.expires);
@@ -62,8 +61,7 @@ void rose_start_t2timer(struct sock *sk)
 
 	sk_stop_timer(sk, &rose->timer);
 
-	rose->timer.data     = (unsigned long)sk;
-	rose->timer.function = &rose_timer_expiry;
+	rose->timer.function = (TIMER_FUNC_TYPE)rose_timer_expiry;
 	rose->timer.expires  = jiffies + rose->t2;
 
 	sk_reset_timer(sk, &rose->timer, rose->timer.expires);
@@ -75,8 +73,7 @@ void rose_start_t3timer(struct sock *sk)
 
 	sk_stop_timer(sk, &rose->timer);
 
-	rose->timer.data     = (unsigned long)sk;
-	rose->timer.function = &rose_timer_expiry;
+	rose->timer.function = (TIMER_FUNC_TYPE)rose_timer_expiry;
 	rose->timer.expires  = jiffies + rose->t3;
 
 	sk_reset_timer(sk, &rose->timer, rose->timer.expires);
@@ -88,8 +85,7 @@ void rose_start_hbtimer(struct sock *sk)
 
 	sk_stop_timer(sk, &rose->timer);
 
-	rose->timer.data     = (unsigned long)sk;
-	rose->timer.function = &rose_timer_expiry;
+	rose->timer.function = (TIMER_FUNC_TYPE)rose_timer_expiry;
 	rose->timer.expires  = jiffies + rose->hb;
 
 	sk_reset_timer(sk, &rose->timer, rose->timer.expires);
@@ -102,8 +98,7 @@ void rose_start_idletimer(struct sock *sk)
 	sk_stop_timer(sk, &rose->timer);
 
 	if (rose->idle > 0) {
-		rose->idletimer.data     = (unsigned long)sk;
-		rose->idletimer.function = &rose_idletimer_expiry;
+		rose->idletimer.function = (TIMER_FUNC_TYPE)rose_idletimer_expiry;
 		rose->idletimer.expires  = jiffies + rose->idle;
 
 		sk_reset_timer(sk, &rose->idletimer, rose->idletimer.expires);
@@ -165,10 +160,10 @@ static void rose_heartbeat_expiry(unsigned long param)
 	sock_put(sk);
 }
 
-static void rose_timer_expiry(unsigned long param)
+static void rose_timer_expiry(struct timer_list *t)
 {
-	struct sock *sk = (struct sock *)param;
-	struct rose_sock *rose = rose_sk(sk);
+	struct rose_sock *rose = from_timer(rose, t, timer);
+	struct sock *sk = &rose->sock;
 
 	bh_lock_sock(sk);
 	switch (rose->state) {
@@ -195,9 +190,10 @@ static void rose_timer_expiry(unsigned long param)
 	sock_put(sk);
 }
 
-static void rose_idletimer_expiry(unsigned long param)
+static void rose_idletimer_expiry(struct timer_list *t)
 {
-	struct sock *sk = (struct sock *)param;
+	struct rose_sock *rose = from_timer(rose, t, idletimer);
+	struct sock *sk = &rose->sock;
 
 	bh_lock_sock(sk);
 	rose_clear_queues(sk);

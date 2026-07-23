@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * To speed up listener socket lookup, create an array to store all sockets
  * listening on the same port.  This allows a decision to be made after finding
@@ -8,36 +9,18 @@
 #include <net/sock_reuseport.h>
 #include <linux/bpf.h>
 #include <linux/idr.h>
+#include <linux/filter.h>
 #include <linux/rcupdate.h>
 
 #define INIT_SOCKS 128
 
 DEFINE_SPINLOCK(reuseport_lock);
 
-#define REUSEPORT_MIN_ID 1
 static DEFINE_IDA(reuseport_ida);
 
-int reuseport_get_id(struct sock_reuseport *reuse)
+static struct sock_reuseport *__reuseport_alloc(unsigned int max_socks)
 {
-	int id;
-
-	if (reuse->reuseport_id)
-		return reuse->reuseport_id;
-
-	id = ida_simple_get(&reuseport_ida, REUSEPORT_MIN_ID, 0,
-			    /* Called under reuseport_lock */
-			    GFP_ATOMIC);
-	if (id < 0)
-		return id;
-
-	reuse->reuseport_id = id;
-
-	return reuse->reuseport_id;
-}
-
-static struct sock_reuseport *__reuseport_alloc(u16 max_socks)
-{
-	size_t size = sizeof(struct sock_reuseport) +
+	unsigned int size = sizeof(struct sock_reuseport) +
 		      sizeof(struct sock *) * max_socks;
 	struct sock_reuseport *reuse = kzalloc(size, GFP_ATOMIC);
 
@@ -53,6 +36,7 @@ static struct sock_reuseport *__reuseport_alloc(u16 max_socks)
 int reuseport_alloc(struct sock *sk, bool bind_inany)
 {
 	struct sock_reuseport *reuse;
+	int id, ret = 0;
 
 	/* bh lock used since this function call may precede hlist lock in
 	 * soft irq of receive path or setsockopt from process context
@@ -76,10 +60,18 @@ int reuseport_alloc(struct sock *sk, bool bind_inany)
 
 	reuse = __reuseport_alloc(INIT_SOCKS);
 	if (!reuse) {
-		spin_unlock_bh(&reuseport_lock);
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto out;
 	}
 
+	id = ida_alloc(&reuseport_ida, GFP_ATOMIC);
+	if (id < 0) {
+		kfree(reuse);
+		ret = id;
+		goto out;
+	}
+
+	reuse->reuseport_id = id;
 	reuse->socks[0] = sk;
 	reuse->num_socks = 1;
 	reuse->bind_inany = bind_inany;
@@ -88,7 +80,7 @@ int reuseport_alloc(struct sock *sk, bool bind_inany)
 out:
 	spin_unlock_bh(&reuseport_lock);
 
-	return 0;
+	return ret;
 }
 EXPORT_SYMBOL(reuseport_alloc);
 
@@ -113,7 +105,6 @@ static struct sock_reuseport *reuseport_grow(struct sock_reuseport *reuse)
 
 	memcpy(more_reuse->socks, reuse->socks,
 	       reuse->num_socks * sizeof(struct sock *));
-	more_reuse->synq_overflow_ts = READ_ONCE(reuse->synq_overflow_ts);
 
 	for (i = 0; i < reuse->num_socks; ++i)
 		rcu_assign_pointer(reuse->socks[i]->sk_reuseport_cb,
@@ -132,10 +123,8 @@ static void reuseport_free_rcu(struct rcu_head *head)
 	struct sock_reuseport *reuse;
 
 	reuse = container_of(head, struct sock_reuseport, rcu);
-	if (reuse->prog)
-		bpf_prog_destroy(reuse->prog);
-	if (reuse->reuseport_id)
-		ida_simple_remove(&reuseport_ida, reuse->reuseport_id);
+	sk_reuseport_prog_free(rcu_dereference_protected(reuse->prog, 1));
+	ida_free(&reuseport_ida, reuse->reuseport_id);
 	kfree(reuse);
 }
 
@@ -196,12 +185,15 @@ void reuseport_detach_sock(struct sock *sk)
 	reuse = rcu_dereference_protected(sk->sk_reuseport_cb,
 					  lockdep_is_held(&reuseport_lock));
 
-	/* At least one of the sk in this reuseport group is added to
-	 * a bpf map.  Notify the bpf side.  The bpf map logic will
-	 * remove the sk if it is indeed added to a bpf map.
+	/* Notify the bpf side. The sk may be added to a sockarray
+	 * map. If so, sockarray logic will remove it from the map.
+	 *
+	 * Other bpf map types that work with reuseport, like sockmap,
+	 * don't need an explicit callback from here. They override sk
+	 * unhash/close ops to remove the sk from the map before we
+	 * get to this point.
 	 */
-	if (reuse->reuseport_id)
-		bpf_sk_reuseport_detach(sk);
+	bpf_sk_reuseport_detach(sk);
 
 	rcu_assign_pointer(sk->sk_reuseport_cb, NULL);
 
@@ -218,9 +210,9 @@ void reuseport_detach_sock(struct sock *sk)
 }
 EXPORT_SYMBOL(reuseport_detach_sock);
 
-static struct sock *run_bpf(struct sock_reuseport *reuse, u16 socks,
-			    struct bpf_prog *prog, struct sk_buff *skb,
-			    int hdr_len)
+static struct sock *run_bpf_filter(struct sock_reuseport *reuse, u16 socks,
+				   struct bpf_prog *prog, struct sk_buff *skb,
+				   int hdr_len)
 {
 	struct sk_buff *nskb = NULL;
 	u32 index;
@@ -281,10 +273,29 @@ struct sock *reuseport_select_sock(struct sock *sk,
 		/* paired with smp_wmb() in reuseport_add_sock() */
 		smp_rmb();
 
-		if (prog && skb)
-			sk2 = run_bpf(reuse, socks, prog, skb, hdr_len);
+		if (!prog || !skb)
+			goto select_by_hash;
+
+		if (prog->type == BPF_PROG_TYPE_SK_REUSEPORT)
+			sk2 = bpf_run_sk_reuseport(reuse, sk, prog, skb, hash);
 		else
-			sk2 = reuse->socks[reciprocal_scale(hash, socks)];
+			sk2 = run_bpf_filter(reuse, socks, prog, skb, hdr_len);
+
+select_by_hash:
+		/* no bpf or invalid bpf result: fall back to hash usage */
+		if (!sk2) {
+			int i, j;
+
+			i = j = reciprocal_scale(hash, socks);
+			while (reuse->socks[i]->sk_state == TCP_ESTABLISHED) {
+				i++;
+				if (i >= reuse->num_socks)
+					i = 0;
+				if (i == j)
+					goto out;
+			}
+			sk2 = reuse->socks[i];
+		}
 	}
 
 out:
@@ -293,11 +304,20 @@ out:
 }
 EXPORT_SYMBOL(reuseport_select_sock);
 
-struct bpf_prog *
-reuseport_attach_prog(struct sock *sk, struct bpf_prog *prog)
+int reuseport_attach_prog(struct sock *sk, struct bpf_prog *prog)
 {
 	struct sock_reuseport *reuse;
 	struct bpf_prog *old_prog;
+
+	if (sk_unhashed(sk) && sk->sk_reuseport) {
+		int err = reuseport_alloc(sk, false);
+
+		if (err)
+			return err;
+	} else if (!rcu_access_pointer(sk->sk_reuseport_cb)) {
+		/* The socket wasn't bound with SO_REUSEPORT */
+		return -EINVAL;
+	}
 
 	spin_lock_bh(&reuseport_lock);
 	reuse = rcu_dereference_protected(sk->sk_reuseport_cb,
@@ -307,6 +327,31 @@ reuseport_attach_prog(struct sock *sk, struct bpf_prog *prog)
 	rcu_assign_pointer(reuse->prog, prog);
 	spin_unlock_bh(&reuseport_lock);
 
-	return old_prog;
+	sk_reuseport_prog_free(old_prog);
+	return 0;
 }
 EXPORT_SYMBOL(reuseport_attach_prog);
+
+int reuseport_detach_prog(struct sock *sk)
+{
+	struct sock_reuseport *reuse;
+	struct bpf_prog *old_prog;
+
+	if (!rcu_access_pointer(sk->sk_reuseport_cb))
+		return sk->sk_reuseport ? -ENOENT : -EINVAL;
+
+	old_prog = NULL;
+	spin_lock_bh(&reuseport_lock);
+	reuse = rcu_dereference_protected(sk->sk_reuseport_cb,
+					  lockdep_is_held(&reuseport_lock));
+	rcu_swap_protected(reuse->prog, old_prog,
+			   lockdep_is_held(&reuseport_lock));
+	spin_unlock_bh(&reuseport_lock);
+
+	if (!old_prog)
+		return -ENOENT;
+
+	sk_reuseport_prog_free(old_prog);
+	return 0;
+}
+EXPORT_SYMBOL(reuseport_detach_prog);

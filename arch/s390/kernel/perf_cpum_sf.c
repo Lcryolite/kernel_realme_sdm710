@@ -15,6 +15,7 @@
 #include <linux/kernel_stat.h>
 #include <linux/perf_event.h>
 #include <linux/percpu.h>
+#include <linux/pid.h>
 #include <linux/notifier.h>
 #include <linux/export.h>
 #include <linux/slab.h>
@@ -673,6 +674,67 @@ static unsigned long hw_limit_rate(const struct hws_qsi_info_block *si,
 		       si->min_sampl_rate, si->max_sampl_rate);
 }
 
+static u32 cpumsf_pid_type(struct perf_event *event,
+			   u32 pid, enum pid_type type)
+{
+	struct task_struct *tsk;
+
+	/* Idle process */
+	if (!pid)
+		goto out;
+
+	tsk = find_task_by_pid_ns(pid, &init_pid_ns);
+	pid = -1;
+	if (tsk) {
+		/*
+		 * Only top level events contain the pid namespace in which
+		 * they are created.
+		 */
+		if (event->parent)
+			event = event->parent;
+		pid = __task_pid_nr_ns(tsk, type, event->ns);
+		/*
+		 * See also 1d953111b648
+		 * "perf/core: Don't report zero PIDs for exiting tasks".
+		 */
+		if (!pid && !pid_alive(tsk))
+			pid = -1;
+	}
+out:
+	return pid;
+}
+
+static void cpumsf_output_event_pid(struct perf_event *event,
+				    struct perf_sample_data *data,
+				    struct pt_regs *regs)
+{
+	u32 pid;
+	struct perf_event_header header;
+	struct perf_output_handle handle;
+
+	/*
+	 * Obtain the PID from the basic-sampling data entry and
+	 * correct the data->tid_entry.pid value.
+	 */
+	pid = data->tid_entry.pid;
+
+	/* Protect callchain buffers, tasks */
+	rcu_read_lock();
+
+	perf_prepare_sample(&header, data, event, regs);
+	if (perf_output_begin(&handle, event, header.size))
+		goto out;
+
+	/* Update the process ID (see also kernel/events/core.c) */
+	data->tid_entry.pid = cpumsf_pid_type(event, pid, PIDTYPE_TGID);
+	data->tid_entry.tid = cpumsf_pid_type(event, pid, PIDTYPE_PID);
+
+	perf_output_sample(&handle, &header, data, event);
+	perf_output_end(&handle);
+out:
+	rcu_read_unlock();
+}
+
 static int __hw_perf_event_init(struct perf_event *event)
 {
 	struct cpu_hw_sf *cpuhw;
@@ -806,6 +868,14 @@ static int __hw_perf_event_init(struct perf_event *event)
 				break;
 		}
 	}
+
+	/* If PID/TID sampling is active, replace the default overflow
+	 * handler to extract and resolve the PIDs from the basic-sampling
+	 * data entries.
+	 */
+	if (event->attr.sample_type & PERF_SAMPLE_TID)
+		if (is_default_overflow_handler(event))
+			event->overflow_handler = cpumsf_output_event_pid;
 out:
 	return err;
 }
@@ -840,9 +910,12 @@ static int cpumsf_pmu_event_init(struct perf_event *event)
 	}
 
 	/* Check online status of the CPU to which the event is pinned */
-	if (event->cpu >= nr_cpumask_bits ||
-	    (event->cpu >= 0 && !cpu_online(event->cpu)))
-		return -ENODEV;
+	if (event->cpu >= 0) {
+		if ((unsigned int)event->cpu >= nr_cpumask_bits)
+			return -ENODEV;
+		if (!cpu_online(event->cpu))
+			return -ENODEV;
+	}
 
 	/* Force reset of idle/hv excludes regardless of what the
 	 * user requested.
@@ -1012,39 +1085,41 @@ static int perf_push_sample(struct perf_event *event, struct sf_raw_sample *sfr)
 	regs.int_parm = CPU_MF_INT_SF_PRA;
 	sde_regs = (struct perf_sf_sde_regs *) &regs.int_parm_long;
 
-	regs.psw.addr = sfr->basic.ia;
-	if (sfr->basic.T)
-		regs.psw.mask |= PSW_MASK_DAT;
-	if (sfr->basic.W)
-		regs.psw.mask |= PSW_MASK_WAIT;
-	if (sfr->basic.P)
-		regs.psw.mask |= PSW_MASK_PSTATE;
-	switch (sfr->basic.AS) {
-	case 0x0:
-		regs.psw.mask |= PSW_ASC_PRIMARY;
+	psw_bits(regs.psw).ia	= sfr->basic.ia;
+	psw_bits(regs.psw).dat	= sfr->basic.T;
+	psw_bits(regs.psw).wait = sfr->basic.W;
+	psw_bits(regs.psw).pstate = sfr->basic.P;
+	psw_bits(regs.psw).as	= sfr->basic.AS;
+
+	/*
+	 * Use the hardware provided configuration level to decide if the
+	 * sample belongs to a guest or host. If that is not available,
+	 * fall back to the following heuristics:
+	 * A non-zero guest program parameter always indicates a guest
+	 * sample. Some early samples or samples from guests without
+	 * lpp usage would be misaccounted to the host. We use the asn
+	 * value as an addon heuristic to detect most of these guest samples.
+	 * If the value differs from 0xffff (the host value), we assume to
+	 * be a KVM guest.
+	 */
+	switch (sfr->basic.CL) {
+	case 1: /* logical partition */
+		sde_regs->in_guest = 0;
 		break;
-	case 0x1:
-		regs.psw.mask |= PSW_ASC_ACCREG;
+	case 2: /* virtual machine */
+		sde_regs->in_guest = 1;
 		break;
-	case 0x2:
-		regs.psw.mask |= PSW_ASC_SECONDARY;
-		break;
-	case 0x3:
-		regs.psw.mask |= PSW_ASC_HOME;
+	default: /* old machine, use heuristics */
+		if (sfr->basic.gpp || sfr->basic.prim_asn != 0xffff)
+			sde_regs->in_guest = 1;
 		break;
 	}
 
 	/*
-	 * A non-zero guest program parameter indicates a guest
-	 * sample.
-	 * Note that some early samples or samples from guests without
-	 * lpp usage would be misaccounted to the host. We use the asn
-	 * value as a heuristic to detect most of these guest samples.
-	 * If the value differs from the host hpp value, we assume
-	 * it to be a KVM guest.
+	 * Store the PID value from the sample-data-entry to be
+	 * processed and resolved by cpumsf_output_event_pid().
 	 */
-	if (sfr->basic.gpp || sfr->basic.prim_asn != (u16) sfr->basic.hpp)
-		sde_regs->in_guest = 1;
+	data.tid_entry.pid = basic->hpp & LPP_PID_MASK;
 
 	overflow = 0;
 	if (perf_exclude_event(event, &regs, sde_regs))
@@ -1657,7 +1732,7 @@ static int __init init_cpum_sampling_pmu(void)
 		goto out;
 	}
 
-	cpuhp_setup_state(CPUHP_AP_PERF_S390_SF_ONLINE, "AP_PERF_S390_SF_ONLINE",
+	cpuhp_setup_state(CPUHP_AP_PERF_S390_SF_ONLINE, "perf/s390/sf:online",
 			  s390_pmu_sf_online_cpu, s390_pmu_sf_offline_cpu);
 out:
 	return err;

@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -81,7 +81,7 @@ struct tspp_ion_dma_buf_info {
 	struct dma_buf_attachment *attach;
 	struct sg_table *table;
 	bool smmu_map;
-	dma_addr_t dma_map_base;
+	void *va;
 };
 
 typedef void (tspp_notifier)(int channel_id, void *user);
@@ -119,4 +119,6 @@ int tspp_attach_ion_dma_buff(u32 dev,
 
 int tspp_detach_ion_dma_buff(u32 dev,
 	struct tspp_ion_dma_buf_info *ion_dma_buf);
+void *tspp_allocate_dma_buffer(u32 dev, int size, phys_addr_t *paddr);
+int tspp_free_dma_buffer(u32 dev, int size, void *vaddr, dma_addr_t paddr);
 #endif /* _MSM_TSPP_H_ */

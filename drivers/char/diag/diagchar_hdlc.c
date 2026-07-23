@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2009, 2012-2014, 2016 The Linux Foundation.
+/* Copyright (c) 2008-2009, 2012-2014, 2016-2017, The Linux Foundation.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -153,7 +153,6 @@ int diag_hdlc_decode(struct diag_hdlc_decode_type *hdlc)
 {
 	uint8_t *src_ptr = NULL, *dest_ptr = NULL;
 	unsigned int src_length = 0, dest_length = 0;
-
 	unsigned int len = 0;
 	unsigned int i;
 	uint8_t src_byte;
@@ -175,21 +174,24 @@ int diag_hdlc_decode(struct diag_hdlc_decode_type *hdlc)
 		dest_ptr = &dest_ptr[hdlc->dest_idx];
 		dest_length = hdlc->dest_size - hdlc->dest_idx;
 
-		for (i = 0; i < src_length; i++) {
-
+		for (i = 0; i < src_length && len < dest_length; i++) {
 			src_byte = src_ptr[i];
 
 			if (hdlc->escaping) {
 				dest_ptr[len++] = src_byte ^ ESC_MASK;
 				hdlc->escaping = 0;
-			} else if (src_byte == ESC_CHAR) {
+				continue;
+			}
+			if (src_byte == ESC_CHAR) {
 				if (i == (src_length - 1)) {
 					hdlc->escaping = 1;
 					i++;
 					break;
 				}
 				dest_ptr[len++] = src_ptr[++i] ^ ESC_MASK;
-			} else if (src_byte == CONTROL_CHAR) {
+				continue;
+			}
+			if (src_byte == CONTROL_CHAR) {
 				if (msg_start && i == 0 && src_length > 1)
 					continue;
 				/* Byte 0x7E will be considered as end of
@@ -199,16 +201,9 @@ int diag_hdlc_decode(struct diag_hdlc_decode_type *hdlc)
 				i++;
 				pkt_bnd = HDLC_COMPLETE;
 				break;
-			} else {
-				dest_ptr[len++] = src_byte;
 			}
-
-			if (len >= dest_length) {
-				i++;
-				break;
-			}
+			dest_ptr[len++] = src_byte;
 		}
-
 		hdlc->src_idx += i;
 		hdlc->dest_idx += len;
 	}

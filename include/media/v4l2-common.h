@@ -55,6 +55,13 @@
 			v4l_client_printk(KERN_DEBUG, client, fmt , ## arg); \
 	} while (0)
 
+/* Add a version of v4l_dbg to be used on drivers using dev_foo() macros */
+#define dev_dbg_lvl(__dev, __level, __debug, __fmt, __arg...)		\
+	do {								\
+		if (__debug >= (__level))				\
+			dev_printk(KERN_DEBUG, __dev, __fmt, ##__arg);	\
+	} while (0)
+
 /* ------------------------------------------------------------------------- */
 
 /* These printk constructs can be used with v4l2_device and v4l2_subdev */
@@ -256,9 +263,5 @@ const struct v4l2_frmsize_discrete *v4l2_find_nearest_format(
 		s32 width, s32 height);
 
 void v4l2_get_timestamp(struct timeval *tv);
-
-void v4l2_simplify_fraction(u32 *numerator, u32 *denominator,
-		unsigned int n_terms, unsigned int threshold);
-u32 v4l2_fraction_to_interval(u32 numerator, u32 denominator);
 
 #endif /* V4L2_COMMON_H_ */

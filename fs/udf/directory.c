@@ -16,6 +16,7 @@
 
 #include <linux/fs.h>
 #include <linux/string.h>
+#include <linux/bio.h>
 
 struct fileIdentDesc *udf_fileident_read(struct inode *dir, loff_t *nf_pos,
 					 struct udf_fileident_bh *fibh,
@@ -177,7 +178,7 @@ struct fileIdentDesc *udf_get_fileident(void *buffer, int bufsize, int *offset)
 	if (fi->descTag.tagIdent != cpu_to_le16(TAG_IDENT_FID)) {
 		udf_debug("0x%x != TAG_IDENT_FID\n",
 			  le16_to_cpu(fi->descTag.tagIdent));
-		udf_debug("offset: %u sizeof: %lu bufsize: %u\n",
+		udf_debug("offset: %d sizeof: %lu bufsize: %d\n",
 			  *offset, (unsigned long)sizeof(struct fileIdentDesc),
 			  bufsize);
 		return NULL;

@@ -12,10 +12,6 @@
   FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
   more details.
 
-  You should have received a copy of the GNU General Public License along with
-  this program; if not, write to the Free Software Foundation, Inc.,
-  51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
-
   The full GNU General Public License is included in this distribution in
   the file called "COPYING".
 
@@ -113,7 +109,7 @@ static int ndesc_get_rx_status(void *data, struct stmmac_extra_stats *x,
 			stats->collisions++;
 		}
 		if (unlikely(rdes0 & RDES0_CRC_ERROR)) {
-			x->rx_crc++;
+			x->rx_crc_errors++;
 			stats->rx_crc_errors++;
 		}
 		ret = discard_frame;
@@ -197,7 +193,7 @@ static void ndesc_release_tx_desc(struct dma_desc *p, int mode)
 
 static void ndesc_prepare_tx_desc(struct dma_desc *p, int is_fs, int len,
 				  bool csum_flag, int mode, bool tx_own,
-				  bool ls)
+				  bool ls, unsigned int tot_pkt_len)
 {
 	unsigned int tdes1 = le32_to_cpu(p->des1);
 
@@ -271,7 +267,7 @@ static u64 ndesc_get_timestamp(void *desc, u32 ats)
 	return ns;
 }
 
-static int ndesc_get_rx_timestamp_status(void *desc, u32 ats)
+static int ndesc_get_rx_timestamp_status(void *desc, void *next_desc, u32 ats)
 {
 	struct dma_desc *p = (struct dma_desc *)desc;
 

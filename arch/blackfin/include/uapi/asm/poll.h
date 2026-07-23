@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0+ WITH Linux-syscall-note */
 /*
  * Copyright 2004-2009 Analog Devices Inc.
  *
@@ -8,8 +9,8 @@
 #ifndef _UAPI__BFIN_POLL_H
 #define _UAPI__BFIN_POLL_H
 
-#define POLLWRNORM	4 /* POLLOUT */
-#define POLLWRBAND	256
+#define POLLWRNORM	(__force __poll_t)4 /* POLLOUT */
+#define POLLWRBAND	(__force __poll_t)256
 
 #include <asm-generic/poll.h>
 

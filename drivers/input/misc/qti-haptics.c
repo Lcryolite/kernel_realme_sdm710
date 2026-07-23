@@ -1,4 +1,4 @@
-/* Copyright (c) 2018, 2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2018-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -65,8 +65,6 @@ enum haptics_custom_effect_param {
 #define HAP_WAVEFORM_BUFFER_MAX		8
 #define HAP_VMAX_MV_DEFAULT		1800
 #define HAP_VMAX_MV_MAX			3596
-#define HAP_ILIM_MA_DEFAULT		400
-#define HAP_ILIM_MA_MAX			800
 #define HAP_PLAY_RATE_US_DEFAULT	5715
 #define HAP_PLAY_RATE_US_MAX		20475
 #define HAP_PLAY_RATE_US_LSB		5
@@ -138,6 +136,8 @@ enum haptics_custom_effect_param {
 #define HAP_VMAX_MV_LSB			116
 
 #define REG_HAP_ILIM_CFG		0x52
+#define HAP_ILIM_SEL_1000MA		BIT(1)
+#define HAP_ILIM_DEFAULT_SEL		HAP_ILIM_SEL_1000MA
 #define REG_HAP_SC_DEB_CFG		0x53
 #define REG_HAP_RATE_CFG1		0x54
 #define REG_HAP_RATE_CFG2		0x55
@@ -204,7 +204,6 @@ struct qti_hap_config {
 	enum lra_auto_res_mode	lra_auto_res_mode;
 	enum wf_src		ext_src;
 	u16			vmax_mv;
-	u16			ilim_ma;
 	u16			play_rate_us;
 	bool			lra_allow_variable_play_rate;
 	bool			use_ext_wf_src;
@@ -767,12 +766,19 @@ static irqreturn_t qti_haptics_play_irq_handler(int irq, void *data)
 	int rc;
 
 	dev_dbg(chip->dev, "play_irq triggered\n");
+
+	if (effect == NULL)
+		goto handled;
+
 	if (play->playing_pos == effect->pattern_length) {
 		dev_dbg(chip->dev, "waveform playing done\n");
 		if (chip->play_irq_en) {
 			disable_irq_nosync(chip->play_irq);
 			chip->play_irq_en = false;
 		}
+
+		/* Clear PLAY after all pattern bytes are queued */
+		qti_haptics_play(chip, false);
 
 		goto handled;
 	}
@@ -985,10 +991,6 @@ static int qti_haptics_playback(struct input_dev *dev, int effect_id, int val)
 				enable_irq(chip->play_irq);
 				chip->play_irq_en = true;
 			}
-			/* Toggle PLAY when playing pattern */
-			rc = qti_haptics_play(chip, false);
-			if (rc < 0)
-				return rc;
 		} else {
 			if (chip->play_irq_en) {
 				disable_irq_nosync(chip->play_irq);
@@ -1110,7 +1112,7 @@ static int qti_haptics_hw_init(struct qti_hap_chip *chip)
 
 	/* Config ilim_ma */
 	addr = REG_HAP_ILIM_CFG;
-	val = config->ilim_ma == 400 ? 0 : 1;
+	val = HAP_ILIM_DEFAULT_SEL;
 	rc = qti_haptics_write(chip, addr, &val, 1);
 	if (rc < 0) {
 		dev_err(chip->dev, "write ilim_ma failed, rc=%d\n", rc);
@@ -1157,8 +1159,11 @@ static int qti_haptics_hw_init(struct qti_hap_chip *chip)
 	 * Skip configurations below for ERM actuator
 	 * as they're only for LRA actuators
 	 */
-	if (config->act_type == ACT_ERM)
-		return 0;
+	if (config->act_type == ACT_ERM) {
+		/* Disable AUTO_RES for ERM */
+		rc = qti_haptics_lra_auto_res_enable(chip, false);
+		return rc;
+	}
 
 	addr = REG_HAP_CFG2;
 	val = config->lra_shape;
@@ -1302,12 +1307,6 @@ static int qti_haptics_parse_dt(struct qti_hap_chip *chip)
 	if (!rc)
 		config->vmax_mv = (tmp > HAP_VMAX_MV_MAX) ?
 			HAP_VMAX_MV_MAX : tmp;
-
-	config->ilim_ma = HAP_ILIM_MA_DEFAULT;
-	rc = of_property_read_u32(node, "qcom,ilim-ma", &tmp);
-	if (!rc)
-		config->ilim_ma = (tmp >= HAP_ILIM_MA_MAX) ?
-			HAP_ILIM_MA_MAX : HAP_ILIM_MA_DEFAULT;
 
 	config->play_rate_us = HAP_PLAY_RATE_US_DEFAULT;
 	rc = of_property_read_u32(node, "qcom,play-rate-us", &tmp);

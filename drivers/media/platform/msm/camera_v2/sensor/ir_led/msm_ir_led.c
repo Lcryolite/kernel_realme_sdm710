@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2018 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2019 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -268,8 +268,8 @@ static struct v4l2_subdev_ops msm_ir_led_subdev_ops = {
 };
 
 static int msm_ir_led_close(struct v4l2_subdev *sd,
-			struct v4l2_subdev_fh *fh) {
-
+			struct v4l2_subdev_fh *fh)
+{
 	int rc = 0;
 	struct msm_ir_led_ctrl_t *ir_led_ctrl = v4l2_get_subdevdata(sd);
 

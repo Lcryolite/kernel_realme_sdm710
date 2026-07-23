@@ -9,7 +9,6 @@
 #include <linux/miscdevice.h>
 #include <linux/init.h>
 #include <linux/wait.h>
-#include <linux/module.h>
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/poll.h>
@@ -18,6 +17,7 @@
 #include <linux/dlm.h>
 #include <linux/dlm_device.h>
 #include <linux/slab.h>
+#include <linux/sched/signal.h>
 
 #include "dlm_internal.h"
 #include "lockspace.h"
@@ -124,6 +124,8 @@ static void compat_input(struct dlm_write_request *kb,
 static void compat_output(struct dlm_lock_result *res,
 			  struct dlm_lock_result32 *res32)
 {
+	memset(res32, 0, sizeof(*res32));
+
 	res32->version[0] = res->version[0];
 	res32->version[1] = res->version[1];
 	res32->version[2] = res->version[2];

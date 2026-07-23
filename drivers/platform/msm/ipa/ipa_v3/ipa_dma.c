@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -245,7 +245,6 @@ int ipa3_dma_init(void)
 	ipa_dma_ctx_t = kzalloc(sizeof(*(ipa3_dma_ctx)), GFP_KERNEL);
 
 	if (!ipa_dma_ctx_t) {
-		IPADMA_ERR("kzalloc error.\n");
 		res = -ENOMEM;
 		goto init_unlock;
 	}
@@ -418,12 +417,12 @@ int ipa3_dma_enable(void)
 	IPADMA_FUNC_ENTRY();
 	if ((ipa3_dma_ctx == NULL) ||
 		(ipa3_dma_init_refcnt_ctrl->ref_cnt < 1)) {
-		IPADMA_ERR("IPADMA isn't initialized, can't enable\n");
+		IPAERR_RL("IPADMA isn't initialized, can't enable\n");
 		return -EINVAL;
 	}
 	mutex_lock(&ipa3_dma_ctx->enable_lock);
 	if (ipa3_dma_ctx->enable_ref_cnt > 0) {
-		IPADMA_ERR("Already enabled refcnt=%d\n",
+		IPAERR_RL("Already enabled refcnt=%d\n",
 			ipa3_dma_ctx->enable_ref_cnt);
 		ipa3_dma_ctx->enable_ref_cnt++;
 		mutex_unlock(&ipa3_dma_ctx->enable_lock);
@@ -476,26 +475,26 @@ int ipa3_dma_disable(void)
 	IPADMA_FUNC_ENTRY();
 	if ((ipa3_dma_ctx == NULL) ||
 		(ipa3_dma_init_refcnt_ctrl->ref_cnt < 1)) {
-		IPADMA_ERR("IPADMA isn't initialized, can't disable\n");
+		IPAERR_RL("IPADMA isn't initialized, can't disable\n");
 		return -EINVAL;
 	}
 	mutex_lock(&ipa3_dma_ctx->enable_lock);
 	spin_lock_irqsave(&ipa3_dma_ctx->pending_lock, flags);
 	if (ipa3_dma_ctx->enable_ref_cnt > 1) {
-		IPADMA_DBG("Multiple enablement done. refcnt=%d\n",
+		IPAERR_RL("Multiple enablement done. refcnt=%d\n",
 			ipa3_dma_ctx->enable_ref_cnt);
 		ipa3_dma_ctx->enable_ref_cnt--;
 		goto completed;
 	}
 
 	if (ipa3_dma_ctx->enable_ref_cnt == 0) {
-		IPADMA_ERR("Already disabled\n");
+		IPAERR_RL("Already disabled\n");
 		res = -EPERM;
 		goto completed;
 	}
 
 	if (ipa3_dma_work_pending()) {
-		IPADMA_ERR("There is pending work, can't disable.\n");
+		IPAERR_RL("There is pending work, can't disable.\n");
 		res = -EFAULT;
 		goto completed;
 	}
@@ -693,6 +692,7 @@ int ipa3_dma_sync_memcpy(u64 dest, u64 src, int len)
 		mutex_lock(&ipa3_dma_ctx->sync_lock);
 		head_descr = list_first_entry(&cons_sys->head_desc_list,
 					struct ipa3_dma_xfer_wrapper, link);
+		/* Unexpected transfer sent from HW */
 		BUG_ON(xfer_descr != head_descr);
 	}
 	mutex_unlock(&ipa3_dma_ctx->sync_lock);
@@ -822,7 +822,7 @@ int ipa3_dma_async_memcpy(u64 dest, u64 src, int len,
 	ep_idx = ipa3_get_ep_mapping(IPA_CLIENT_MEMCPY_DMA_ASYNC_PROD);
 	if (-1 == ep_idx) {
 		IPADMA_ERR("Client %u is not mapped\n",
-			IPA_CLIENT_MEMCPY_DMA_SYNC_PROD);
+			IPA_CLIENT_MEMCPY_DMA_ASYNC_PROD);
 		return -EFAULT;
 	}
 	prod_sys = ipa3_ctx->ep[ep_idx].sys;
@@ -830,7 +830,6 @@ int ipa3_dma_async_memcpy(u64 dest, u64 src, int len,
 	xfer_descr = kmem_cache_zalloc(ipa3_dma_ctx->ipa_dma_xfer_wrapper_cache,
 					GFP_KERNEL);
 	if (!xfer_descr) {
-		IPADMA_ERR("failed to alloc xfrer descr wrapper\n");
 		res = -ENOMEM;
 		goto fail_mem_alloc;
 	}
@@ -1097,11 +1096,9 @@ void ipa3_dma_async_memcpy_notify_cb(void *priv
 	struct ipa3_dma_xfer_wrapper *xfer_descr_expected;
 	struct ipa3_sys_context *sys;
 	unsigned long flags;
-	struct ipa_mem_buffer *mem_info;
 
 	IPADMA_FUNC_ENTRY();
 
-	mem_info = (struct ipa_mem_buffer *)data;
 	ep_idx = ipa3_get_ep_mapping(IPA_CLIENT_MEMCPY_DMA_ASYNC_CONS);
 	if (ep_idx < 0) {
 		IPADMA_ERR("IPA Client mapping failed\n");
@@ -1202,7 +1199,7 @@ static ssize_t ipa3_dma_debugfs_reset_statistics(struct file *file,
 	if (sizeof(dbg_buff) < count + 1)
 		return -EFAULT;
 
-	missing = copy_from_user(dbg_buff, ubuf, count);
+	missing = copy_from_user(dbg_buff, ubuf, min(sizeof(dbg_buff), count));
 	if (missing)
 		return -EFAULT;
 
@@ -1231,8 +1228,7 @@ const struct file_operations ipa3_ipadma_stats_ops = {
 
 static void ipa3_dma_debugfs_init(void)
 {
-	const mode_t read_write_mode = S_IRUSR | S_IRGRP | S_IROTH |
-			S_IWUSR | S_IWGRP | S_IWOTH;
+	const mode_t read_write_mode = 0666;
 
 	dent = debugfs_create_dir("ipa_dma", 0);
 	if (IS_ERR(dent)) {

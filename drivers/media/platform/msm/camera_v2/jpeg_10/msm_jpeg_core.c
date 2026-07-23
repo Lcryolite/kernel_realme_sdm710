@@ -18,7 +18,8 @@
 #include "msm_jpeg_common.h"
 
 int msm_jpeg_core_reset(struct msm_jpeg_device *pgmn_dev, uint8_t op_mode,
-	void *base, int size) {
+	void *base, int size)
+{
 	unsigned long flags;
 	int rc = 0;
 	int tm = 500; /*500ms*/
@@ -120,8 +121,8 @@ static void *msm_jpeg_core_fe_pingpong_irq(int jpeg_irq_status,
 
 /* write engine */
 int msm_jpeg_core_we_buf_update(struct msm_jpeg_device *pgmn_dev,
-	struct msm_jpeg_core_buf *buf) {
-
+	struct msm_jpeg_core_buf *buf)
+{
 	JPEG_DBG("%s:%d] 0x%08x 0x%08x %d\n", __func__, __LINE__,
 		(int) buf->y_buffer_addr, (int) buf->cbcr_buffer_addr,
 		buf->y_len);

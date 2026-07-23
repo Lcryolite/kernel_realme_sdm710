@@ -29,6 +29,7 @@
 #include <linux/buffer_head.h>
 #include <linux/writeback.h>
 #include <linux/bit_spinlock.h>
+#include <linux/bio.h>
 
 #include "aops.h"
 #include "attrib.h"
@@ -764,7 +765,7 @@ lock_retry_remap:
 			}
 			// TODO: Instantiate the hole.
 			// clear_buffer_new(bh);
-			// unmap_underlying_metadata(bh->b_bdev, bh->b_blocknr);
+			// clean_bdev_bh_alias(bh);
 			ntfs_error(vol->sb, "Writing into sparse regions is "
 					"not supported yet. Sorry.");
 			err = -EOPNOTSUPP;
@@ -1738,7 +1739,7 @@ void mark_ntfs_record_dirty(struct page *page, const unsigned int ofs) {
 	spin_lock(&mapping->private_lock);
 	if (unlikely(!page_has_buffers(page))) {
 		spin_unlock(&mapping->private_lock);
-		bh = head = alloc_page_buffers(page, bh_size, true);
+		bh = head = alloc_page_buffers(page, bh_size, 1);
 		spin_lock(&mapping->private_lock);
 		if (likely(!page_has_buffers(page))) {
 			struct buffer_head *tail;

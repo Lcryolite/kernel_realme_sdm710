@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *  S390 version
  *    Copyright IBM Corp. 1999, 2000
@@ -288,6 +289,17 @@ typedef struct
 	unsigned int  acrs[NUM_ACRS];
 	unsigned long orig_gpr2;
 } s390_regs;
+
+/*
+ * The user_pt_regs structure exports the beginning of
+ * the in-kernel pt_regs structure to user space.
+ */
+typedef struct
+{
+	unsigned long args[1];
+	psw_t psw;
+	unsigned long gprs[NUM_GPRS];
+} user_pt_regs;
 
 /*
  * Now for the user space program event recording (trace) definitions.

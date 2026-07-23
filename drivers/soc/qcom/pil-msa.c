@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -239,18 +239,20 @@ static int pil_mss_restart_reg(struct q6v5_data *drv, u32 mss_restart)
 
 	if (drv->restart_reg && !drv->restart_reg_sec) {
 		writel_relaxed(mss_restart, drv->restart_reg);
+		/* Ensure physical address access is done before returning.*/
 		mb();
 		udelay(2);
 	} else if (drv->restart_reg_sec) {
 		if (!is_scm_armv8()) {
 			ret = scm_call(SCM_SVC_PIL, MSS_RESTART_ID,
-					&mss_restart, sizeof(mss_restart),
+			&mss_restart, sizeof(mss_restart),
 					&scm_ret, sizeof(scm_ret));
 		} else {
 			ret = scm_call2(SCM_SIP_FNID(SCM_SVC_PIL,
-						MSS_RESTART_ID), &desc);
+			MSS_RESTART_ID), &desc);
 			scm_ret = desc.ret[0];
 		}
+
 		if (ret || scm_ret)
 			pr_err("Secure MSS restart failed\n");
 	}
@@ -300,8 +302,10 @@ static int pil_msa_wait_for_mba_ready(struct q6v5_data *drv)
 	u32 status;
 	u64 val;
 
+#ifdef CONFIG_QCOM_MINIDUMP
 	if (of_property_read_bool(dev->of_node, "qcom,minidump-id"))
 		pbl_mba_boot_timeout_ms = MBA_ENCRYPTION_TIMEOUT;
+#endif
 
 	val = is_timeout_disabled() ? 0 : pbl_mba_boot_timeout_ms * 1000;
 
@@ -544,16 +548,17 @@ static int pil_mss_mem_setup(struct pil_desc *pil,
 
 	if (!is_scm_armv8()) {
 		ret = scm_call(SCM_SVC_PIL, PAS_MEM_SETUP_CMD, &request,
-				sizeof(request), &scm_ret, sizeof(scm_ret));
+			sizeof(request), &scm_ret, sizeof(scm_ret));
 	} else {
 		desc.args[0] = md->pas_id;
 		desc.args[1] = addr;
 		desc.args[2] = size;
 		desc.arginfo = SCM_ARGS(3);
 		ret = scm_call2(SCM_SIP_FNID(SCM_SVC_PIL, PAS_MEM_SETUP_CMD),
-				&desc);
+								&desc);
 		scm_ret = desc.ret[0];
 	}
+
 	if (ret)
 		return ret;
 	return scm_ret;
@@ -564,6 +569,7 @@ static int pil_mss_reset(struct pil_desc *pil)
 	struct q6v5_data *drv = container_of(pil, struct q6v5_data, desc);
 	phys_addr_t start_addr = pil_get_entry_addr(pil);
 	u32 debug_val = 0;
+	bool minidump_ss;
 	int ret;
 
 	trace_pil_func(__func__);
@@ -582,7 +588,13 @@ static int pil_mss_reset(struct pil_desc *pil)
 	if (ret)
 		goto err_clks;
 
-	if (!pil->minidump_ss || !pil->modem_ssr) {
+	minidump_ss = true;
+#ifdef CONFIG_QCOM_MINIDUMP
+	if (pil->minidump_ss)
+		minidump_ss = false;
+#endif
+
+	if (minidump_ss || !pil->modem_ssr) {
 		/* Save state of modem debug register before full reset */
 		debug_val = readl_relaxed(drv->reg_base + QDSP6SS_DBG_CFG);
 	}
@@ -595,7 +607,7 @@ static int pil_mss_reset(struct pil_desc *pil)
 	if (ret)
 		goto err_restart;
 
-	if (!pil->minidump_ss || !pil->modem_ssr) {
+	if (minidump_ss || !pil->modem_ssr) {
 		writel_relaxed(debug_val, drv->reg_base + QDSP6SS_DBG_CFG);
 		if (modem_dbg_cfg)
 			writel_relaxed(modem_dbg_cfg,
@@ -663,12 +675,7 @@ int pil_mss_reset_load_mba(struct pil_desc *pil)
 	const struct firmware *fw = NULL, *dp_fw = NULL;
 	char fw_name_legacy[10] = "mba.b00";
 	char fw_name[10] = "mba.mbn";
-	#ifndef OPLUS_FEATURE_MODEM_MINIDUMP
-	//Add for customized subsystem ramdump
 	char *dp_name = "msadp";
-	#else
-	char *dp_name = "msadp.mbn";
-	#endif
 	char *fw_name_p;
 	void *mba_dp_virt;
 	dma_addr_t mba_dp_phys, mba_dp_phys_end;
@@ -799,28 +806,22 @@ err_invalid_fw:
 	return ret;
 }
 
+#ifdef CONFIG_QCOM_MINIDUMP
 int pil_mss_debug_reset(struct pil_desc *pil)
 {
 	struct q6v5_data *drv = container_of(pil, struct q6v5_data, desc);
-#ifndef OPLUS_FEATURE_MODEM_MINIDUMP
-    u32 encryption_status;
-#endif
+	u32 encryption_status;
 	int ret;
 
 
 	if (!pil->minidump_ss)
 		return 0;
 
-#ifndef OPLUS_FEATURE_MODEM_MINIDUMP
-	//Add for skip mini dump encryption
 	encryption_status = pil->minidump_ss->encryption_status;
 
 	if ((pil->minidump_ss->md_ss_enable_status != MD_SS_ENABLED) ||
 		encryption_status == MD_SS_ENCR_NOTREQ)
 		return 0;
-#else
-	return 0;
-#endif
 
 	/*
 	 * Bring subsystem out of reset and enable required
@@ -868,10 +869,10 @@ err_restart:
 		clk_disable_unprepare(drv->ahb_clk);
 	return ret;
 }
+#endif
 
 static int pil_msa_auth_modem_mdt(struct pil_desc *pil, const u8 *metadata,
-					size_t size, phys_addr_t region_start,
-					void *region)
+				  size_t size)
 {
 	struct modem_data *drv = dev_get_drvdata(pil->dev);
 	void *mdata_virt;
@@ -955,8 +956,7 @@ fail:
 }
 
 static int pil_msa_mss_reset_mba_load_auth_mdt(struct pil_desc *pil,
-				const u8 *metadata, size_t size,
-				phys_addr_t region_start, void *region)
+				const u8 *metadata, size_t size)
 {
 	int ret;
 
@@ -964,8 +964,7 @@ static int pil_msa_mss_reset_mba_load_auth_mdt(struct pil_desc *pil,
 	if (ret)
 		return ret;
 
-	return pil_msa_auth_modem_mdt(pil, metadata, size, region_start,
-								region);
+	return pil_msa_auth_modem_mdt(pil, metadata, size);
 }
 
 static int pil_msa_mba_verify_blob(struct pil_desc *pil, phys_addr_t phy_addr,

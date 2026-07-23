@@ -1,6 +1,5 @@
-/*
- * Copyright (c) 2015, Sony Mobile Communications Inc.
- * Copyright (c) 2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015, Sony Mobile Communications Inc.
+ * Copyright (c) 2013, 2018-2019 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -14,21 +13,22 @@
 
 #include <linux/module.h>
 #include <linux/skbuff.h>
-#include <linux/soc/qcom/smd.h>
+#include <linux/rpmsg.h>
+#include <linux/of.h>
 
 #include "qrtr.h"
 
 struct qrtr_smd_dev {
 	struct qrtr_endpoint ep;
-	struct qcom_smd_channel *channel;
+	struct rpmsg_endpoint *channel;
 	struct device *dev;
 };
 
 /* from smd to qrtr */
-static int qcom_smd_qrtr_callback(struct qcom_smd_channel *channel,
-				  const void *data, size_t len)
+static int qcom_smd_qrtr_callback(struct rpmsg_device *rpdev,
+				  void *data, int len, void *priv, u32 addr)
 {
-	struct qrtr_smd_dev *qdev = qcom_smd_get_drvdata(channel);
+	struct qrtr_smd_dev *qdev = dev_get_drvdata(&rpdev->dev);
 	int rc;
 
 	if (!qdev)
@@ -54,7 +54,7 @@ static int qcom_smd_qrtr_send(struct qrtr_endpoint *ep, struct sk_buff *skb)
 	if (rc)
 		goto out;
 
-	rc = qcom_smd_send(qdev->channel, skb->data, skb->len);
+	rc = rpmsg_send(qdev->channel, skb->data, skb->len);
 
 out:
 	if (rc)
@@ -64,57 +64,63 @@ out:
 	return rc;
 }
 
-static int qcom_smd_qrtr_probe(struct qcom_smd_device *sdev)
+static int qcom_smd_qrtr_probe(struct rpmsg_device *rpdev)
 {
 	struct qrtr_smd_dev *qdev;
+	u32 net_id;
+	bool rt;
 	int rc;
 
-	qdev = devm_kzalloc(&sdev->dev, sizeof(*qdev), GFP_KERNEL);
+	qdev = devm_kzalloc(&rpdev->dev, sizeof(*qdev), GFP_KERNEL);
 	if (!qdev)
 		return -ENOMEM;
 
-	qdev->channel = sdev->channel;
-	qdev->dev = &sdev->dev;
+	qdev->channel = rpdev->ept;
+	qdev->dev = &rpdev->dev;
 	qdev->ep.xmit = qcom_smd_qrtr_send;
 
-	rc = qrtr_endpoint_register(&qdev->ep, QRTR_EP_NID_AUTO);
+	rc = of_property_read_u32(rpdev->dev.of_node, "qcom,net-id", &net_id);
+	if (rc < 0)
+		net_id = QRTR_EP_NET_ID_AUTO;
+
+	rt = of_property_read_bool(rpdev->dev.of_node, "qcom,low-latency");
+
+	rc = qrtr_endpoint_register(&qdev->ep, net_id, rt);
 	if (rc)
 		return rc;
 
-	qcom_smd_set_drvdata(sdev->channel, qdev);
-	dev_set_drvdata(&sdev->dev, qdev);
+	dev_set_drvdata(&rpdev->dev, qdev);
 
-	dev_dbg(&sdev->dev, "Qualcomm SMD QRTR driver probed\n");
+	dev_dbg(&rpdev->dev, "Qualcomm SMD QRTR driver probed\n");
 
 	return 0;
 }
 
-static void qcom_smd_qrtr_remove(struct qcom_smd_device *sdev)
+static void qcom_smd_qrtr_remove(struct rpmsg_device *rpdev)
 {
-	struct qrtr_smd_dev *qdev = dev_get_drvdata(&sdev->dev);
+	struct qrtr_smd_dev *qdev = dev_get_drvdata(&rpdev->dev);
 
 	qrtr_endpoint_unregister(&qdev->ep);
 
-	dev_set_drvdata(&sdev->dev, NULL);
+	dev_set_drvdata(&rpdev->dev, NULL);
 }
 
-static const struct qcom_smd_id qcom_smd_qrtr_smd_match[] = {
+static const struct rpmsg_device_id qcom_smd_qrtr_smd_match[] = {
 	{ "IPCRTR" },
 	{}
 };
 
-static struct qcom_smd_driver qcom_smd_qrtr_driver = {
+static struct rpmsg_driver qcom_smd_qrtr_driver = {
 	.probe = qcom_smd_qrtr_probe,
 	.remove = qcom_smd_qrtr_remove,
 	.callback = qcom_smd_qrtr_callback,
-	.smd_match_table = qcom_smd_qrtr_smd_match,
-	.driver = {
+	.id_table = qcom_smd_qrtr_smd_match,
+	.drv = {
 		.name = "qcom_smd_qrtr",
-		.owner = THIS_MODULE,
 	},
 };
 
-module_qcom_smd_driver(qcom_smd_qrtr_driver);
+module_rpmsg_driver(qcom_smd_qrtr_driver);
 
 MODULE_ALIAS("rpmsg:IPCRTR");
 MODULE_DESCRIPTION("Qualcomm IPC-Router SMD interface driver");

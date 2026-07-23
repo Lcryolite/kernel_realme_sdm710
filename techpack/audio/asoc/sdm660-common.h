@@ -93,10 +93,16 @@ struct sdm660_codec {
 
 enum {
 	INT_SND_CARD,
-	INT_DIG_SND_CARD,
-	INT_MAX_SND_CARD = INT_DIG_SND_CARD,
 	EXT_SND_CARD_TASHA,
 	EXT_SND_CARD_TAVIL,
+};
+
+struct msm_snd_interrupt {
+	void __iomem *mpm_wakeup;
+	void __iomem *intr1_cfg_apps;
+	void __iomem *lpi_gpio_intr_cfg;
+	void __iomem *lpi_gpio_cfg;
+	void __iomem *lpi_gpio_inout;
 };
 
 struct msm_asoc_mach_data {
@@ -128,10 +134,7 @@ struct msm_asoc_mach_data {
 	struct mutex cdc_int_mclk0_mutex;
 	struct delayed_work disable_int_mclk0_work;
 	struct afe_clk_set digital_cdc_core_clk;
-	int gpio_linein_det;
-	int gpio_lineout_det;
-	int linein_det_swh;
-	int lineout_det_swh;
+	struct msm_snd_interrupt msm_snd_intr_lpi;
 };
 
 int msm_common_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
@@ -140,8 +143,6 @@ int msm_aux_pcm_snd_startup(struct snd_pcm_substream *substream);
 void msm_aux_pcm_snd_shutdown(struct snd_pcm_substream *substream);
 int msm_mi2s_snd_startup(struct snd_pcm_substream *substream);
 void msm_mi2s_snd_shutdown(struct snd_pcm_substream *substream);
-int msm_tdm_snd_startup(struct snd_pcm_substream *substream);
-void msm_tdm_snd_shutdown(struct snd_pcm_substream *substream);
 int msm_common_snd_controls_size(void);
 void msm_set_codec_reg_done(bool done);
 int msm_tdm_snd_startup(struct snd_pcm_substream *substream);

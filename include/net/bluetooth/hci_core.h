@@ -26,6 +26,8 @@
 #define __HCI_CORE_H
 
 #include <linux/leds.h>
+#include <linux/rculist.h>
+
 #include <net/bluetooth/hci.h>
 #include <net/bluetooth/hci_sock.h>
 
@@ -645,7 +647,6 @@ void hci_inquiry_cache_flush(struct hci_dev *hdev);
 /* ----- HCI Connections ----- */
 enum {
 	HCI_CONN_AUTH_PEND,
-	HCI_CONN_REAUTH_PEND,
 	HCI_CONN_ENCRYPT_PEND,
 	HCI_CONN_RSWITCH_PEND,
 	HCI_CONN_MODE_CHANGE_PEND,
@@ -994,7 +995,7 @@ static inline void hci_conn_drop(struct hci_conn *conn)
 static inline void hci_dev_put(struct hci_dev *d)
 {
 	BT_DBG("%s orig refcnt %d", d->name,
-	       atomic_read(&d->dev.kobj.kref.refcount));
+	       kref_read(&d->dev.kobj.kref));
 
 	put_device(&d->dev);
 }
@@ -1002,7 +1003,7 @@ static inline void hci_dev_put(struct hci_dev *d)
 static inline struct hci_dev *hci_dev_hold(struct hci_dev *d)
 {
 	BT_DBG("%s orig refcnt %d", d->name,
-	       atomic_read(&d->dev.kobj.kref.refcount));
+	       kref_read(&d->dev.kobj.kref));
 
 	get_device(&d->dev);
 	return d;

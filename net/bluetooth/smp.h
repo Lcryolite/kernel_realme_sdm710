@@ -57,6 +57,7 @@ struct smp_cmd_pairing {
 #define SMP_AUTH_MITM		0x04
 #define SMP_AUTH_SC		0x08
 #define SMP_AUTH_KEYPRESS	0x10
+#define SMP_AUTH_CT2		0x20
 
 #define SMP_CMD_PAIRING_CONFIRM	0x03
 struct smp_cmd_pairing_confirm {
@@ -137,7 +138,6 @@ struct smp_cmd_keypress_notify {
 #define SMP_NUMERIC_COMP_FAILED		0x0c
 #define SMP_BREDR_PAIRING_IN_PROGRESS	0x0d
 #define SMP_CROSS_TRANSP_NOT_ALLOWED	0x0e
-#define SMP_KEY_REJECTED		0x0f
 
 #define SMP_MIN_ENC_KEY_SIZE		7
 #define SMP_MAX_ENC_KEY_SIZE		16

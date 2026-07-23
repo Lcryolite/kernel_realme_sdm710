@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __ARCH_M68K_ATOMIC__
 #define __ARCH_M68K_ATOMIC__
 
@@ -208,21 +209,6 @@ static inline int atomic_add_negative(int i, atomic_t *v)
 			     : "=d" (c), "+m" (*v)
 			     : ASM_DI (i));
 	return c != 0;
-}
-
-static __inline__ int __atomic_add_unless(atomic_t *v, int a, int u)
-{
-	int c, old;
-	c = atomic_read(v);
-	for (;;) {
-		if (unlikely(c == (u)))
-			break;
-		old = atomic_cmpxchg((v), c, c + (a));
-		if (likely(old == c))
-			break;
-		c = old;
-	}
-	return c;
 }
 
 #endif /* __ARCH_M68K_ATOMIC __ */

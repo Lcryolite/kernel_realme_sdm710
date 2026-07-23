@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_X86_VGTOD_H
 #define _ASM_X86_VGTOD_H
 
@@ -17,8 +18,8 @@ struct vsyscall_gtod_data {
 	unsigned seq;
 
 	int vclock_mode;
-	cycle_t	cycle_last;
-	cycle_t	mask;
+	u64	cycle_last;
+	u64	mask;
 	u32	mult;
 	u32	shift;
 

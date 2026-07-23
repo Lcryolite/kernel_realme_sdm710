@@ -84,22 +84,23 @@ __bpf_trace_tp_map_##call = {						\
 };
 
 #define FIRST(x, ...) x
+
 #undef DEFINE_EVENT_WRITABLE
 #define DEFINE_EVENT_WRITABLE(template, call, proto, args, size)	\
 static inline void bpf_test_buffer_##call(void)				\
 {									\
- 	/* BUILD_BUG_ON() is ignored if the code is completely eliminated, but \
- 	 * BUILD_BUG_ON_ZERO() uses a different mechanism that is not	\
- 	 * dead-code-eliminated.					\
- 	 */								\
- 	FIRST(proto);							\
- 	(void)BUILD_BUG_ON_ZERO(size != sizeof(*FIRST(args)));		\
+	/* BUILD_BUG_ON() is ignored if the code is completely eliminated, but \
+	 * BUILD_BUG_ON_ZERO() uses a different mechanism that is not	\
+	 * dead-code-eliminated.					\
+	 */								\
+	FIRST(proto);							\
+	(void)BUILD_BUG_ON_ZERO(size != sizeof(*FIRST(args)));		\
 }									\
 __DEFINE_EVENT(template, call, PARAMS(proto), PARAMS(args), size)
 
 #undef DEFINE_EVENT
 #define DEFINE_EVENT(template, call, proto, args)			\
- 	__DEFINE_EVENT(template, call, PARAMS(proto), PARAMS(args), 0)
+	__DEFINE_EVENT(template, call, PARAMS(proto), PARAMS(args), 0)
 
 #undef DEFINE_EVENT_PRINT
 #define DEFINE_EVENT_PRINT(template, name, proto, args, print)	\
@@ -110,4 +111,5 @@ __DEFINE_EVENT(template, call, PARAMS(proto), PARAMS(args), size)
 #undef DEFINE_EVENT_WRITABLE
 #undef __DEFINE_EVENT
 #undef FIRST
+
 #endif /* CONFIG_BPF_EVENTS */

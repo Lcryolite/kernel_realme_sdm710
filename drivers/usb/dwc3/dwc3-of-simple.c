@@ -25,15 +25,16 @@
 #include <linux/platform_device.h>
 #include <linux/dma-mapping.h>
 #include <linux/clk.h>
-#include <linux/clk-provider.h>
 #include <linux/of.h>
 #include <linux/of_platform.h>
 #include <linux/pm_runtime.h>
+#include <linux/regulator/consumer.h>
 
 struct dwc3_of_simple {
 	struct device		*dev;
 	struct clk		**clks;
 	int			num_clocks;
+	struct regulator	*gdsc;
 };
 
 static int dwc3_of_simple_clk_init(struct dwc3_of_simple *simple, int count)
@@ -98,7 +99,19 @@ static int dwc3_of_simple_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, simple);
 	simple->dev = dev;
 
-	ret = dwc3_of_simple_clk_init(simple, of_clk_get_parent_count(np));
+	simple->gdsc = devm_regulator_get(dev, "USB3_GDSC");
+	if (IS_ERR(simple->gdsc)) {
+		simple->gdsc = NULL;
+	} else {
+		ret = regulator_enable(simple->gdsc);
+		if (ret) {
+			dev_err(dev, "unable to enable usb3 gdsc\n");
+			return ret;
+		}
+	}
+
+	ret = dwc3_of_simple_clk_init(simple, of_count_phandle_with_args(np,
+						"clocks", "#clock-cells"));
 	if (ret)
 		return ret;
 
@@ -129,6 +142,9 @@ static int dwc3_of_simple_remove(struct platform_device *pdev)
 		clk_disable_unprepare(simple->clks[i]);
 		clk_put(simple->clks[i]);
 	}
+
+	if (simple->gdsc)
+		regulator_disable(simple->gdsc);
 
 	of_platform_depopulate(dev);
 
@@ -180,6 +196,7 @@ static const struct of_device_id of_dwc3_simple_match[] = {
 	{ .compatible = "rockchip,rk3399-dwc3" },
 	{ .compatible = "xlnx,zynqmp-dwc3" },
 	{ .compatible = "cavium,octeon-7130-usb-uctl" },
+	{ .compatible = "sprd,sc9860-dwc3" },
 	{ /* Sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, of_dwc3_simple_match);

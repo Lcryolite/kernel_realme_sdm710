@@ -25,8 +25,8 @@
 
 #define MAX_INST_NAME_LEN	40
 
-#define IPC_BRIDGE_MAX_READ_SZ	(8 * 1024)
-#define IPC_BRIDGE_MAX_WRITE_SZ	(8 * 1024)
+#define IPC_BRIDGE_MAX_READ_SZ	(24 * 1024)
+#define IPC_BRIDGE_MAX_WRITE_SZ	(24 * 1024)
 
 #define IPC_WRITE_WAIT_TIMEOUT	10000
 
@@ -46,9 +46,9 @@ static struct usb_interface_descriptor intf_desc = {
 	.bLength            =	sizeof(intf_desc),
 	.bDescriptorType    =	USB_DT_INTERFACE,
 	.bNumEndpoints      =	2,
-	.bInterfaceClass    =	0xFF,
-	.bInterfaceSubClass =	0xFF,
-	.bInterfaceProtocol =	0x30,
+	.bInterfaceClass    =	USB_CLASS_VENDOR_SPEC,
+	.bInterfaceSubClass =	USB_SUBCLASS_VENDOR_SPEC,
+	.bInterfaceProtocol =	0x90,
 };
 
 static struct usb_endpoint_descriptor hs_bulk_in_desc = {
@@ -125,7 +125,8 @@ static struct usb_descriptor_header *fs_ipc_desc[] = {
 	(struct usb_descriptor_header *) &fs_bulk_in_desc,
 	(struct usb_descriptor_header *) &fs_bulk_out_desc,
 	NULL,
-	};
+};
+
 static struct usb_descriptor_header *hs_ipc_desc[] = {
 	(struct usb_descriptor_header *) &intf_desc,
 	(struct usb_descriptor_header *) &hs_bulk_in_desc,
@@ -150,8 +151,8 @@ static struct usb_string ipc_string_defs[] = {
 };
 
 static struct usb_gadget_strings ipc_string_table = {
-	.language =		0x0409,	/* en-us */
-	.strings =		ipc_string_defs,
+	.language = 0x0409,	/* en-us */
+	.strings = ipc_string_defs,
 };
 
 static struct usb_gadget_strings *ipc_strings[] = {
@@ -237,7 +238,7 @@ static void ipc_in_complete(struct usb_ep *ep, struct usb_request *req)
  * completion of IN request.
  */
 static int ipc_write(struct platform_device *pdev, char *buf,
-							unsigned int count)
+		     unsigned int count)
 {
 	unsigned long flags;
 	struct usb_request *req;
@@ -264,18 +265,18 @@ static int ipc_write(struct platform_device *pdev, char *buf,
 retry_write:
 	if (ipc_dev->current_state == IPC_DISCONNECTED) {
 		pr_err("%s: Interface disconnected, cannot queue req\n",
-								__func__);
+		       __func__);
 		ipc_dev->pending_writes--;
 		return -EINVAL;
 	}
 
 	reinit_completion(&ipc_dev->write_done);
 
-	/* Notify the GPIO driver to wakup the host if
-	 * host is in suspend mode
-	 */
 	if (usb_ep_queue(in, req, GFP_KERNEL)) {
-		sb_notifier_call_chain(EVT_WAKE_UP, NULL);
+		/* Notify GPIO driver to wakup the host if host
+		 * is in suspend mode.
+		 */
+		sb_notifier_call_chain(EVENT_REQUEST_WAKE_UP, NULL);
 		wait_event_interruptible(ipc_dev->state_wq, ipc_dev->online ||
 				ipc_dev->current_state == IPC_DISCONNECTED);
 		pr_debug("%s: Interface ready, Retry IN request\n", __func__);
@@ -296,8 +297,8 @@ retry_write_done:
 	/* Notify the GPIO driver to wakeup the host and reintialize the
 	 * completion structure.
 	 */
-	} else if (!ipc_dev->online) {
-		sb_notifier_call_chain(EVT_WAKE_UP, NULL);
+	} else if (ipc_dev->connected && !ipc_dev->online) {
+		sb_notifier_call_chain(EVENT_REQUEST_WAKE_UP, NULL);
 		reinit_completion(&ipc_dev->write_done);
 		goto retry_write_done;
 	}
@@ -356,7 +357,7 @@ static int ipc_read(struct platform_device *pdev, char *buf, unsigned int count)
 retry_read:
 	if (ipc_dev->current_state == IPC_DISCONNECTED) {
 		pr_err("%s: Interface disconnected, cannot queue req\n",
-							__func__);
+		       __func__);
 		ipc_dev->pending_reads--;
 		return -EINVAL;
 	}
@@ -429,7 +430,7 @@ static const struct ipc_bridge_platform_data ipc_pdata = {
 static void ipc_function_work(struct work_struct *w)
 {
 	struct ipc_context *ctxt = container_of(w, struct ipc_context,
-								func_work);
+						func_work);
 	int ret;
 
 	switch (ctxt->current_state) {
@@ -473,7 +474,6 @@ static void ipc_function_work(struct work_struct *w)
 
 pdev_fail:
 	ctxt->current_state = IPC_DISCONNECTED;
-	return;
 }
 
 static int ipc_bind(struct usb_configuration *c, struct usb_function *f)
@@ -586,7 +586,7 @@ static void ipc_unbind(struct usb_configuration *c, struct usb_function *f)
 }
 
 static int ipc_set_alt(struct usb_function *f, unsigned int intf,
-				unsigned int alt)
+		       unsigned int alt)
 {
 	struct ipc_context *ctxt = func_to_ipc(f);
 	struct usb_composite_dev *cdev = f->config->cdev;

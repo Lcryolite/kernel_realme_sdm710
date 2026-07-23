@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2018,2020 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -85,13 +85,13 @@ static uint32_t gpu_limit;
 	type *node = NULL;				\
 	spin_lock_irqsave(&__q->lock, flags);			\
 	if (!list_empty(&__q->list)) {				\
-		list_for_each_entry(node, &__q->list, member)	\
-		if (node->sd == q_node) {				\
-			__q->len--;				\
-			list_del_init(&node->member);		\
-			kzfree(node);				\
-			break;					\
-		}						\
+		list_for_each_entry(node, &__q->list, member) \
+			if (node->sd == q_node) {	\
+				__q->len--;				\
+				list_del_init(&node->member);		\
+				kzfree(node);				\
+				break;					\
+			}						\
 	}							\
 	spin_unlock_irqrestore(&__q->lock, flags);		\
 })
@@ -103,12 +103,12 @@ static uint32_t gpu_limit;
 	spin_lock_irqsave(&__q->lock, flags);			\
 	if (!list_empty(&__q->list)) {				\
 		list_for_each_entry(node, &__q->list, member)	\
-		if (node == q_node) {				\
-			__q->len--;				\
-			list_del_init(&node->member);		\
-			kzfree(node);				\
-			break;					\
-		}						\
+			if (node == q_node) {				\
+				__q->len--;				\
+				list_del_init(&node->member);		\
+				kzfree(node);				\
+				break;					\
+			}						\
 	}							\
 	spin_unlock_irqrestore(&__q->lock, flags);		\
 })
@@ -140,9 +140,9 @@ typedef int (*msm_queue_func)(void *d1, void *d2);
 	spin_lock_irqsave(&__q->lock, flags);			\
 	if (!list_empty(&__q->list)) { \
 		list_for_each_entry(node, &__q->list, member) \
-		if (node && __f)  { \
-			__f(node, data); \
-	  } \
+			if (node && __f)  { \
+				__f(node, data); \
+			} \
 	} \
 	spin_unlock_irqrestore(&__q->lock, flags);			\
 } while (0)
@@ -157,10 +157,10 @@ typedef int (*msm_queue_find_func)(void *d1, void *d2);
 	spin_lock_irqsave(&__q->lock, flags);			\
 	if (!list_empty(&__q->list)) { \
 		list_for_each_entry(node, &__q->list, member) \
-		if ((__f) && __f(node, data)) { \
-			__ret = node; \
-			break; \
-		} \
+			if ((__f) && __f(node, data)) { \
+				__ret = node; \
+				break; \
+			} \
 	} \
 	spin_unlock_irqrestore(&__q->lock, flags); \
 	__ret; \
@@ -236,6 +236,8 @@ static inline void msm_pm_qos_add_request(void)
 static void msm_pm_qos_remove_request(void)
 {
 	pr_info("%s: remove request", __func__);
+	if (!atomic_cmpxchg(&qos_add_request_done, 1, 0))
+		return;
 	pm_qos_remove_request(&msm_v4l2_pm_qos_request);
 }
 
@@ -631,9 +633,6 @@ static inline int __msm_remove_session_cmd_ack_q(void *d1, void *d2)
 {
 	struct msm_command_ack *cmd_ack = d1;
 
-	if (!(&cmd_ack->command_q))
-		return 0;
-
 	msm_queue_drain(&cmd_ack->command_q, struct msm_command, list);
 
 	return 0;
@@ -641,7 +640,7 @@ static inline int __msm_remove_session_cmd_ack_q(void *d1, void *d2)
 
 static void msm_remove_session_cmd_ack_q(struct msm_session *session)
 {
-	if ((!session) || !(&session->command_ack_q))
+	if (!session)
 		return;
 
 	mutex_lock(&session->lock);
@@ -811,7 +810,7 @@ static long msm_private_ioctl(struct file *file, void *fh,
 			__msm_queue_find_command_ack_q,
 			&stream_id);
 		if (WARN_ON(!cmd_ack)) {
-			kzfree(ret_cmd);
+			kfree(ret_cmd);
 			rc = -EFAULT;
 			break;
 		}
@@ -1451,7 +1450,7 @@ mdev_fail:
 #endif
 	video_device_release(pvdev->vdev);
 video_fail:
-	kzfree(pvdev);
+	kfree(pvdev);
 pvdev_fail:
 	kzfree(msm_v4l2_dev);
 probe_end:

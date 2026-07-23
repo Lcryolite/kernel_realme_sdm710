@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2014, 2016-2019 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2014, 2016-2020 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -28,9 +28,10 @@
 #include <linux/of.h>
 #include <linux/slab.h>
 #include <linux/ipc_logging.h>
-#include <linux/of_device.h>
+#include <linux/of_platform.h>
 #include <soc/qcom/subsystem_restart.h>
 #include <soc/qcom/scm.h>
+#include <soc/snd_event.h>
 #include <dsp/apr_audio-v2.h>
 #include <dsp/audio_notifier.h>
 #include <ipc/apr.h>
@@ -38,15 +39,12 @@
 
 #define APR_PKT_IPC_LOG_PAGE_CNT 2
 
-static struct device *apr_dev_ptr;
 static struct apr_q6 q6;
 static struct apr_client client[APR_DEST_MAX][APR_CLIENT_MAX];
 static void *apr_pkt_ctx;
-static wait_queue_head_t dsp_wait;
 static wait_queue_head_t modem_wait;
 static bool is_modem_up;
-static bool is_initial_boot;
-static bool is_child_devices_loaded;
+static char *subsys_name = NULL;
 /* Subsystem restart: QDSP6 data, functions */
 static struct workqueue_struct *apr_reset_workqueue;
 static void apr_reset_deregister(struct work_struct *work);
@@ -56,8 +54,20 @@ struct apr_reset_work {
 	struct work_struct work;
 };
 
+struct apr_chld_device {
+	struct platform_device *pdev;
+	struct list_head node;
+};
+
+struct apr_private {
+	struct device *dev;
+	spinlock_t apr_lock;
+	bool is_initial_boot;
+	struct work_struct add_chld_dev_work;
+};
+
+static struct apr_private *apr_priv;
 static bool apr_cf_debug;
-static struct delayed_work add_chld_dev_work;
 
 #ifdef CONFIG_DEBUG_FS
 static struct dentry *debugfs_apr_debug;
@@ -272,14 +282,19 @@ int apr_set_q6_state(enum apr_subsys_state state)
 }
 EXPORT_SYMBOL(apr_set_q6_state);
 
-enum apr_subsys_state apr_cmpxchg_q6_state(enum apr_subsys_state prev,
-					   enum apr_subsys_state new)
+static void apr_ssr_disable(struct device *dev, void *data)
 {
-	return atomic_cmpxchg(&q6.q6_state, prev, new);
+	apr_set_q6_state(APR_SUBSYS_DOWN);
 }
+
+static const struct snd_event_ops apr_ssr_ops = {
+	.disable = apr_ssr_disable,
+};
 
 static void apr_adsp_down(unsigned long opcode)
 {
+	pr_info("%s: Q6 is Down\n", __func__);
+	snd_event_notify(apr_priv->dev, SND_EVENT_DOWN);
 	apr_set_q6_state(APR_SUBSYS_DOWN);
 	dispatch_event(opcode, APR_DEST_QDSP6);
 }
@@ -288,42 +303,23 @@ static void apr_add_child_devices(struct work_struct *work)
 {
 	int ret;
 
-	ret = of_platform_populate(apr_dev_ptr->of_node,
-			NULL, NULL, apr_dev_ptr);
+	ret = of_platform_populate(apr_priv->dev->of_node,
+			NULL, NULL, apr_priv->dev);
 	if (ret)
-		dev_err(apr_dev_ptr, "%s: failed to add child nodes, ret=%d\n",
+		dev_err(apr_priv->dev, "%s: failed to add child nodes, ret=%d\n",
 			__func__, ret);
 }
 
 static void apr_adsp_up(void)
 {
-	if (apr_cmpxchg_q6_state(APR_SUBSYS_DOWN, APR_SUBSYS_LOADED) ==
-							APR_SUBSYS_DOWN)
-		wake_up(&dsp_wait);
+	pr_info("%s: Q6 is Up\n", __func__);
+	apr_set_q6_state(APR_SUBSYS_LOADED);
 
-	if (!is_child_devices_loaded) {
-		schedule_delayed_work(&add_chld_dev_work,
-				msecs_to_jiffies(100));
-		is_child_devices_loaded = true;
-	}
-}
-
-int apr_wait_for_device_up(int dest_id)
-{
-	int rc = -1;
-
-	if (dest_id == APR_DEST_MODEM)
-		rc = wait_event_interruptible_timeout(modem_wait,
-				    (apr_get_modem_state() == APR_SUBSYS_UP),
-				    (1 * HZ));
-	else if (dest_id == APR_DEST_QDSP6)
-		rc = wait_event_interruptible_timeout(dsp_wait,
-				    (apr_get_q6_state() == APR_SUBSYS_UP),
-				    (1 * HZ));
-	else
-		pr_err("%s: unknown dest_id %d\n", __func__, dest_id);
-	/* returns left time */
-	return rc;
+	spin_lock(&apr_priv->apr_lock);
+	if (apr_priv->is_initial_boot)
+		schedule_work(&apr_priv->add_chld_dev_work);
+	spin_unlock(&apr_priv->apr_lock);
+	snd_event_notify(apr_priv->dev, SND_EVENT_UP);
 }
 
 int apr_load_adsp_image(void)
@@ -429,8 +425,14 @@ int apr_send_pkt(void *handle, uint32_t *buf)
 			rc = -EINVAL;
 		}
 	} else {
-		pr_err("%s: Write APR pkt failed with error %d\n",
+		pr_err_ratelimited("%s: Write APR pkt failed with error %d\n",
 			__func__, rc);
+		if (rc == -ECONNRESET) {
+			pr_err_ratelimited("%s: Received reset error from tal\n",
+					__func__);
+			apr_set_q6_state(APR_SUBSYS_DOWN);
+			rc = -ENETRESET;
+		}
 	}
 	spin_unlock_irqrestore(&svc->w_lock, flags);
 
@@ -524,7 +526,9 @@ struct apr_svc *apr_register(char *dest, char *svc_name, apr_fn svc_fn,
 				return NULL;
 			}
 			pr_debug("%s: Wait for modem to bootup\n", __func__);
-			rc = apr_wait_for_device_up(APR_DEST_MODEM);
+			rc = wait_event_interruptible_timeout(modem_wait,
+						(apr_get_modem_state() == APR_SUBSYS_UP),
+						(1 * HZ));
 			if (rc == 0) {
 				pr_err("%s: Modem is not Up\n", __func__);
 				return NULL;
@@ -557,6 +561,7 @@ struct apr_svc *apr_register(char *dest, char *svc_name, apr_fn svc_fn,
 	if (svc->need_reset) {
 		mutex_unlock(&svc->m_lock);
 		pr_err_ratelimited("APR: Service needs reset\n");
+		svc = NULL;
 		goto done;
 	}
 	svc->id = svc_id;
@@ -728,6 +733,7 @@ void apr_cb_func(void *buf, int len, void *priv)
 
 	if (unlikely(apr_cf_debug)) {
 		if (hdr->opcode == APR_BASIC_RSP_RESULT && data.payload) {
+			uint32_t *ptr = data.payload;
 
 			APR_PKT_INFO(
 			"Rx: src_addr[0x%X] dest_addr[0x%X] opcode[0x%X] token[0x%X] rc[0x%X]",
@@ -1071,21 +1077,25 @@ static int apr_notifier_service_cb(struct notifier_block *this,
 		 * recovery notifications during initial boot
 		 * up since everything is expected to be down.
 		 */
-		if (is_initial_boot) {
-			is_initial_boot = false;
+		spin_lock(&apr_priv->apr_lock);
+		if (apr_priv->is_initial_boot) {
+			spin_unlock(&apr_priv->apr_lock);
 			break;
 		}
+		spin_unlock(&apr_priv->apr_lock);
 		if (cb_data->domain == AUDIO_NOTIFIER_MODEM_DOMAIN)
 			apr_modem_down(opcode);
 		else
 			apr_adsp_down(opcode);
 		break;
 	case AUDIO_NOTIFIER_SERVICE_UP:
-		is_initial_boot = false;
 		if (cb_data->domain == AUDIO_NOTIFIER_MODEM_DOMAIN)
 			apr_modem_up();
 		else
 			apr_adsp_up();
+		spin_lock(&apr_priv->apr_lock);
+		apr_priv->is_initial_boot = false;
+		spin_unlock(&apr_priv->apr_lock);
 		break;
 	default:
 		break;
@@ -1114,19 +1124,21 @@ static int __init apr_debug_init(void)
 }
 #else
 static int __init apr_debug_init(void)
-(
+{
 	return 0;
-)
+}
 #endif
 
 static void apr_cleanup(void)
 {
 	int i, j, k;
 
-	subsys_notif_deregister("apr_modem");
-	subsys_notif_deregister("apr_adsp");
-	if (apr_reset_workqueue)
+	of_platform_depopulate(apr_priv->dev);
+	subsys_notif_deregister(subsys_name);
+	if (apr_reset_workqueue) {
+		flush_workqueue(apr_reset_workqueue);
 		destroy_workqueue(apr_reset_workqueue);
+	}
 	mutex_destroy(&q6.lock);
 	for (i = 0; i < APR_DEST_MAX; i++) {
 		for (j = 0; j < APR_CLIENT_MAX; j++) {
@@ -1135,14 +1147,24 @@ static void apr_cleanup(void)
 				mutex_destroy(&client[i][j].svc[k].m_lock);
 		}
 	}
+#ifdef CONFIG_DEBUG_FS
+	debugfs_remove(debugfs_apr_debug);
+#endif
 }
 
 static int apr_probe(struct platform_device *pdev)
 {
-	int i, j, k;
+	int i, j, k, ret = 0;
 
-	init_waitqueue_head(&dsp_wait);
 	init_waitqueue_head(&modem_wait);
+
+	apr_priv = devm_kzalloc(&pdev->dev, sizeof(*apr_priv), GFP_KERNEL);
+	if (!apr_priv)
+		return -ENOMEM;
+
+	apr_priv->dev = &pdev->dev;
+	spin_lock_init(&apr_priv->apr_lock);
+	INIT_WORK(&apr_priv->add_chld_dev_work, apr_add_child_devices);
 
 	for (i = 0; i < APR_DEST_MAX; i++)
 		for (j = 0; j < APR_CLIENT_MAX; j++) {
@@ -1155,29 +1177,58 @@ static int apr_probe(struct platform_device *pdev)
 	apr_set_subsys_state();
 	mutex_init(&q6.lock);
 	apr_reset_workqueue = create_singlethread_workqueue("apr_driver");
-	if (!apr_reset_workqueue)
+	if (!apr_reset_workqueue) {
+		apr_priv = NULL;
 		return -ENOMEM;
+	}
 
 	apr_pkt_ctx = ipc_log_context_create(APR_PKT_IPC_LOG_PAGE_CNT,
 						"apr", 0);
 	if (!apr_pkt_ctx)
 		pr_err("%s: Unable to create ipc log context\n", __func__);
 
-	is_initial_boot = true;
-	subsys_notif_register("apr_adsp", AUDIO_NOTIFIER_ADSP_DOMAIN,
-			      &adsp_service_nb);
-	subsys_notif_register("apr_modem", AUDIO_NOTIFIER_MODEM_DOMAIN,
-			      &modem_service_nb);
+	spin_lock(&apr_priv->apr_lock);
+	apr_priv->is_initial_boot = true;
+	spin_unlock(&apr_priv->apr_lock);
+	ret = of_property_read_string(pdev->dev.of_node,
+				      "qcom,subsys-name",
+				      (const char **)(&subsys_name));
+	if (ret) {
+		pr_err("%s: missing subsys-name entry in dt node\n", __func__);
+		return -EINVAL;
+	}
+
+	if (!strcmp(subsys_name, "apr_adsp")) {
+		subsys_notif_register("apr_adsp",
+				       AUDIO_NOTIFIER_ADSP_DOMAIN,
+				       &adsp_service_nb);
+	} else if (!strcmp(subsys_name, "apr_modem")) {
+		subsys_notif_register("apr_modem",
+				       AUDIO_NOTIFIER_MODEM_DOMAIN,
+				       &modem_service_nb);
+	} else {
+		pr_err("%s: invalid subsys-name %s\n", __func__, subsys_name);
+		return -EINVAL;
+	}
 
 	apr_tal_init();
-	apr_dev_ptr = &pdev->dev;
-	INIT_DELAYED_WORK(&add_chld_dev_work, apr_add_child_devices);
+
+	ret = snd_event_client_register(&pdev->dev, &apr_ssr_ops, NULL);
+	if (ret) {
+		pr_err("%s: Registration with SND event fwk failed ret = %d\n",
+			__func__, ret);
+		ret = 0;
+	}
+
 	return apr_debug_init();
 }
 
 static int apr_remove(struct platform_device *pdev)
 {
+	snd_event_client_deregister(&pdev->dev);
 	apr_cleanup();
+	apr_tal_exit();
+	apr_priv = NULL;
 	return 0;
 }
 
@@ -1196,20 +1247,7 @@ static struct platform_driver apr_driver = {
 	}
 };
 
-static int __init apr_init(void)
-{
-	platform_driver_register(&apr_driver);
-	apr_dummy_init();
-	return 0;
-}
-module_init(apr_init);
-
-static void __exit apr_exit(void)
-{
-	apr_dummy_exit();
-	platform_driver_unregister(&apr_driver);
-}
-module_exit(apr_exit);
+module_platform_driver(apr_driver);
 
 MODULE_DESCRIPTION("APR DRIVER");
 MODULE_LICENSE("GPL v2");

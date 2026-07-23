@@ -92,45 +92,23 @@ static int has_device_tree(void)
 int chk_config_get_id(void)
 {
 	switch (socinfo_get_msm_cpu()) {
-	case MSM_CPU_8X60:
-		return APQ8060_TOOLS_ID;
 	case MSM_CPU_8960:
 	case MSM_CPU_8960AB:
 		return AO8960_TOOLS_ID;
 	case MSM_CPU_8064:
-	case MSM_CPU_8064AB:
-	case MSM_CPU_8064AA:
 		return APQ8064_TOOLS_ID;
-	case MSM_CPU_8930:
-	case MSM_CPU_8930AA:
-	case MSM_CPU_8930AB:
-		return MSM8930_TOOLS_ID;
 	case MSM_CPU_8974:
 		return MSM8974_TOOLS_ID;
-	case MSM_CPU_8625:
-		return MSM8625_TOOLS_ID;
 	case MSM_CPU_8084:
 		return APQ8084_TOOLS_ID;
 	case MSM_CPU_8916:
 		return MSM8916_TOOLS_ID;
-	case MSM_CPU_8939:
-		return MSM8939_TOOLS_ID;
-	case MSM_CPU_8994:
-		return MSM8994_TOOLS_ID;
-	case MSM_CPU_8226:
-		return APQ8026_TOOLS_ID;
-	case MSM_CPU_8909:
-		return MSM8909_TOOLS_ID;
-	case MSM_CPU_8992:
-		return MSM8992_TOOLS_ID;
 	case MSM_CPU_8996:
 		return MSM_8996_TOOLS_ID;
 	default:
 		if (driver->use_device_tree) {
 			if (machine_is_msm8974())
 				return MSM8974_TOOLS_ID;
-			else if (machine_is_apq8074())
-				return APQ8074_TOOLS_ID;
 			else
 				return 0;
 		} else {
@@ -152,13 +130,6 @@ int chk_apps_only(void)
 	case MSM_CPU_8960:
 	case MSM_CPU_8960AB:
 	case MSM_CPU_8064:
-	case MSM_CPU_8064AB:
-	case MSM_CPU_8064AA:
-	case MSM_CPU_8930:
-	case MSM_CPU_8930AA:
-	case MSM_CPU_8930AB:
-	case MSM_CPU_8627:
-	case MSM_CPU_9615:
 	case MSM_CPU_8974:
 		return 1;
 	default:
@@ -211,39 +182,45 @@ void chk_logging_wakeup(void)
 	int i;
 	int j;
 	int pid = 0;
+	int proc;
 
-	for (j = 0; j < NUM_MD_SESSIONS; j++) {
-		if (!driver->md_session_map[j])
-			continue;
-		pid = driver->md_session_map[j]->pid;
+	for (proc = 0; proc < NUM_DIAG_MD_DEV; proc++) {
+		for (j = 0; j < NUM_MD_SESSIONS; j++) {
+			if (!driver->md_session_map[proc][j])
+				continue;
+			pid = driver->md_session_map[proc][j]->pid;
 
-		/* Find the index of the logging process */
-		for (i = 0; i < driver->num_clients; i++) {
-			if (driver->client_map[i].pid != pid)
-				continue;
-			if (driver->data_ready[i] & USER_SPACE_DATA_TYPE)
-				continue;
+			/* Find the index of the logging process */
+			for (i = 0; i < driver->num_clients; i++) {
+				if (driver->client_map[i].pid != pid)
+					continue;
+				if (driver->data_ready[i] &
+					USER_SPACE_DATA_TYPE)
+					continue;
+				/*
+				 * At very high logging rates a race condition
+				 * can occur where the buffers containing the
+				 * data from a channel are all in use, but the
+				 * data_ready flag is cleared. In this case,
+				 * the buffers never have their data
+				 * read/logged. Detect and remedy this
+				 * situation.
+				 */
+				driver->data_ready[i] |= USER_SPACE_DATA_TYPE;
+				atomic_inc(&driver->data_ready_notif[i]);
+				pr_debug("diag: Force wakeup of logging process\n");
+				wake_up_interruptible(&driver->wait_q);
+				break;
+			}
 			/*
-			 * At very high logging rates a race condition can
-			 * occur where the buffers containing the data from
-			 * a channel are all in use, but the data_ready flag
-			 * is cleared. In this case, the buffers never have
-			 * their data read/logged. Detect and remedy this
-			 * situation.
+			 * Diag Memory Device is in normal. Check only for the
+			 * first index as all the indices point to the same
+			 * session structure.
 			 */
-			driver->data_ready[i] |= USER_SPACE_DATA_TYPE;
-			atomic_inc(&driver->data_ready_notif[i]);
-			pr_debug("diag: Force wakeup of logging process\n");
-			wake_up_interruptible(&driver->wait_q);
-			break;
+			if ((driver->md_session_mask[proc] == DIAG_CON_ALL) &&
+				(j == 0))
+				break;
 		}
-		/*
-		 * Diag Memory Device is in normal. Check only for the first
-		 * index as all the indices point to the same session
-		 * structure.
-		 */
-		if ((driver->md_session_mask == DIAG_CON_ALL) && (j == 0))
-			break;
 	}
 }
 
@@ -270,16 +247,16 @@ static void pack_rsp_and_send(unsigned char *buf, int len,
 	mutex_lock(&driver->md_session_lock);
 	session_info = diag_md_session_get_pid(pid);
 	info = (session_info) ? session_info :
-				diag_md_session_get_peripheral(APPS_DATA);
+		diag_md_session_get_peripheral(DIAG_LOCAL_PROC, APPS_DATA);
 
 	/*
 	 * Explicitly check for the Peripheral Modem here
 	 * is necessary till a way to identify a peripheral
 	 * if its supporting qshrink4 feature.
 	 */
-	if (info && info->peripheral_mask) {
+	if (info && info->peripheral_mask[DIAG_LOCAL_PROC]) {
 		for (i = 0; i < NUM_MD_SESSIONS; i++) {
-			if (info->peripheral_mask & (1 << i))
+			if (info->peripheral_mask[DIAG_LOCAL_PROC] & (1 << i))
 				break;
 		}
 		rsp_ctxt = SET_BUF_CTXT(i, TYPE_CMD, TYPE_CMD);
@@ -308,8 +285,10 @@ static void pack_rsp_and_send(unsigned char *buf, int len,
 		 * for responses. Make sure we don't miss previous wakeups for
 		 * draining responses when we are in Memory Device Mode.
 		 */
-		if (driver->logging_mode == DIAG_MEMORY_DEVICE_MODE ||
-				driver->logging_mode == DIAG_MULTI_MODE) {
+		if (driver->logging_mode[DIAG_LOCAL_PROC] ==
+				DIAG_MEMORY_DEVICE_MODE ||
+			driver->logging_mode[DIAG_LOCAL_PROC] ==
+				DIAG_MULTI_MODE) {
 			mutex_lock(&driver->md_session_lock);
 			chk_logging_wakeup();
 			mutex_unlock(&driver->md_session_lock);
@@ -363,16 +342,16 @@ static void encode_rsp_and_send(unsigned char *buf, int len,
 	mutex_lock(&driver->md_session_lock);
 	session_info = diag_md_session_get_pid(pid);
 	info = (session_info) ? session_info :
-				diag_md_session_get_peripheral(APPS_DATA);
+		diag_md_session_get_peripheral(DIAG_LOCAL_PROC, APPS_DATA);
 
 	/*
 	 * Explicitly check for the Peripheral Modem here
 	 * is necessary till a way to identify a peripheral
 	 * if its supporting qshrink4 feature.
 	 */
-	if (info && info->peripheral_mask) {
+	if (info && info->peripheral_mask[DIAG_LOCAL_PROC]) {
 		for (i = 0; i < NUM_MD_SESSIONS; i++) {
-			if (info->peripheral_mask & (1 << i))
+			if (info->peripheral_mask[DIAG_LOCAL_PROC] & (1 << i))
 				break;
 		}
 		rsp_ctxt = SET_BUF_CTXT(i, TYPE_CMD, TYPE_CMD);
@@ -400,8 +379,10 @@ static void encode_rsp_and_send(unsigned char *buf, int len,
 		 * for responses. Make sure we don't miss previous wakeups for
 		 * draining responses when we are in Memory Device Mode.
 		 */
-		if (driver->logging_mode == DIAG_MEMORY_DEVICE_MODE ||
-				driver->logging_mode == DIAG_MULTI_MODE) {
+		if (driver->logging_mode[DIAG_LOCAL_PROC] ==
+			DIAG_MEMORY_DEVICE_MODE ||
+			driver->logging_mode[DIAG_LOCAL_PROC] ==
+				DIAG_MULTI_MODE) {
 			mutex_lock(&driver->md_session_lock);
 			chk_logging_wakeup();
 			mutex_unlock(&driver->md_session_lock);
@@ -445,7 +426,8 @@ static void diag_send_rsp(unsigned char *buf, int len,
 	mutex_lock(&driver->md_session_lock);
 	info = diag_md_session_get_pid(pid);
 	session_info = (info) ? info :
-				diag_md_session_get_peripheral(APPS_DATA);
+			diag_md_session_get_peripheral(DIAG_LOCAL_PROC,
+							APPS_DATA);
 	if (session_info)
 		hdlc_disabled = session_info->hdlc_disabled;
 	else
@@ -516,19 +498,16 @@ void diag_update_userspace_clients(unsigned int type)
 	wake_up_interruptible(&driver->wait_q);
 	mutex_unlock(&driver->diagchar_mutex);
 }
-
-void diag_update_md_clients(unsigned int type)
+void diag_update_md_clients_proc(unsigned int proc, unsigned int type)
 {
 	int i, j;
 
-	mutex_lock(&driver->diagchar_mutex);
-	mutex_lock(&driver->md_session_lock);
 	for (i = 0; i < NUM_MD_SESSIONS; i++) {
-		if (driver->md_session_map[i] != NULL)
+		if (driver->md_session_map[proc][i]) {
 			for (j = 0; j < driver->num_clients; j++) {
 				if (driver->client_map[j].pid != 0 &&
 					driver->client_map[j].pid ==
-					driver->md_session_map[i]->pid) {
+					driver->md_session_map[proc][i]->pid) {
 					if (!(driver->data_ready[j] & type)) {
 						driver->data_ready[j] |= type;
 						atomic_inc(
@@ -537,7 +516,19 @@ void diag_update_md_clients(unsigned int type)
 					break;
 				}
 			}
+		}
 	}
+}
+void diag_update_md_clients(unsigned int type)
+{
+	int proc;
+
+	mutex_lock(&driver->diagchar_mutex);
+	mutex_lock(&driver->md_session_lock);
+
+	for (proc = 0; proc < NUM_DIAG_MD_DEV; proc++)
+		diag_update_md_clients_proc(proc, type);
+
 	mutex_unlock(&driver->md_session_lock);
 	wake_up_interruptible(&driver->wait_q);
 	mutex_unlock(&driver->diagchar_mutex);
@@ -578,7 +569,7 @@ void diag_process_stm_mask(uint8_t cmd, uint8_t data_mask, int data_type)
 {
 	int status = 0;
 
-	if (data_type >= PERIPHERAL_MODEM && data_type <= PERIPHERAL_SENSORS) {
+	if (data_type >= PERIPHERAL_MODEM && data_type < NUM_PERIPHERALS) {
 		if (driver->feature[data_type].stm_support) {
 			status = diag_send_stm_state(data_type, cmd);
 			if (status == 0)
@@ -618,7 +609,7 @@ int diag_process_stm_cmd(unsigned char *buf, int len, unsigned char *dest_buf)
 	 */
 	if ((version != 2) || (cmd > STM_AUTO_QUERY) ||
 		((cmd != STATUS_STM && cmd != STM_AUTO_QUERY) &&
-		((mask == 0) || (0 != (mask >> 4))))) {
+		((mask == 0) || (0 != (mask >> (NUM_PERIPHERALS + 1)))))) {
 		/* Command is invalid. Send bad param message response */
 		dest_buf[0] = BAD_PARAM_RESPONSE_MESSAGE;
 		for (i = 0; i < STM_CMD_NUM_BYTES; i++)
@@ -640,13 +631,12 @@ int diag_process_stm_cmd(unsigned char *buf, int len, unsigned char *dest_buf)
 		if (mask & DIAG_STM_SENSORS)
 			diag_process_stm_mask(cmd, DIAG_STM_SENSORS,
 						PERIPHERAL_SENSORS);
-		if (mask & DIAG_STM_WDSP)
-			diag_process_stm_mask(cmd, DIAG_STM_WDSP,
-						PERIPHERAL_WDSP);
-
 		if (mask & DIAG_STM_CDSP)
 			diag_process_stm_mask(cmd, DIAG_STM_CDSP,
 						PERIPHERAL_CDSP);
+		if (mask & DIAG_STM_NPU)
+			diag_process_stm_mask(cmd, DIAG_STM_NPU,
+						PERIPHERAL_NPU);
 
 		if (mask & DIAG_STM_APPS)
 			diag_process_stm_mask(cmd, DIAG_STM_APPS, APPS_DATA);
@@ -668,11 +658,11 @@ int diag_process_stm_cmd(unsigned char *buf, int len, unsigned char *dest_buf)
 	if (driver->feature[PERIPHERAL_SENSORS].stm_support)
 		rsp_supported |= DIAG_STM_SENSORS;
 
-	if (driver->feature[PERIPHERAL_WDSP].stm_support)
-		rsp_supported |= DIAG_STM_WDSP;
-
 	if (driver->feature[PERIPHERAL_CDSP].stm_support)
 		rsp_supported |= DIAG_STM_CDSP;
+
+	if (driver->feature[PERIPHERAL_NPU].stm_support)
+		rsp_supported |= DIAG_STM_NPU;
 
 	rsp_supported |= DIAG_STM_APPS;
 
@@ -689,11 +679,11 @@ int diag_process_stm_cmd(unsigned char *buf, int len, unsigned char *dest_buf)
 	if (driver->stm_state[PERIPHERAL_SENSORS])
 		rsp_status |= DIAG_STM_SENSORS;
 
-	if (driver->stm_state[PERIPHERAL_WDSP])
-		rsp_status |= DIAG_STM_WDSP;
-
 	if (driver->stm_state[PERIPHERAL_CDSP])
 		rsp_status |= DIAG_STM_CDSP;
+
+	if (driver->stm_state[PERIPHERAL_NPU])
+		rsp_status |= DIAG_STM_NPU;
 
 	if (driver->stm_state[APPS_DATA])
 		rsp_status |= DIAG_STM_APPS;
@@ -779,6 +769,30 @@ int diag_process_diag_id_query_cmd(unsigned char *src_buf, int src_len,
 	memcpy(dest_buf, &rsp, rsp_len);
 	return  write_len;
 }
+
+int diag_process_diag_transport_query_cmd(unsigned char *src_buf, int src_len,
+				      unsigned char *dest_buf, int dest_len)
+{
+	struct diag_query_transport_req_t *req;
+	struct diag_query_transport_rsp_t rsp;
+
+	if (!src_buf || !dest_buf || src_len <= 0 || dest_len <= 0 ||
+		src_len < sizeof(struct diag_query_transport_req_t) ||
+		sizeof(rsp) > dest_len) {
+		pr_err("diag: Invalid input in %s, src_buf: %pK, src_len: %d, dest_buf: %pK, dest_len: %d",
+			__func__, src_buf, src_len, dest_buf, dest_len);
+		return -EINVAL;
+	}
+
+	req = (struct diag_query_transport_req_t *)src_buf;
+	rsp.header.cmd_code = req->header.cmd_code;
+	rsp.header.subsys_id = req->header.subsys_id;
+	rsp.header.subsys_cmd_code = req->header.subsys_cmd_code;
+	rsp.transport = driver->transport_set;
+	memcpy(dest_buf, &rsp, sizeof(rsp));
+	return sizeof(rsp);
+}
+
 int diag_process_time_sync_switch_cmd(unsigned char *src_buf, int src_len,
 				      unsigned char *dest_buf, int dest_len)
 {
@@ -1029,8 +1043,8 @@ int diag_process_apps_pkt(unsigned char *buf, int len, int pid)
 	struct diag_cmd_reg_entry_t entry;
 	struct diag_cmd_reg_entry_t *temp_entry = NULL;
 	struct diag_cmd_reg_t *reg_item = NULL;
-	struct diagfwd_info *fwd_info = NULL;
 	uint32_t pd_mask = 0;
+	struct diagfwd_info *fwd_info = NULL;
 	struct diag_md_session_t *info = NULL;
 
 	if (!buf || len <= 0)
@@ -1046,25 +1060,27 @@ int diag_process_apps_pkt(unsigned char *buf, int len, int pid)
 	temp = buf;
 	if (len >= sizeof(uint8_t)) {
 		entry.cmd_code = (uint16_t)(*(uint8_t *)temp);
-		pr_debug("diag: received cmd_code %02x\n", entry.cmd_code);
+		DIAG_LOG(DIAG_DEBUG_CMD_INFO,
+			"diag: received cmd_code %02x\n", entry.cmd_code);
 	}
 	if (len >= (2 * sizeof(uint8_t))) {
 		temp += sizeof(uint8_t);
 		entry.subsys_id = (uint16_t)(*(uint8_t *)temp);
-		pr_debug("diag: received subsys_id %02x\n", entry.subsys_id);
+		DIAG_LOG(DIAG_DEBUG_CMD_INFO,
+			"diag: received subsys_id %02x\n", entry.subsys_id);
 	}
 	if (len == (3 * sizeof(uint8_t))) {
 		temp += sizeof(uint8_t);
 		entry.cmd_code_hi = (uint16_t)(*(uint8_t *)temp);
 		entry.cmd_code_lo = (uint16_t)(*(uint8_t *)temp);
-		pr_debug("diag: received cmd_code_hi %02x\n",
-			entry.cmd_code_hi);
+		DIAG_LOG(DIAG_DEBUG_CMD_INFO,
+			"diag: received cmd_code_hi %02x\n", entry.cmd_code_hi);
 	} else if (len >= (2 * sizeof(uint8_t)) + sizeof(uint16_t)) {
 		temp += sizeof(uint8_t);
 		entry.cmd_code_hi = (uint16_t)(*(uint16_t *)temp);
 		entry.cmd_code_lo = (uint16_t)(*(uint16_t *)temp);
-		pr_debug("diag: received cmd_code_hi %02x\n",
-			entry.cmd_code_hi);
+		DIAG_LOG(DIAG_DEBUG_CMD_INFO,
+			"diag: received cmd_code_hi %02x\n", entry.cmd_code_hi);
 	}
 
 	if ((len >= sizeof(uint8_t)) && *buf == DIAG_CMD_LOG_ON_DMND &&
@@ -1086,7 +1102,7 @@ int diag_process_apps_pkt(unsigned char *buf, int len, int pid)
 		mutex_lock(&driver->md_session_lock);
 		info = diag_md_session_get_pid(pid);
 		if (info) {
-			p_mask = info->peripheral_mask;
+			p_mask = info->peripheral_mask[DIAG_LOCAL_PROC];
 			mutex_unlock(&driver->md_session_lock);
 			MD_PERIPHERAL_PD_MASK(TYPE_CMD, reg_item->proc,
 				pd_mask);
@@ -1096,7 +1112,7 @@ int diag_process_apps_pkt(unsigned char *buf, int len, int pid)
 		} else {
 			mutex_unlock(&driver->md_session_lock);
 			if (MD_PERIPHERAL_MASK(reg_item->proc) &
-				driver->logging_mask) {
+				driver->logging_mask[DIAG_LOCAL_PROC]) {
 				mutex_unlock(&driver->cmd_reg_mutex);
 				diag_send_error_rsp(buf, len, pid);
 				return write_len;
@@ -1160,6 +1176,18 @@ int diag_process_apps_pkt(unsigned char *buf, int len, int pid)
 		(*(buf+1) == DIAG_SS_DIAG) &&
 		(*(uint16_t *)(buf+2) == DIAG_GET_DIAG_ID)) {
 		write_len = diag_process_diag_id_query_cmd(buf, len,
+							driver->apps_rsp_buf,
+							DIAG_MAX_RSP_SIZE);
+		if (write_len > 0)
+			diag_send_rsp(driver->apps_rsp_buf, write_len, pid);
+		return 0;
+	}
+	/* Check for transport command*/
+	else if ((len >= ((2 * sizeof(uint8_t)) + sizeof(uint16_t))) &&
+		(*buf == DIAG_CMD_DIAG_SUBSYS) &&
+		(*(buf+1) == DIAG_SS_DIAG) &&
+		(*(uint16_t *)(buf+2) == DIAG_QUERY_TRANSPORT)) {
+		write_len = diag_process_diag_transport_query_cmd(buf, len,
 							driver->apps_rsp_buf,
 							DIAG_MAX_RSP_SIZE);
 		if (write_len > 0)
@@ -1290,17 +1318,20 @@ int diag_process_apps_pkt(unsigned char *buf, int len, int pid)
 		else
 			driver->hdlc_disabled = 1;
 		peripheral =
-			diag_md_session_match_pid_peripheral(pid, 0);
+			diag_md_session_match_pid_peripheral(DIAG_LOCAL_PROC,
+								pid, 0);
 		for (i = 0; i < NUM_MD_SESSIONS; i++) {
 			if (peripheral > 0 && info) {
 				if (peripheral & (1 << i))
 					driver->p_hdlc_disabled[i] =
 					info->hdlc_disabled;
-				else if (!diag_md_session_get_peripheral(i))
+				else if (!diag_md_session_get_peripheral(
+						DIAG_LOCAL_PROC, i))
 					driver->p_hdlc_disabled[i] =
 					driver->hdlc_disabled;
 			} else {
-				if (!diag_md_session_get_peripheral(i))
+				if (!diag_md_session_get_peripheral(
+						DIAG_LOCAL_PROC, i))
 					driver->p_hdlc_disabled[i] =
 					driver->hdlc_disabled;
 			}
@@ -1456,9 +1487,10 @@ static int diagfwd_mux_close(int id, int mode)
 		return -EINVAL;
 	}
 
-	if ((driver->logging_mode == DIAG_MULTI_MODE &&
-		driver->md_session_mode == DIAG_MD_NONE) ||
-		(driver->md_session_mode == DIAG_MD_PERIPHERAL)) {
+	if ((driver->logging_mode[DIAG_LOCAL_PROC] == DIAG_MULTI_MODE &&
+		driver->md_session_mode[DIAG_LOCAL_PROC] == DIAG_MD_NONE) ||
+		(driver->md_session_mode[DIAG_LOCAL_PROC] ==
+			DIAG_MD_PERIPHERAL)) {
 		/*
 		 * This case indicates that the USB is removed
 		 * but there is a client running in background
@@ -1486,7 +1518,7 @@ static int diagfwd_mux_close(int id, int mode)
 		pr_debug("diag: In %s, re-enabling HDLC encoding\n",
 		       __func__);
 		mutex_lock(&driver->hdlc_disable_mutex);
-		if (driver->md_session_mode == DIAG_MD_NONE) {
+		if (driver->md_session_mode[DIAG_LOCAL_PROC] == DIAG_MD_NONE) {
 			driver->hdlc_disabled = 0;
 			/*
 			 * HDLC encoding is re-enabled when
@@ -1543,7 +1575,8 @@ static void diag_timer_work_fn(struct work_struct *work)
 	driver->hdlc_disabled = 0;
 	mutex_lock(&driver->md_session_lock);
 	for (i = 0; i < NUM_MD_SESSIONS; i++) {
-		session_info = diag_md_session_get_peripheral(i);
+		session_info = diag_md_session_get_peripheral(DIAG_LOCAL_PROC,
+								i);
 		if (!session_info)
 			driver->p_hdlc_disabled[i] =
 			driver->hdlc_disabled;
@@ -1576,7 +1609,8 @@ static void diag_md_timer_work_fn(struct work_struct *work)
 	if (session_info)
 		session_info->hdlc_disabled = 0;
 	peripheral =
-		diag_md_session_match_pid_peripheral(hdlc_work->pid, 0);
+		diag_md_session_match_pid_peripheral(DIAG_LOCAL_PROC,
+							hdlc_work->pid, 0);
 	if (peripheral > 0 && session_info) {
 		for (i = 0; i < NUM_MD_SESSIONS; i++) {
 			if (peripheral & (1 << i))
@@ -1661,18 +1695,23 @@ static void diag_hdlc_start_recovery(unsigned char *buf, int len,
 				driver->hdlc_disabled = 0;
 
 			peripheral =
-				diag_md_session_match_pid_peripheral(pid, 0);
+				diag_md_session_match_pid_peripheral(
+								DIAG_LOCAL_PROC,
+								pid, 0);
 			for (i = 0; i < NUM_MD_SESSIONS; i++) {
 				if (peripheral > 0 && info) {
 					if (peripheral & (1 << i))
 						driver->p_hdlc_disabled[i] =
 						info->hdlc_disabled;
 					else if (
-					!diag_md_session_get_peripheral(i))
+					!diag_md_session_get_peripheral(
+							DIAG_LOCAL_PROC, i))
 						driver->p_hdlc_disabled[i] =
 						driver->hdlc_disabled;
 				} else {
-					if (!diag_md_session_get_peripheral(i))
+					if (
+					!diag_md_session_get_peripheral(
+							DIAG_LOCAL_PROC, i))
 						driver->p_hdlc_disabled[i] =
 						driver->hdlc_disabled;
 				}
@@ -1804,8 +1843,7 @@ start:
 			mutex_unlock(&driver->hdlc_recovery_mutex);
 			diag_hdlc_start_recovery(buf, (len - read_bytes), pid);
 			mutex_lock(&driver->hdlc_recovery_mutex);
-		}
-		else
+		} else
 			hdlc_reset = 0;
 		err = diag_process_apps_pkt(data_ptr,
 					    actual_pkt->length, pid);
@@ -1839,9 +1877,9 @@ static int diagfwd_mux_write_done(unsigned char *buf, int len, int buf_ctxt,
 				  int ctxt)
 {
 	unsigned long flags;
-	int peripheral = -1;
-	int type = -1;
-	int num = -1;
+	int peripheral = -1, type = -1;
+	int num = -1, hdlc_ctxt = -1;
+	struct diag_apps_data_t *temp = NULL;
 
 	if (!buf || len < 0)
 		return -EINVAL;
@@ -1860,9 +1898,27 @@ static int diagfwd_mux_write_done(unsigned char *buf, int len, int buf_ctxt,
 			diag_ws_on_copy(DIAG_WS_MUX);
 		} else if (peripheral == APPS_DATA) {
 			spin_lock_irqsave(&driver->diagmem_lock, flags);
-			diagmem_free(driver, (unsigned char *)buf,
-				     POOL_TYPE_HDLC);
-			buf = NULL;
+			hdlc_ctxt = GET_HDLC_CTXT(buf_ctxt);
+			if ((hdlc_ctxt == HDLC_CTXT) && hdlc_data.allocated)
+				temp = &hdlc_data;
+			else if ((hdlc_ctxt == NON_HDLC_CTXT) &&
+				non_hdlc_data.allocated)
+				temp = &non_hdlc_data;
+			else
+				DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+				"No apps data buffer is allocated to be freed\n");
+			if (temp) {
+				DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
+				"Freeing Apps data buffer after write done hdlc_ctxt: %d, hdlc.allocated: %d, non_hdlc.allocated: %d\n",
+				hdlc_ctxt,
+				hdlc_data.allocated, non_hdlc_data.allocated);
+				diagmem_free(driver, temp->buf, POOL_TYPE_HDLC);
+				temp->buf = NULL;
+				temp->len = 0;
+				temp->allocated = 0;
+				temp->flushed = 0;
+				wake_up_interruptible(&driver->hdlc_wait_q);
+			}
 			spin_unlock_irqrestore(&driver->diagmem_lock, flags);
 		} else {
 			pr_err_ratelimited("diag: Invalid peripheral %d in %s, type: %d\n",
@@ -1876,9 +1932,9 @@ static int diagfwd_mux_write_done(unsigned char *buf, int len, int buf_ctxt,
 			"Marking buffer as free after write done p: %d, t: %d, buf_num: %d\n",
 			peripheral, type, num);
 			diagfwd_write_done(peripheral, type, num);
-		} else if (peripheral == APPS_DATA ||
-			(peripheral >= 0 && peripheral < NUM_PERIPHERALS &&
-			num == TYPE_CMD)) {
+		} else if ((peripheral >= 0 &&
+			peripheral <= NUM_PERIPHERALS + NUM_UPD) &&
+			num == TYPE_CMD) {
 			DIAG_LOG(DIAG_DEBUG_PERIPHERALS,
 			"Marking APPS response buffer free after write done for p: %d, t: %d, buf_num: %d\n",
 			peripheral, type, num);

@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2018, 2020 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -23,6 +23,7 @@
 #include <linux/of_device.h>
 #include <linux/dma-mapping.h>
 #include <linux/module.h>
+#include <linux/syscore_ops.h>
 
 #define MSM_DUMP_TABLE_VERSION		MSM_DUMP_MAKE_VERSION(2, 0)
 
@@ -38,7 +39,6 @@ struct msm_memory_dump {
 	uint64_t table_phys;
 	struct msm_dump_table *table;
 };
-
 
 static struct msm_memory_dump memdump;
 static struct msm_mem_dump_vaddr_tbl vaddr_tbl;
@@ -140,7 +140,7 @@ int msm_dump_data_register(enum msm_dump_table_ids id,
 
 	dmac_flush_range(table, (void *)table + sizeof(struct msm_dump_table));
 
-	if (msm_dump_data_add_minidump(entry) < 0)
+	if (msm_dump_data_add_minidump(entry))
 		pr_err("Failed to add entry in Minidump table\n");
 
 	return 0;
@@ -169,12 +169,23 @@ struct dump_vaddr_entry *get_msm_dump_ptr(enum msm_dump_data_ids id)
 }
 EXPORT_SYMBOL(get_msm_dump_ptr);
 
+static void __iomem *imem_base;
+#ifdef CONFIG_HIBERNATION
+static void memory_dump_syscore_resume(void)
+{
+	memcpy_toio(imem_base, &memdump.table_phys, sizeof(memdump.table_phys));
+}
+
+static struct syscore_ops memory_dump_syscore_ops = {
+	.resume = memory_dump_syscore_resume,
+};
+#endif
+
 static int __init init_memory_dump(void)
 {
 	struct msm_dump_table *table;
 	struct msm_dump_entry entry;
 	struct device_node *np;
-	void __iomem *imem_base;
 	int ret;
 
 	np = of_find_compatible_node(NULL, NULL,
@@ -202,8 +213,9 @@ static int __init init_memory_dump(void)
 	mb();
 	pr_info("MSM Memory Dump base table set up\n");
 
+#ifndef CONFIG_HIBERNATION
 	iounmap(imem_base);
-
+#endif
 	table = kzalloc(sizeof(struct msm_dump_table), GFP_KERNEL);
 	if (!table) {
 		ret = -ENOMEM;
@@ -220,6 +232,9 @@ static int __init init_memory_dump(void)
 	}
 	pr_info("MSM Memory Dump apps data table set up\n");
 
+#ifdef CONFIG_HIBERNATION
+	register_syscore_ops(&memory_dump_syscore_ops);
+#endif
 	return 0;
 err2:
 	kfree(table);
@@ -236,14 +251,9 @@ early_initcall(init_memory_dump);
 static int __init init_debug_lar_unlock(void)
 {
 	int ret;
-	uint32_t argument = 0;
 	struct scm_desc desc = {0};
 
-	if (!is_scm_armv8())
-		ret = scm_call(SCM_SVC_TZ, SCM_CMD_DEBUG_LAR_UNLOCK, &argument,
-			       sizeof(argument), NULL, 0);
-	else
-		ret = scm_call2(SCM_SIP_FNID(SCM_SVC_TZ,
+	ret = scm_call2(SCM_SIP_FNID(SCM_SVC_TZ,
 				SCM_CMD_DEBUG_LAR_UNLOCK), &desc);
 	if (ret)
 		pr_err("Core Debug Lock unlock failed, ret: %d\n", ret);
@@ -269,8 +279,8 @@ static int mem_dump_probe(struct platform_device *pdev)
 
 	vaddr_tbl.num_node = of_get_child_count(node);
 	vaddr_tbl.entries = devm_kcalloc(&pdev->dev, vaddr_tbl.num_node,
-				 sizeof(struct dump_vaddr_entry),
-				 GFP_KERNEL);
+				sizeof(struct dump_vaddr_entry),
+				GFP_KERNEL);
 	if (!vaddr_tbl.entries)
 		dev_err(&pdev->dev, "Unable to allocate mem for ptr addr\n");
 

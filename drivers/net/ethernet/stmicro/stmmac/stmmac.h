@@ -10,10 +10,6 @@
   FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
   more details.
 
-  You should have received a copy of the GNU General Public License along with
-  this program; if not, write to the Free Software Foundation, Inc.,
-  51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
-
   The full GNU General Public License is included in this distribution in
   the file called "COPYING".
 
@@ -33,6 +29,13 @@
 #include "common.h"
 #include <linux/ptp_clock_kernel.h>
 #include <linux/reset.h>
+#ifdef CONFIG_MSM_BOOT_TIME_MARKER
+#include <soc/qcom/boot_stats.h>
+#endif
+#include "dwmac-qcom-ipa-offload.h"
+#include <linux/udp.h>
+#include <linux/if_ether.h>
+#include <linux/icmp.h>
 
 struct stmmac_resources {
 	void __iomem *addr;
@@ -50,47 +53,70 @@ struct stmmac_tx_info {
 	bool is_jumbo;
 };
 
-struct stmmac_priv {
-	/* Frequently used values are kept adjacent for cache effect */
+/* Frequently used values are kept adjacent for cache effect */
+struct stmmac_tx_queue {
+	u32 queue_index;
+	struct stmmac_priv *priv_data;
 	struct dma_extended_desc *dma_etx ____cacheline_aligned_in_smp;
 	struct dma_desc *dma_tx;
 	struct sk_buff **tx_skbuff;
+	struct stmmac_tx_info *tx_skbuff_dma;
 	unsigned int cur_tx;
 	unsigned int dirty_tx;
+	dma_addr_t dma_tx_phy;
+	u32 tx_tail_addr;
+	bool skip_sw;
+};
+
+struct stmmac_rx_queue {
+	u32 queue_index;
+	struct stmmac_priv *priv_data;
+	struct dma_extended_desc *dma_erx;
+	struct dma_desc *dma_rx ____cacheline_aligned_in_smp;
+	struct sk_buff **rx_skbuff;
+	dma_addr_t *rx_skbuff_dma;
+	unsigned int cur_rx;
+	unsigned int dirty_rx;
+	u32 rx_zeroc_thresh;
+	dma_addr_t dma_rx_phy;
+	u32 rx_tail_addr;
+	struct napi_struct napi ____cacheline_aligned_in_smp;
+	bool skip_sw;
+	bool en_fep;
+};
+
+struct stmmac_priv {
+	/* Frequently used values are kept adjacent for cache effect */
 	u32 tx_count_frames;
 	u32 tx_coal_frames;
 	u32 tx_coal_timer;
-	struct stmmac_tx_info *tx_skbuff_dma;
-	dma_addr_t dma_tx_phy;
+	bool tx_coal_timer_disable;
+
 	int tx_coalesce;
 	int hwts_tx_en;
-	spinlock_t tx_lock;
 	bool tx_path_in_lpi_mode;
 	struct timer_list txtimer;
 	bool tso;
 
-	struct dma_desc *dma_rx	____cacheline_aligned_in_smp;
-	struct dma_extended_desc *dma_erx;
-	struct sk_buff **rx_skbuff;
-	unsigned int cur_rx;
-	unsigned int dirty_rx;
 	unsigned int dma_buf_sz;
 	unsigned int rx_copybreak;
-	unsigned int rx_zeroc_thresh;
 	u32 rx_riwt;
 	int hwts_rx_en;
-	dma_addr_t *rx_skbuff_dma;
-	dma_addr_t dma_rx_phy;
-
-	struct napi_struct napi ____cacheline_aligned_in_smp;
 
 	void __iomem *ioaddr;
 	struct net_device *dev;
 	struct device *device;
 	struct mac_device_info *hw;
-	spinlock_t lock;
+	struct phy_device *phydev;
+	/* Mutex lock */
+	struct mutex lock;
 
-	struct phy_device *phydev ____cacheline_aligned_in_smp;
+	/* RX Queue */
+	struct stmmac_rx_queue rx_queue[MTL_MAX_RX_QUEUES];
+
+	/* TX Queue */
+	struct stmmac_tx_queue tx_queue[MTL_MAX_TX_QUEUES];
+
 	int oldlink;
 	int speed;
 	int oldduplex;
@@ -108,9 +134,6 @@ struct stmmac_priv {
 	u32 msg_enable;
 	int wolopts;
 	int wol_irq;
-	struct clk *stmmac_clk;
-	struct clk *pclk;
-	struct reset_control *stmmac_rst;
 	int clk_csr;
 	struct timer_list eee_ctrl_timer;
 	int lpi_irq;
@@ -122,24 +145,50 @@ struct stmmac_priv {
 	struct ptp_clock *ptp_clock;
 	struct ptp_clock_info ptp_clock_ops;
 	unsigned int default_addend;
-	struct clk *clk_ptp_ref;
-	unsigned int clk_ptp_rate;
 	u32 adv_ts;
 	int use_riwt;
 	int irq_wake;
 	spinlock_t ptp_lock;
 	void __iomem *mmcaddr;
 	void __iomem *ptpaddr;
-	u32 rx_tail_addr;
-	u32 tx_tail_addr;
 	u32 mss;
-
+	bool boot_kpi;
+	int current_loopback;
 #ifdef CONFIG_DEBUG_FS
 	struct dentry *dbgfs_dir;
 	struct dentry *dbgfs_rings_status;
 	struct dentry *dbgfs_dma_cap;
 #endif
+	bool hw_offload_enabled;
 };
+
+struct stmmac_emb_smmu_cb_ctx {
+	bool valid;
+	struct platform_device *pdev_master;
+	struct platform_device *smmu_pdev;
+	struct dma_iommu_mapping *mapping;
+	struct iommu_domain *iommu_domain;
+	u32 va_start;
+	u32 va_size;
+	u32 va_end;
+	int ret;
+};
+
+extern struct stmmac_emb_smmu_cb_ctx stmmac_emb_smmu_ctx;
+
+#define GET_MEM_PDEV_DEV (stmmac_emb_smmu_ctx.valid ? \
+			&stmmac_emb_smmu_ctx.smmu_pdev->dev : priv->device)
+
+#define MICREL_PHY_ID 0x00221620
+
+#define MMC_CONFIG 0x24
+
+int ethqos_handle_prv_ioctl(struct net_device *dev, struct ifreq *rq, int cmd);
+int ethqos_init_pps(struct stmmac_priv *priv);
+
+int ethqos_phy_intr_enable(struct stmmac_priv *priv);
+extern bool phy_intr_en;
+void qcom_ethqos_request_phy_wol(struct plat_stmmacenet_data *plat_dat);
 
 int stmmac_mdio_unregister(struct net_device *ndev);
 int stmmac_mdio_register(struct net_device *ndev);
@@ -156,5 +205,8 @@ int stmmac_dvr_probe(struct device *device,
 		     struct stmmac_resources *res);
 void stmmac_disable_eee_mode(struct stmmac_priv *priv);
 bool stmmac_eee_init(struct stmmac_priv *priv);
-
+bool qcom_ethqos_ipa_enabled(void);
+u16 icmp_fast_csum(u16 old_csum);
+void swap_ip_port(struct sk_buff *skb, unsigned int eth_type);
+unsigned int dwmac_qcom_get_eth_type(unsigned char *buf);
 #endif /* __STMMAC_H__ */

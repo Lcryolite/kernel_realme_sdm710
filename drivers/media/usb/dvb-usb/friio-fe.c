@@ -261,6 +261,28 @@ static int jdvbt90502_read_signal_strength(struct dvb_frontend *fe,
 	return 0;
 }
 
+
+/* filter out un-supported properties to notify users */
+static int jdvbt90502_set_property(struct dvb_frontend *fe,
+				   struct dtv_property *tvp)
+{
+	int r = 0;
+
+	switch (tvp->cmd) {
+	case DTV_DELIVERY_SYSTEM:
+		if (tvp->u.data != SYS_ISDBT)
+			r = -EINVAL;
+		break;
+	case DTV_CLEAR:
+	case DTV_TUNE:
+	case DTV_FREQUENCY:
+		break;
+	default:
+		r = -EINVAL;
+	}
+	return r;
+}
+
 static int jdvbt90502_set_frontend(struct dvb_frontend *fe)
 {
 	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
@@ -297,7 +319,7 @@ static int jdvbt90502_set_frontend(struct dvb_frontend *fe)
 }
 
 
-/**
+/*
  * (reg, val) commad list to initialize this module.
  *  captured on a Windows box.
  */
@@ -379,7 +401,7 @@ static void jdvbt90502_release(struct dvb_frontend *fe)
 }
 
 
-static struct dvb_frontend_ops jdvbt90502_ops;
+static const struct dvb_frontend_ops jdvbt90502_ops;
 
 struct dvb_frontend *jdvbt90502_attach(struct dvb_usb_device *d)
 {
@@ -410,7 +432,7 @@ error:
 	return NULL;
 }
 
-static struct dvb_frontend_ops jdvbt90502_ops = {
+static const struct dvb_frontend_ops jdvbt90502_ops = {
 	.delsys = { SYS_ISDBT },
 	.info = {
 		.name			= "Comtech JDVBT90502 ISDB-T",
@@ -434,6 +456,8 @@ static struct dvb_frontend_ops jdvbt90502_ops = {
 
 	.init = jdvbt90502_init,
 	.write = _jdvbt90502_write,
+
+	.set_property = jdvbt90502_set_property,
 
 	.set_frontend = jdvbt90502_set_frontend,
 

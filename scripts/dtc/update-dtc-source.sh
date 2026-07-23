@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
 # Simple script to update the version of DTC carried by the Linux kernel
 #
 # This script assumes that the dtc and the linux git trees are in the
@@ -34,9 +35,7 @@ DTC_SOURCE="checks.c data.c dtc.c dtc.h flattree.c fstree.c livetree.c srcpos.c 
 		srcpos.h treesource.c util.c util.h version_gen.h Makefile.dtc \
 		dtc-lexer.l dtc-parser.y"
 DTC_GENERATED="dtc-lexer.lex.c dtc-parser.tab.c dtc-parser.tab.h"
-LIBFDT_SOURCE="Makefile.libfdt fdt.c fdt.h fdt_addresses.c fdt_empty_tree.c \
-		fdt_overlay.c fdt_ro.c fdt_rw.c fdt_strerror.c fdt_sw.c \
-		fdt_wip.c libfdt.h libfdt_env.h libfdt_internal.h"
+LIBFDT_SOURCE="Makefile.libfdt fdt.c fdt.h fdt_empty_tree.c fdt_ro.c fdt_rw.c fdt_strerror.c fdt_sw.c fdt_wip.c libfdt.h libfdt_env.h libfdt_internal.h"
 
 get_last_dtc_version() {
 	git log --oneline scripts/dtc/ | grep 'upstream' | head -1 | sed -e 's/^.* \(.*\)/\1/'
@@ -56,20 +55,20 @@ dtc_log=$(git log --oneline ${last_dtc_ver}..)
 cd $DTC_LINUX_PATH
 for f in $DTC_SOURCE; do
 	cp ${DTC_UPSTREAM_PATH}/${f} ${f}
-	git add -f ${f}
+	git add ${f}
 done
 for f in $DTC_GENERATED; do
 	cp ${DTC_UPSTREAM_PATH}/$f ${f}_shipped
-	git add -f ${f}_shipped
+	git add ${f}_shipped
 done
 for f in $LIBFDT_SOURCE; do
        cp ${DTC_UPSTREAM_PATH}/libfdt/${f} libfdt/${f}
-       git add -f libfdt/${f}
+       git add libfdt/${f}
 done
 
 sed -i -- 's/#include <libfdt_env.h>/#include "libfdt_env.h"/g' ./libfdt/libfdt.h
 sed -i -- 's/#include <fdt.h>/#include "fdt.h"/g' ./libfdt/libfdt.h
-git add -f ./libfdt/libfdt.h
+git add ./libfdt/libfdt.h
 
 commit_msg=$(cat << EOF
 scripts/dtc: Update to upstream version ${dtc_version}

@@ -1,5 +1,4 @@
-/*
- * Copyright (c) 2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015, 2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -152,5 +151,10 @@
 #define clk_l2_m_clk						 0x4bedf4d0
 
 #define clk_wcnss_m_clk						 0x709f430b
+
+#define GCC_USB2_HS_PHY_ONLY_BCR				0
+#define GCC_QUSB2_PHY_BCR					1
+#define GCC_USB_HS_BCR						2
+#define GCC_USB_HS_HSIC_BCR					3
 
 #endif

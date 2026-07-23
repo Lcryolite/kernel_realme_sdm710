@@ -47,7 +47,15 @@ extern "C" {
 #define DRM_MODE_TYPE_DRIVER	(1<<6)
 
 /* Video mode flags */
-/* bit compatible with the xorg definitions. */
+/* bit compatible with the xrandr RR_ definitions (bits 0-13)
+ *
+ * ABI warning: Existing userspace really expects
+ * the mode flags to match the xrandr definitions. Any
+ * changes that don't match the xrandr definitions will
+ * likely need a new client cap or some other mechanism
+ * to avoid breaking existing userspace. This includes
+ * allocating new flags in the previously unused bits!
+ */
 #define DRM_MODE_FLAG_PHSYNC			(1<<0)
 #define DRM_MODE_FLAG_NHSYNC			(1<<1)
 #define DRM_MODE_FLAG_PVSYNC			(1<<2)
@@ -67,7 +75,7 @@ extern "C" {
   * (define not exposed to user space).
   */
 #define DRM_MODE_FLAG_3D_MASK			(0x1f<<14)
-#define  DRM_MODE_FLAG_3D_NONE			(0<<14)
+#define  DRM_MODE_FLAG_3D_NONE		(0<<14)
 #define  DRM_MODE_FLAG_3D_FRAME_PACKING		(1<<14)
 #define  DRM_MODE_FLAG_3D_FIELD_ALTERNATIVE	(2<<14)
 #define  DRM_MODE_FLAG_3D_LINE_ALTERNATIVE	(3<<14)
@@ -76,11 +84,11 @@ extern "C" {
 #define  DRM_MODE_FLAG_3D_L_DEPTH_GFX_GFX_DEPTH	(6<<14)
 #define  DRM_MODE_FLAG_3D_TOP_AND_BOTTOM	(7<<14)
 #define  DRM_MODE_FLAG_3D_SIDE_BY_SIDE_HALF	(8<<14)
-#define  DRM_MODE_FLAG_SEAMLESS			(1<<19)
-#define  DRM_MODE_FLAG_SUPPORTS_RGB		(1<<20)
-#define  DRM_MODE_FLAG_SUPPORTS_YUV422		(1<<21)
-#define  DRM_MODE_FLAG_SUPPORTS_YUV420		(1<<22)
 
+#define  DRM_MODE_FLAG_SEAMLESS			(1 << 19)
+#define  DRM_MODE_FLAG_SUPPORTS_RGB		(1 << 20)
+#define  DRM_MODE_FLAG_SUPPORTS_YUV422		(1 << 21)
+#define  DRM_MODE_FLAG_SUPPORTS_YUV420		(1 << 22)
 
 /* Picture aspect ratio options */
 #define DRM_MODE_PICTURE_ASPECT_NONE		0
@@ -90,17 +98,23 @@ extern "C" {
 #define DRM_MODE_PICTURE_ASPECT_256_135		4
 
 /* Aspect ratio flag bitmask (4 bits 27:24) */
-#define DRM_MODE_FLAG_PIC_AR_MASK		(0x0F<<24)
+#define DRM_MODE_FLAG_PIC_AR_MASK		(0x0F << 24)
 #define  DRM_MODE_FLAG_PIC_AR_NONE \
-			(DRM_MODE_PICTURE_ASPECT_NONE<<24)
+			(DRM_MODE_PICTURE_ASPECT_NONE << 24)
 #define  DRM_MODE_FLAG_PIC_AR_4_3 \
-			(DRM_MODE_PICTURE_ASPECT_4_3<<24)
+			(DRM_MODE_PICTURE_ASPECT_4_3 << 24)
 #define  DRM_MODE_FLAG_PIC_AR_16_9 \
-			(DRM_MODE_PICTURE_ASPECT_16_9<<24)
+			(DRM_MODE_PICTURE_ASPECT_16_9 << 24)
 #define  DRM_MODE_FLAG_PIC_AR_64_27 \
-			(DRM_MODE_PICTURE_ASPECT_64_27<<24)
+			(DRM_MODE_PICTURE_ASPECT_64_27 << 24)
 #define  DRM_MODE_FLAG_PIC_AR_256_135 \
-			(DRM_MODE_PICTURE_ASPECT_256_135<<24)
+			(DRM_MODE_PICTURE_ASPECT_256_135 << 24)
+
+#define  DRM_MODE_FLAG_SUPPORTS_YUV \
+			(DRM_MODE_FLAG_SUPPORTS_YUV422 | \
+			 DRM_MODE_FLAG_SUPPORTS_YUV420)
+#define  DRM_MODE_FLAG_VID_MODE_PANEL		(1<<29)
+#define  DRM_MODE_FLAG_CMD_MODE_PANEL		(1<<30)
 
 /* DPMS flags */
 /* bit compatible with the xorg definitions. */
@@ -125,6 +139,10 @@ extern "C" {
 #define DRM_MODE_DIRTY_OFF      0
 #define DRM_MODE_DIRTY_ON       1
 #define DRM_MODE_DIRTY_ANNOTATE 2
+
+/* Link Status options */
+#define DRM_MODE_LINK_STATUS_GOOD	0
+#define DRM_MODE_LINK_STATUS_BAD	1
 
 /*
  * DRM_MODE_ROTATE_<degrees>
@@ -286,14 +304,16 @@ struct drm_mode_get_encoder {
 
 /* This is for connectors with multiple signal types. */
 /* Try to match DRM_MODE_CONNECTOR_X as closely as possible. */
-#define DRM_MODE_SUBCONNECTOR_Automatic	0
-#define DRM_MODE_SUBCONNECTOR_Unknown	0
-#define DRM_MODE_SUBCONNECTOR_DVID	3
-#define DRM_MODE_SUBCONNECTOR_DVIA	4
-#define DRM_MODE_SUBCONNECTOR_Composite	5
-#define DRM_MODE_SUBCONNECTOR_SVIDEO	6
-#define DRM_MODE_SUBCONNECTOR_Component	8
-#define DRM_MODE_SUBCONNECTOR_SCART	9
+enum drm_mode_subconnector {
+	DRM_MODE_SUBCONNECTOR_Automatic = 0,
+	DRM_MODE_SUBCONNECTOR_Unknown = 0,
+	DRM_MODE_SUBCONNECTOR_DVID = 3,
+	DRM_MODE_SUBCONNECTOR_DVIA = 4,
+	DRM_MODE_SUBCONNECTOR_Composite = 5,
+	DRM_MODE_SUBCONNECTOR_SVIDEO = 6,
+	DRM_MODE_SUBCONNECTOR_Component = 8,
+	DRM_MODE_SUBCONNECTOR_SCART = 9,
+};
 
 #define DRM_MODE_CONNECTOR_Unknown	0
 #define DRM_MODE_CONNECTOR_VGA		1
@@ -313,6 +333,7 @@ struct drm_mode_get_encoder {
 #define DRM_MODE_CONNECTOR_VIRTUAL      15
 #define DRM_MODE_CONNECTOR_DSI		16
 #define DRM_MODE_CONNECTOR_DPI		17
+#define DRM_MODE_CONNECTOR_WRITEBACK	18
 
 struct drm_mode_get_connector {
 
@@ -459,17 +480,20 @@ struct drm_mode_fb_cmd2 {
 	 * offsets[1].  Note that offsets[0] will generally
 	 * be 0 (but this is not required).
 	 *
-	 * To accommodate tiled, compressed, etc formats, a per-plane
+	 * To accommodate tiled, compressed, etc formats, a
 	 * modifier can be specified.  The default value of zero
 	 * indicates "native" format as specified by the fourcc.
-	 * Vendor specific modifier token.  This allows, for example,
-	 * different tiling/swizzling pattern on different planes.
-	 * See discussion above of DRM_FORMAT_MOD_xxx.
+	 * Vendor specific modifier token.  Note that even though
+	 * it looks like we have a modifier per-plane, we in fact
+	 * do not. The modifier for each plane must be identical.
+	 * Thus all combinations of different data layouts for
+	 * multi plane formats must be enumerated as separate
+	 * modifiers.
 	 */
 	__u32 handles[4];
 	__u32 pitches[4]; /* pitch for each plane */
 	__u32 offsets[4]; /* offset of each plane */
-	__u64 modifier[4]; /* ie, tiling, compressed (per plane) */
+	__u64 modifier[4]; /* ie, tiling, compress */
 };
 
 #define DRM_MODE_FB_DIRTY_ANNOTATE_COPY 0x01
@@ -707,6 +731,56 @@ struct drm_mode_atomic {
 	__u64 user_data;
 };
 
+struct drm_format_modifier_blob {
+#define FORMAT_BLOB_CURRENT 1
+	/* Version of this blob format */
+	__u32 version;
+
+	/* Flags */
+	__u32 flags;
+
+	/* Number of fourcc formats supported */
+	__u32 count_formats;
+
+	/* Where in this blob the formats exist (in bytes) */
+	__u32 formats_offset;
+
+	/* Number of drm_format_modifiers */
+	__u32 count_modifiers;
+
+	/* Where in this blob the modifiers exist (in bytes) */
+	__u32 modifiers_offset;
+
+	/* __u32 formats[] */
+	/* struct drm_format_modifier modifiers[] */
+};
+
+struct drm_format_modifier {
+	/* Bitmask of formats in get_plane format list this info applies to. The
+	 * offset allows a sliding window of which 64 formats (bits).
+	 *
+	 * Some examples:
+	 * In today's world with < 65 formats, and formats 0, and 2 are
+	 * supported
+	 * 0x0000000000000005
+	 *		  ^-offset = 0, formats = 5
+	 *
+	 * If the number formats grew to 128, and formats 98-102 are
+	 * supported with the modifier:
+	 *
+	 * 0x0000003c00000000 0000000000000000
+	 *		  ^
+	 *		  |__offset = 64, formats = 0x3c00000000
+	 *
+	 */
+	__u64 formats;
+	__u32 offset;
+	__u32 pad;
+
+	/* The modifier that applies to the >get_plane format list bitmask. */
+	__u64 modifier;
+};
+
 /**
  * Create a new 'blob' data property, copying length bytes from data pointer,
  * and returning new blob ID.
@@ -725,6 +799,72 @@ struct drm_mode_create_blob {
  */
 struct drm_mode_destroy_blob {
 	__u32 blob_id;
+};
+
+/**
+ * Lease mode resources, creating another drm_master.
+ */
+struct drm_mode_create_lease {
+	/** Pointer to array of object ids (__u32) */
+	__u64 object_ids;
+	/** Number of object ids */
+	__u32 object_count;
+	/** flags for new FD (O_CLOEXEC, etc) */
+	__u32 flags;
+
+	/** Return: unique identifier for lessee. */
+	__u32 lessee_id;
+	/** Return: file descriptor to new drm_master file */
+	__u32 fd;
+};
+
+/**
+ * List lesses from a drm_master
+ */
+struct drm_mode_list_lessees {
+	/** Number of lessees.
+	 * On input, provides length of the array.
+	 * On output, provides total number. No
+	 * more than the input number will be written
+	 * back, so two calls can be used to get
+	 * the size and then the data.
+	 */
+	__u32 count_lessees;
+	__u32 pad;
+
+	/** Pointer to lessees.
+	 * pointer to __u64 array of lessee ids
+	 */
+	__u64 lessees_ptr;
+};
+
+/**
+ * Get leased objects
+ */
+struct drm_mode_get_lease {
+	/** Number of leased objects.
+	 * On input, provides length of the array.
+	 * On output, provides total number. No
+	 * more than the input number will be written
+	 * back, so two calls can be used to get
+	 * the size and then the data.
+	 */
+	__u32 count_objects;
+	__u32 pad;
+
+	/** Pointer to objects.
+	 * pointer to __u32 array of object ids
+	 */
+	__u64 objects_ptr;
+};
+
+/**
+ * Revoke lease
+ */
+struct drm_mode_revoke_lease {
+	/** Unique ID of lessee
+	 */
+	__u32 lessee_id;
 };
 
 #if defined(__cplusplus)

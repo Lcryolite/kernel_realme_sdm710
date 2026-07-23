@@ -19,7 +19,6 @@
 #include <linux/stat.h>
 #include <linux/iopoll.h>
 #include <linux/msm_hdcp.h>
-#include <linux/hdcp_qseecom.h>
 #include <drm/drm_dp_helper.h>
 #include "sde_hdcp.h"
 #include "hdmi.xml.h"
@@ -211,9 +210,11 @@ struct sde_hdcp_1x {
 	u8 bcaps;
 	u32 tp_msgid;
 	u32 an_0, an_1, aksv_0, aksv_1;
+	u32 aksv_msb, aksv_lsb;
 	bool sink_r0_ready;
 	bool reauth;
 	bool ksv_ready;
+	bool force_encryption;
 	enum sde_hdcp_state hdcp_state;
 	struct HDCP_V2V1_MSG_TOPOLOGY current_tp;
 	struct delayed_work hdcp_auth_work;
@@ -225,6 +226,7 @@ struct sde_hdcp_1x {
 	struct sde_hdcp_int_set int_set;
 	struct sde_hdcp_sink_addr_map sink_addr;
 	struct workqueue_struct *workq;
+	void *hdcp1_handle;
 };
 
 static int sde_hdcp_1x_count_one(u8 *array, u8 len)
@@ -237,11 +239,9 @@ static int sde_hdcp_1x_count_one(u8 *array, u8 len)
 	return count;
 }
 
-static int sde_hdcp_1x_load_keys(void *input)
+static int sde_hdcp_1x_enable_hdcp_engine(void *input)
 {
 	int rc = 0;
-	u32 aksv_lsb, aksv_msb;
-	u8 aksv[5];
 	struct dss_io_data *dp_ahb;
 	struct dss_io_data *dp_aux;
 	struct dss_io_data *dp_link;
@@ -269,30 +269,8 @@ static int sde_hdcp_1x_load_keys(void *input)
 	dp_link = hdcp->init_data.dp_link;
 	reg_set = &hdcp->reg_set;
 
-	if (hdcp1_set_keys(&aksv_msb, &aksv_lsb)) {
-		pr_err("setting hdcp SW keys failed\n");
-		rc = -EINVAL;
-		goto end;
-	}
-
-	pr_debug("%s: AKSV=%02x%08x\n", SDE_HDCP_STATE_NAME,
-		aksv_msb, aksv_lsb);
-
-	aksv[0] =  aksv_lsb        & 0xFF;
-	aksv[1] = (aksv_lsb >> 8)  & 0xFF;
-	aksv[2] = (aksv_lsb >> 16) & 0xFF;
-	aksv[3] = (aksv_lsb >> 24) & 0xFF;
-	aksv[4] =  aksv_msb        & 0xFF;
-
-	/* check there are 20 ones in AKSV */
-	if (sde_hdcp_1x_count_one(aksv, 5) != 20) {
-		pr_err("AKSV bit count failed\n");
-		rc = -EINVAL;
-		goto end;
-	}
-
-	DSS_REG_W(dp_aux, reg_set->aksv_lsb, aksv_lsb);
-	DSS_REG_W(dp_aux, reg_set->aksv_msb, aksv_msb);
+	DSS_REG_W(dp_aux, reg_set->aksv_lsb, hdcp->aksv_lsb);
+	DSS_REG_W(dp_aux, reg_set->aksv_msb, hdcp->aksv_msb);
 
 	/* Setup seed values for random number An */
 	DSS_REG_W(dp_link, reg_set->entropy_ctrl0, 0xB1FFB0FF);
@@ -1053,7 +1031,8 @@ error:
 
 static void sde_hdcp_1x_update_auth_status(struct sde_hdcp_1x *hdcp)
 {
-	if (sde_hdcp_1x_state(HDCP_STATE_AUTHENTICATED)) {
+	if (IS_ENABLED(CONFIG_HDCP_QSEECOM) &&
+			sde_hdcp_1x_state(HDCP_STATE_AUTHENTICATED)) {
 		msm_hdcp_cache_repeater_topology(hdcp->init_data.msm_hdcp_dev,
 						&hdcp->current_tp);
 		msm_hdcp_notify_topology(hdcp->init_data.msm_hdcp_dev);
@@ -1100,10 +1079,13 @@ static void sde_hdcp_1x_auth_work(struct work_struct *work)
 	}
 
 	/*
-	 * program hw to enable encryption as soon as
-	 * authentication is successful.
+	 * Program h/w to enable encryption as soon as authentication is
+	 * successful. This is applicable for HDMI sinks and HDCP 1.x compliance
+	 * test cases.
 	 */
-	hdcp1_set_enc(true);
+	if (hdcp->init_data.client_id == HDCP_CLIENT_HDMI ||
+			hdcp->force_encryption)
+		hdcp1_set_enc(hdcp->hdcp1_handle, true);
 
 	rc = sde_hdcp_1x_authentication_part1(hdcp);
 	if (rc)
@@ -1141,20 +1123,29 @@ end:
 static int sde_hdcp_1x_authenticate(void *input)
 {
 	struct sde_hdcp_1x *hdcp = (struct sde_hdcp_1x *)input;
+	int rc = 0;
 
 	if (!hdcp) {
 		pr_err("invalid input\n");
-		return -EINVAL;
+		rc = -EINVAL;
+		goto error;
 	}
 
 	flush_delayed_work(&hdcp->hdcp_auth_work);
 
 	if (!sde_hdcp_1x_state(HDCP_STATE_INACTIVE)) {
 		pr_err("invalid state\n");
-		return -EINVAL;
+		rc = -EINVAL;
+		goto error;
 	}
 
-	if (!sde_hdcp_1x_load_keys(input)) {
+	rc = hdcp1_start(hdcp->hdcp1_handle, &hdcp->aksv_msb, &hdcp->aksv_lsb);
+	if (rc) {
+		pr_err("hdcp1_start failed (%d)\n", rc);
+		goto error;
+	}
+
+	if (!sde_hdcp_1x_enable_hdcp_engine(input)) {
 
 		queue_delayed_work(hdcp->workq,
 			&hdcp->hdcp_auth_work, HZ/2);
@@ -1163,7 +1154,8 @@ static int sde_hdcp_1x_authenticate(void *input)
 		sde_hdcp_1x_update_auth_status(hdcp);
 	}
 
-	return 0;
+error:
+	return rc;
 } /* hdcp_1x_authenticate */
 
 static int sde_hdcp_1x_reauthenticate(void *input)
@@ -1172,7 +1164,7 @@ static int sde_hdcp_1x_reauthenticate(void *input)
 	struct dss_io_data *io;
 	struct sde_hdcp_reg_set *reg_set;
 	struct sde_hdcp_int_set *isr;
-	u32 ret = 0, reg;
+	u32 reg;
 
 	if (!hdcp || !hdcp->init_data.dp_ahb) {
 		pr_err("invalid input\n");
@@ -1200,9 +1192,8 @@ static int sde_hdcp_1x_reauthenticate(void *input)
 	DSS_REG_W(io, reg_set->reset, reg & ~reg_set->reset_bit);
 
 	hdcp->hdcp_state = HDCP_STATE_INACTIVE;
-	sde_hdcp_1x_authenticate(hdcp);
 
-	return ret;
+	return sde_hdcp_1x_authenticate(hdcp);
 } /* hdcp_1x_reauthenticate */
 
 static void sde_hdcp_1x_off(void *input)
@@ -1251,7 +1242,9 @@ static void sde_hdcp_1x_off(void *input)
 		pr_debug("%s: Deleted hdcp auth work\n",
 			SDE_HDCP_STATE_NAME);
 
-	hdcp1_set_enc(false);
+	if (hdcp->init_data.client_id == HDCP_CLIENT_HDMI ||
+			hdcp->force_encryption)
+		hdcp1_set_enc(hdcp->hdcp1_handle, false);
 
 	reg = DSS_REG_R(io, reg_set->reset);
 	DSS_REG_W(io, reg_set->reset, reg | reg_set->reset_bit);
@@ -1263,7 +1256,7 @@ static void sde_hdcp_1x_off(void *input)
 
 	hdcp->sink_r0_ready = false;
 
-	hdcp1_unload_app();
+	hdcp1_stop(hdcp->hdcp1_handle);
 
 	pr_debug("%s: HDCP: Off\n", SDE_HDCP_STATE_NAME);
 } /* hdcp_1x_off */
@@ -1363,6 +1356,40 @@ error:
 	return rc;
 }
 
+static bool sde_hdcp_1x_feature_supported(void *input)
+{
+	struct sde_hdcp_1x *hdcp = (struct sde_hdcp_1x *)input;
+	bool feature_supported = false;
+
+	if (!hdcp) {
+		pr_err("invalid input\n");
+		return -EINVAL;
+	}
+
+	feature_supported = hdcp1_feature_supported(hdcp->hdcp1_handle);
+
+	pr_debug("feature_supported = %d\n", feature_supported);
+
+	return feature_supported;
+}
+
+static void sde_hdcp_1x_force_encryption(void *input, bool enable)
+{
+	struct sde_hdcp_1x *hdcp = (struct sde_hdcp_1x *)input;
+
+	if (!hdcp) {
+		pr_err("invalid input\n");
+		return;
+	}
+	hdcp->force_encryption = enable;
+	pr_info("force_encryption=%d\n", hdcp->force_encryption);
+}
+
+static bool sde_hdcp_1x_sink_support(void *input)
+{
+	return true;
+}
+
 void sde_hdcp_1x_deinit(void *input)
 {
 	struct sde_hdcp_1x *hdcp = (struct sde_hdcp_1x *)input;
@@ -1374,6 +1401,8 @@ void sde_hdcp_1x_deinit(void *input)
 
 	if (hdcp->workq)
 		destroy_workqueue(hdcp->workq);
+
+	hdcp1_deinit(hdcp->hdcp1_handle);
 
 	kfree(hdcp);
 } /* hdcp_1x_deinit */
@@ -1478,6 +1507,9 @@ void *sde_hdcp_1x_init(struct sde_hdcp_init_data *init_data)
 		.cp_irq = sde_hdcp_1x_cp_irq,
 		.reauthenticate = sde_hdcp_1x_reauthenticate,
 		.authenticate = sde_hdcp_1x_authenticate,
+		.feature_supported = sde_hdcp_1x_feature_supported,
+		.force_encryption = sde_hdcp_1x_force_encryption,
+		.sink_support = sde_hdcp_1x_sink_support,
 		.off = sde_hdcp_1x_off
 	};
 
@@ -1505,8 +1537,13 @@ void *sde_hdcp_1x_init(struct sde_hdcp_init_data *init_data)
 	hdcp->workq = create_workqueue(name);
 	if (!hdcp->workq) {
 		pr_err("Error creating workqueue\n");
-		kfree(hdcp);
-		goto error;
+		goto workqueue_error;
+	}
+
+	hdcp->hdcp1_handle = hdcp1_init();
+	if (!hdcp->hdcp1_handle) {
+		pr_err("Error creating HDCP 1.x handle\n");
+		goto hdcp1_handle_error;
 	}
 
 	sde_hdcp_1x_update_client_reg_set(hdcp);
@@ -1516,17 +1553,21 @@ void *sde_hdcp_1x_init(struct sde_hdcp_init_data *init_data)
 	hdcp->hdcp_state = HDCP_STATE_INACTIVE;
 	init_completion(&hdcp->r0_checked);
 	init_completion(&hdcp->sink_r0_available);
+	hdcp->force_encryption = false;
 
 	pr_debug("HDCP module initialized. HDCP_STATE=%s\n",
 		SDE_HDCP_STATE_NAME);
 
 	return (void *)hdcp;
-
+hdcp1_handle_error:
+	destroy_workqueue(hdcp->workq);
+workqueue_error:
+	kfree(hdcp);
 error:
 	return NULL;
 } /* hdcp_1x_init */
 
-struct sde_hdcp_ops *sde_hdcp_1x_start(void *input)
+struct sde_hdcp_ops *sde_hdcp_1x_get(void *input)
 {
 	return ((struct sde_hdcp_1x *)input)->ops;
 }

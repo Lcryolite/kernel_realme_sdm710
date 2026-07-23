@@ -88,8 +88,17 @@ config FB_MSM_MDSS_SPI_PANEL
 	---help---
 	The MDSS SPI Panel provides support for transmittimg SPI signals of
 	MDSS frame buffer data to connected panel. Limited by SPI clock rate,
-	the current max fps only reach to ~30 fps with 240x320 resolution, and
+	the current max fps only reach to ~30 fps with 240x240 resolution, and
 	limited by MDP hardware architecture only supply GPU compostition.
+
+config FB_MSM_MDSS_RGB_PANEL
+	depends on FB_MSM_MDSS
+	bool "Support RGB panel feature"
+	---help---
+	The MDSS RGB Panel provides support for transmitting
+	MDSS frame buffer data over RGB parallel interface
+	connected to RGB panel. Panel on/off sequence commands
+	are sent to RGB Panel through an SPI interface.
 
 config FB_MSM_MDSS_MHL3
 	depends on FB_MSM_MDSS_HDMI_PANEL
@@ -108,6 +117,17 @@ config FB_MSM_MDSS_DSI_CTRL_STATUS
 	seconds) by sending Bus-Turn-Around (BTA) command. If DSI controller
 	fails to acknowledge the BTA command, it sends PANEL_ALIVE=0 status
 	to HAL layer to reset the controller.
+
+config FB_MSM_MDSS_DP_PANEL
+        depends on FB_MSM_MDSS
+        select MSM_EXT_DISPLAY
+        bool "MDSS DP Panel"
+        ---help---
+	The MDSS DP Panel provides support for DP host controller driver
+	which runs in Video mode only and is responsible for transmitting
+	frame buffer from host SOC to DP display panel.
+
+	support for DP display panel.
 
 config FB_MSM_MDSS_EDP_PANEL
 	depends on FB_MSM_MDSS

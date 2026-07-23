@@ -75,7 +75,7 @@ to CDM interface node.
   Usage: required
   Value type: <u32>
   Definition: Offset of the register space compared to
-              to Camera base register space.
+	to Camera base register space.
 
 - interrupt-names
   Usage: optional
@@ -96,7 +96,7 @@ to CDM interface node.
   Usage: required
   Value type: <phandle>
   Definition: Regulator reference corresponding to the names listed
-              in "regulator-names".
+	in "regulator-names".
 
 - clock-names
   Usage: required

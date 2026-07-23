@@ -73,9 +73,6 @@ drop_nopreempt_cpus(struct cpumask *lowest_mask)
 	}
 }
 
-#ifdef OPLUS_FEATURE_UIFIRST
-extern void drop_ux_task_cpus(struct task_struct *p, struct cpumask *lowest_mask);
-#endif /* OPLUS_FEATURE_UIFIRST */
 /**
  * cpupri_find - find the best (lowest-pri) CPU in the system
  * @cp: The cpupri context
@@ -91,18 +88,13 @@ extern void drop_ux_task_cpus(struct task_struct *p, struct cpumask *lowest_mask
  *
  * Return: (int)bool - CPUs were found
  */
-extern bool ux_task_misfit(struct task_struct *p, int cpu);
-extern int ux_prefer_cpu[];
-extern void kick_min_cpu_from_mask(struct cpumask *lowest_mask);
 int cpupri_find(struct cpupri *cp, struct task_struct *p,
 		struct cpumask *lowest_mask)
 {
 	int idx = 0;
 	int task_pri = convert_prio(p->prio);
 	bool drop_nopreempts = task_pri <= MAX_RT_PRIO;
-#ifdef OPLUS_FEATURE_UIFIRST
-	bool drop_uxtasks = sysctl_uifirst_enabled;
-#endif /* OPLUS_FEATURE_UIFIRST */
+
 	BUG_ON(task_pri >= CPUPRI_NR_PRIORITIES);
 
 retry:
@@ -136,23 +128,15 @@ retry:
 		if (skip)
 			continue;
 
-		if (cpumask_any_and(tsk_cpus_allowed(p), vec->mask) >= nr_cpu_ids)
+		if (cpumask_any_and(&p->cpus_allowed, vec->mask) >= nr_cpu_ids)
 			continue;
 
 		if (lowest_mask) {
-			cpumask_and(lowest_mask, tsk_cpus_allowed(p), vec->mask);
+			cpumask_and(lowest_mask, &p->cpus_allowed, vec->mask);
 			cpumask_andnot(lowest_mask, lowest_mask,
 				       cpu_isolated_mask);
 			if (drop_nopreempts)
 				drop_nopreempt_cpus(lowest_mask);
-#ifdef OPLUS_FEATURE_UIFIRST
-			if (drop_uxtasks)
-				drop_ux_task_cpus(p, lowest_mask);
-#if defined (CONFIG_SCHED_WALT) && defined (OPLUS_FEATURE_UIFIRST)
-        if (sysctl_uifirst_enabled && (sysctl_slide_boost_enabled || sysctl_animation_type == LAUNCHER_SI_START) && ux_task_misfit(p, task_cpu(p)))
-            kick_min_cpu_from_mask(lowest_mask);
-#endif
-#endif /* OPLUS_FEATURE_UIFIRST */
 			/*
 			 * We have to ensure that we have at least one bit
 			 * still set in the array, since the map could have
@@ -175,12 +159,6 @@ retry:
 		drop_nopreempts = false;
 		goto retry;
 	}
-#ifdef OPLUS_FEATURE_UIFIRST
-	if (drop_uxtasks) {
-		drop_uxtasks = false;
-		goto retry;
-	}
-#endif /* OPLUS_FEATURE_UIFIRST */
 	return 0;
 }
 
@@ -266,8 +244,6 @@ int cpupri_init(struct cpupri *cp)
 {
 	int i;
 
-	memset(cp, 0, sizeof(*cp));
-
 	for (i = 0; i < CPUPRI_NR_PRIORITIES; i++) {
 		struct cpupri_vec *vec = &cp->pri_to_cpu[i];
 
@@ -312,6 +288,5 @@ bool cpupri_check_rt(void)
 {
 	int cpu = raw_smp_processor_id();
 
-	return (cpu_rq(cpu)->rd->cpupri.cpu_to_pri[cpu] > CPUPRI_NORMAL) &&
-	       (cpu_rq(cpu)->rt.rt_throttled == 0);
+	return cpu_rq(cpu)->rd->cpupri.cpu_to_pri[cpu] > CPUPRI_NORMAL;
 }

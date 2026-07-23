@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ((GPL-2.0 WITH Linux-syscall-note) AND MIT) */
 /*
  *  compress_params.h - codec types and parameters for compressed data
  *  streaming interface
@@ -78,6 +79,11 @@
 /* Bit-0 - 0 : Disable Timestamp mode */
 #define COMPRESSED_TIMESTAMP_FLAG 0x0001
 
+/* Perf mode flag */
+/* Bit-1 - 1 : Enable perf mode */
+/* Bit-1 - 0 : Disable perf mode */
+#define COMPRESSED_PERF_MODE_FLAG 0x0002
+
 /* Codecs are listed linearly to allow for extensibility */
 #define SND_AUDIOCODEC_PCM                   ((__u32) 0x00000001)
 #define SND_AUDIOCODEC_MP3                   ((__u32) 0x00000002)
@@ -109,7 +115,9 @@
 #define SND_AUDIOCODEC_DSD                   ((__u32) 0x00000022)
 #define SND_AUDIOCODEC_APTX                  ((__u32) 0x00000023)
 #define SND_AUDIOCODEC_TRUEHD                ((__u32) 0x00000024)
-#define SND_AUDIOCODEC_MAX                   SND_AUDIOCODEC_TRUEHD
+#define SND_AUDIOCODEC_MAT                   ((__u32) 0x00000025)
+#define SND_AUDIOCODEC_THD                   ((__u32) 0x00000026)
+#define SND_AUDIOCODEC_MAX                   SND_AUDIOCODEC_THD
 
 /*
  * Profile and modes are listed with bit masks. This allows for a
@@ -363,6 +371,13 @@ struct snd_dec_ddp {
 	__u32 params_value[SND_DEC_DDP_MAX_PARAMS];
 } __attribute__((packed, aligned(4)));
 
+#define SND_DEC_THD_MAX_PARAMS 8
+struct snd_dec_thd {
+	__u32 params_length;
+	__u32 params_id[SND_DEC_THD_MAX_PARAMS];
+	__u32 params_value[SND_DEC_THD_MAX_PARAMS];
+} __attribute__((packed, aligned(4)));
+
 struct snd_dec_flac {
 	__u16 sample_size;
 	__u16 min_blk_size;
@@ -428,6 +443,7 @@ struct snd_dec_pcm {
 struct snd_dec_amrwb_plus {
 	__u32 bit_stream_fmt;
 };
+
 union snd_codec_options {
 	struct snd_enc_wma wma;
 	struct snd_enc_vorbis vorbis;
@@ -440,6 +456,7 @@ union snd_codec_options {
 	struct snd_dec_alac alac;
 	struct snd_dec_ape ape;
 	struct snd_dec_aptx aptx_dec;
+	struct snd_dec_thd truehd;
 	struct snd_dec_pcm pcm_dec;
 	struct snd_dec_amrwb_plus amrwbplus;
 	struct snd_dec_dsd dsd_dec;
@@ -504,6 +521,7 @@ struct snd_codec_desc {
  * @align: Block alignment in bytes of an audio sample.
  *		Only required for PCM or IEC formats.
  * @options: encoder-specific settings
+ * @compr_passthr: compressed bitstream passthrough
  * @reserved: reserved for future use
  */
 
@@ -519,10 +537,10 @@ struct snd_codec {
 	__u32 ch_mode;
 	__u32 format;
 	__u32 align;
-	__u32 compr_passthr;
 	union snd_codec_options options;
+	__u32 compr_passthr;
 	__u32 flags;
-	__u32 reserved[2];
+	__u32 reserved[1];
 } __attribute__((packed, aligned(4)));
 
 
@@ -538,7 +556,8 @@ struct snd_codec_metadata {
 	__u32 length;
 	__u32 offset;
 	__u64 timestamp;
-	__u32 reserved[4];
+	__u32 flags;
+	__u32 reserved[3];
 };
 
 #endif

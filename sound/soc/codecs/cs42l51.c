@@ -504,7 +504,7 @@ static int cs42l51_codec_probe(struct snd_soc_codec *codec)
 	return 0;
 }
 
-static struct snd_soc_codec_driver soc_codec_device_cs42l51 = {
+static const struct snd_soc_codec_driver soc_codec_device_cs42l51 = {
 	.probe = cs42l51_codec_probe,
 
 	.component_driver = {
@@ -561,13 +561,6 @@ error:
 	return ret;
 }
 EXPORT_SYMBOL_GPL(cs42l51_probe);
-
-const struct of_device_id cs42l51_of_match[] = {
-	{ .compatible = "cirrus,cs42l51", },
-	{ }
-};
-MODULE_DEVICE_TABLE(of, cs42l51_of_match);
-EXPORT_SYMBOL_GPL(cs42l51_of_match);
 
 MODULE_AUTHOR("Arnaud Patard <arnaud.patard@rtp-net.org>");
 MODULE_DESCRIPTION("Cirrus Logic CS42L51 ALSA SoC Codec Driver");

@@ -17,6 +17,7 @@
 #include <linux/io-pgtable-fast.h>
 
 struct dma_iommu_mapping;
+struct io_pgtable_ops;
 
 struct dma_fast_smmu_mapping {
 	struct device		*dev;
@@ -27,7 +28,6 @@ struct dma_fast_smmu_mapping {
 
 	u32		min_iova_align;
 	struct page	*guard_page;
-	u32		force_guard_page_len;
 
 	unsigned int	bitmap_size;
 	unsigned long	*bitmap;
@@ -36,12 +36,10 @@ struct dma_fast_smmu_mapping {
 	bool		have_stale_tlbs;
 
 	dma_addr_t	pgtbl_dma_handle;
-	av8l_fast_iopte	*pgtbl_pmds;
+	struct io_pgtable_ops *pgtbl_ops;
 
 	spinlock_t	lock;
 	struct notifier_block notifier;
-
-	int		is_smmu_pt_coherent;
 };
 
 #ifdef CONFIG_IOMMU_IO_PGTABLE_FAST

@@ -251,6 +251,7 @@ int mcb_device_register(struct mcb_bus *bus, struct mcb_device *dev)
 	return 0;
 
 out:
+	put_device(&dev->dev);
 
 	return ret;
 }
@@ -392,17 +393,13 @@ EXPORT_SYMBOL_GPL(mcb_free_dev);
 
 static int __mcb_bus_add_devices(struct device *dev, void *data)
 {
-	struct mcb_device *mdev = to_mcb_device(dev);
 	int retval;
 
-	if (mdev->is_added)
-		return 0;
-
 	retval = device_attach(dev);
-	if (retval < 0)
+	if (retval < 0) {
 		dev_err(dev, "Error adding device (%d)\n", retval);
-
-	mdev->is_added = true;
+		return retval;
+	}
 
 	return 0;
 }
@@ -418,6 +415,22 @@ void mcb_bus_add_devices(const struct mcb_bus *bus)
 	bus_for_each_dev(&mcb_bus_type, NULL, NULL, __mcb_bus_add_devices);
 }
 EXPORT_SYMBOL_GPL(mcb_bus_add_devices);
+
+/**
+ * mcb_get_resource() - get a resource for a mcb device
+ * @dev: the mcb device
+ * @type: the type of resource
+ */
+struct resource *mcb_get_resource(struct mcb_device *dev, unsigned int type)
+{
+	if (type == IORESOURCE_MEM)
+		return &dev->mem;
+	else if (type == IORESOURCE_IRQ)
+		return &dev->irq;
+	else
+		return NULL;
+}
+EXPORT_SYMBOL_GPL(mcb_get_resource);
 
 /**
  * mcb_request_mem() - Request memory
@@ -462,7 +475,9 @@ EXPORT_SYMBOL_GPL(mcb_release_mem);
 
 static int __mcb_get_irq(struct mcb_device *dev)
 {
-	struct resource *irq = &dev->irq;
+	struct resource *irq;
+
+	irq = mcb_get_resource(dev, IORESOURCE_IRQ);
 
 	return irq->start;
 }

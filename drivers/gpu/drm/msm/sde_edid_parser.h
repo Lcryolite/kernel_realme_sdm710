@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -33,11 +33,7 @@
 #define SDE_CEA_EXT    0x02
 #define SDE_EXTENDED_TAG 0x07
 
-#define MIN_SCRAMBLER_REQ_RATE 340000
-
-#define SDE_DRM_MODE_FLAG_FMT_MASK (DRM_MODE_FLAG_SUPPORTS_RGB | \
-				DRM_MODE_FLAG_SUPPORTS_YUV422 | \
-				DRM_MODE_FLAG_SUPPORTS_YUV420)
+#define SDE_DRM_MODE_FLAG_FMT_MASK (0x3 << 20)
 
 enum extended_data_block_types {
 	VIDEO_CAPABILITY_DATA_BLOCK = 0x0,
@@ -124,6 +120,14 @@ void sde_edid_deinit(void **edid_ctrl);
 void sde_get_edid(struct drm_connector *connector,
 struct i2c_adapter *adapter,
 void **edid_ctrl);
+
+/**
+ * sde_parse_edid() - parses edid info.
+ * @edid_ctrl:   Handle to the edid_ctrl structure.
+ *
+ * Return: void.
+ */
+void sde_parse_edid(void *edid_ctrl);
 
 /**
  * sde_free_edid() - free edid structure.

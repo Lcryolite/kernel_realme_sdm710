@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * zfcp device driver
  *
@@ -28,7 +29,7 @@ static bool enable_dif;
 module_param_named(dif, enable_dif, bool, 0400);
 MODULE_PARM_DESC(dif, "Enable DIF/DIX data integrity support");
 
-static bool allow_lun_scan = 1;
+static bool allow_lun_scan = true;
 module_param(allow_lun_scan, bool, 0600);
 MODULE_PARM_DESC(allow_lun_scan, "For NPIV, scan and attach all storage LUNs");
 
@@ -355,6 +356,7 @@ static struct scsi_host_template zfcp_scsi_host_template = {
 	.module			 = THIS_MODULE,
 	.name			 = "zfcp",
 	.queuecommand		 = zfcp_scsi_queuecommand,
+	.eh_timed_out		 = fc_eh_timed_out,
 	.eh_abort_handler	 = zfcp_scsi_eh_abort_handler,
 	.eh_device_reset_handler = zfcp_scsi_eh_device_reset_handler,
 	.eh_target_reset_handler = zfcp_scsi_eh_target_reset_handler,
@@ -706,6 +708,9 @@ void zfcp_scsi_rport_work(struct work_struct *work)
 	struct zfcp_port *port = container_of(work, struct zfcp_port,
 					      rport_work);
 
+	set_worker_desc("zrp%c-%16llx",
+			(port->rport_task == RPORT_ADD) ? 'a' : 'd',
+			port->wwpn); /* < WORKER_DESC_LEN=24 */
 	while (port->rport_task) {
 		if (port->rport_task == RPORT_ADD) {
 			port->rport_task = RPORT_NONE;

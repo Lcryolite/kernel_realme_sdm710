@@ -61,7 +61,7 @@ static int drm_bootsplash_buffer_create(
 
 	splash->buffer->vaddr =
 		drm_client_buffer_vmap(splash->buffer);
-	if (!(splash->buffer->vaddr))
+	if (!splash->buffer->vaddr)
 		DRM_ERROR("drm_client_buffer_vmap fail\n");
 
 	return 0;
@@ -77,7 +77,7 @@ static int drm_bootsplash_display_probe(struct drm_bootsplash *splash)
 	bool tiled = false;
 	int ret;
 
-	ret = drm_client_modeset_probe(client, 1920, 1080);
+	ret = drm_client_modeset_probe(client, 0, 0);
 	if (ret)
 		return ret;
 
@@ -223,22 +223,18 @@ static void drm_bootsplash_worker(struct work_struct *work)
 	int ret = 0;
 
 	mutex_lock(&splash->lock);
-
 	stop = splash->stop;
-
 	ret = drm_bootsplash_draw(splash);
-
 	mutex_unlock(&splash->lock);
 
 	if (stop || ret == -ENOENT || ret == -EBUSY)
 		goto skip;
 
-
 	msleep(5000);
 	splash->stop = true;
-
 skip:
 	drm_lastclose(dev);
+
 	drm_bootsplash_buffer_delete(splash);
 
 	DRM_DEBUG("Bootsplash has stopped (start=%u, stop=%u, ret=%d).\n",

@@ -266,7 +266,7 @@ static int gs_cmd_reset(struct gs_usb *gsusb, struct gs_can *gsdev)
 	rc = usb_control_msg(interface_to_usbdev(intf),
 			     usb_sndctrlpipe(interface_to_usbdev(intf), 0),
 			     GS_USB_BREQ_MODE,
-			     USB_DIR_OUT|USB_TYPE_VENDOR|USB_RECIP_INTERFACE,
+			     USB_DIR_OUT | USB_TYPE_VENDOR | USB_RECIP_INTERFACE,
 			     gsdev->channel,
 			     0,
 			     dm,
@@ -389,6 +389,9 @@ static void gs_usb_receive_bulk_callback(struct urb *urb)
 	}
 
 	if (hf->flags & GS_CAN_FLAG_OVERFLOW) {
+		stats->rx_over_errors++;
+		stats->rx_errors++;
+
 		skb = alloc_can_err_skb(netdev, &cf);
 		if (!skb)
 			goto resubmit_urb;
@@ -396,8 +399,6 @@ static void gs_usb_receive_bulk_callback(struct urb *urb)
 		cf->can_id |= CAN_ERR_CRTL;
 		cf->can_dlc = CAN_ERR_DLC;
 		cf->data[1] = CAN_ERR_CRTL_RX_OVERFLOW;
-		stats->rx_over_errors++;
-		stats->rx_errors++;
 		netif_rx(skb);
 	}
 
@@ -445,7 +446,7 @@ static int gs_usb_set_bittiming(struct net_device *netdev)
 	rc = usb_control_msg(interface_to_usbdev(intf),
 			     usb_sndctrlpipe(interface_to_usbdev(intf), 0),
 			     GS_USB_BREQ_BITTIMING,
-			     USB_DIR_OUT|USB_TYPE_VENDOR|USB_RECIP_INTERFACE,
+			     USB_DIR_OUT | USB_TYPE_VENDOR | USB_RECIP_INTERFACE,
 			     dev->channel,
 			     0,
 			     dbt,
@@ -552,7 +553,6 @@ static netdev_tx_t gs_can_start_xmit(struct sk_buff *skb,
 				  sizeof(*hf),
 				  hf,
 				  urb->transfer_dma);
-
 
 		if (rc == -ENODEV) {
 			netif_device_detach(netdev);
@@ -741,6 +741,8 @@ static int gs_can_close(struct net_device *netdev)
 	usb_kill_anchored_urbs(&dev->tx_submitted);
 	atomic_set(&dev->active_tx_urbs, 0);
 
+	dev->can.state = CAN_STATE_STOPPED;
+
 	/* reset the device */
 	rc = gs_cmd_reset(parent, dev);
 	if (rc < 0)
@@ -840,7 +842,7 @@ static struct gs_can *gs_make_candev(unsigned int channel,
 	rc = usb_control_msg(interface_to_usbdev(intf),
 			     usb_rcvctrlpipe(interface_to_usbdev(intf), 0),
 			     GS_USB_BREQ_BT_CONST,
-			     USB_DIR_IN|USB_TYPE_VENDOR|USB_RECIP_INTERFACE,
+			     USB_DIR_IN | USB_TYPE_VENDOR | USB_RECIP_INTERFACE,
 			     channel,
 			     0,
 			     bt_const,
@@ -958,7 +960,7 @@ static int gs_usb_probe(struct usb_interface *intf,
 	rc = usb_control_msg(interface_to_usbdev(intf),
 			     usb_sndctrlpipe(interface_to_usbdev(intf), 0),
 			     GS_USB_BREQ_HOST_FORMAT,
-			     USB_DIR_OUT|USB_TYPE_VENDOR|USB_RECIP_INTERFACE,
+			     USB_DIR_OUT | USB_TYPE_VENDOR | USB_RECIP_INTERFACE,
 			     1,
 			     intf->cur_altsetting->desc.bInterfaceNumber,
 			     hconf,
@@ -981,7 +983,7 @@ static int gs_usb_probe(struct usb_interface *intf,
 	rc = usb_control_msg(interface_to_usbdev(intf),
 			     usb_rcvctrlpipe(interface_to_usbdev(intf), 0),
 			     GS_USB_BREQ_DEVICE_CONFIG,
-			     USB_DIR_IN|USB_TYPE_VENDOR|USB_RECIP_INTERFACE,
+			     USB_DIR_IN | USB_TYPE_VENDOR | USB_RECIP_INTERFACE,
 			     1,
 			     intf->cur_altsetting->desc.bInterfaceNumber,
 			     dconf,

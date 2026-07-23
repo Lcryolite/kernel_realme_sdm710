@@ -59,6 +59,8 @@ const char * __init arch_read_machine_name(void);
 	__show_ratelimited;						\
 })
 
+int handle_guest_sea(phys_addr_t addr, unsigned int esr);
+
 #endif	/* __ASSEMBLY__ */
 
 #endif	/* __ASM_SYSTEM_MISC_H */

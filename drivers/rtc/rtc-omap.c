@@ -608,7 +608,7 @@ static int rtc_pinconf_set(struct pinctrl_dev *pctldev,
 	struct omap_rtc *rtc = pinctrl_dev_get_drvdata(pctldev);
 	u32 val;
 	unsigned int param;
-	u16 param_val;
+	u32 param_val;
 	int i;
 
 	rtc->type->unlock(rtc);
@@ -821,7 +821,8 @@ static int omap_rtc_probe(struct platform_device *pdev)
 	rtc->pctldev = pinctrl_register(&rtc_pinctrl_desc, &pdev->dev, rtc);
 	if (IS_ERR(rtc->pctldev)) {
 		dev_err(&pdev->dev, "Couldn't register pinctrl driver\n");
-		return PTR_ERR(rtc->pctldev);
+		ret = PTR_ERR(rtc->pctldev);
+		goto err;
 	}
 
 	if (rtc->is_pmic_controller) {
@@ -842,7 +843,7 @@ err:
 	return ret;
 }
 
-static int __exit omap_rtc_remove(struct platform_device *pdev)
+static int omap_rtc_remove(struct platform_device *pdev)
 {
 	struct omap_rtc *rtc = platform_get_drvdata(pdev);
 	u8 reg;
@@ -880,8 +881,7 @@ static int __exit omap_rtc_remove(struct platform_device *pdev)
 	return 0;
 }
 
-#ifdef CONFIG_PM_SLEEP
-static int omap_rtc_suspend(struct device *dev)
+static int __maybe_unused omap_rtc_suspend(struct device *dev)
 {
 	struct omap_rtc *rtc = dev_get_drvdata(dev);
 
@@ -904,7 +904,7 @@ static int omap_rtc_suspend(struct device *dev)
 	return 0;
 }
 
-static int omap_rtc_resume(struct device *dev)
+static int __maybe_unused omap_rtc_resume(struct device *dev)
 {
 	struct omap_rtc *rtc = dev_get_drvdata(dev);
 
@@ -919,10 +919,8 @@ static int omap_rtc_resume(struct device *dev)
 
 	return 0;
 }
-#endif
 
-#ifdef CONFIG_PM
-static int omap_rtc_runtime_suspend(struct device *dev)
+static int __maybe_unused omap_rtc_runtime_suspend(struct device *dev)
 {
 	struct omap_rtc *rtc = dev_get_drvdata(dev);
 
@@ -932,16 +930,9 @@ static int omap_rtc_runtime_suspend(struct device *dev)
 	return 0;
 }
 
-static int omap_rtc_runtime_resume(struct device *dev)
-{
-	return 0;
-}
-#endif
-
 static const struct dev_pm_ops omap_rtc_pm_ops = {
 	SET_SYSTEM_SLEEP_PM_OPS(omap_rtc_suspend, omap_rtc_resume)
-	SET_RUNTIME_PM_OPS(omap_rtc_runtime_suspend,
-			   omap_rtc_runtime_resume, NULL)
+	SET_RUNTIME_PM_OPS(omap_rtc_runtime_suspend, NULL, NULL)
 };
 
 static void omap_rtc_shutdown(struct platform_device *pdev)
@@ -962,7 +953,7 @@ static void omap_rtc_shutdown(struct platform_device *pdev)
 
 static struct platform_driver omap_rtc_driver = {
 	.probe		= omap_rtc_probe,
-	.remove		= __exit_p(omap_rtc_remove),
+	.remove		= omap_rtc_remove,
 	.shutdown	= omap_rtc_shutdown,
 	.driver		= {
 		.name	= "omap_rtc",

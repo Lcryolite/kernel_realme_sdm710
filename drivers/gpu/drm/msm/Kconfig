@@ -4,6 +4,8 @@ config DRM_MSM
 	depends on DRM
 	depends on ARCH_QCOM || (ARM && COMPILE_TEST)
 	depends on OF
+	depends on MMU
+	select QCOM_MDT_LOADER if ARCH_QCOM
 	select REGULATOR
 	select DRM_KMS_HELPER
 	select DRM_PANEL
@@ -12,8 +14,8 @@ config DRM_MSM
 	select QCOM_SCM
 	select SND_SOC_HDMI_CODEC if SND_SOC
 	select SYNC_FILE
-	select HDCP_QSEECOM
 	select MSM_EXT_DISPLAY
+	select PM_GENERIC_DOMAINS
 	default y
 	help
 	  DRM/KMS driver for MSM/snapdragon.
@@ -69,6 +71,16 @@ config DRM_MSM_DSI_STAGING
 	  Interface and DSI stands for Display Serial Interface which powers
 	  the primary display of your mobile device.
 
+config DSI_PARSER
+	bool "Enable DSI panel configuration parser"
+	depends on DYNAMIC_DEBUG
+	default y
+	help
+	  Choose this option if you need text parser for a DSI panel
+	  configurations which can parse a given text file and get the
+	  panel configurations. Also, this module provides a set of APIs
+	  which can be used to get the parsed data.
+
 config DRM_MSM_DSI_PLL
 	bool "Enable DSI PLL driver in MSM DRM"
 	depends on DRM_MSM_DSI && COMMON_CLK
@@ -115,13 +127,20 @@ config DRM_MSM_MDP4
 	default n
 	help
 	  Choose this option if MSM MDP4 revision support is needed in DRM/KMS.
+	  MSM MDP4 DRM driver should be disabled for other MDP revisions to
+	  avoid possible conflicts.  Only select this option if the target
+	  MSM platform is MDP4 based.
 
 config DRM_MSM_HDCP
 	tristate "HDCP for MSM DRM"
 	depends on DRM_MSM
 	default n
 	help
-	  Chose this option if HDCP supported is needed in DRM/KMS driver.
+	  Chose this option if High-bandwidth Digital Content Protection (HDCP)
+	  support is needed in the MSM DRM/KMS driver.  Enabling this config
+	  will allow HDCP encrypted (copy protected) media to be displayed.
+	  This should only be enabled if required for platforms supporting HDCP
+	  over the desired interface.
 
 config DRM_SDE_WB
 	bool "Enable Writeback support in SDE DRM"
@@ -129,23 +148,53 @@ config DRM_SDE_WB
 	default y
 	help
 	  Choose this option for writeback connector support.
+	  This option enables a virtual writeback connector where
+	  the output image is written back to memory in the format
+	  selected by the connector's mode and property settings.
+
+config DRM_SDE_SHD
+	bool "Enable Shared display support in SDE DRM"
+	depends on DRM_MSM
+	help
+	  Choose this option for shared display support.
+	  This option enables multiple logical displays
+	  to share one base physical encoder/connector.
+	  Each logical display will appear as different
+	  connectors and report back to user.
+
+config DRM_SDE_SHP
+	bool "Enable Shared plane support in SDE DRM"
+	depends on DRM_MSM
+	help
+	  Choose this option for shared plane support.
+	  This option enables multiple logical planes
+	  to share one base physical plane hardware.
+	  Each logical plane will appear as different
+	  planes and report back to user.
+
+config DRM_MSM_DSI_14NM_PHY
+	bool "Enable DSI 14nm PHY driver in MSM DRM (used by MSM8996/APQ8096)"
+	depends on DRM_MSM_DSI
+	default y
+	help
+	  Choose this option if DSI PHY on 8996 is used on the platform.
 
 config DRM_SDE_EVTLOG_DEBUG
 	bool "Enable event logging in MSM DRM"
 	depends on DRM_MSM
 	help
-          The SDE DRM debugging provides support to enable display debugging
-          features to: dump SDE registers during driver errors, panic
-          driver during fatal errors and enable some display-driver logging
-          into an internal buffer (this avoids logging overhead).
+	  The SDE DRM debugging provides support to enable display debugging
+	  features to: dump SDE registers during driver errors, panic
+	  driver during fatal errors and enable some display-driver logging
+	  into an internal buffer (this avoids logging overhead).
 
 config DRM_SDE_RSC
 	bool "Enable sde resource state coordinator(rsc) driver"
 	depends on DRM_MSM
 	help
-          The SDE DRM RSC provides display Resource State Coordinator support
-          to vote the ab/ib bandwidth for primary display. Each rsc client
-          can vote their active state. Any active request from any client
-          avoids the display core power collapse. A client can also register
-          for display core power collapse events on rsc.
+	  The SDE DRM RSC provides display Resource State Coordinator support
+	  to vote the ab/ib bandwidth for primary display. Each rsc client
+	  can vote their active state. Any active request from any client
+	  avoids the display core power collapse. A client can also register
+	  for display core power collapse events on rsc.
 

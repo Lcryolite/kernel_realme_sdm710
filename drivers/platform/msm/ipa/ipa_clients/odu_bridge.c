@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -27,9 +27,7 @@
 #include <linux/cdev.h>
 #include <linux/ipa_odu_bridge.h>
 #include "../ipa_common_i.h"
-#ifdef CONFIG_IPA3
 #include "../ipa_v3/ipa_pm.h"
-#endif
 
 #define ODU_BRIDGE_DRV_NAME "odu_ipa_bridge"
 
@@ -715,7 +713,7 @@ static ssize_t odu_debugfs_hw_bridge_mode_write(struct file *file,
 	if (sizeof(dbg_buff) < count + 1)
 		return -EFAULT;
 
-	missing = copy_from_user(dbg_buff, ubuf, count);
+	missing = copy_from_user(dbg_buff, ubuf, min(sizeof(dbg_buff), count));
 	if (missing)
 		return -EFAULT;
 
@@ -776,9 +774,8 @@ const struct file_operations odu_hw_bridge_mode_ops = {
 
 static void odu_debugfs_init(void)
 {
-	const mode_t read_only_mode = S_IRUSR | S_IRGRP | S_IROTH;
-	const mode_t read_write_mode = S_IRUSR | S_IRGRP | S_IROTH |
-		S_IWUSR | S_IWGRP | S_IWOTH;
+	const mode_t read_only_mode = 0444;
+	const mode_t read_write_mode = 0666;
 
 	dent = debugfs_create_dir("odu_ipa_bridge", 0);
 	if (IS_ERR(dent)) {

@@ -30,10 +30,10 @@
 #include <drm/drmP.h>
 #include <drm/drm_crtc_helper.h>
 #include "amdgpu.h"
+#include "amdgpu_pm.h"
 #include "amd_acpi.h"
 #include "atom.h"
 
-extern void amdgpu_pm_acpi_event_handler(struct amdgpu_device *adev);
 /* Call the ATIF method
  */
 /**
@@ -50,6 +50,7 @@ static union acpi_object *amdgpu_atif_call(acpi_handle handle, int function,
 		struct acpi_buffer *params)
 {
 	acpi_status status;
+	union acpi_object *obj;
 	union acpi_object atif_arg_elements[2];
 	struct acpi_object_list atif_arg;
 	struct acpi_buffer buffer = { ACPI_ALLOCATE_BUFFER, NULL };
@@ -71,16 +72,24 @@ static union acpi_object *amdgpu_atif_call(acpi_handle handle, int function,
 	}
 
 	status = acpi_evaluate_object(handle, "ATIF", &atif_arg, &buffer);
-
-	/* Fail only if calling the method fails and ATIF is supported */
+	obj = (union acpi_object *)buffer.pointer;
+	
+	/* Fail if calling the method fails and ATIF is supported */
 	if (ACPI_FAILURE(status) && status != AE_NOT_FOUND) {
 		DRM_DEBUG_DRIVER("failed to evaluate ATIF got %s\n",
 				 acpi_format_exception(status));
-		kfree(buffer.pointer);
+		kfree(obj);
 		return NULL;
 	}
 
-	return buffer.pointer;
+	if (obj->type != ACPI_TYPE_BUFFER) {
+		DRM_DEBUG_DRIVER("bad object returned from ATIF: %d\n",
+				 obj->type);
+		kfree(obj);
+		return NULL;
+	}
+
+	return obj;
 }
 
 /**
@@ -289,7 +298,7 @@ out:
  * handles it.
  * Returns NOTIFY code
  */
-int amdgpu_atif_handler(struct amdgpu_device *adev,
+static int amdgpu_atif_handler(struct amdgpu_device *adev,
 			struct acpi_bus_event *event)
 {
 	struct amdgpu_atif *atif = &adev->atif;
@@ -675,12 +684,10 @@ int amdgpu_acpi_init(struct amdgpu_device *adev)
 
 			if ((enc->devices & (ATOM_DEVICE_LCD_SUPPORT)) &&
 			    enc->enc_priv) {
-				if (adev->is_atom_bios) {
-					struct amdgpu_encoder_atom_dig *dig = enc->enc_priv;
-					if (dig->bl_dev) {
-						atif->encoder_for_bl = enc;
-						break;
-					}
+				struct amdgpu_encoder_atom_dig *dig = enc->enc_priv;
+				if (dig->bl_dev) {
+					atif->encoder_for_bl = enc;
+					break;
 				}
 			}
 		}

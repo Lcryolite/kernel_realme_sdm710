@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -117,6 +117,7 @@ struct qbt1000_drvdata {
 	enum fd_indication_mode fd_ind_mode;
 	bool ipc_is_stale;
 	bool gestures_enabled;
+	atomic_t wakelock_acquired;
 };
 
 /*
@@ -236,11 +237,6 @@ static int send_tz_cmd(struct qbt1000_drvdata *drvdata,
 		goto end;
 	}
 
-	if (aligned_cmd - cmd + cmd_len > g_app_buf_size) {
-		rc = -ENOMEM;
-		goto end;
-	}
-
 	if (is_user_space) {
 		rc = copy_from_user(aligned_cmd, (void __user *)cmd,
 				cmd_len);
@@ -287,14 +283,14 @@ static int qbt1000_open(struct inode *inode, struct file *file)
 						   qbt1000_cdev);
 	file->private_data = drvdata;
 
-	pr_debug("qbt1000_open begin\n");
+	pr_debug("%s begin\n", __func__);
 	/* disallowing concurrent opens */
 	if (!atomic_dec_and_test(&drvdata->available)) {
 		atomic_inc(&drvdata->available);
 		rc = -EBUSY;
 	}
 
-	pr_debug("qbt1000_open end : %d\n", rc);
+	pr_debug("%s end : %d\n", __func__, rc);
 	return rc;
 }
 
@@ -311,11 +307,16 @@ static int qbt1000_release(struct inode *inode, struct file *file)
 	struct qbt1000_drvdata *drvdata;
 
 	if (!file || !file->private_data) {
-		pr_err("qbt1000_release: NULL pointer passed");
+		pr_err("%s: NULL pointer passed", __func__);
 		return -EINVAL;
 	}
 	drvdata = file->private_data;
 	atomic_inc(&drvdata->available);
+	if (atomic_read(&drvdata->wakelock_acquired) != 0) {
+		pr_debug("Releasing wakelock\n");
+		pm_relax(drvdata->dev);
+		atomic_set(&drvdata->wakelock_acquired, 0);
+	}
 	return 0;
 }
 
@@ -337,7 +338,7 @@ static long qbt1000_ioctl(
 	struct qbt1000_drvdata *drvdata;
 
 	if (!file || !file->private_data) {
-		pr_err("qbt1000_ioctl: NULL pointer passed");
+		pr_err("%s: NULL pointer passed", __func__);
 		return -EINVAL;
 	}
 
@@ -351,7 +352,7 @@ static long qbt1000_ioctl(
 
 	mutex_lock(&drvdata->mutex);
 
-	pr_debug("qbt1000_ioctl %d\n", cmd);
+	pr_debug("%s %d\n", __func__, cmd);
 
 	switch (cmd) {
 	case QBT1000_LOAD_APP:
@@ -497,7 +498,7 @@ static long qbt1000_ioctl(
 	case QBT1000_SEND_TZCMD:
 	{
 		struct qbt1000_send_tz_cmd tzcmd;
-		void *rsp_buf = NULL;
+		void *rsp_buf;
 
 		if (copy_from_user(&tzcmd, priv_arg,
 			sizeof(tzcmd))
@@ -591,6 +592,25 @@ static long qbt1000_ioctl(
 		} else {
 			drvdata->fd_ind_mode = FD_IND_MODE_BIOMETRIC;
 			drvdata->gestures_enabled = false;
+		}
+		break;
+	}
+	case QBT1000_ACQUIRE_WAKELOCK:
+	{
+		if (atomic_read(&drvdata->wakelock_acquired) == 0) {
+			pr_debug("Acquiring wakelock\n");
+			pm_stay_awake(drvdata->dev);
+		}
+		atomic_inc(&drvdata->wakelock_acquired);
+		break;
+	}
+	case QBT1000_RELEASE_WAKELOCK:
+	{
+		if (atomic_read(&drvdata->wakelock_acquired) == 0)
+			break;
+		if (atomic_dec_and_test(&drvdata->wakelock_acquired)) {
+			pr_debug("Releasing wakelock\n");
+			pm_relax(drvdata->dev);
 		}
 		break;
 	}
@@ -935,8 +955,8 @@ static irqreturn_t qbt1000_gpio_isr(int irq, void *dev_id)
 static irqreturn_t qbt1000_ipc_irq_handler(int irq, void *dev_id)
 {
 	uint8_t *msg_buffer;
-	struct fw_ipc_cmd *rx_cmd = NULL;
-	struct fw_ipc_header *header = NULL;
+	struct fw_ipc_cmd *rx_cmd;
+	struct fw_ipc_header *header;
 	int i, j;
 	uint32_t rxipc = FP_APP_CMD_RX_IPC;
 	struct qbt1000_drvdata *drvdata = (struct qbt1000_drvdata *)dev_id;
@@ -1226,7 +1246,7 @@ static int qbt1000_probe(struct platform_device *pdev)
 	struct qbt1000_drvdata *drvdata;
 	int rc = 0;
 
-	pr_debug("qbt1000_probe begin\n");
+	pr_debug("%s begin\n", __func__);
 	drvdata = devm_kzalloc(dev, sizeof(*drvdata), GFP_KERNEL);
 	if (!drvdata)
 		return -ENOMEM;
@@ -1239,6 +1259,7 @@ static int qbt1000_probe(struct platform_device *pdev)
 		goto end;
 
 	atomic_set(&drvdata->available, 1);
+	atomic_set(&drvdata->wakelock_acquired, 0);
 
 	mutex_init(&drvdata->mutex);
 	mutex_init(&drvdata->fw_events_mutex);
@@ -1271,7 +1292,7 @@ static int qbt1000_probe(struct platform_device *pdev)
 	drvdata->gestures_enabled = false;
 
 end:
-	pr_debug("qbt1000_probe end : %d\n", rc);
+	pr_debug("%s : %d\n", __func__, rc);
 	return rc;
 }
 

@@ -1,5 +1,10 @@
 obj-$(CONFIG_QTI_PDC)			+= pdc.o
-obj-$(CONFIG_QTI_PDC_SDM845)		+= pdc-sdm845.o
+obj-$(CONFIG_QTI_PDC_SM8150)		+= pdc-sm8150.o
 obj-$(CONFIG_QTI_PDC_SDM670)		+= pdc-sdm670.o
-obj-$(CONFIG_QTI_PDC_SDXPOORWILLS)	+= pdc-sdxpoorwills.o
-obj-$(CONFIG_QTI_MPM)			+= mpm.o mpm-8909.o mpm-8953.o mpm-8937.o
+obj-$(CONFIG_QTI_PDC_SM6150)		+= pdc-sm6150.o
+obj-$(CONFIG_QTI_PDC_SDMMAGPIE)		+= pdc-sdmmagpie.o
+obj-$(CONFIG_QTI_PDC_SDXPRAIRIE)	+= pdc-sdxprairie.o
+obj-$(CONFIG_QTI_PDC_ATOLL)		+= pdc-atoll.o
+obj-$(CONFIG_QTI_MPM)			+= mpm.o mpm-8937.o mpm-qcs405.o mpm-trinket.o \
+					   mpm-9607.o mpm-sdm660.o mpm-sdm429.o
+obj-$(CONFIG_QTI_PDC_VIRT)		+= pdc-virt.o

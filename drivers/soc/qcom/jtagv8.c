@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -51,6 +51,7 @@
 #define MAX_DBG_STATE_SIZE	(MAX_DBG_REGS * num_possible_cpus())
 
 #define OSLOCK_MAGIC		(0xC5ACCE55)
+#define GET_FEAT_VERSION_CMD	3
 #define TZ_DBG_ETM_FEAT_ID	(0x8)
 #define TZ_DBG_ETM_VER		(0x400000)
 
@@ -959,16 +960,23 @@ static struct notifier_block jtag_cpu_pm_notifier = {
 static int __init msm_jtag_dbg_init(void)
 {
 	int ret;
+	struct scm_desc desc = {0};
 
 	/* This will run on core0 so use it to populate parameters */
 	dbg_init_arch_data();
 
 	if (dbg_arch_supported(dbg.arch)) {
-		if (scm_get_feat_version(TZ_DBG_ETM_FEAT_ID) < TZ_DBG_ETM_VER) {
-			dbg.save_restore_enabled = true;
-		} else {
-			pr_info("dbg save-restore supported by TZ\n");
-			goto dbg_out;
+		desc.args[0] = TZ_DBG_ETM_FEAT_ID;
+		desc.arginfo = SCM_ARGS(1);
+		ret = scm_call2(SCM_SIP_FNID(SCM_SVC_INFO,
+				GET_FEAT_VERSION_CMD), &desc);
+		if (!ret) {
+			if (desc.ret[0] < TZ_DBG_ETM_VER)
+				dbg.save_restore_enabled = true;
+			else {
+				pr_info("dbg save-restore supported by TZ\n");
+				goto dbg_out;
+			}
 		}
 	} else {
 		pr_info("dbg arch %u not supported\n", dbg.arch);

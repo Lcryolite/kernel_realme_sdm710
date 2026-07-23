@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2017,2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -39,6 +39,8 @@
 #define dcc_readl(drvdata, off)						\
 	__raw_readl(drvdata->base + off)
 
+#define dcc_sram_writel(drvdata, val, off)				\
+	__raw_writel((val), drvdata->ram_base + off)
 #define dcc_sram_readl(drvdata, off)					\
 	__raw_readl(drvdata->ram_base + off)
 
@@ -127,16 +129,6 @@ struct dcc_drvdata {
 	uint64_t		xpu_addr;
 	uint32_t		xpu_unlock_count;
 };
-static int dcc_sram_writel(struct dcc_drvdata *drvdata,
-					uint32_t val, uint32_t off)
-{
-	if (unlikely(off > (drvdata->ram_size - 4)))
-		return -EINVAL;
-
-	__raw_writel((val), drvdata->ram_base + off);
-
-	return 0;
-}
 
 static int dcc_cfg_xpu(struct dcc_drvdata *drvdata, bool enable)
 {
@@ -170,7 +162,7 @@ static int dcc_xpu_lock(struct dcc_drvdata *drvdata)
 
 		ret = dcc_cfg_xpu(drvdata, 1);
 		if (ret)
-			dev_err(drvdata->dev, "Falied to lock DCC XPU.\n");
+			dev_err(drvdata->dev, "Failed to lock DCC XPU.\n");
 
 		clk_disable_unprepare(drvdata->clk);
 	}
@@ -197,7 +189,7 @@ static int dcc_xpu_unlock(struct dcc_drvdata *drvdata)
 
 		ret = dcc_cfg_xpu(drvdata, 0);
 		if (ret)
-			dev_err(drvdata->dev, "Falied to unlock DCC XPU.\n");
+			dev_err(drvdata->dev, "Failed to unlock DCC XPU.\n");
 
 		clk_disable_unprepare(drvdata->clk);
 	}
@@ -285,17 +277,12 @@ static int __dcc_ll_cfg(struct dcc_drvdata *drvdata)
 		if (!prev_addr || prev_addr != addr || prev_off > off) {
 			/* Check if we need to write link of prev entry */
 			if (link) {
-				ret = dcc_sram_writel(drvdata,
-							link, sram_offset);
-				if (ret)
-					goto overstep;
+				dcc_sram_writel(drvdata, link, sram_offset);
 				sram_offset += 4;
 			}
 
 			/* Write address */
-			ret = dcc_sram_writel(drvdata, addr, sram_offset);
-			if (ret)
-				goto overstep;
+			dcc_sram_writel(drvdata, addr, sram_offset);
 			sram_offset += 4;
 
 			/* Reset link and prev_off */
@@ -335,9 +322,7 @@ static int __dcc_ll_cfg(struct dcc_drvdata *drvdata)
 			 ((entry->len << 8) & BM(8, 14))) << pos;
 
 		if (pos) {
-			ret = dcc_sram_writel(drvdata, link, sram_offset);
-			if (ret)
-				goto overstep;
+			dcc_sram_writel(drvdata, link, sram_offset);
 			sram_offset += 4;
 			link = 0;
 		}
@@ -347,16 +332,12 @@ static int __dcc_ll_cfg(struct dcc_drvdata *drvdata)
 	}
 
 	if (link) {
-		ret = dcc_sram_writel(drvdata, link, sram_offset);
-		if (ret)
-			goto overstep;
+		dcc_sram_writel(drvdata, link, sram_offset);
 		sram_offset += 4;
 	}
 
 	/* Setting zero to indicate end of the list */
-	ret = dcc_sram_writel(drvdata, 0, sram_offset);
-	if (ret)
-		goto overstep;
+	dcc_sram_writel(drvdata, 0, sram_offset);
 	sram_offset += 4;
 
 	/* check if the data will overstep */
@@ -572,8 +553,7 @@ static ssize_t dcc_store_func_type(struct device *dev,
 
 	if (strlen(buf) >= 10)
 		return -EINVAL;
-
-	if (sscanf(buf, "%9s", str) != 1)
+	if (sscanf(buf, "%s", str) != 1)
 		return -EINVAL;
 
 	mutex_lock(&drvdata->mutex);
@@ -618,8 +598,7 @@ static ssize_t dcc_store_data_sink(struct device *dev,
 
 	if (strlen(buf) >= 10)
 		return -EINVAL;
-
-	if (sscanf(buf, "%9s", str) != 1)
+	if (sscanf(buf, "%s", str) != 1)
 		return -EINVAL;
 
 	mutex_lock(&drvdata->mutex);
@@ -750,8 +729,7 @@ static int dcc_config_add(struct dcc_drvdata *drvdata, unsigned int addr,
 
 	mutex_lock(&drvdata->mutex);
 
-	/* Check the len to avoid allocate huge memory */
-	if (!len || len > (drvdata->ram_size / 8)) {
+	if (!len) {
 		dev_err(drvdata->dev, "DCC: Invalid length!\n");
 		ret = -EINVAL;
 		goto err;
@@ -837,7 +815,7 @@ static ssize_t dcc_store_config(struct device *dev,
 	struct dcc_drvdata *drvdata = dev_get_drvdata(dev);
 	int nval;
 
-	nval = sscanf(buf, "%x %u", &base, &len);
+	nval = sscanf(buf, "%x %i", &base, &len);
 	if (nval <= 0 || nval > 2)
 		return -EINVAL;
 
@@ -1265,7 +1243,7 @@ static int dcc_probe(struct platform_device *pdev)
 	if (!drvdata->ram_base)
 		return -ENOMEM;
 
-	drvdata->clk = devm_clk_get(dev, "apb_pclk");
+	drvdata->clk = devm_clk_get(dev, "dcc_clk");
 	if (IS_ERR(drvdata->clk)) {
 		ret = PTR_ERR(drvdata->clk);
 		goto err;
@@ -1336,6 +1314,7 @@ static int dcc_probe(struct platform_device *pdev)
 		goto err;
 
 	dcc_allocate_dump_mem(drvdata);
+
 	return 0;
 err:
 	return ret;

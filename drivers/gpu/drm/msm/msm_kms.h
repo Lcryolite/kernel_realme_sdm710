@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
  * Copyright (C) 2013 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
  *
@@ -26,9 +26,6 @@
 
 #define MAX_PLANE	4
 
-#define RGB_24BPP_TMDS_CHAR_RATE_RATIO		1
-#define YUV420_24BPP_TMDS_CHAR_RATE_RATIO	2
-
 /**
  * Device Private DRM Mode Flags
  * drm_mode->private_flags
@@ -43,29 +40,8 @@
 #define MSM_MODE_FLAG_SEAMLESS_VRR			(1<<3)
 /* Request to switch the bit clk */
 #define MSM_MODE_FLAG_SEAMLESS_DYN_CLK			(1<<4)
-
-/*
- * We need setting some flags in bridge, and using them in encoder. Add them in
- * private_flags would be better for use. DRM_MODE_FLAG_SUPPORTS_RGB/YUV are
- * flags that indicating the SINK supported color formats read from EDID. While,
- * these flags defined here indicate the best color/bit depth foramt we choosed
- * that would be better for display. For example the best mode display like:
- * RGB+RGB_DC,YUV+YUV_DC, RGB,YUV. And we could not set RGB and YUV format at
- * the same time. And also RGB_DC only set when RGB format is set,the same for
- * YUV_DC.
- */
-/* Enable RGB444 30 bit deep color */
-#define MSM_MODE_FLAG_RGB444_DC_ENABLE		(1<<5)
-/* Enable YUV422 30 bit deep color */
-#define MSM_MODE_FLAG_YUV422_DC_ENABLE		(1<<6)
-/* Enable YUV420 30 bit deep color */
-#define MSM_MODE_FLAG_YUV420_DC_ENABLE		(1<<7)
-/* Choose RGB444 format to display */
-#define MSM_MODE_FLAG_COLOR_FORMAT_RGB444	(1<<8)
-/* Choose YUV422 format to display */
-#define MSM_MODE_FLAG_COLOR_FORMAT_YCBCR422	(1<<9)
-/* Choose YUV420 format to display */
-#define MSM_MODE_FLAG_COLOR_FORMAT_YCBCR420	(1<<10)
+/* Request to switch the panel mode */
+#define MSM_MODE_FLAG_SEAMLESS_POMS			(1<<5)
 
 /* As there are different display controller blocks depending on the
  * snapdragon version, the kms support is split out and the appropriate
@@ -83,6 +59,8 @@ struct msm_kms_funcs {
 	irqreturn_t (*irq)(struct msm_kms *kms);
 	int (*enable_vblank)(struct msm_kms *kms, struct drm_crtc *crtc);
 	void (*disable_vblank)(struct msm_kms *kms, struct drm_crtc *crtc);
+	/* swap global atomic state: */
+	void (*swap_state)(struct msm_kms *kms, struct drm_atomic_state *state);
 	/* modeset, bracketing atomic_commit(): */
 	void (*prepare_fence)(struct msm_kms *kms,
 			struct drm_atomic_state *state);
@@ -100,8 +78,7 @@ struct msm_kms_funcs {
 	/* get msm_format w/ optional format modifiers from drm_mode_fb_cmd2 */
 	const struct msm_format *(*get_format)(struct msm_kms *kms,
 					const uint32_t format,
-					const uint64_t *modifiers,
-					const uint32_t modifiers_len);
+					const uint64_t modifier);
 	/* do format checking on format modified through fb_cmd2 modifiers */
 	int (*check_modified_format)(const struct msm_kms *kms,
 			const struct msm_format *msm_fmt,
@@ -120,9 +97,13 @@ struct msm_kms_funcs {
 	void (*postopen)(struct msm_kms *kms, struct drm_file *file);
 	void (*preclose)(struct msm_kms *kms, struct drm_file *file);
 	void (*postclose)(struct msm_kms *kms, struct drm_file *file);
-	void (*lastclose)(struct msm_kms *kms);
+	void (*lastclose)(struct msm_kms *kms,
+			struct drm_modeset_acquire_ctx *ctx);
 	int (*register_events)(struct msm_kms *kms,
 			struct drm_mode_object *obj, u32 event, bool en);
+	void (*set_encoder_mode)(struct msm_kms *kms,
+				 struct drm_encoder *encoder,
+				 bool cmd_mode);
 	/* pm suspend/resume hooks */
 	int (*pm_suspend)(struct device *dev);
 	int (*pm_resume)(struct device *dev);
@@ -132,10 +113,18 @@ struct msm_kms_funcs {
 	struct msm_gem_address_space *(*get_address_space)(
 			struct msm_kms *kms,
 			unsigned int domain);
+#ifdef CONFIG_DEBUG_FS
+	/* debugfs: */
+	int (*debugfs_init)(struct msm_kms *kms, struct drm_minor *minor);
+#endif
 	/* handle continuous splash  */
 	int (*cont_splash_config)(struct msm_kms *kms);
 	/* check for continuous splash status */
 	bool (*check_for_splash)(struct msm_kms *kms);
+	/* topology information */
+	int (*get_mixer_count)(const struct msm_kms *kms,
+			const struct drm_display_mode *mode,
+			u32 mode_max_width, u32 *num_lm);
 };
 
 struct msm_kms {
@@ -143,7 +132,22 @@ struct msm_kms {
 
 	/* irq number to be passed on to drm_irq_install */
 	int irq;
+
+	/* mapper-id used to request GEM buffer mapped for scanout: */
+	struct msm_gem_address_space *aspace;
 };
+
+/**
+ * Subclass of drm_atomic_state, to allow kms backend to have driver
+ * private global state.  The kms backend can do whatever it wants
+ * with the ->state ptr.  On ->atomic_state_clear() the ->state ptr
+ * is kfree'd and set back to NULL.
+ */
+struct msm_kms_state {
+	struct drm_atomic_state base;
+	void *state;
+};
+#define to_kms_state(x) container_of(x, struct msm_kms_state, base)
 
 static inline void msm_kms_init(struct msm_kms *kms,
 		const struct msm_kms_funcs *funcs)
@@ -162,6 +166,8 @@ struct msm_kms *mdp4_kms_init(struct drm_device *dev) { return NULL; };
 int msm_mdss_init(struct drm_device *dev);
 void msm_mdss_destroy(struct drm_device *dev);
 struct msm_kms *mdp5_kms_init(struct drm_device *dev);
+int msm_mdss_enable(struct msm_mdss *mdss);
+int msm_mdss_disable(struct msm_mdss *mdss);
 #else
 static inline int msm_mdss_init(struct drm_device *dev)
 {
@@ -174,8 +180,18 @@ static inline struct msm_kms *mdp5_kms_init(struct drm_device *dev)
 {
 	return NULL;
 }
+static inline int msm_mdss_enable(struct msm_mdss *mdss)
+{
+	return 0;
+}
+static inline int msm_mdss_disable(struct msm_mdss *mdss)
+{
+	return 0;
+}
+
 #endif
 struct msm_kms *sde_kms_init(struct drm_device *dev);
+
 
 /**
  * Mode Set Utility Functions
@@ -203,6 +219,13 @@ static inline bool msm_is_mode_seamless_vrr(const struct drm_display_mode *mode)
 		: false;
 }
 
+static inline bool msm_is_mode_seamless_poms(
+		const struct drm_display_mode *mode)
+{
+	return mode ? (mode->private_flags & MSM_MODE_FLAG_SEAMLESS_POMS)
+		: false;
+}
+
 static inline bool msm_is_mode_seamless_dyn_clk(
 					const struct drm_display_mode *mode)
 {
@@ -215,5 +238,4 @@ static inline bool msm_needs_vblank_pre_modeset(
 {
 	return (mode->private_flags & MSM_MODE_FLAG_VBLANK_PRE_MODESET);
 }
-
 #endif /* __MSM_KMS_H__ */

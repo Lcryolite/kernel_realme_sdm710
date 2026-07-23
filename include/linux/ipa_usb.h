@@ -47,6 +47,7 @@ enum ipa_usb_notify_event {
 };
 
 enum ipa_usb_max_usb_packet_size {
+	IPA_USB_FULL_SPEED_64B = 64,
 	IPA_USB_HIGH_SPEED_512B = 512,
 	IPA_USB_SUPER_SPEED_1024B = 1024
 };
@@ -69,7 +70,7 @@ struct ipa_usb_teth_prot_params {
  * ipa_usb_xdci_connect_params - parameters required to start IN, OUT
  * channels, and connect RNDIS/ECM/teth_bridge
  *
- * @max_pkt_size:          high speed or full speed
+ * @max_pkt_size:          USB speed (full/high/super/super-speed plus)
  * @ipa_to_usb_xferrscidx: Transfer Resource Index (XferRscIdx) for IN channel.
  *                         The hardware-assigned transfer resource index for the
  *                         transfer, which was returned in response to the
@@ -158,7 +159,6 @@ struct ipa_usb_xdci_chan_params {
 	u64 data_buff_base_addr_iova;
 	struct sg_table *sgt_xfer_rings;
 	struct sg_table *sgt_data_buff;
-	bool is_sw_path;
 };
 
 /**

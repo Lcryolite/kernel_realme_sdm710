@@ -19,7 +19,7 @@
 
 struct nft_cmp_expr {
 	struct nft_data		data;
-	enum nft_registers	sreg:8;
+	u8			sreg;
 	u8			len;
 	enum nft_cmp_ops	op:8;
 };
@@ -79,13 +79,9 @@ static int nft_cmp_init(const struct nft_ctx *ctx, const struct nft_expr *expr,
 			    tb[NFTA_CMP_DATA]);
 	BUG_ON(err < 0);
 
-	priv->sreg = nft_parse_register(tb[NFTA_CMP_SREG]);
-	err = nft_validate_register_load(priv->sreg, desc.len);
+	err = nft_parse_register_load(tb[NFTA_CMP_SREG], &priv->sreg, desc.len);
 	if (err < 0)
 		return err;
-
-	if (desc.len > U8_MAX)
-		return -ERANGE;
 
 	priv->op  = ntohl(nla_get_be32(tb[NFTA_CMP_OP]));
 	priv->len = desc.len;
@@ -110,7 +106,6 @@ nla_put_failure:
 	return -1;
 }
 
-static struct nft_expr_type nft_cmp_type;
 static const struct nft_expr_ops nft_cmp_ops = {
 	.type		= &nft_cmp_type,
 	.size		= NFT_EXPR_SIZE(sizeof(struct nft_cmp_expr)),
@@ -133,8 +128,7 @@ static int nft_cmp_fast_init(const struct nft_ctx *ctx,
 			    tb[NFTA_CMP_DATA]);
 	BUG_ON(err < 0);
 
-	priv->sreg = nft_parse_register(tb[NFTA_CMP_SREG]);
-	err = nft_validate_register_load(priv->sreg, desc.len);
+	err = nft_parse_register_load(tb[NFTA_CMP_SREG], &priv->sreg, desc.len);
 	if (err < 0)
 		return err;
 
@@ -205,26 +199,24 @@ nft_cmp_select_ops(const struct nft_ctx *ctx, const struct nlattr * const tb[])
 	if (err < 0)
 		return ERR_PTR(err);
 
+	if (desc.type != NFT_DATA_VALUE) {
+		err = -EINVAL;
+		goto err1;
+	}
+
 	if (desc.len <= sizeof(u32) && op == NFT_CMP_EQ)
 		return &nft_cmp_fast_ops;
-	else
-		return &nft_cmp_ops;
+
+	return &nft_cmp_ops;
+err1:
+	nft_data_release(&data, desc.type);
+	return ERR_PTR(-EINVAL);
 }
 
-static struct nft_expr_type nft_cmp_type __read_mostly = {
+struct nft_expr_type nft_cmp_type __read_mostly = {
 	.name		= "cmp",
 	.select_ops	= nft_cmp_select_ops,
 	.policy		= nft_cmp_policy,
 	.maxattr	= NFTA_CMP_MAX,
 	.owner		= THIS_MODULE,
 };
-
-int __init nft_cmp_module_init(void)
-{
-	return nft_register_expr(&nft_cmp_type);
-}
-
-void nft_cmp_module_exit(void)
-{
-	nft_unregister_expr(&nft_cmp_type);
-}

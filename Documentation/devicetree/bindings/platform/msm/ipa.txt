@@ -44,6 +44,7 @@ Optional:
 is a number
 - qcom,ipa-hw-mode: IPA hardware mode - Normal, Virtual memory allocation,
 memory allocation over a PCIe bridge
+-qcom,platform-type:            MDM platform, MSM platform or APQ platform
 - qcom,msm-bus,name:            String representing the client-name
 - qcom,msm-bus,num-cases:       Total number of usecases
 - qcom,msm-bus,active-only:     Boolean context flag for requests in active or
@@ -60,6 +61,10 @@ memory allocation over a PCIe bridge
                                 a pipe reset via the IPA uC is required
 - qcom,ipa-wdi2:		Boolean context flag to indicate whether
 				using wdi-2.0 or not
+- qcom,ipa-wdi3-over-gsi:       Boolean context flag to indicate whether
+                                using wdi-3.0 or not
+- qcom,ipa-config-is-auto:      Boolean context flag to indicate ipa to be
+                                used in auto config or not
 - qcom,bandwidth-vote-for-ipa:	Boolean context flag to indicate whether
 				ipa clock voting is done by bandwidth
 				voting via msm-bus-scale driver or not
@@ -87,9 +92,30 @@ memory allocation over a PCIe bridge
                                 need to be unlocked by TZ.
 - qcom,ipa-uc-monitor-holb:   	Boolean context flag to indicate whether
                                 monitoring of holb via IPA uc is required.
+-qcom,ipa-fltrt-not-hashable:   Boolean context flag to indicate filter/route rules
+				hashing not supported.
 - qcom,wlan-ce-db-over-pcie: Boolean context flag to represent WLAN CE DB
 				over pcie bus or not.
+- qcom,ipa-wdi2_over_gsi: Boolean context flag to indicate WDI2 offload over GSI
+				supported or not.
+- qcom,register-collection-on-crash: Boolean that controls IPA/GSI register
+				collection upon system crash (i.e. SSR).
+- qcom,testbus-collection-on-crash: Boolean that controls testbus register
+				collection upon system crash.
+- qcom,non-tn-collection-on-crash: Boolean to control a certain subset of IPA/GSI
+				register collection relative to an SSR.  Accessing
+				these registers can cause stalling, hence this
+				control.
+- qcom,entire-ipa-block-size: Complete size of the ipa block in which all
+				registers, collected upon crash, reside.
+- qcom,ipa-endp-delay-wa: Boolean context flag to indicate end point delay work around
+				supported or not.
+- qcom,secure-debug-check-action: Drives secure memory debug check. Three values allowed:
+				0 (use scm call),
+				1 (override scm call as though it returned true), and
+				2 (override scm call as though it returned false)
 - qcom,use-xbl-boot: Boolean to indicate XBL boot loading for IPA FW
+- qcom,manual-fw-load: Manually load ipa fws by writing 1 to ipa dev node
 
 IPA pipe sub nodes (A2 static pipes configurations):
 
@@ -137,6 +163,8 @@ IPA SMMU sub nodes
 
 - qcom,smmu-s1-bypass: Boolean context flag to set SMMU to S1 bypass.
 
+- dma-coherent: Indicate using dma-coherent or not in SMMU block
+
 - iommus : the phandle and stream IDs for the SMMU used by this root
 
 - qcom,iova-mapping: specifies the start address and size of iova space.
@@ -144,17 +172,13 @@ IPA SMMU sub nodes
 - qcom,additional-mapping: specifies any addtional mapping needed for this
 				context bank. The format is <iova pa size>
 
-- qcom,ipa-q6-smem-size: specifies the Q6 SMEM partition size
-
 IPA SMP2P sub nodes
 
--compatible: "qcom,smp2pgpio-map-ipa-1-out" - represents the out gpio from
+-compatible: "qcom,smp2p-map-ipa-1-out" - represents the out smp2p from
 					      ipa driver to modem.
 
--compatible: "qcom,smp2pgpio-map-ipa-1-in" - represents the in gpio to
+-compatible: "qcom,smp2p-map-ipa-1-in" - represents the in smp2p to
 					     ipa driver from modem.
-
--gpios: Binding to the gpio defined in XXX-smp2p.dtsi
 
 
 Example:
@@ -208,15 +232,13 @@ qcom,ipa@fd4c0000 {
 		qcom,descriptor-fifo-size = <0x300>;
 	};
 
-	/* smp2p gpio information */
-	qcom,smp2pgpio_map_ipa_1_out {
-		compatible = "qcom,smp2pgpio-map-ipa-1-out";
-		gpios = <&smp2pgpio_ipa_1_out 0 0>;
+	/* smp2p information */
+	qcom,smp2p_map_ipa_1_out {
+		compatible = "qcom,smp2p-map-ipa-1-out";
 	};
 
-	qcom,smp2pgpio_map_ipa_1_in {
-		compatible = "qcom,smp2pgpio-map-ipa-1-in";
-		gpios = <&smp2pgpio_ipa_1_in 0 0>;
+	qcom,smp2p_map_ipa_1_in {
+		compatible = "qcom,smp2p-map-ipa-1-in";
 	};
 
 	ipa_smmu_ap: ipa_smmu_ap {

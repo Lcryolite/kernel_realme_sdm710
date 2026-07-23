@@ -40,13 +40,13 @@ extern unsigned int max_possible_efficiency;
 extern unsigned int min_possible_efficiency;
 extern unsigned int max_possible_freq;
 extern unsigned int sched_major_task_runtime;
+extern unsigned int __read_mostly sched_init_task_load_windows;
 extern unsigned int __read_mostly sched_load_granule;
 
 extern struct mutex cluster_lock;
 extern rwlock_t related_thread_group_lock;
 extern __read_mostly unsigned int sched_ravg_hist_size;
 extern __read_mostly unsigned int sched_freq_aggregate;
-extern __read_mostly int sched_freq_aggregate_threshold;
 extern __read_mostly unsigned int sched_window_stats_policy;
 extern __read_mostly unsigned int sched_group_upmigrate;
 extern __read_mostly unsigned int sched_group_downmigrate;
@@ -56,7 +56,7 @@ extern struct sched_cluster init_cluster;
 extern void update_task_ravg(struct task_struct *p, struct rq *rq, int event,
 						u64 wallclock, u64 irqtime);
 
-extern unsigned int nr_eligible_big_tasks(int cpu);
+extern unsigned int walt_big_tasks(int cpu);
 
 static inline void
 inc_nr_big_task(struct walt_sched_stats *stats, struct task_struct *p)
@@ -94,16 +94,17 @@ walt_adjust_nr_big_tasks(struct rq *rq, int delta, bool inc)
 
 static inline void
 fixup_cumulative_runnable_avg(struct walt_sched_stats *stats,
-			      s64 task_load_delta, s64 pred_demand_delta)
+			      s64 demand_scaled_delta,
+			      s64 pred_demand_scaled_delta)
 {
 	if (sched_disable_window_stats)
 		return;
 
-	stats->cumulative_runnable_avg += task_load_delta;
-	BUG_ON((s64)stats->cumulative_runnable_avg < 0);
+	stats->cumulative_runnable_avg_scaled += demand_scaled_delta;
+	BUG_ON((s64)stats->cumulative_runnable_avg_scaled < 0);
 
-	stats->pred_demands_sum += pred_demand_delta;
-	BUG_ON((s64)stats->pred_demands_sum < 0);
+	stats->pred_demands_sum_scaled += pred_demand_scaled_delta;
+	BUG_ON((s64)stats->pred_demands_sum_scaled < 0);
 }
 
 static inline void
@@ -112,8 +113,8 @@ walt_inc_cumulative_runnable_avg(struct rq *rq, struct task_struct *p)
 	if (sched_disable_window_stats)
 		return;
 
-	fixup_cumulative_runnable_avg(&rq->walt_stats, p->ravg.demand,
-				      p->ravg.pred_demand);
+	fixup_cumulative_runnable_avg(&rq->walt_stats, p->ravg.demand_scaled,
+				      p->ravg.pred_demand_scaled);
 
 	/*
 	 * Add a task's contribution to the cumulative window demand when
@@ -123,7 +124,7 @@ walt_inc_cumulative_runnable_avg(struct rq *rq, struct task_struct *p)
 	 * (2) task is waking for the first time in this window.
 	 */
 	if (p->on_rq || (p->last_sleep_ts < rq->window_start))
-		walt_fixup_cum_window_demand(rq, p->ravg.demand);
+		walt_fixup_cum_window_demand(rq, p->ravg.demand_scaled);
 }
 
 static inline void
@@ -132,8 +133,9 @@ walt_dec_cumulative_runnable_avg(struct rq *rq, struct task_struct *p)
 	if (sched_disable_window_stats)
 		return;
 
-	fixup_cumulative_runnable_avg(&rq->walt_stats, -(s64)p->ravg.demand,
-				      -(s64)p->ravg.pred_demand);
+	fixup_cumulative_runnable_avg(&rq->walt_stats,
+				      -(s64)p->ravg.demand_scaled,
+				      -(s64)p->ravg.pred_demand_scaled);
 
 	/*
 	 * on_rq will be 1 for sleeping tasks. So check if the task
@@ -141,12 +143,12 @@ walt_dec_cumulative_runnable_avg(struct rq *rq, struct task_struct *p)
 	 * prio/cgroup/class.
 	 */
 	if (task_on_rq_migrating(p) || p->state == TASK_RUNNING)
-		walt_fixup_cum_window_demand(rq, -(s64)p->ravg.demand);
+		walt_fixup_cum_window_demand(rq, -(s64)p->ravg.demand_scaled);
 }
 
 extern void fixup_walt_sched_stats_common(struct rq *rq, struct task_struct *p,
-					  u32 new_task_load,
-					  u32 new_pred_demand);
+					  u16 updated_demand_scaled,
+					  u16 updated_pred_demand_scaled);
 extern void inc_rq_walt_stats(struct rq *rq, struct task_struct *p);
 extern void dec_rq_walt_stats(struct rq *rq, struct task_struct *p);
 extern void fixup_busy_time(struct task_struct *p, int new_cpu);
@@ -155,11 +157,6 @@ extern void mark_task_starting(struct task_struct *p);
 extern void set_window_start(struct rq *rq);
 void account_irqtime(int cpu, struct task_struct *curr, u64 delta,
                                   u64 wallclock);
-void walt_fixup_cumulative_runnable_avg(struct rq *rq, struct task_struct *p,
-					u64 new_task_load);
-
-
-
 extern bool do_pl_notif(struct rq *rq);
 
 #define SCHED_HIGH_IRQ_TIMEOUT 3
@@ -233,6 +230,14 @@ static inline unsigned int cpu_cur_freq(int cpu)
 	return cpu_rq(cpu)->cluster->cur_freq;
 }
 
+static inline unsigned int sched_cpu_legacy_freq(int cpu)
+{
+	unsigned long curr_cap = arch_scale_freq_capacity(NULL, cpu);
+
+	return (curr_cap * (u64) cpu_rq(cpu)->cluster->max_possible_freq) >>
+		SCHED_CAPACITY_SHIFT;
+}
+
 static inline void
 move_list(struct list_head *dst, struct list_head *src, bool sync_rcu)
 {
@@ -285,15 +290,11 @@ static inline int same_cluster(int src_cpu, int dst_cpu)
 	return cpu_rq(src_cpu)->cluster == cpu_rq(dst_cpu)->cluster;
 }
 
+void sort_clusters(void);
+
 void walt_irq_work(struct irq_work *irq_work);
 
-void walt_sched_init(struct rq *rq);
-
-extern int __read_mostly min_power_cpu;
-static inline int walt_start_cpu(int prev_cpu)
-{
-	return sysctl_sched_is_big_little ? prev_cpu : min_power_cpu;
-}
+void walt_sched_init_rq(struct rq *rq);
 
 static inline void walt_update_last_enqueue(struct task_struct *p)
 {
@@ -302,16 +303,25 @@ static inline void walt_update_last_enqueue(struct task_struct *p)
 extern void walt_rotate_work_init(void);
 extern void walt_rotation_checkpoint(int nr_big);
 extern unsigned int walt_rotation_enabled;
+extern unsigned int walt_get_default_coloc_group_load(void);
+
+extern __read_mostly bool sched_freq_aggr_en;
+static inline void walt_enable_frequency_aggregation(bool enable)
+{
+	sched_freq_aggr_en = enable;
+}
 
 #else /* CONFIG_SCHED_WALT */
 
-static inline void walt_sched_init(struct rq *rq) { }
+static inline void walt_sched_init_rq(struct rq *rq) { }
+
 static inline void walt_rotate_work_init(void) { }
 static inline void walt_rotation_checkpoint(int nr_big) { }
 static inline void walt_update_last_enqueue(struct task_struct *p) { }
-static inline void walt_fixup_cumulative_runnable_avg(struct rq *rq,
-						      struct task_struct *p,
-						      u64 new_task_load) { }
+static inline unsigned int walt_get_default_coloc_group_load(void)
+{
+	return 0;
+}
 
 static inline void update_task_ravg(struct task_struct *p, struct rq *rq,
 				int event, u64 wallclock, u64 irqtime) { }
@@ -320,7 +330,7 @@ static inline void walt_inc_cumulative_runnable_avg(struct rq *rq,
 {
 }
 
-static inline unsigned int nr_eligible_big_tasks(int cpu)
+static inline unsigned int walt_big_tasks(int cpu)
 {
 	return 0;
 }
@@ -376,13 +386,9 @@ dec_rq_walt_stats(struct rq *rq, struct task_struct *p) { }
 
 static inline void
 fixup_walt_sched_stats_common(struct rq *rq, struct task_struct *p,
-			      u32 new_task_load, u32 new_pred_demand)
+			      u16 updated_demand_scaled,
+			      u16 updated_pred_demand_scaled)
 {
-}
-
-static inline int walt_start_cpu(int prev_cpu)
-{
-	return prev_cpu;
 }
 
 static inline u64 sched_irqload(int cpu)
@@ -390,7 +396,5 @@ static inline u64 sched_irqload(int cpu)
 	return 0;
 }
 #endif /* CONFIG_SCHED_WALT */
-
-#define walt_cpu_high_irqload(cpu) sched_cpu_high_irqload(cpu)
 
 #endif

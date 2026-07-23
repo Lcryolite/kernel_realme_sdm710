@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -62,9 +62,9 @@ static int __init mpq_adapter_init(void)
 		mpq_info.interfaces[i].callback = NULL;
 	}
 
-	/* regsiter a new dvb-adapter to dvb-core */
+	/* register a new dvb-adapter to dvb-core */
 	result = dvb_register_adapter(&mpq_info.adapter,
-				      "Qualcomm technologies, inc. DVB adapter",
+				      "Qualcomm Technologies, Inc. DVB adapter",
 				      THIS_MODULE, NULL, adapter_nr);
 	if (result < 0) {
 		MPQ_DVB_ERR_PRINT(
@@ -84,7 +84,7 @@ static void __exit mpq_adapter_exit(void)
 {
 	MPQ_DVB_DBG_PRINT("%s executed\n", __func__);
 
-	/* un-regsiter adapter from dvb-core */
+	/* un-register adapter from dvb-core */
 	dvb_unregister_adapter(&mpq_info.adapter);
 	mutex_destroy(&mpq_info.mutex);
 }

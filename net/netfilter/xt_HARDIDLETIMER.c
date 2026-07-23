@@ -4,7 +4,8 @@
  * Netfilter module to trigger a timer when packet matches.
  * After timer expires a kevent will be sent.
  *
- * Copyright (c) 2014-2015, 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2015, 2017-2018, The Linux Foundation.
+ * All rights reserved.
  *
  * Copyright (C) 2004, 2010 Nokia Corporation
  *
@@ -127,7 +128,7 @@ static ssize_t hardidletimer_tg_show(struct kobject *kobj,
 	if (ktimespec.tv_sec >= 0)
 		return snprintf(buf, PAGE_SIZE, "%ld\n", ktimespec.tv_sec);
 
-	if ((timer) && (timer->send_nl_msg))
+	if ((timer) && timer->send_nl_msg)
 		return snprintf(buf, PAGE_SIZE, "0 %ld\n", ktimespec.tv_sec);
 	else
 		return snprintf(buf, PAGE_SIZE, "0\n");
@@ -155,11 +156,6 @@ static enum alarmtimer_restart hardidletimer_tg_alarmproc(struct alarm *alarm,
 	schedule_work(&timer->work);
 	return ALARMTIMER_NORESTART;
 }
-
-#ifdef VENDOR_EDIT
-//Yunqing.Zeng@BSP.Power.Basic 2017/12/12 add for filter net alarm counter
-enum alarmtimer_restart	(*net_alarm_func)(struct alarm *, ktime_t now) = hardidletimer_tg_alarmproc;
-#endif /* VENDOR_EDIT */
 
 static int hardidletimer_tg_create(struct hardidletimer_tg_info *info)
 {
@@ -192,11 +188,6 @@ static int hardidletimer_tg_create(struct hardidletimer_tg_info *info)
 
 	alarm_init(&info->timer->alarm, ALARM_BOOTTIME,
 		   hardidletimer_tg_alarmproc);
-	#ifdef VENDOR_EDIT
-	//Yunqing.Zeng@BSP.Power.Basic 2017/12/12 add for filter net alarm counter
-	net_alarm_func = hardidletimer_tg_alarmproc;
-	#endif /* VENDOR_EDIT */
-
 	info->timer->alarm.data = info->timer;
 	info->timer->refcnt = 1;
 	info->timer->send_nl_msg = (info->send_nl_msg == 0) ? false : true;

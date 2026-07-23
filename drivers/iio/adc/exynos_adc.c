@@ -579,7 +579,7 @@ static int exynos_read_s3c64xx_ts(struct iio_dev *indio_dev, int *x, int *y)
 
 static irqreturn_t exynos_adc_isr(int irq, void *dev_id)
 {
-	struct exynos_adc *info = (struct exynos_adc *)dev_id;
+	struct exynos_adc *info = dev_id;
 	u32 mask = info->data->mask;
 
 	/* Read value */
@@ -632,7 +632,7 @@ static irqreturn_t exynos_ts_isr(int irq, void *dev_id)
 		input_report_key(info->input, BTN_TOUCH, 1);
 		input_sync(info->input);
 
-		msleep(1);
+		usleep_range(1000, 1100);
 	};
 
 	writel(0, ADC_V1_CLRINTPNDNUP(info->regs));
@@ -787,6 +787,12 @@ static int exynos_adc_probe(struct platform_device *pdev)
 		}
 	}
 
+	/* leave out any TS related code if unreachable */
+	if (IS_REACHABLE(CONFIG_INPUT)) {
+		has_ts = of_property_read_bool(pdev->dev.of_node,
+					       "has-touchscreen") || pdata;
+	}
+
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0) {
 		dev_err(&pdev->dev, "no irq resource?\n");
@@ -794,11 +800,15 @@ static int exynos_adc_probe(struct platform_device *pdev)
 	}
 	info->irq = irq;
 
-	irq = platform_get_irq(pdev, 1);
-	if (irq == -EPROBE_DEFER)
-		return irq;
+	if (has_ts) {
+		irq = platform_get_irq(pdev, 1);
+		if (irq == -EPROBE_DEFER)
+			return irq;
 
-	info->tsirq = irq;
+		info->tsirq = irq;
+	} else {
+		info->tsirq = -1;
+	}
 
 	info->dev = &pdev->dev;
 
@@ -864,12 +874,6 @@ static int exynos_adc_probe(struct platform_device *pdev)
 
 	if (info->data->init_hw)
 		info->data->init_hw(info);
-
-	/* leave out any TS related code if unreachable */
-	if (IS_REACHABLE(CONFIG_INPUT)) {
-		has_ts = of_property_read_bool(pdev->dev.of_node,
-					       "has-touchscreen") || pdata;
-	}
 
 	if (pdata)
 		info->delay = pdata->delay;

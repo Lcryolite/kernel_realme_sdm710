@@ -24,8 +24,7 @@
 #define IPA_UT_DEBUG_WRITE_BUF_SIZE 256
 #define IPA_UT_DEBUG_READ_BUF_SIZE 1024
 
-#define IPA_UT_READ_WRITE_DBG_FILE_MODE \
-	(S_IRUSR | S_IRGRP | S_IROTH | S_IWUSR | S_IWGRP)
+#define IPA_UT_READ_WRITE_DBG_FILE_MODE 0664
 
 /**
  * struct ipa_ut_context - I/S context
@@ -411,10 +410,10 @@ static ssize_t ipa_ut_dbgfs_meta_test_read(struct file *file,
 	meta_type = (long)(file->private_data);
 	IPA_UT_DBG("Meta test type %ld\n", meta_type);
 
-	buf = kmalloc(IPA_UT_DEBUG_READ_BUF_SIZE, GFP_KERNEL);
+	buf = kmalloc(IPA_UT_DEBUG_READ_BUF_SIZE + 1, GFP_KERNEL);
 	if (!buf) {
 		IPA_UT_ERR("failed to allocate %d bytes\n",
-			IPA_UT_DEBUG_READ_BUF_SIZE);
+			IPA_UT_DEBUG_READ_BUF_SIZE + 1);
 		cnt = 0;
 		goto unlock_mutex;
 	}
@@ -439,11 +438,9 @@ static ssize_t ipa_ut_dbgfs_meta_test_read(struct file *file,
 		for (i = 0 ; i < suite->tests_cnt ; i++) {
 			if (!suite->tests[i].run_in_regression)
 				continue;
-			if (nbytes < IPA_UT_DEBUG_READ_BUF_SIZE) {
-				nbytes += scnprintf(buf + nbytes,
-					IPA_UT_DEBUG_READ_BUF_SIZE - nbytes,
-					"\t\t%s\n", suite->tests[i].name);
-			}
+			nbytes += scnprintf(buf + nbytes,
+				IPA_UT_DEBUG_READ_BUF_SIZE - nbytes,
+				"\t\t%s\n", suite->tests[i].name);
 		}
 	}
 
@@ -869,7 +866,7 @@ static ssize_t ipa_ut_dbgfs_enable_write(struct file *file,
 		return -E2BIG;
 	}
 
-	if (copy_from_user(lcl_buf, buf, count)) {
+	if (copy_from_user(lcl_buf, buf, min(sizeof(lcl_buf), count))) {
 		IPA_UT_ERR("fail to copy buf from user space\n");
 		return -EFAULT;
 	}
@@ -934,7 +931,9 @@ static int ipa_ut_framework_init(void)
 
 	ipa_assert_on(!ipa_ut_ctx);
 
+#ifdef CONFIG_DEBUG_FS
 	ipa_ut_ctx->ipa_dbgfs_root = ipa_debugfs_get_root();
+#endif
 	if (!ipa_ut_ctx->ipa_dbgfs_root) {
 		IPA_UT_ERR("No IPA debugfs root entry\n");
 		return -EFAULT;
@@ -1119,7 +1118,7 @@ void ipa_ut_module_exit(void)
 	ipa_ut_ctx = NULL;
 }
 
-#if IPA_EMULATION_COMPILE == 0 /* On real UE, we have a module */
+#if !defined(CONFIG_IPA_EMULATION) /* On real UE, we have a module */
 module_init(ipa_ut_module_init);
 module_exit(ipa_ut_module_exit);
 MODULE_LICENSE("GPL v2");

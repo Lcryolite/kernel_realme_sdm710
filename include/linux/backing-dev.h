@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * include/linux/backing-dev.h
  *
@@ -18,8 +19,6 @@
 #include <linux/backing-dev-defs.h>
 #include <linux/slab.h>
 
-int __must_check bdi_init(struct backing_dev_info *bdi);
-
 static inline struct backing_dev_info *bdi_get(struct backing_dev_info *bdi)
 {
 	kref_get(&bdi->refcnt);
@@ -28,16 +27,18 @@ static inline struct backing_dev_info *bdi_get(struct backing_dev_info *bdi)
 
 void bdi_put(struct backing_dev_info *bdi);
 
-__printf(3, 4)
-int bdi_register(struct backing_dev_info *bdi, struct device *parent,
-		const char *fmt, ...);
-int bdi_register_dev(struct backing_dev_info *bdi, dev_t dev);
+__printf(2, 3)
+int bdi_register(struct backing_dev_info *bdi, const char *fmt, ...);
+int bdi_register_va(struct backing_dev_info *bdi, const char *fmt,
+		    va_list args);
 int bdi_register_owner(struct backing_dev_info *bdi, struct device *owner);
 void bdi_unregister(struct backing_dev_info *bdi);
 
-int __must_check bdi_setup_and_register(struct backing_dev_info *, char *);
-void bdi_destroy(struct backing_dev_info *bdi);
 struct backing_dev_info *bdi_alloc_node(gfp_t gfp_mask, int node_id);
+static inline struct backing_dev_info *bdi_alloc(gfp_t gfp_mask)
+{
+	return bdi_alloc_node(gfp_mask, NUMA_NO_NODE);
+}
 
 void wb_start_writeback(struct bdi_writeback *wb, long nr_pages,
 			bool range_cyclic, enum wb_reason reason);
@@ -67,37 +68,17 @@ static inline bool bdi_has_dirty_io(struct backing_dev_info *bdi)
 static inline void __add_wb_stat(struct bdi_writeback *wb,
 				 enum wb_stat_item item, s64 amount)
 {
-	__percpu_counter_add(&wb->stat[item], amount, WB_STAT_BATCH);
-}
-
-static inline void __inc_wb_stat(struct bdi_writeback *wb,
-				 enum wb_stat_item item)
-{
-	__add_wb_stat(wb, item, 1);
+	percpu_counter_add_batch(&wb->stat[item], amount, WB_STAT_BATCH);
 }
 
 static inline void inc_wb_stat(struct bdi_writeback *wb, enum wb_stat_item item)
 {
-	unsigned long flags;
-
-	local_irq_save(flags);
-	__inc_wb_stat(wb, item);
-	local_irq_restore(flags);
-}
-
-static inline void __dec_wb_stat(struct bdi_writeback *wb,
-				 enum wb_stat_item item)
-{
-	__add_wb_stat(wb, item, -1);
+	__add_wb_stat(wb, item, 1);
 }
 
 static inline void dec_wb_stat(struct bdi_writeback *wb, enum wb_stat_item item)
 {
-	unsigned long flags;
-
-	local_irq_save(flags);
-	__dec_wb_stat(wb, item);
-	local_irq_restore(flags);
+	__add_wb_stat(wb, item, -1);
 }
 
 static inline s64 wb_stat(struct bdi_writeback *wb, enum wb_stat_item item)
@@ -105,22 +86,9 @@ static inline s64 wb_stat(struct bdi_writeback *wb, enum wb_stat_item item)
 	return percpu_counter_read_positive(&wb->stat[item]);
 }
 
-static inline s64 __wb_stat_sum(struct bdi_writeback *wb,
-				enum wb_stat_item item)
-{
-	return percpu_counter_sum_positive(&wb->stat[item]);
-}
-
 static inline s64 wb_stat_sum(struct bdi_writeback *wb, enum wb_stat_item item)
 {
-	s64 sum;
-	unsigned long flags;
-
-	local_irq_save(flags);
-	sum = __wb_stat_sum(wb, item);
-	local_irq_restore(flags);
-
-	return sum;
+	return percpu_counter_sum_positive(&wb->stat[item]);
 }
 
 extern void wb_writeout_inc(struct bdi_writeback *wb);
@@ -157,6 +125,8 @@ int bdi_set_max_ratio(struct backing_dev_info *bdi, unsigned int max_ratio);
  * BDI_CAP_STRICTLIMIT:    Keep number of dirty pages below bdi threshold.
  *
  * BDI_CAP_CGROUP_WRITEBACK: Supports cgroup-aware writeback.
+ * BDI_CAP_SYNCHRONOUS_IO: Device is so fast that asynchronous IO would be
+ *			   inefficient.
  */
 #define BDI_CAP_NO_ACCT_DIRTY	0x00000001
 #define BDI_CAP_NO_WRITEBACK	0x00000002
@@ -164,6 +134,7 @@ int bdi_set_max_ratio(struct backing_dev_info *bdi, unsigned int max_ratio);
 #define BDI_CAP_STABLE_WRITES	0x00000008
 #define BDI_CAP_STRICTLIMIT	0x00000010
 #define BDI_CAP_CGROUP_WRITEBACK 0x00000020
+#define BDI_CAP_SYNCHRONOUS_IO	0x00000040
 
 #define BDI_CAP_NO_ACCT_AND_WRITEBACK \
 	(BDI_CAP_NO_WRITEBACK | BDI_CAP_NO_ACCT_DIRTY | BDI_CAP_NO_ACCT_WB)
@@ -210,6 +181,11 @@ long congestion_wait(int sync, long timeout);
 long wait_iff_congested(struct pglist_data *pgdat, int sync, long timeout);
 int pdflush_proc_obsolete(struct ctl_table *table, int write,
 		void __user *buffer, size_t *lenp, loff_t *ppos);
+
+static inline bool bdi_cap_synchronous_io(struct backing_dev_info *bdi)
+{
+	return bdi->capabilities & BDI_CAP_SYNCHRONOUS_IO;
+}
 
 static inline bool bdi_cap_stable_pages_required(struct backing_dev_info *bdi)
 {

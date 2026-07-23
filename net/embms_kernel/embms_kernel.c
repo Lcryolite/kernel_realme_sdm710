@@ -1,6 +1,6 @@
 /*************************************************************************
  * -----------------------------------------------------------------------
- * Copyright (c) 2013-2015, 2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2015, 2017, 2018 The Linux Foundation. All rights reserved.
 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -62,6 +62,7 @@ static int handle_multicast_stream(struct sk_buff *skb)
 {
 	struct iphdr *iph;
 	struct udphdr *udph;
+	struct in_device *in_dev;
 	unsigned char *tmp_ptr = NULL;
 	struct sk_buff *skb_new = NULL;
 	struct sk_buff *skb_cpy = NULL;
@@ -102,13 +103,13 @@ static int handle_multicast_stream(struct sk_buff *skb)
 				       struct tmgi_to_clnt_info,
 				       tmgi_list_ptr);
 
-		if ((temp_tmgi->tmgi_multicast_addr == iph->daddr) &&
-		    (temp_tmgi->tmgi_port == udph->dest))
+		if (temp_tmgi->tmgi_multicast_addr == iph->daddr &&
+		    temp_tmgi->tmgi_port == udph->dest)
 			break;
 	}
 
 	if (tmgi_entry_ptr == &tmgi_to_clnt_map_tbl.tmgi_list_ptr) {
-		embms_error("handle_multicast_stream:");
+		embms_error("%s:", __func__);
 		embms_error("could not find matchin tmgi entry\n");
 		spin_unlock_bh(&embms_conf.lock);
 		return 0;
@@ -243,8 +244,8 @@ static struct tmgi_to_clnt_info *check_for_tmgi_entry(u32 addr,
 	struct list_head *tmgi_ptr, *prev_tmgi_ptr;
 	struct tmgi_to_clnt_info *temp_tmgi = NULL;
 
-	embms_debug("check_for_tmgi_entry: mcast addr :%pI4, port %u\n",
-		    &addr, ntohs(port));
+	embms_debug("%s: mcast addr :%pI4, port %u\n",
+		    __func__, &addr, ntohs(port));
 
 	list_for_each_safe(tmgi_ptr,
 			   prev_tmgi_ptr,
@@ -253,9 +254,9 @@ static struct tmgi_to_clnt_info *check_for_tmgi_entry(u32 addr,
 				       struct tmgi_to_clnt_info,
 				       tmgi_list_ptr);
 
-		if ((temp_tmgi->tmgi_multicast_addr == addr) &&
-		    (temp_tmgi->tmgi_port == port)) {
-			embms_debug("check_for_tmgi_entry:TMGI entry found\n");
+		if (temp_tmgi->tmgi_multicast_addr == addr &&
+		    temp_tmgi->tmgi_port == port) {
+			embms_debug("%s:TMGI entry found\n", __func__);
 			return temp_tmgi;
 		}
 	}
@@ -277,8 +278,8 @@ static struct clnt_info *chk_clnt_entry(struct tmgi_to_clnt_info *tmgi,
 		temp_client = list_entry(clnt_ptr,
 					 struct clnt_info,
 					 client_list_ptr);
-		if ((temp_client->addr == clnt->client_addr) &&
-		    (temp_client->port == clnt->client_port)) {
+		if (temp_client->addr == clnt->client_addr &&
+		    temp_client->port == clnt->client_port) {
 			embms_debug("Clnt entry present\n");
 			return temp_client;
 		}
@@ -291,12 +292,12 @@ static int add_new_tmgi_entry(struct tmgi_to_clnt_info_update *info_update,
 {
 	struct tmgi_to_clnt_info *new_tmgi = NULL;
 
-	embms_debug("add_new_tmgi_entry:Enter\n");
+	embms_debug("%s:Enter\n", __func__);
 
 	new_tmgi = kzalloc(sizeof(*new_tmgi),
 			   GFP_ATOMIC);
 	if (!new_tmgi) {
-		embms_error("add_new_tmgi_entry: mem alloc failed\n");
+		embms_error("%s: mem alloc failed\n", __func__);
 		return -ENOMEM;
 	}
 
@@ -305,12 +306,12 @@ static int add_new_tmgi_entry(struct tmgi_to_clnt_info_update *info_update,
 	new_tmgi->tmgi_multicast_addr = info_update->multicast_addr;
 	new_tmgi->tmgi_port = info_update->multicast_port;
 
-	embms_debug("add_new_tmgi_entry:");
+	embms_debug("%s:", __func__);
 	embms_debug("New tmgi multicast addr :%pI4 , port %u\n",
 		    &info_update->multicast_addr,
 		    ntohs(info_update->multicast_port));
 
-	embms_debug("add_new_tmgi_entry:Adding client entry\n");
+	embms_debug("%s:Adding client entry\n", __func__);
 
 	spin_lock_bh(&embms_conf.lock);
 
@@ -395,17 +396,20 @@ static void print_tmgi_to_client_table(void)
 
 int delete_tmgi_entry_from_table(char *buffer)
 {
+	int i;
 	struct tmgi_to_clnt_info_update *info_update;
+	char message_buffer[sizeof(struct tmgi_to_clnt_info_update)];
 	struct clnt_info *temp_client = NULL;
 	struct tmgi_to_clnt_info *temp_tmgi = NULL;
+	struct list_head *tmgi_entry_ptr, *prev_tmgi_entry_ptr;
 	struct list_head *clnt_ptr, *prev_clnt_ptr;
 
-	embms_debug("delete_tmgi_entry_from_table: Enter\n");
+	embms_debug("%s: Enter\n", __func__);
 
 	info_update = (struct tmgi_to_clnt_info_update *)buffer;
 
 	if (!info_update) {
-		embms_error("delete_tmgi_entry_from_table:");
+		embms_error("%s:", __func__);
 		embms_error("NULL arguments passed\n");
 		return -EBADPARAM;
 	}
@@ -424,7 +428,7 @@ int delete_tmgi_entry_from_table(char *buffer)
 
 	if (!temp_tmgi) {
 		/* TMGI entry was not found in our local table*/
-		embms_error("delete_client_entry_from_table :");
+		embms_error("%s :", __func__);
 		embms_error("Desired TMGI entry not found\n");
 		return -EBADPARAM;
 	}
@@ -440,7 +444,7 @@ int delete_tmgi_entry_from_table(char *buffer)
 		temp_client = list_entry(clnt_ptr,
 					 struct clnt_info,
 					 client_list_ptr);
-		embms_debug("delete_tmgi_entry_from_table :");
+		embms_debug("%s :", __func__);
 		embms_debug("Client addr to delete :%pI4 , port %u\n",
 			    &temp_client->addr, ntohs(temp_client->port));
 		list_del(&temp_client->client_list_ptr);
@@ -456,7 +460,7 @@ int delete_tmgi_entry_from_table(char *buffer)
 
 	spin_unlock_bh(&embms_conf.lock);
 
-	embms_debug("delete_tmgi_entry_from_table : TMGI Entry deleted.\n");
+	embms_debug("%s : TMGI Entry deleted.\n", __func__);
 
 	return SUCCESS;
 }
@@ -473,10 +477,13 @@ int delete_tmgi_entry_from_table(char *buffer)
  */
 int delete_client_entry_from_all_tmgi(char *buffer)
 {
+	int i;
 	struct tmgi_to_clnt_info_update *info_update;
+	char message_buffer[sizeof(struct tmgi_to_clnt_info_update)];
 	struct clnt_info *temp_client = NULL;
 	struct tmgi_to_clnt_info *tmgi = NULL;
 	struct list_head *tmgi_entry_ptr, *prev_tmgi_entry_ptr;
+	struct list_head *clnt_ptr, *prev_clnt_ptr;
 
 	/* We use this function when we want to delete any
 	 * client entry from all TMGI entries. This scenario
@@ -567,25 +574,32 @@ int delete_client_entry_from_all_tmgi(char *buffer)
  */
 int add_client_entry_to_table(char *buffer)
 {
-	int ret;
+	int i, ret;
 	struct tmgi_to_clnt_info_update *info_update;
+	char message_buffer[sizeof(struct tmgi_to_clnt_info_update)];
 	struct clnt_info *new_client = NULL;
+	struct clnt_info *temp_client = NULL;
+	struct tmgi_to_clnt_info *new_tmgi = NULL;
 	struct tmgi_to_clnt_info *tmgi = NULL;
+	struct list_head *tmgi_entry_ptr, *prev_tmgi_entry_ptr;
+	struct list_head *clnt_ptr, *prev_clnt_ptr;
 	struct neighbour *neigh_entry;
+	struct in_device *iface_dev;
+	struct in_ifaddr *iface_info;
 
-	embms_debug("add_client_entry_to_table: Enter\n");
+	embms_debug("%s: Enter\n", __func__);
 
 	info_update = (struct tmgi_to_clnt_info_update *)buffer;
 
 	if (!info_update) {
-		embms_error("add_client_entry_to_table:");
+		embms_error("%s:", __func__);
 		embms_error("NULL arguments passed\n");
 		return -EBADPARAM;
 	}
 
 	new_client = kzalloc(sizeof(*new_client), GFP_ATOMIC);
 	if (!new_client) {
-		embms_error("add_client_entry_to_table:");
+		embms_error("%s:", __func__);
 		embms_error("Cannot allocate memory\n");
 		return -ENOMEM;
 	}
@@ -596,7 +610,7 @@ int add_client_entry_to_table(char *buffer)
 	neigh_entry = __ipv4_neigh_lookup(dev_global,
 					  (u32)(new_client->addr));
 	if (!neigh_entry) {
-		embms_error("add_client_entry_to_table :");
+		embms_error("%s :", __func__);
 		embms_error("Can't find neighbour entry\n");
 		kfree(new_client);
 		return -EBADPARAM;
@@ -606,7 +620,7 @@ int add_client_entry_to_table(char *buffer)
 
 	embms_debug("DMAC of client : %pM\n", new_client->dmac);
 
-	embms_debug("add_client_entry_to_table:");
+	embms_debug("%s:", __func__);
 	embms_debug("New client addr :%pI4 , port %u\n",
 		    &info_update->client_addr,
 		    ntohs(info_update->client_port));
@@ -685,16 +699,20 @@ exit_add:
  */
 int delete_client_entry_from_table(char *buffer)
 {
+	int i;
 	struct tmgi_to_clnt_info_update *info_update;
+	char message_buffer[sizeof(struct tmgi_to_clnt_info_update)];
 	struct clnt_info *temp_client = NULL;
 	struct tmgi_to_clnt_info *temp_tmgi = NULL;
+	struct list_head *tmgi_entry_ptr, *prev_tmgi_entry_ptr;
+	struct list_head *clnt_ptr, *prev_clnt_ptr;
 
-	embms_debug("delete_client_entry_from_table: Enter\n");
+	embms_debug("%s: Enter\n", __func__);
 
 	info_update = (struct tmgi_to_clnt_info_update *)buffer;
 
 	if (!info_update) {
-		embms_error("delete_client_entry_from_table:");
+		embms_error("%s:", __func__);
 		embms_error("NULL arguments passed\n");
 		return -EBADPARAM;
 	}
@@ -707,13 +725,13 @@ int delete_client_entry_from_table(char *buffer)
 					 info_update->multicast_port);
 
 	if (!temp_tmgi) {
-		embms_error("delete_client_entry_from_table:TMGI not found\n");
+		embms_error("%s:TMGI not found\n", __func__);
 		return -EBADPARAM;
 	}
 	/* Delete client entry for a specific tmgi*/
 
-	embms_debug("delete_client_entry_from_table:clnt addr :%pI4,port %u\n",
-		    &info_update->client_addr,
+	embms_debug("%s:clnt addr :%pI4,port %u\n",
+		    __func__, &info_update->client_addr,
 		    ntohs(info_update->client_port));
 
 	temp_client = chk_clnt_entry(temp_tmgi, info_update);
@@ -722,7 +740,7 @@ int delete_client_entry_from_table(char *buffer)
 		/* Specified client entry was not found in client list
 		 * of specified TMGI
 		 */
-		embms_error("delete_client_entry_from_table:Clnt not found\n");
+		embms_error("%s:Clnt not found\n", __func__);
 		return -EBADPARAM;
 	}
 
@@ -736,15 +754,15 @@ int delete_client_entry_from_table(char *buffer)
 	kfree(temp_client);
 	temp_client = NULL;
 
-	embms_debug("delete_client_entry_from_table:Client entry deleted\n");
+	embms_debug("%s:Client entry deleted\n, __func__");
 
 	if (temp_tmgi->no_of_clients == 0) {
 		/* If deleted client was the only client for that TMGI
 		 * we need to delete TMGI entry from table
 		 */
-		embms_debug("delete_client_entry_from_table:");
+		embms_debug("%s:", __func__);
 		embms_debug("Deleted client was the last client for tmgi\n");
-		embms_debug("delete_client_entry_from_table:");
+		embms_debug("%s:", __func__);
 		embms_debug("Deleting tmgi since it has zero clients\n");
 
 		spin_lock_bh(&embms_conf.lock);
@@ -755,7 +773,7 @@ int delete_client_entry_from_table(char *buffer)
 
 		spin_unlock_bh(&embms_conf.lock);
 
-		embms_debug("delete_client_entry_from_table: TMGI deleted\n");
+		embms_debug("%s: TMGI deleted\n", __func__);
 	}
 
 	if (embms_conf.no_of_tmgi_sessions == 0)
@@ -781,7 +799,9 @@ int delete_client_entry_from_table(char *buffer)
 long embms_device_ioctl(struct file *file, unsigned int ioctl_num,
 			unsigned long ioctl_param)
 {
-	int ret;
+	int i, error;
+	long ret;
+	char *temp;
 	char buffer[BUF_LEN];
 	struct in_device *iface_dev;
 	struct in_ifaddr *iface_info;

@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015, 2017-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -129,7 +129,7 @@ EXPORT_SYMBOL(dbg_check_notify_mask);
  * Create driver attributes that let you mask
  * specific commands.
  */
-static ssize_t cmd_mask_store(struct device_driver *drv, const char *buf,
+static ssize_t command_mask_store(struct device_driver *drv, const char *buf,
 							size_t count)
 {
 	unsigned int cmd, i;
@@ -152,7 +152,7 @@ static ssize_t cmd_mask_store(struct device_driver *drv, const char *buf,
 		pr_err("invalid command specified\n");
 	return count;
 }
-static DRIVER_ATTR(command_mask, 00200, NULL, cmd_mask_store);
+static DRIVER_ATTR_WO(command_mask);
 
 static ssize_t notifier_mask_store(struct device_driver *drv, const char *buf,
 							size_t count)
@@ -177,7 +177,7 @@ static ssize_t notifier_mask_store(struct device_driver *drv, const char *buf,
 		pr_err("invalid notifier specified\n");
 	return count;
 }
-static DRIVER_ATTR(notifier_mask, 00200, NULL, notifier_mask_store);
+static DRIVER_ATTR_WO(notifier_mask);
 
 #ifdef CONFIG_MDM_DBG_REQ_ENG
 static struct esoc_clink *dbg_clink;
@@ -263,13 +263,13 @@ static ssize_t req_eng_resp_store(struct device_driver *drv, const char *buf,
 	return count;
 }
 
-static DRIVER_ATTR(req_eng_resp, 0200, NULL, req_eng_resp_store);
+static DRIVER_ATTR_WO(req_eng_resp);
 
 static ssize_t last_esoc_req_show(struct device_driver *drv, char *buf)
 {
 	unsigned int i;
 	unsigned long flags;
-	size_t count = 0;
+	size_t count;
 
 	spin_lock_irqsave(&req_lock, flags);
 	for (i = 0; i < ARRAY_SIZE(req_to_str); i++) {
@@ -282,7 +282,7 @@ static ssize_t last_esoc_req_show(struct device_driver *drv, char *buf)
 	spin_unlock_irqrestore(&req_lock, flags);
 	return count;
 }
-static DRIVER_ATTR(last_esoc_req, 0400, last_esoc_req_show, NULL);
+static DRIVER_ATTR_RO(last_esoc_req);
 
 static void esoc_handle_req(enum esoc_req req, struct esoc_eng *eng)
 {

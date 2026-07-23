@@ -8,94 +8,27 @@
 
 #include <linux/device.h>
 #include <linux/slab.h>
-#include <linux/sched.h>
+#include <linux/sched/signal.h>
 #include <linux/capability.h>
 #include <linux/export.h>
 #include <linux/suspend.h>
 #include <linux/seq_file.h>
 #include <linux/debugfs.h>
 #include <linux/pm_wakeirq.h>
-#include <linux/types.h>
+#include <linux/irq.h>
+#include <linux/interrupt.h>
+#include <linux/wakeup_reason.h>
 #include <trace/events/power.h>
 #include <linux/irq.h>
+#include <linux/interrupt.h>
 #include <linux/irqdesc.h>
-
-#ifdef OPLUS_FEATURE_POWERINFO_STANDBY
-#include "../../drivers/soc/oplus/owakelock/oplus_wakelock_profiler_qcom.h"
-#endif /* OPLUS_FEATURE_POWERINFO_STANDBY */
 
 #include "power.h"
 
-#ifdef VENDOR_EDIT
-//Yunqing.Zeng@BSP.Power.Basic 2017/11/09 add for wakelock profiler
-#include <linux/kobject.h>
-#include <linux/sysfs.h>
-#ifdef CONFIG_FB
-#include <linux/fb.h>
-#include <linux/notifier.h>
+#ifndef CONFIG_SUSPEND
+suspend_state_t pm_suspend_target_state;
+#define pm_suspend_target_state	(PM_SUSPEND_ON)
 #endif
-#ifdef CONFIG_DRM_MSM
-#include <linux/msm_drm_notify.h>
-#endif
-#endif /* VENDOR_EDIT */
-
-#ifdef VENDOR_EDIT
-#include <soc/oppo/oppo_project.h>
-
-//#define WAKEUP_SOURCE_MODEM 					60	//qcom,glink-smem-native-xprt-modem
-//#define WAKEUP_SOURCE_MODEM_IPA					119 //ipa
-//#define WAKEUP_SOURCE_ADSP						61  //qcom,glink-smem-native-xprt-adsp
-//#define WAKEUP_SOURCE_CDSP						62	//qcom,glink-smem-native-xprt-cdsp
-
-#define WAKEUP_SOURCE_KPDPWR 						69	//qpnp_kpdpwr_status
-#define WAKEUP_SOURCE_PMIC_ALARM					595 //qpnp_rtc_alarm
-#define WAKEUP_SOURCE_KPDPWR_710 					68	//qpnp_kpdpwr_status
-#define WAKEUP_SOURCE_PMIC_ALARM_710				593 //qpnp_rtc_alarm
-#define WAKEUP_SOURCE_KPDPWR_710P 					89	//qpnp_kpdpwr_status
-#define WAKEUP_SOURCE_PMIC_ALARM_710P				600 //qpnp_rtc_alarm
-
-
-u64 wakeup_source_count_kpdpwr = 0;
-u64 wakeup_source_count_cdsp= 0;
-u64 wakeup_source_count_adsp= 0;
-u64 alarm_count = 0;
-u64	wakeup_source_count_rtc = 0;
-u64	wakeup_source_count_pmic_rtc= 0;
-u64 wakeup_source_count_wifi = 0;
-
-#define MODEM_WAKEUP_SRC_NUM 3
-#define MODEM_DIAG_WS_INDEX 0
-#define MODEM_IPA_WS_INDEX 1
-#define MODEM_QMI_WS_INDEX 2
-
-u64	wakeup_source_count_modem= 0;
-
-int modem_wakeup_src_count[MODEM_WAKEUP_SRC_NUM] = { 0 };
-char modem_wakeup_src_string[MODEM_WAKEUP_SRC_NUM][10] =
-		{"DIAG_WS",
-		"IPA_WS",
-		"QMI_WS"};
-#endif /* VENDOR_EDIT */
-
-#ifdef VENDOR_EDIT
-//PengNan@BSP.Power.Basic,add for modifing the irq info. 2019/09/26
-static unsigned int qpnp_rtc_sirq = 0;
-static unsigned int qpnp_kpdpwr_sirq = 0;
-#define QPNP_RTC_IRQ_NAME   "qpnp_rtc_alarm"
-#define QPNP_KPDPWR_IRQ_NAME   "qpnp_kpdpwr_status"
-#endif /*VENDOR_EDIT*/
-
-#ifdef VENDOR_EDIT
-//Yunqing.Zeng@BSP.Power.Basic 2017/11/28 add for kernel wakelock time statistics
-static atomic_t ws_all_release_flag = ATOMIC_INIT(1);
-static ktime_t ws_start_node;
-static ktime_t ws_end_node;
-static ktime_t ws_hold_all_time;
-static ktime_t reset_time;
-static spinlock_t statistics_lock;
-#endif /* VENDOR_EDIT */
-
-#include <linux/proc_fs.h>
 
 /*
  * If set, the suspend/hibernate code will abort transitions to a sleep state
@@ -106,8 +39,8 @@ bool events_check_enabled __read_mostly;
 /* First wakeup IRQ seen by the kernel in the last cycle. */
 unsigned int pm_wakeup_irq __read_mostly;
 
-/* If set and the system is suspending, terminate the suspend. */
-static bool pm_abort_suspend __read_mostly;
+/* If greater than 0 and the system is suspending, terminate the suspend. */
+static atomic_t pm_abort_suspend __read_mostly;
 
 /*
  * Combined counters of registered wakeup events and wakeup events in progress.
@@ -145,6 +78,8 @@ static struct wakeup_source deleted_ws = {
 	.lock =  __SPIN_LOCK_UNLOCKED(deleted_ws.lock),
 };
 
+static DEFINE_IDA(wakeup_ida);
+
 /**
  * wakeup_source_prepare - Prepare a new wakeup source for initialization.
  * @ws: Wakeup source to prepare.
@@ -168,14 +103,32 @@ EXPORT_SYMBOL_GPL(wakeup_source_prepare);
  */
 struct wakeup_source *wakeup_source_create(const char *name)
 {
-	struct wakeup_source *ws;
+ 	struct wakeup_source *ws;
+	const char *ws_name;
+	int id;
 
-	ws = kmalloc(sizeof(*ws), GFP_KERNEL);
+	ws = kzalloc(sizeof(*ws), GFP_KERNEL);
 	if (!ws)
-		return NULL;
+		goto err_ws;
 
-	wakeup_source_prepare(ws, name ? kstrdup_const(name, GFP_KERNEL) : NULL);
+	ws_name = kstrdup_const(name, GFP_KERNEL);
+	if (!ws_name)
+		goto err_name;
+	ws->name = ws_name;
+
+	id = ida_simple_get(&wakeup_ida, 0, 0, GFP_KERNEL);
+	if (id < 0)
+		goto err_id;
+	ws->id = id;
+
 	return ws;
+
+err_id:
+	kfree_const(ws->name);
+err_name:
+	kfree(ws);
+err_ws:
+	return NULL;
 }
 EXPORT_SYMBOL_GPL(wakeup_source_create);
 
@@ -223,6 +176,13 @@ static void wakeup_source_record(struct wakeup_source *ws)
 	spin_unlock_irqrestore(&deleted_ws.lock, flags);
 }
 
+static void wakeup_source_free(struct wakeup_source *ws)
+{
+	ida_simple_remove(&wakeup_ida, ws->id);
+	kfree_const(ws->name);
+	kfree(ws);
+}
+
 /**
  * wakeup_source_destroy - Destroy a struct wakeup_source object.
  * @ws: Wakeup source to destroy.
@@ -236,8 +196,7 @@ void wakeup_source_destroy(struct wakeup_source *ws)
 
 	wakeup_source_drop(ws);
 	wakeup_source_record(ws);
-	kfree_const(ws->name);
-	kfree(ws);
+	wakeup_source_free(ws);
 }
 EXPORT_SYMBOL_GPL(wakeup_source_destroy);
 
@@ -255,7 +214,6 @@ void wakeup_source_add(struct wakeup_source *ws)
 	spin_lock_init(&ws->lock);
 	setup_timer(&ws->timer, pm_wakeup_timer_fn, (unsigned long)ws);
 	ws->active = false;
-	ws->last_time = ktime_get();
 
 	spin_lock_irqsave(&events_lock, flags);
 	list_add_rcu(&ws->entry, &wakeup_sources);
@@ -290,16 +248,26 @@ EXPORT_SYMBOL_GPL(wakeup_source_remove);
 
 /**
  * wakeup_source_register - Create wakeup source and add it to the list.
+ * @dev: Device this wakeup source is associated with (or NULL if virtual).
  * @name: Name of the wakeup source to register.
  */
-struct wakeup_source *wakeup_source_register(const char *name)
+struct wakeup_source *wakeup_source_register(struct device *dev,
+					     const char *name)
 {
 	struct wakeup_source *ws;
+	int ret;
 
 	ws = wakeup_source_create(name);
-	if (ws)
+	if (ws) {
+		if (!dev || device_is_registered(dev)) {
+			ret = wakeup_source_sysfs_add(dev, ws);
+			if (ret) {
+				wakeup_source_free(ws);
+				return NULL;
+			}
+		}
 		wakeup_source_add(ws);
-
+	}
 	return ws;
 }
 EXPORT_SYMBOL_GPL(wakeup_source_register);
@@ -312,6 +280,7 @@ void wakeup_source_unregister(struct wakeup_source *ws)
 {
 	if (ws) {
 		wakeup_source_remove(ws);
+		wakeup_source_sysfs_remove(ws);
 		wakeup_source_destroy(ws);
 	}
 }
@@ -352,7 +321,10 @@ int device_wakeup_enable(struct device *dev)
 	if (!dev || !dev->power.can_wakeup)
 		return -EINVAL;
 
-	ws = wakeup_source_register(dev_name(dev));
+	if (pm_suspend_target_state != PM_SUSPEND_ON)
+		dev_dbg(dev, "Suspicious %s() during system transition!\n", __func__);
+
+	ws = wakeup_source_register(dev, dev_name(dev));
 	if (!ws)
 		return -ENOMEM;
 
@@ -496,15 +468,17 @@ void device_set_wakeup_capable(struct device *dev, bool capable)
 	if (!!dev->power.can_wakeup == !!capable)
 		return;
 
+	dev->power.can_wakeup = capable;
 	if (device_is_registered(dev) && !list_empty(&dev->power.entry)) {
 		if (capable) {
-			if (wakeup_sysfs_add(dev))
-				return;
+			int ret = wakeup_sysfs_add(dev);
+
+			if (ret)
+				dev_info(dev, "Wakeup sysfs attributes not added\n");
 		} else {
 			wakeup_sysfs_remove(dev);
 		}
 	}
-	dev->power.can_wakeup = capable;
 }
 EXPORT_SYMBOL_GPL(device_set_wakeup_capable);
 
@@ -611,16 +585,6 @@ static void wakeup_source_activate(struct wakeup_source *ws)
 			"unregistered wakeup source\n"))
 		return;
 
-    #ifdef OPLUS_FEATURE_POWERINFO_STANDBY
-	//wakeup_get_start_hold_time();
-	wakeup_get_start_time();
-    #endif /* OPLUS_FEATURE_POWERINFO_STANDBY */
-	/*
-	 * active wakeup source should bring the system
-	 * out of PM_SUSPEND_FREEZE state
-	 */
-	freeze_wake();
-
 	ws->active = true;
 	ws->active_count++;
 	ws->last_time = ktime_get();
@@ -636,8 +600,9 @@ static void wakeup_source_activate(struct wakeup_source *ws)
 /**
  * wakeup_source_report_event - Report wakeup event using the given source.
  * @ws: Wakeup source to report the event for.
+ * @hard: If set, abort suspends in progress and wake up from suspend-to-idle.
  */
-static void wakeup_source_report_event(struct wakeup_source *ws)
+static void wakeup_source_report_event(struct wakeup_source *ws, bool hard)
 {
 	ws->event_count++;
 	/* This is racy, but the counter is approximate anyway. */
@@ -646,6 +611,9 @@ static void wakeup_source_report_event(struct wakeup_source *ws)
 
 	if (!ws->active)
 		wakeup_source_activate(ws);
+
+	if (hard)
+		pm_system_wakeup();
 }
 
 /**
@@ -663,7 +631,7 @@ void __pm_stay_awake(struct wakeup_source *ws)
 
 	spin_lock_irqsave(&ws->lock, flags);
 
-	wakeup_source_report_event(ws);
+	wakeup_source_report_event(ws, false);
 	del_timer(&ws->timer);
 	ws->timer_expires = 0;
 
@@ -758,12 +726,8 @@ static void wakeup_source_deactivate(struct wakeup_source *ws)
 	trace_wakeup_source_deactivate(ws->name, cec);
 
 	split_counters(&cnt, &inpr);
-	if (!inpr && waitqueue_active(&wakeup_count_wait_queue)) {
-        #ifdef OPLUS_FEATURE_POWERINFO_STANDBY
-        wakeup_get_end_hold_time();
-        #endif /* OPLUS_FEATURE_POWERINFO_STANDBY */
+	if (!inpr && waitqueue_active(&wakeup_count_wait_queue))
 		wake_up(&wakeup_count_wait_queue);
-	}
 }
 
 /**
@@ -833,9 +797,10 @@ static void pm_wakeup_timer_fn(unsigned long data)
 }
 
 /**
- * __pm_wakeup_event - Notify the PM core of a wakeup event.
+ * pm_wakeup_ws_event - Notify the PM core of a wakeup event.
  * @ws: Wakeup source object associated with the event source.
  * @msec: Anticipated event processing time (in milliseconds).
+ * @hard: If set, abort suspends in progress and wake up from suspend-to-idle.
  *
  * Notify the PM core of a wakeup event whose source is @ws that will take
  * approximately @msec milliseconds to be processed by the kernel.  If @ws is
@@ -844,7 +809,7 @@ static void pm_wakeup_timer_fn(unsigned long data)
  *
  * It is safe to call this function from interrupt context.
  */
-void __pm_wakeup_event(struct wakeup_source *ws, unsigned int msec)
+void pm_wakeup_ws_event(struct wakeup_source *ws, unsigned int msec, bool hard)
 {
 	unsigned long flags;
 	unsigned long expires;
@@ -854,7 +819,7 @@ void __pm_wakeup_event(struct wakeup_source *ws, unsigned int msec)
 
 	spin_lock_irqsave(&ws->lock, flags);
 
-	wakeup_source_report_event(ws);
+	wakeup_source_report_event(ws, hard);
 
 	if (!msec) {
 		wakeup_source_deactivate(ws);
@@ -873,17 +838,17 @@ void __pm_wakeup_event(struct wakeup_source *ws, unsigned int msec)
  unlock:
 	spin_unlock_irqrestore(&ws->lock, flags);
 }
-EXPORT_SYMBOL_GPL(__pm_wakeup_event);
-
+EXPORT_SYMBOL_GPL(pm_wakeup_ws_event);
 
 /**
  * pm_wakeup_event - Notify the PM core of a wakeup event.
  * @dev: Device the wakeup event is related to.
  * @msec: Anticipated event processing time (in milliseconds).
+ * @hard: If set, abort suspends in progress and wake up from suspend-to-idle.
  *
- * Call __pm_wakeup_event() for the @dev's wakeup source object.
+ * Call pm_wakeup_ws_event() for the @dev's wakeup source object.
  */
-void pm_wakeup_event(struct device *dev, unsigned int msec)
+void pm_wakeup_dev_event(struct device *dev, unsigned int msec, bool hard)
 {
 	unsigned long flags;
 
@@ -891,10 +856,10 @@ void pm_wakeup_event(struct device *dev, unsigned int msec)
 		return;
 
 	spin_lock_irqsave(&dev->power.lock, flags);
-	__pm_wakeup_event(dev->power.wakeup, msec);
+	pm_wakeup_ws_event(dev->power.wakeup, msec, hard);
 	spin_unlock_irqrestore(&dev->power.lock, flags);
 }
-EXPORT_SYMBOL_GPL(pm_wakeup_event);
+EXPORT_SYMBOL_GPL(pm_wakeup_dev_event);
 
 void pm_get_active_wakeup_sources(char *pending_wakeup_source, size_t max)
 {
@@ -909,13 +874,8 @@ void pm_get_active_wakeup_sources(char *pending_wakeup_source, size_t max)
 			if (!active)
 				len += scnprintf(pending_wakeup_source, max,
 						"Pending Wakeup Sources: ");
-#ifndef OPLUS_FEATURE_POWERINFO_STANDBY
-            len += scnprintf(pending_wakeup_source + len, max - len,
-                "%s ", ws->name);
-#else
-            len += scnprintf(pending_wakeup_source + len, max - len,
-                "%s, %ld, %ld ", ws->name, ws->active_count, ktime_to_ms(ws->total_time));
-#endif
+			len += scnprintf(pending_wakeup_source + len, max - len,
+				"%s ", ws->name);
 			active = true;
 		} else if (!active &&
 			   (!last_active_ws ||
@@ -925,20 +885,11 @@ void pm_get_active_wakeup_sources(char *pending_wakeup_source, size_t max)
 		}
 	}
 	if (!active && last_active_ws) {
-#ifndef OPLUS_FEATURE_POWERINFO_STANDBY
-        scnprintf(pending_wakeup_source, max,
-                "Last active Wakeup Source: %s",
-                last_active_ws->name);
-#else
-        scnprintf(pending_wakeup_source, max,
-                "Last active Wakeup Source: %s, %ld, %ld",
-                last_active_ws->name, last_active_ws->active_count, ktime_to_ms(last_active_ws->total_time));
-#endif
+		scnprintf(pending_wakeup_source, max,
+				"Last active Wakeup Source: %s",
+				last_active_ws->name);
 	}
 	srcu_read_unlock(&wakeup_srcu, srcuidx);
-#ifdef OPLUS_FEATURE_POWERINFO_STANDBY
-	pr_info("%s, active: %d, pending: %s for debug\n", __func__, active, pending_wakeup_source);
-#endif
 }
 EXPORT_SYMBOL_GPL(pm_get_active_wakeup_sources);
 
@@ -951,11 +902,7 @@ void pm_print_active_wakeup_sources(void)
 	srcuidx = srcu_read_lock(&wakeup_srcu);
 	list_for_each_entry_rcu(ws, &wakeup_sources, entry) {
 		if (ws->active) {
-            #ifdef OPLUS_FEATURE_POWERINFO_STANDBY
-            pr_info("active wakeup source: %s, %ld, %ld\n", ws->name, ws->active_count, ktime_to_ms(ws->total_time));
-            #else
-            pr_debug("active wakeup source: %s\n", ws->name);
-            #endif /* OPLUS_FEATURE_POWERINFO_STANDBY */
+			pr_debug("active wakeup source: %s\n", ws->name);
 			active = 1;
 		} else if (!active &&
 			   (!last_activity_ws ||
@@ -965,46 +912,12 @@ void pm_print_active_wakeup_sources(void)
 		}
 	}
 
-	if (!active && last_activity_ws) {
-        #ifdef OPLUS_FEATURE_POWERINFO_STANDBY
-        pr_info("last active wakeup source: %s, %ld, %ld\n",
-            last_activity_ws->name, last_activity_ws->active_count, ktime_to_ms(last_activity_ws->total_time));
-        #else
-        pr_debug("last active wakeup source: %s\n",
-            last_activity_ws->name);
-        #endif /* OPLUS_FEATURE_POWERINFO_STANDBY */
-	}
+	if (!active && last_activity_ws)
+		pr_debug("last active wakeup source: %s\n",
+			last_activity_ws->name);
 	srcu_read_unlock(&wakeup_srcu, srcuidx);
 }
 EXPORT_SYMBOL_GPL(pm_print_active_wakeup_sources);
-
-
-#ifdef OPLUS_FEATURE_POWERINFO_STANDBY
-void get_ws_listhead(struct list_head **ws)
-{
-	if (ws)
-		*ws = &wakeup_sources;
-}
-
-void wakeup_srcu_read_lock(int *srcuidx)
-{
-	*srcuidx = srcu_read_lock(&wakeup_srcu);
-}
-
-void wakeup_srcu_read_unlock(int srcuidx)
-{
-	srcu_read_unlock(&wakeup_srcu, srcuidx);
-}
-
-bool ws_all_release(void)
-{
-	unsigned int cnt, inpr;
-
-	pr_info("Enter: %s\n", __func__);
-	split_counters(&cnt, &inpr);
-	return (!inpr) ? true : false;
-}
-#endif /* OPLUS_FEATURE_POWERINFO_STANDBY */
 
 /**
  * pm_wakeup_pending - Check if power transition in progress should be aborted.
@@ -1018,6 +931,7 @@ bool pm_wakeup_pending(void)
 {
 	unsigned long flags;
 	bool ret = false;
+	char suspend_abort[MAX_SUSPEND_ABORT_LEN];
 
 	spin_lock_irqsave(&events_lock, flags);
 	if (events_check_enabled) {
@@ -1029,35 +943,33 @@ bool pm_wakeup_pending(void)
 	}
 	spin_unlock_irqrestore(&events_lock, flags);
 
-#ifndef VENDOR_EDIT
-/*yixue.ge@bsp.drv modify for maybe pm_abort_suspend happend here*/
 	if (ret) {
-#else
-	if (ret || pm_abort_suspend) {
-#endif
-        #ifndef OPLUS_FEATURE_POWERINFO_STANDBY
-        pr_debug("PM: Wakeup pending, aborting suspend\n");
-        #else
-        pr_info("PM: Wakeup pending, aborting suspend\n");
-        wakeup_reasons_statics(IRQ_NAME_ABORT, WS_CNT_ABORT);
-        #endif /* OPLUS_FEATURE_POWERINFO_STANDBY */
-		pm_print_active_wakeup_sources();
+		pm_get_active_wakeup_sources(suspend_abort,
+					     MAX_SUSPEND_ABORT_LEN);
+		log_suspend_abort_reason(suspend_abort);
+		pr_info("PM: %s\n", suspend_abort);
 	}
 
-	return ret || pm_abort_suspend;
+	return ret || atomic_read(&pm_abort_suspend) > 0;
 }
 
 void pm_system_wakeup(void)
 {
-	pm_abort_suspend = true;
-	freeze_wake();
+	atomic_inc(&pm_abort_suspend);
+	s2idle_wake();
 }
 EXPORT_SYMBOL_GPL(pm_system_wakeup);
 
-void pm_wakeup_clear(void)
+void pm_system_cancel_wakeup(void)
 {
-	pm_abort_suspend = false;
+	atomic_dec_if_positive(&pm_abort_suspend);
+}
+
+void pm_wakeup_clear(bool reset)
+{
 	pm_wakeup_irq = 0;
+	if (reset)
+		atomic_set(&pm_abort_suspend, 0);
 }
 
 void pm_system_irq_wakeup(unsigned int irq_number)
@@ -1075,47 +987,7 @@ void pm_system_irq_wakeup(unsigned int irq_number)
 
 			pr_warn("%s: %d triggered %s\n", __func__,
 					irq_number, name);
-            #ifdef VENDOR_EDIT
-			if (is_project(OPPO_18081) || is_project(OPPO_18085)) //QCM670
-			{
-				if(irq_number == WAKEUP_SOURCE_KPDPWR) {
-					wakeup_source_count_kpdpwr++;
-				}
-				if(irq_number == WAKEUP_SOURCE_PMIC_ALARM) {
-					wakeup_source_count_pmic_rtc++;
-				}
-			} else if(is_project(OPPO_18181))  //QCM710
-			{
-				if(irq_number == WAKEUP_SOURCE_KPDPWR_710) {
-					wakeup_source_count_kpdpwr++;
-				}
-				if(irq_number == WAKEUP_SOURCE_PMIC_ALARM_710) {
-					wakeup_source_count_pmic_rtc++;
-				}
-			} else {
-				if (qpnp_rtc_sirq == 0 && (name != NULL) && strncmp(name, QPNP_RTC_IRQ_NAME, strlen(QPNP_RTC_IRQ_NAME)) == 0) {
-					qpnp_rtc_sirq = irq_number;
-				}
-				if (qpnp_kpdpwr_sirq == 0 && (name != NULL) && strncmp(name, QPNP_KPDPWR_IRQ_NAME, strlen(QPNP_KPDPWR_IRQ_NAME)) == 0) {
-					qpnp_kpdpwr_sirq = irq_number;
-				}
-			}
-			#endif
-			#ifdef VENDOR_EDIT
-			//PengNan@BSP.Power.Basic, add for modifing the irq info, 2019/09/26
-			if (irq_number == qpnp_rtc_sirq) {
-				#ifdef OPLUS_FEATURE_POWERINFO_STANDBY
-	            pr_info("%s: resume caused by irq=%d, name=%s\n", __func__, irq_number, name);
-	            wakeup_reasons_statics(IRQ_NAME_RTCALARM, WS_CNT_POWERKEY|WS_CNT_RTCALARM);
-                #endif /* OPLUS_FEATURE_POWERINFO_STANDBY */
-			}
-			if (irq_number == qpnp_kpdpwr_sirq) {
-				#ifdef OPLUS_FEATURE_POWERINFO_STANDBY
-	            pr_info("%s: resume caused by irq=%d, name=%s\n", __func__, irq_number, name);
-	            wakeup_reasons_statics(IRQ_NAME_POWERKEY, WS_CNT_POWERKEY|WS_CNT_RTCALARM);
-                #endif /* OPLUS_FEATURE_POWERINFO_STANDBY */
-			}
-			#endif /*VENDOR_EDIT*/
+
 		}
 		pm_wakeup_irq = irq_number;
 		pm_system_wakeup();
@@ -1147,7 +1019,7 @@ bool pm_get_wakeup_count(unsigned int *count, bool block)
 			split_counters(&cnt, &inpr);
 			if (inpr == 0 || signal_pending(current))
 				break;
-
+			pm_print_active_wakeup_sources();
 			schedule();
 		}
 		finish_wait(&wakeup_count_wait_queue, &wait);
@@ -1241,14 +1113,14 @@ static int print_wakeup_source_stats(struct seq_file *m,
 
 		active_time = ktime_sub(now, ws->last_time);
 		total_time = ktime_add(total_time, active_time);
-		if (active_time.tv64 > max_time.tv64)
+		if (active_time > max_time)
 			max_time = active_time;
 
 		if (ws->autosleep_enabled)
 			prevent_sleep_time = ktime_add(prevent_sleep_time,
 				ktime_sub(now, ws->start_prevent_time));
 	} else {
-		active_time = ktime_set(0, 0);
+		active_time = 0;
 	}
 
 	seq_printf(m, "%-32s\t%lu\t\t%lu\t\t%lu\t\t%lu\t\t%lld\t\t%lld\t\t%lld\t\t%lld\t\t%lld\n",
@@ -1291,75 +1163,18 @@ static int wakeup_sources_stats_open(struct inode *inode, struct file *file)
 	return single_open(file, wakeup_sources_stats_show, NULL);
 }
 
-#ifdef VENDOR_EDIT
-static ssize_t watchdog_write(struct file *file, const char __user *buf, size_t count, loff_t *ppos)
-{
-	s32 value;
-	struct timespec ts;
-	struct rtc_time tm;
-
-	if (count == sizeof(s32)) {
-		if (copy_from_user(&value, buf, sizeof(s32)))
-			return -EFAULT;
-	} else if (count <= 11) { /* ASCII perhaps? */
-		char ascii_value[11];
-		unsigned long int ulval;
-		int ret;
-
-		if (copy_from_user(ascii_value, buf, count))
-			return -EFAULT;
-
-		if (count > 10) {
-			if (ascii_value[10] == '\n')
-				ascii_value[10] = '\0';
-			else
-				return -EINVAL;
-		} else {
-			ascii_value[count] = '\0';
-		}
-		ret = kstrtoul(ascii_value, 16, &ulval);
-		if (ret) {
-			pr_debug("%s, 0x%lx, 0x%x\n", ascii_value, ulval, ret);
-			return -EINVAL;
-		}
-		value = (s32)lower_32_bits(ulval);
-	} else {
-		return -EINVAL;
-	}
-
-	getnstimeofday(&ts);
-	rtc_time_to_tm(ts.tv_sec, &tm);
-	pr_warn("!@WatchDog_%d; %d-%02d-%02d %02d:%02d:%02d.%09lu UTC\n",
-		value, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-		tm.tm_hour, tm.tm_min, tm.tm_sec, ts.tv_nsec);
-
-	return count;
-}
-#endif /* VENDOR_EDIT */
-
 static const struct file_operations wakeup_sources_stats_fops = {
 	.owner = THIS_MODULE,
 	.open = wakeup_sources_stats_open,
 	.read = seq_read,
 	.llseek = seq_lseek,
 	.release = single_release,
-#ifdef VENDOR_EDIT
-	.write          = watchdog_write,
-#endif /* VENDOR_EDIT */
 };
 
 static int __init wakeup_sources_debugfs_init(void)
 {
-#ifndef VENDOR_EDIT
 	wakeup_sources_stats_dentry = debugfs_create_file("wakeup_sources",
 			S_IRUGO, NULL, NULL, &wakeup_sources_stats_fops);
-#else /* VENDOR_EDIT */
-	wakeup_sources_stats_dentry = debugfs_create_file("wakeup_sources",
-			S_IRUGO| S_IWUGO, NULL, NULL, &wakeup_sources_stats_fops);
-#endif /* VENDOR_EDIT */
-
-    proc_create_data("wakeup_sources", 0444, NULL, &wakeup_sources_stats_fops, NULL);
-    
 	return 0;
 }
 

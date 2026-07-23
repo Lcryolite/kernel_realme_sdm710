@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -26,13 +26,13 @@
 #include <linux/pm_qos.h>
 #include <linux/of_platform.h>
 #include <linux/smp.h>
-#include <linux/remote_spinlock.h>
-#include <linux/msm_remote_spinlock.h>
 #include <linux/dma-mapping.h>
 #include <linux/coresight-cti.h>
 #include <linux/moduleparam.h>
 #include <linux/sched.h>
 #include <linux/cpu_pm.h>
+#include <linux/io.h>
+#include <linux/of_address.h>
 #include <soc/qcom/spm.h>
 #include <soc/qcom/pm-legacy.h>
 #include <soc/qcom/rpm-notifier.h>
@@ -57,10 +57,22 @@
 #include <soc/qcom/minidump.h>
 
 #define SCLK_HZ (32768)
-#define SCM_HANDOFF_LOCK_ID "S:7"
 #define PSCI_POWER_STATE(reset) (reset << 30)
 #define PSCI_AFFINITY_LEVEL(lvl) ((lvl & 0x3) << 24)
-static remote_spinlock_t scm_handoff_lock;
+#define MUTEX_NUM_PID 128
+#define MUTEX_TID_START MUTEX_NUM_PID
+#define SCM_HANDOFF_LOCK_ID 7
+
+/* sfpb implementation for hardware spinlock usage */
+static phys_addr_t reg_base;
+static uint32_t reg_size;
+static uint32_t lock_size;
+
+static void __iomem *hw_mutex_reg_base;
+
+struct mutex_reg {
+volatile uint32_t regaddr;
+};
 
 enum {
 	MSM_LPM_LVL_DBG_SUSPEND_LIMITS = BIT(0),
@@ -78,7 +90,7 @@ enum debug_event {
 };
 
 struct lpm_debug {
-	cycle_t time;
+	u64 time;
 	enum debug_event evt;
 	int cpu;
 	uint32_t arg1;
@@ -409,7 +421,8 @@ static int cpu_power_select(struct cpuidle_device *dev,
 	int best_level = 0;
 	uint32_t latency_us = pm_qos_request_for_cpu(PM_QOS_CPU_DMA_LATENCY,
 							dev->cpu);
-	s64 sleep_us = ktime_to_us(tick_nohz_get_sleep_length());
+	ktime_t delta_next;
+	s64 sleep_us = ktime_to_us(tick_nohz_get_sleep_length(&delta_next));
 	uint32_t modified_time_us = 0;
 	uint32_t next_event_us = 0;
 	int i;
@@ -479,7 +492,7 @@ static uint64_t get_cluster_sleep_time(struct lpm_cluster *cluster,
 	ktime_t next_event;
 	struct cpumask online_cpus_in_cluster;
 
-	next_event.tv64 = KTIME_MAX;
+	next_event = KTIME_MAX;
 	if (!from_idle) {
 		if (mask)
 			cpumask_copy(mask, cpumask_of(raw_smp_processor_id()));
@@ -493,8 +506,8 @@ static uint64_t get_cluster_sleep_time(struct lpm_cluster *cluster,
 		ktime_t *next_event_c;
 
 		next_event_c = get_next_event_cpu(cpu);
-		if (next_event_c->tv64 < next_event.tv64) {
-			next_event.tv64 = next_event_c->tv64;
+		if (*next_event_c < next_event) {
+			next_event = *next_event_c;
 			next_cpu = cpu;
 		}
 	}
@@ -594,13 +607,13 @@ static unsigned int get_next_online_cpu(bool from_idle)
 
 	if (!from_idle)
 		return next_cpu;
-	next_event.tv64 = KTIME_MAX;
+	next_event = KTIME_MAX;
 	for_each_online_cpu(cpu) {
 		ktime_t *next_event_c;
 
 		next_event_c = get_next_event_cpu(cpu);
-		if (next_event_c->tv64 < next_event.tv64) {
-			next_event.tv64 = next_event_c->tv64;
+		if (*next_event_c < next_event) {
+			next_event = *next_event_c;
 			next_cpu = cpu;
 		}
 	}
@@ -714,7 +727,8 @@ static void cluster_prepare(struct lpm_cluster *cluster,
 	if (cluster_configure(cluster, i, from_idle))
 		goto failed;
 
-	cluster->stats->sleep_time = start_time;
+	if (!IS_ERR_OR_NULL(cluster->stats))
+		cluster->stats->sleep_time = start_time;
 	cluster_prepare(cluster->parent, &cluster->num_children_in_sync, i,
 			from_idle, start_time);
 
@@ -731,7 +745,8 @@ static void cluster_prepare(struct lpm_cluster *cluster,
 	return;
 failed:
 	spin_unlock(&cluster->sync_lock);
-	cluster->stats->sleep_time = 0;
+	if (!IS_ERR_OR_NULL(cluster->stats))
+		cluster->stats->sleep_time = 0;
 }
 
 static void cluster_unprepare(struct lpm_cluster *cluster,
@@ -766,7 +781,7 @@ static void cluster_unprepare(struct lpm_cluster *cluster,
 	if (!first_cpu || cluster->last_level == cluster->default_level)
 		goto unlock_return;
 
-	if (cluster->stats->sleep_time)
+	if (!IS_ERR_OR_NULL(cluster->stats) && cluster->stats->sleep_time)
 		cluster->stats->sleep_time = end_time -
 			cluster->stats->sleep_time;
 	lpm_stats_cluster_exit(cluster->stats, cluster->last_level, success);
@@ -987,7 +1002,7 @@ static bool psci_enter_sleep(struct lpm_cluster *cluster,
 #endif
 
 static int lpm_cpuidle_select(struct cpuidle_driver *drv,
-		struct cpuidle_device *dev)
+		struct cpuidle_device *dev, bool *stop_tick)
 {
 	struct lpm_cluster *cluster = per_cpu(cpu_cluster, dev->cpu);
 	int idx;
@@ -1096,7 +1111,6 @@ static struct cpuidle_governor lpm_governor = {
 	.name =		"qcom",
 	.rating =	30,
 	.select =	lpm_cpuidle_select,
-	.owner =	THIS_MODULE,
 };
 
 static int cluster_cpuidle_register(struct lpm_cluster *cl)
@@ -1215,6 +1229,9 @@ static void register_cluster_lpm_stats(struct lpm_cluster *cl,
 
 	cl->stats = lpm_stats_config_level(cl->cluster_name, level_name,
 			cl->nlevels, parent ? parent->stats : NULL, NULL);
+	if (IS_ERR_OR_NULL(cl->stats))
+		pr_info("Cluster (%s) stats not registered\n",
+			cl->cluster_name);
 
 	kfree(level_name);
 
@@ -1317,13 +1334,38 @@ static const struct platform_suspend_ops lpm_suspend_ops = {
 	.wake = lpm_suspend_wake,
 };
 
+static int init_hw_mutex(struct device_node *node)
+{
+	struct resource r;
+	int rc;
+	static uint32_t lock_count;
+
+	rc = of_address_to_resource(node, 0, &r);
+	if (rc) {
+		pr_err("Failed to get resource\n");
+		return 1;
+	}
+
+	rc = of_property_read_u32(node, "qcom,num-locks", &lock_count);
+	if (rc) {
+		pr_err("Failed to get num-locks property\n");
+		return 1;
+	}
+
+	reg_base = r.start;
+	reg_size = (uint32_t)(resource_size(&r));
+	lock_size = reg_size / lock_count;
+
+	return 0;
+}
+
 static int lpm_probe(struct platform_device *pdev)
 {
 	int ret;
 	int size;
 	struct kobject *module_kobj = NULL;
 	struct md_region md_entry;
-
+	struct device_node *node;
 	get_online_cpus();
 	lpm_root_node = lpm_of_parse_cluster(pdev);
 
@@ -1344,14 +1386,6 @@ static int lpm_probe(struct platform_device *pdev)
 	 */
 	suspend_set_ops(&lpm_suspend_ops);
 	hrtimer_init(&lpm_hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-
-	ret = remote_spin_lock_init(&scm_handoff_lock, SCM_HANDOFF_LOCK_ID);
-	if (ret) {
-		pr_err("%s: Failed initializing scm_handoff_lock (%d)\n",
-			__func__, ret);
-		put_online_cpus();
-		return ret;
-	}
 	size = num_dbg_elements * sizeof(struct lpm_debug);
 	lpm_debug = dma_alloc_coherent(&pdev->dev, size,
 			&lpm_debug_phys, GFP_KERNEL);
@@ -1393,6 +1427,28 @@ static int lpm_probe(struct platform_device *pdev)
 	if (msm_minidump_add_region(&md_entry))
 		pr_info("Failed to add lpm_debug in Minidump\n");
 
+	node = of_find_node_by_name(NULL, "qcom,ipc-spinlock");
+	if (!node) {
+		pr_err("Failed to find ipc-spinlock node\n");
+		ret = -ENODEV;
+		goto failed;
+	}
+
+	if (init_hw_mutex(node)) {
+		ret = -EINVAL;
+		of_node_put(node);
+		goto failed;
+	}
+
+	hw_mutex_reg_base = ioremap(reg_base, reg_size);
+	if (!hw_mutex_reg_base) {
+		pr_err("ioremap failed\n");
+		ret = -ENOMEM;
+		of_node_put(node);
+		goto failed;
+	}
+	of_node_put(node);
+
 	return 0;
 failed:
 	free_cluster_node(lpm_root_node);
@@ -1429,11 +1485,24 @@ fail:
 }
 late_initcall(lpm_levels_module_init);
 
+static void mutex_reg_write(uint32_t tid)
+{
+	struct mutex_reg *lock;
+
+	lock = hw_mutex_reg_base + (SCM_HANDOFF_LOCK_ID * lock_size);
+	do {
+		writel_relaxed(tid, lock);
+		/* barrier for proper semantics */
+		smp_mb();
+	} while (readl_relaxed(lock) != tid);
+}
+
+
 enum msm_pm_l2_scm_flag lpm_cpu_pre_pc_cb(unsigned int cpu)
 {
 	struct lpm_cluster *cluster = per_cpu(cpu_cluster, cpu);
 	enum msm_pm_l2_scm_flag retflag = MSM_SCM_L2_ON;
-
+	uint32_t tid;
 	/*
 	 * No need to acquire the lock if probe isn't completed yet
 	 * In the event of the hotplug happening before lpm probe, we want to
@@ -1474,8 +1543,8 @@ unlock_and_return:
 	update_debug_pc_event(PRE_PC_CB, retflag, 0xdeadbeef, 0xdeadbeef,
 			0xdeadbeef);
 	trace_pre_pc_cb(retflag);
-	remote_spin_lock_rlock_id(&scm_handoff_lock,
-				  REMOTE_SPINLOCK_TID_START + cpu);
+	tid = MUTEX_TID_START + cpu;
+	mutex_reg_write(tid);
 	spin_unlock(&cluster->sync_lock);
 	return retflag;
 }

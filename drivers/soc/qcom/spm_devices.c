@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2019  The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -284,8 +284,8 @@ static int msm_spm_dev_init(struct msm_spm_device *dev,
 
 	dev->cpu_vdd = VDD_DEFAULT;
 	dev->num_modes = data->num_modes;
-	dev->modes = kmalloc(
-			sizeof(struct msm_spm_power_modes) * dev->num_modes,
+	dev->modes = kmalloc_array(
+			dev->num_modes, sizeof(struct msm_spm_power_modes),
 			GFP_KERNEL);
 
 	if (!dev->modes)

@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -25,7 +25,7 @@
 /*
  * The following for adding code (ie. for EMULATION) not found on x86.
  */
-#if IPA_EMULATION_COMPILE == 1
+#if defined(CONFIG_IPA_EMULATION)
 # include "ipa_v3/ipa_emulation_stubs.h"
 #endif
 
@@ -42,9 +42,9 @@
 			if (ipa_api_ctrl->api) { \
 				ret = ipa_api_ctrl->api(p); \
 			} else { \
-				pr_err("%s not implemented for IPA ver %d\n", \
+				WARN(1, \
+					"%s not implemented for IPA ver %d\n", \
 						__func__, ipa_api_hw_type); \
-				WARN_ON(1); \
 				ret = -EPERM; \
 			} \
 		} \
@@ -59,9 +59,9 @@
 			if (ipa_api_ctrl->api) { \
 				ipa_api_ctrl->api(p); \
 			} else { \
-				pr_err("%s not implemented for IPA ver %d\n", \
+				WARN(1, \
+					"%s not implemented for IPA ver %d\n",\
 						__func__, ipa_api_hw_type); \
-				WARN_ON(1); \
 			} \
 		} \
 	} while (0)
@@ -77,9 +77,8 @@
 			if (ipa_api_ctrl->api) { \
 				ret = ipa_api_ctrl->api(p); \
 			} else { \
-				pr_err("%s not implemented for IPA ver %d\n", \
+				WARN(1, "%s not implemented for IPA ver %d\n",\
 						__func__, ipa_api_hw_type); \
-				WARN_ON(1); \
 				ret = NULL; \
 			} \
 		} \
@@ -96,15 +95,18 @@
 			if (ipa_api_ctrl->api) { \
 				ret = ipa_api_ctrl->api(p); \
 			} else { \
-				pr_err("%s not implemented for IPA ver %d\n", \
+				WARN(1, "%s not implemented for IPA ver %d\n",\
 						__func__, ipa_api_hw_type); \
-				WARN_ON(1); \
 				ret = false; \
 			} \
 		} \
 	} while (0)
 
-static bool running_emulation = IPA_EMULATION_COMPILE;
+#if defined(CONFIG_IPA_EMULATION)
+static bool running_emulation = true;
+#else
+static bool running_emulation;
+#endif
 
 static enum ipa_hw_type ipa_api_hw_type;
 static struct ipa_api_controller *ipa_api_ctrl;
@@ -122,11 +124,11 @@ const char *ipa_clients_strings[IPA_CLIENT_MAX] = {
 	__stringify(IPA_CLIENT_HSIC5_CONS),
 	__stringify(IPA_CLIENT_WLAN1_PROD),
 	__stringify(IPA_CLIENT_WLAN1_CONS),
-	__stringify(IPA_CLIENT_A5_WLAN_AMPDU_PROD),
+	__stringify(IPA_CLIENT_WLAN2_PROD),
 	__stringify(IPA_CLIENT_WLAN2_CONS),
-	__stringify(RESERVERD_PROD_14),
+	__stringify(RESERVED_PROD_14),
 	__stringify(IPA_CLIENT_WLAN3_CONS),
-	__stringify(RESERVERD_PROD_16),
+	__stringify(RESERVED_PROD_16),
 	__stringify(IPA_CLIENT_WLAN4_CONS),
 	__stringify(IPA_CLIENT_USB_PROD),
 	__stringify(IPA_CLIENT_USB_CONS),
@@ -150,7 +152,7 @@ const char *ipa_clients_strings[IPA_CLIENT_MAX] = {
 	__stringify(IPA_CLIENT_A5_LAN_WAN_CONS),
 	__stringify(IPA_CLIENT_ODU_PROD),
 	__stringify(IPA_CLIENT_ODU_EMB_CONS),
-	__stringify(RESERVERD_PROD_40),
+	__stringify(RESERVED_PROD_40),
 	__stringify(IPA_CLIENT_ODU_TETH_CONS),
 	__stringify(IPA_CLIENT_MHI_PROD),
 	__stringify(IPA_CLIENT_MHI_CONS),
@@ -170,7 +172,7 @@ const char *ipa_clients_strings[IPA_CLIENT_MAX] = {
 	__stringify(IPA_CLIENT_Q6_DECOMP_CONS),
 	__stringify(IPA_CLIENT_Q6_DECOMP2_PROD),
 	__stringify(IPA_CLIENT_Q6_DECOMP2_CONS),
-	__stringify(RESERVERD_PROD_60),
+	__stringify(RESERVED_PROD_60),
 	__stringify(IPA_CLIENT_Q6_LTE_WIFI_AGGR_CONS),
 	__stringify(IPA_CLIENT_TEST_PROD),
 	__stringify(IPA_CLIENT_TEST_CONS),
@@ -182,24 +184,48 @@ const char *ipa_clients_strings[IPA_CLIENT_MAX] = {
 	__stringify(IPA_CLIENT_TEST3_CONS),
 	__stringify(IPA_CLIENT_TEST4_PROD),
 	__stringify(IPA_CLIENT_TEST4_CONS),
-	__stringify(RESERVERD_PROD_72),
+	__stringify(RESERVED_PROD_72),
 	__stringify(IPA_CLIENT_DUMMY_CONS),
-	__stringify(RESERVERD_PROD_74),
+	__stringify(IPA_CLIENT_Q6_DL_NLO_DATA_PROD),
+	__stringify(IPA_CLIENT_Q6_UL_NLO_DATA_CONS),
+	__stringify(RESERVED_PROD_76),
+	__stringify(IPA_CLIENT_Q6_UL_NLO_ACK_CONS),
+	__stringify(RESERVED_PROD_78),
+	__stringify(IPA_CLIENT_Q6_QBAP_STATUS_CONS),
+	__stringify(RESERVED_PROD_80),
 	__stringify(IPA_CLIENT_MHI_DPL_CONS),
-	__stringify(RESERVERD_PROD_76),
-	__stringify(IPA_CLIENT_DUMMY_CONS1),
+	__stringify(RESERVED_PROD_82),
+	__stringify(IPA_CLIENT_ODL_DPL_CONS),
+	__stringify(IPA_CLIENT_Q6_AUDIO_DMA_MHI_PROD),
+	__stringify(IPA_CLIENT_Q6_AUDIO_DMA_MHI_CONS),
+	__stringify(RESERVED_PROD_86),
+	__stringify(IPA_CLIENT_APPS_WAN_COAL_CONS),
 	__stringify(IPA_CLIENT_WIGIG_PROD),
 	__stringify(IPA_CLIENT_WIGIG1_CONS),
-	__stringify(RESERVERD_PROD_80),
+	__stringify(RESERVERD_PROD_90),
 	__stringify(IPA_CLIENT_WIGIG2_CONS),
-	__stringify(RESERVERD_PROD_82),
+	__stringify(RESERVERD_PROD_92),
 	__stringify(IPA_CLIENT_WIGIG3_CONS),
-	__stringify(RESERVERD_PROD_84),
+	__stringify(RESERVERD_PROD_94),
 	__stringify(IPA_CLIENT_WIGIG4_CONS),
+	__stringify(IPA_CLIENT_AQC_ETHERNET_PROD),
+	__stringify(IPA_CLIENT_AQC_ETHERNET_CONS),
+	__stringify(IPA_CLIENT_MHI_PRIME_RMNET_PROD),
+	__stringify(IPA_CLIENT_MHI_PRIME_RMNET_CONS),
+	__stringify(IPA_CLIENT_MHI_PRIME_TETH_PROD),
+	__stringify(IPA_CLIENT_MHI_PRIME_TETH_CONS),
+	__stringify(IPA_CLIENT_MHI_PRIME_DPL_PROD),
+	__stringify(RESERVERD_CONS_103),
 	__stringify(IPA_CLIENT_MHI2_PROD),
 	__stringify(IPA_CLIENT_MHI2_CONS),
 	__stringify(IPA_CLIENT_Q6_CV2X_PROD),
-	__stringify(IPA_CLIENT_Q6_CV2X_CONS)
+	__stringify(IPA_CLIENT_Q6_CV2X_CONS),
+	__stringify(IPA_CLIENT_MHI_LOW_LAT_PROD),
+	__stringify(IPA_CLIENT_MHI_LOW_LAT_CONS),
+	__stringify(IPA_CLIENT_QDSS_PROD),
+	__stringify(IPA_CLIENT_MHI_QDSS_CONS),
+	__stringify(IPA_CLIENT_ETHERNET2_PROD),
+	__stringify(IPA_CLIENT_ETHERNET2_CONS),
 };
 
 /**
@@ -212,7 +238,7 @@ const char *ipa_clients_strings[IPA_CLIENT_MAX] = {
 u8 *ipa_write_64(u64 w, u8 *dest)
 {
 	if (unlikely(dest == NULL)) {
-		pr_err("ipa_write_64: NULL address!\n");
+		pr_err("%s: NULL address\n", __func__);
 		return dest;
 	}
 	*dest++ = (u8)((w) & 0xFF);
@@ -237,7 +263,7 @@ u8 *ipa_write_64(u64 w, u8 *dest)
 u8 *ipa_write_32(u32 w, u8 *dest)
 {
 	if (unlikely(dest == NULL)) {
-		pr_err("ipa_write_32: NULL address!\n");
+		pr_err("%s: NULL address\n", __func__);
 		return dest;
 	}
 	*dest++ = (u8)((w) & 0xFF);
@@ -258,7 +284,7 @@ u8 *ipa_write_32(u32 w, u8 *dest)
 u8 *ipa_write_16(u16 hw, u8 *dest)
 {
 	if (unlikely(dest == NULL)) {
-		pr_err("ipa_write_16: NULL address!\n");
+		pr_err("%s: NULL address\n", __func__);
 		return dest;
 	}
 	*dest++ = (u8)((hw) & 0xFF);
@@ -277,7 +303,7 @@ u8 *ipa_write_16(u16 hw, u8 *dest)
 u8 *ipa_write_8(u8 b, u8 *dest)
 {
 	if (unlikely(dest == NULL)) {
-		pr_err("ipa_write_8: NULL address!\n");
+		WARN(1, "%s: NULL address\n", __func__);
 		return dest;
 	}
 	*dest++ = (b) & 0xFF;
@@ -293,8 +319,15 @@ u8 *ipa_write_8(u8 b, u8 *dest)
  */
 u8 *ipa_pad_to_64(u8 *dest)
 {
-	int i = (long)dest & 0x7;
+	int i;
 	int j;
+
+	if (unlikely(dest == NULL)) {
+		WARN(1, "%s: NULL address\n", __func__);
+		return dest;
+	}
+
+	i = (long)dest & 0x7;
 
 	if (i)
 		for (j = 0; j < (8 - i); j++)
@@ -311,8 +344,15 @@ u8 *ipa_pad_to_64(u8 *dest)
  */
 u8 *ipa_pad_to_32(u8 *dest)
 {
-	int i = (long)dest & 0x3;
+	int i;
 	int j;
+
+	if (unlikely(dest == NULL)) {
+		WARN(1, "%s: NULL address\n", __func__);
+		return dest;
+	}
+
+	i = (long)dest & 0x3;
 
 	if (i)
 		for (j = 0; j < (4 - i); j++)
@@ -325,6 +365,8 @@ int ipa_smmu_store_sgt(struct sg_table **out_ch_ptr,
 	struct sg_table *in_sgt_ptr)
 {
 	unsigned int nents;
+	int i;
+	struct scatterlist *in_sg, *out_sg;
 
 	if (in_sgt_ptr != NULL) {
 		*out_ch_ptr = kzalloc(sizeof(struct sg_table), GFP_KERNEL);
@@ -342,8 +384,12 @@ int ipa_smmu_store_sgt(struct sg_table **out_ch_ptr,
 			return -ENOMEM;
 		}
 
-		memcpy((*out_ch_ptr)->sgl, in_sgt_ptr->sgl,
-			nents*sizeof((*out_ch_ptr)->sgl));
+		out_sg = (*out_ch_ptr)->sgl;
+		for_each_sg(in_sgt_ptr->sgl, in_sg, in_sgt_ptr->nents, i) {
+			memcpy(out_sg, in_sg, sizeof(struct scatterlist));
+			out_sg++;
+		}
+
 		(*out_ch_ptr)->nents = nents;
 		(*out_ch_ptr)->orig_nents = in_sgt_ptr->orig_nents;
 	}
@@ -363,16 +409,16 @@ int ipa_smmu_free_sgt(struct sg_table **out_sgt_ptr)
 
 /**
  * ipa_connect() - low-level IPA client connect
- * @in:	[in] input parameters from client
+ * @in: [in] input parameters from client
  * @sps:	[out] sps output from IPA needed by client for sps_connect
- * @clnt_hdl:	[out] opaque client handle assigned by IPA to client
+ * @clnt_hdl:   [out] opaque client handle assigned by IPA to client
  *
  * Should be called by the driver of the peripheral that wants to connect to
  * IPA in BAM-BAM mode. these peripherals are USB and HSIC. this api
  * expects caller to take responsibility to add any needed headers, routing
  * and filtering tables and rules as needed.
  *
- * Returns:	0 on success, negative on failure
+ * Returns:     0 on success, negative on failure
  *
  * Note:	Should not be called from atomic context
  */
@@ -389,13 +435,13 @@ EXPORT_SYMBOL(ipa_connect);
 
 /**
  * ipa_disconnect() - low-level IPA client disconnect
- * @clnt_hdl:	[in] opaque client handle assigned by IPA to client
+ * @clnt_hdl:   [in] opaque client handle assigned by IPA to client
  *
  * Should be called by the driver of the peripheral that wants to disconnect
  * from IPA in BAM-BAM mode. this api expects caller to take responsibility to
  * free any needed headers, routing and filtering tables and rules as needed.
  *
- * Returns:	0 on success, negative on failure
+ * Returns:     0 on success, negative on failure
  *
  * Note:	Should not be called from atomic context
  */
@@ -408,6 +454,7 @@ int ipa_disconnect(u32 clnt_hdl)
 	return ret;
 }
 EXPORT_SYMBOL(ipa_disconnect);
+
 
 /**
  * ipa_clear_endpoint_delay() - Clear ep_delay.
@@ -962,6 +1009,25 @@ int ipa_add_rt_rule(struct ipa_ioc_add_rt_rule *rules)
 EXPORT_SYMBOL(ipa_add_rt_rule);
 
 /**
+ * ipa_add_rt_rule_v2() - Add the specified routing rules to SW
+ * and optionally commit to IPA HW
+ * @rules:	[inout] set of routing rules to add
+ *
+ * Returns:	0 on success, negative on failure
+ *
+ * Note:	Should not be called from atomic context
+ */
+int ipa_add_rt_rule_v2(struct ipa_ioc_add_rt_rule_v2 *rules)
+{
+	int ret;
+
+	IPA_API_DISPATCH_RETURN(ipa_add_rt_rule_v2, rules);
+
+	return ret;
+}
+EXPORT_SYMBOL(ipa_add_rt_rule_v2);
+
+/**
  * ipa_add_rt_rule_usr() - Add the specified routing rules to SW and optionally
  * commit to IPA HW
  * @rules:	[inout] set of routing rules to add
@@ -980,6 +1046,26 @@ int ipa_add_rt_rule_usr(struct ipa_ioc_add_rt_rule *rules, bool user_only)
 	return ret;
 }
 EXPORT_SYMBOL(ipa_add_rt_rule_usr);
+
+/**
+ * ipa_add_rt_rule_usr_v2() - Add the specified routing rules to
+ * SW and optionally commit to IPA HW
+ * @rules:	[inout] set of routing rules to add
+ * @user_only:	[in] indicate rules installed by userspace
+ *
+ * Returns:	0 on success, negative on failure
+ *
+ * Note:	Should not be called from atomic context
+ */
+int ipa_add_rt_rule_usr_v2(struct ipa_ioc_add_rt_rule_v2 *rules, bool user_only)
+{
+	int ret;
+
+	IPA_API_DISPATCH_RETURN(ipa_add_rt_rule_usr_v2, rules, user_only);
+
+	return ret;
+}
+EXPORT_SYMBOL(ipa_add_rt_rule_usr_v2);
 
 /**
  * ipa_del_rt_rule() - Remove the specified routing rules to SW and optionally
@@ -1114,6 +1200,24 @@ int ipa_mdfy_rt_rule(struct ipa_ioc_mdfy_rt_rule *hdls)
 EXPORT_SYMBOL(ipa_mdfy_rt_rule);
 
 /**
+ * ipa_mdfy_rt_rule_v2() - Modify the specified routing rules in
+ * SW and optionally commit to IPA HW
+ *
+ * Returns:	0 on success, negative on failure
+ *
+ * Note:	Should not be called from atomic context
+ */
+int ipa_mdfy_rt_rule_v2(struct ipa_ioc_mdfy_rt_rule_v2 *hdls)
+{
+	int ret;
+
+	IPA_API_DISPATCH_RETURN(ipa_mdfy_rt_rule_v2, hdls);
+
+	return ret;
+}
+EXPORT_SYMBOL(ipa_mdfy_rt_rule_v2);
+
+/**
  * ipa_add_flt_rule() - Add the specified filtering rules to SW and optionally
  * commit to IPA HW
  * @rules:	[inout] set of filtering rules to add
@@ -1131,6 +1235,25 @@ int ipa_add_flt_rule(struct ipa_ioc_add_flt_rule *rules)
 	return ret;
 }
 EXPORT_SYMBOL(ipa_add_flt_rule);
+
+/**
+ * ipa_add_flt_rule_v2() - Add the specified filtering rules to
+ * SW and optionally commit to IPA HW
+ * @rules:	[inout] set of filtering rules to add
+ *
+ * Returns:	0 on success, negative on failure
+ *
+ * Note:	Should not be called from atomic context
+ */
+int ipa_add_flt_rule_v2(struct ipa_ioc_add_flt_rule_v2 *rules)
+{
+	int ret;
+
+	IPA_API_DISPATCH_RETURN(ipa_add_flt_rule_v2, rules);
+
+	return ret;
+}
+EXPORT_SYMBOL(ipa_add_flt_rule_v2);
 
 /**
  * ipa_add_flt_rule_usr() - Add the specified filtering rules to
@@ -1151,6 +1274,28 @@ int ipa_add_flt_rule_usr(struct ipa_ioc_add_flt_rule *rules, bool user_only)
 	return ret;
 }
 EXPORT_SYMBOL(ipa_add_flt_rule_usr);
+
+/**
+ * ipa_add_flt_rule_usr_v2() - Add the specified filtering rules
+ * to SW and optionally commit to IPA HW
+ * @rules:		[inout] set of filtering rules to add
+ * @user_only:	[in] indicate rules installed by userspace
+ *
+ * Returns:	0 on success, negative on failure
+ *
+ * Note:	Should not be called from atomic context
+ */
+int ipa_add_flt_rule_usr_v2(struct ipa_ioc_add_flt_rule_v2 *rules,
+	bool user_only)
+{
+	int ret;
+
+	IPA_API_DISPATCH_RETURN(ipa_add_flt_rule_usr_v2,
+		rules, user_only);
+
+	return ret;
+}
+EXPORT_SYMBOL(ipa_add_flt_rule_usr_v2);
 
 /**
  * ipa_del_flt_rule() - Remove the specified filtering rules from SW and
@@ -1187,6 +1332,24 @@ int ipa_mdfy_flt_rule(struct ipa_ioc_mdfy_flt_rule *hdls)
 	return ret;
 }
 EXPORT_SYMBOL(ipa_mdfy_flt_rule);
+
+/**
+ * ipa_mdfy_flt_rule_v2() - Modify the specified filtering rules
+ * in SW and optionally commit to IPA HW
+ *
+ * Returns:	0 on success, negative on failure
+ *
+ * Note:	Should not be called from atomic context
+ */
+int ipa_mdfy_flt_rule_v2(struct ipa_ioc_mdfy_flt_rule_v2 *hdls)
+{
+	int ret;
+
+	IPA_API_DISPATCH_RETURN(ipa_mdfy_flt_rule_v2, hdls);
+
+	return ret;
+}
+EXPORT_SYMBOL(ipa_mdfy_flt_rule_v2);
 
 /**
  * ipa_commit_flt() - Commit the current SW filtering table of specified type to
@@ -1963,7 +2126,7 @@ EXPORT_SYMBOL(ipa_uc_wdi_get_dbpa);
 
 /**
  * ipa_uc_reg_rdyCB() - To register uC
- * ready CB if uC not ready
+ * ready CB if uC not ready, wdi only.
  * @inout:	[in/out] input/output parameters
  * from/to client
  *
@@ -1980,6 +2143,31 @@ int ipa_uc_reg_rdyCB(
 	return ret;
 }
 EXPORT_SYMBOL(ipa_uc_reg_rdyCB);
+
+/**
+* ipa_wigig_uc_init() - get uc db and register uC
+* ready CB if uC not ready, wigig only.
+* @inout:	[in/out] uc ready input/output parameters
+* from/to client
+* @int_notify: [in] wigig misc interrupt handler function
+*
+* Returns:	0 on success, negative on failure
+*
+*/
+
+int ipa_wigig_uc_init(
+	struct ipa_wdi_uc_ready_params *inout,
+	ipa_wigig_misc_int_cb int_notify,
+	phys_addr_t *uc_db_pa)
+{
+	int ret;
+
+	IPA_API_DISPATCH_RETURN(ipa_wigig_uc_init, inout,
+		int_notify, uc_db_pa);
+
+	return ret;
+}
+EXPORT_SYMBOL(ipa_wigig_uc_init);
 
 /**
  * ipa_uc_dereg_rdyCB() - To de-register uC ready CB
@@ -2439,13 +2627,14 @@ bool ipa_has_open_aggr_frame(enum ipa_client_type client)
 
 int ipa_mhi_resume_channels_internal(enum ipa_client_type client,
 		bool LPTransitionRejected, bool brstmode_enabled,
-		union __packed gsi_channel_scratch ch_scratch, u8 index)
+		union gsi_channel_scratch ch_scratch, u8 index,
+		bool is_switch_to_dbmode)
 {
 	int ret;
 
 	IPA_API_DISPATCH_RETURN(ipa_mhi_resume_channels_internal, client,
 			LPTransitionRejected, brstmode_enabled, ch_scratch,
-			index);
+			index, is_switch_to_dbmode);
 
 	return ret;
 }
@@ -2924,6 +3113,15 @@ const char *ipa_get_version_string(enum ipa_hw_type ver)
 	case IPA_HW_v4_0:
 		str = "4.0";
 		break;
+	case IPA_HW_v4_1:
+		str = "4.1";
+		break;
+	case IPA_HW_v4_2:
+		str = "4.2";
+		break;
+	case IPA_HW_v4_5:
+		str = "4.5";
+		break;
 	default:
 		str = "Invalid version";
 		break;
@@ -2938,8 +3136,8 @@ static const struct of_device_id ipa_plat_drv_match[] = {
 	{ .compatible = "qcom,ipa-smmu-ap-cb", },
 	{ .compatible = "qcom,ipa-smmu-wlan-cb", },
 	{ .compatible = "qcom,ipa-smmu-uc-cb", },
-	{ .compatible = "qcom,smp2pgpio-map-ipa-1-in", },
-	{ .compatible = "qcom,smp2pgpio-map-ipa-1-out", },
+	{ .compatible = "qcom,smp2p-map-ipa-1-in", },
+	{ .compatible = "qcom,smp2p-map-ipa-1-out", },
 	{}
 };
 
@@ -2998,10 +3196,10 @@ static int ipa_generic_plat_drv_probe(struct platform_device *pdev_p)
 {
 	int result;
 
-/**
- * IPA probe function can be called for multiple times as the same probe
- * function handles multiple compatibilities
- */
+	/*
+	 * IPA probe function can be called for multiple times as the same probe
+	 * function handles multiple compatibilities
+	 */
 	pr_debug("ipa: IPA driver probing started for %s\n",
 		pdev_p->dev.of_node->name);
 
@@ -3024,9 +3222,6 @@ static int ipa_generic_plat_drv_probe(struct platform_device *pdev_p)
 
 	/* call probe based on IPA HW version */
 	switch (ipa_api_hw_type) {
-	case IPA_HW_v2_0:
-	case IPA_HW_v2_1:
-	case IPA_HW_v2_5:
 	case IPA_HW_v2_6L:
 		result = ipa_plat_drv_probe(pdev_p, ipa_api_ctrl,
 			ipa_plat_drv_match);
@@ -3036,6 +3231,9 @@ static int ipa_generic_plat_drv_probe(struct platform_device *pdev_p)
 	case IPA_HW_v3_5:
 	case IPA_HW_v3_5_1:
 	case IPA_HW_v4_0:
+	case IPA_HW_v4_1:
+	case IPA_HW_v4_2:
+	case IPA_HW_v4_5:
 		result = ipa3_plat_drv_probe(pdev_p, ipa_api_ctrl,
 			ipa_plat_drv_match);
 		break;
@@ -3403,6 +3601,39 @@ int ipa_disable_wdi_pipes(int ipa_ep_idx_tx, int ipa_ep_idx_rx)
 	return ret;
 }
 
+
+/**
+ * ipa_add_socksv5_conn()- Add socksv5 entry in IPA
+ *
+ * Return value: 0 on success, negative otherwise
+ */
+int ipa_add_socksv5_conn(struct ipa_socksv5_info *info)
+{
+	int ret;
+
+	IPA_API_DISPATCH_RETURN(ipa_add_socksv5_conn, info);
+
+	return ret;
+}
+EXPORT_SYMBOL(ipa_add_socksv5_conn);
+
+
+/**
+ * ipa_del_socksv5_conn()- Del socksv5 entry in IPA
+ *
+ * Return value: 0 on success, negative otherwise
+ */
+int ipa_del_socksv5_conn(uint32_t handle)
+{
+	int ret;
+
+	IPA_API_DISPATCH_RETURN(ipa_del_socksv5_conn, handle);
+
+	return ret;
+}
+EXPORT_SYMBOL(ipa_del_socksv5_conn);
+
+
 /**
  * ipa_get_lan_rx_napi() - returns if NAPI is enabled in LAN RX
  */
@@ -3415,6 +3646,98 @@ bool ipa_get_lan_rx_napi(void)
 	return ret;
 }
 EXPORT_SYMBOL(ipa_get_lan_rx_napi);
+
+/**
+ * ipa_wigig_uc_msi_init() - smmu map\unmap msi related wigig HW registers
+ *	and init\deinit uC msi config
+ */
+int ipa_wigig_uc_msi_init(bool init,
+	phys_addr_t periph_baddr_pa,
+	phys_addr_t pseudo_cause_pa,
+	phys_addr_t int_gen_tx_pa,
+	phys_addr_t int_gen_rx_pa,
+	phys_addr_t dma_ep_misc_pa)
+{
+	int ret;
+
+	IPA_API_DISPATCH_RETURN(ipa_wigig_uc_msi_init, init,
+		periph_baddr_pa,
+		pseudo_cause_pa,
+		int_gen_tx_pa,
+		int_gen_rx_pa,
+		dma_ep_misc_pa);
+
+	return ret;
+}
+EXPORT_SYMBOL(ipa_wigig_uc_msi_init);
+
+/**
+ * ipa_conn_wigig_rx_pipe_i() - connect wigig rx pipe
+ */
+int ipa_conn_wigig_rx_pipe_i(void *in, struct ipa_wigig_conn_out_params *out)
+{
+	int ret;
+
+	IPA_API_DISPATCH_RETURN(ipa_conn_wigig_rx_pipe_i, in, out);
+
+	return ret;
+}
+EXPORT_SYMBOL(ipa_conn_wigig_rx_pipe_i);
+
+/**
+ * ipa_conn_wigig_client_i() - connect a wigig client
+ */
+int ipa_conn_wigig_client_i(void *in, struct ipa_wigig_conn_out_params *out)
+{
+	int ret;
+
+	IPA_API_DISPATCH_RETURN(ipa_conn_wigig_client_i, in, out);
+
+	return ret;
+}
+EXPORT_SYMBOL(ipa_conn_wigig_client_i);
+
+/**
+ * ipa_disconn_wigig_pipe_i() - disconnect a wigig pipe
+ */
+int ipa_disconn_wigig_pipe_i(enum ipa_client_type client,
+	struct ipa_wigig_pipe_setup_info_smmu *pipe_smmu,
+	void *dbuff)
+{
+	int ret;
+
+	IPA_API_DISPATCH_RETURN(ipa_disconn_wigig_pipe_i, client,
+		pipe_smmu, dbuff);
+
+	return ret;
+}
+EXPORT_SYMBOL(ipa_disconn_wigig_pipe_i);
+
+/**
+ * ipa_enable_wigig_pipe() - enable a wigig pipe
+ */
+int ipa_enable_wigig_pipe_i(enum ipa_client_type client)
+{
+	int ret;
+
+	IPA_API_DISPATCH_RETURN(ipa_enable_wigig_pipe_i, client);
+
+	return ret;
+}
+EXPORT_SYMBOL(ipa_enable_wigig_pipe_i);
+
+/**
+ * ipa_disable_wigig_pipe_i() - disable a wigig pipe
+ */
+int ipa_disable_wigig_pipe_i(enum ipa_client_type client)
+{
+	int ret;
+
+	IPA_API_DISPATCH_RETURN(ipa_disable_wigig_pipe_i, client);
+
+	return ret;
+}
+EXPORT_SYMBOL(ipa_disable_wigig_pipe_i);
 
 /**
  * ipa_tz_unlock_reg() - Allow AP access to memory regions controlled by TZ
@@ -3442,6 +3765,45 @@ void ipa_deregister_client_callback(enum ipa_client_type client)
 		client);
 }
 
+int ipa_uc_debug_stats_alloc(
+	struct IpaHwOffloadStatsAllocCmdData_t cmdinfo)
+{
+	int ret;
+
+	IPA_API_DISPATCH_RETURN(ipa_uc_debug_stats_alloc, cmdinfo);
+
+	return ret;
+}
+EXPORT_SYMBOL(ipa_uc_debug_stats_alloc);
+
+int ipa_uc_debug_stats_dealloc(uint32_t prot_id)
+{
+	int ret;
+
+	IPA_API_DISPATCH_RETURN(ipa_uc_debug_stats_dealloc, prot_id);
+
+	return ret;
+}
+EXPORT_SYMBOL(ipa_uc_debug_stats_dealloc);
+
+void ipa_get_gsi_stats(int prot_id,
+	struct ipa_uc_dbg_ring_stats *stats)
+{
+	IPA_API_DISPATCH(ipa_get_gsi_stats,
+		prot_id, stats);
+}
+EXPORT_SYMBOL(ipa_get_gsi_stats);
+
+int ipa_get_prot_id(enum ipa_client_type client)
+{
+	int ret;
+
+	IPA_API_DISPATCH_RETURN(ipa_get_prot_id,
+		client);
+
+	return ret;
+}
+EXPORT_SYMBOL(ipa_get_prot_id);
 
 /**
  * ipa_pm_is_used() - Returns if IPA PM framework is used
@@ -3454,6 +3816,33 @@ bool ipa_pm_is_used(void)
 
 	return ret;
 }
+
+/**
+ * ipa_conn_qdss_pipes() - connect qdss pipes
+ */
+int ipa_qdss_conn_pipes(struct ipa_qdss_conn_in_params *in,
+	struct ipa_qdss_conn_out_params *out)
+{
+	int ret;
+
+	IPA_API_DISPATCH_RETURN(ipa_conn_qdss_pipes, in, out);
+
+	return ret;
+}
+EXPORT_SYMBOL(ipa_qdss_conn_pipes);
+
+/**
+ * ipa_disconn_qdss_pipes() - disconnect qdss pipes
+ */
+int ipa_qdss_disconn_pipes(void)
+{
+	int ret;
+
+	IPA_API_DISPATCH_RETURN(ipa_disconn_qdss_pipes);
+
+	return ret;
+}
+EXPORT_SYMBOL(ipa_qdss_disconn_pipes);
 
 static const struct dev_pm_ops ipa_pm_ops = {
 	.suspend_noirq = ipa_ap_suspend,

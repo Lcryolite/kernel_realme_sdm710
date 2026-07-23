@@ -16,12 +16,12 @@
 #include <linux/bpf.h>
 
 #include <net/netlink.h>
+#include <net/sock.h>
 #include <net/pkt_sched.h>
 
 #include <linux/tc_act/tc_bpf.h>
 #include <net/tc_act/tc_bpf.h>
 
-#define BPF_TAB_MASK		15
 #define ACT_BPF_NAME_LEN	256
 
 struct tcf_bpf_cfg {
@@ -32,7 +32,7 @@ struct tcf_bpf_cfg {
 	bool is_ebpf;
 };
 
-static int bpf_net_id;
+static unsigned int bpf_net_id;
 static struct tc_action_ops act_bpf_ops;
 
 static int tcf_bpf(struct sk_buff *skb, const struct tc_action *act,
@@ -57,6 +57,8 @@ static int tcf_bpf(struct sk_buff *skb, const struct tc_action *act,
 		bpf_compute_data_pointers(skb);
 		filter_res = BPF_PROG_RUN(filter, skb);
 	}
+	if (skb_sk_is_prefetched(skb) && filter_res != TC_ACT_OK)
+		skb_orphan(skb);
 	rcu_read_unlock();
 
 	/* A BPF program may overwrite the default action opcode.
@@ -121,6 +123,9 @@ static int tcf_bpf_dump_ebpf_info(const struct tcf_bpf *prog,
 
 	if (prog->bpf_name &&
 	    nla_put_string(skb, TCA_ACT_BPF_NAME, prog->bpf_name))
+		return -EMSGSIZE;
+
+	if (nla_put_u32(skb, TCA_ACT_BPF_ID, prog->filter->aux->id))
 		return -EMSGSIZE;
 
 	nla = nla_reserve(skb, TCA_ACT_BPF_TAG, sizeof(prog->filter->tag));
@@ -230,9 +235,7 @@ static int tcf_bpf_init_from_efd(struct nlattr **tb, struct tcf_bpf_cfg *cfg)
 		return PTR_ERR(fp);
 
 	if (tb[TCA_ACT_BPF_NAME]) {
-		name = kmemdup(nla_data(tb[TCA_ACT_BPF_NAME]),
-			       nla_len(tb[TCA_ACT_BPF_NAME]),
-			       GFP_KERNEL);
+		name = nla_memdup(tb[TCA_ACT_BPF_NAME], GFP_KERNEL);
 		if (!name) {
 			bpf_prog_put(fp);
 			return -ENOMEM;
@@ -289,7 +292,7 @@ static int tcf_bpf_init(struct net *net, struct nlattr *nla,
 	if (!nla)
 		return -EINVAL;
 
-	ret = nla_parse_nested(tb, TCA_ACT_BPF_MAX, nla, act_bpf_policy);
+	ret = nla_parse_nested(tb, TCA_ACT_BPF_MAX, nla, act_bpf_policy, NULL);
 	if (ret < 0)
 		return ret;
 
@@ -298,9 +301,9 @@ static int tcf_bpf_init(struct net *net, struct nlattr *nla,
 
 	parm = nla_data(tb[TCA_ACT_BPF_PARMS]);
 
-	if (!tcf_hash_check(tn, parm->index, act, bind)) {
-		ret = tcf_hash_create(tn, parm->index, est, act,
-				      &act_bpf_ops, bind, true);
+	if (!tcf_idr_check(tn, parm->index, act, bind)) {
+		ret = tcf_idr_create(tn, parm->index, est, act,
+				     &act_bpf_ops, bind, true);
 		if (ret < 0)
 			return ret;
 
@@ -310,7 +313,7 @@ static int tcf_bpf_init(struct net *net, struct nlattr *nla,
 		if (bind)
 			return 0;
 
-		tcf_hash_release(*act, bind);
+		tcf_idr_release(*act, bind);
 		if (!replace)
 			return -EEXIST;
 	}
@@ -346,7 +349,7 @@ static int tcf_bpf_init(struct net *net, struct nlattr *nla,
 	rcu_assign_pointer(prog->filter, cfg.filter);
 
 	if (res == ACT_P_CREATED) {
-		tcf_hash_insert(tn, *act);
+		tcf_idr_insert(tn, *act);
 	} else {
 		/* make sure the program being replaced is no longer executing */
 		synchronize_rcu();
@@ -356,7 +359,7 @@ static int tcf_bpf_init(struct net *net, struct nlattr *nla,
 	return res;
 out:
 	if (res == ACT_P_CREATED)
-		tcf_hash_cleanup(*act, est);
+		tcf_idr_release(*act, bind);
 
 	return ret;
 }
@@ -382,7 +385,7 @@ static int tcf_bpf_search(struct net *net, struct tc_action **a, u32 index)
 {
 	struct tc_action_net *tn = net_generic(net, bpf_net_id);
 
-	return tcf_hash_search(tn, a, index);
+	return tcf_idr_search(tn, a, index);
 }
 
 static struct tc_action_ops act_bpf_ops __read_mostly = {
@@ -402,7 +405,7 @@ static __net_init int bpf_init_net(struct net *net)
 {
 	struct tc_action_net *tn = net_generic(net, bpf_net_id);
 
-	return tc_action_net_init(tn, &act_bpf_ops, BPF_TAB_MASK);
+	return tc_action_net_init(net, tn, &act_bpf_ops);
 }
 
 static void __net_exit bpf_exit_net(struct net *net)

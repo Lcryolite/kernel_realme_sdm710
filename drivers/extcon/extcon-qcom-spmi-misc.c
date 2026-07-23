@@ -76,7 +76,7 @@ static void qcom_usb_extcon_detect_cable(struct work_struct *work)
 			extcon_set_property(info->edev, EXTCON_USB,
 						EXTCON_PROP_USB_SS, val);
 		}
-		extcon_set_cable_state_(info->edev, EXTCON_USB, state);
+		extcon_set_state_sync(info->edev, EXTCON_USB, state);
 	}
 }
 

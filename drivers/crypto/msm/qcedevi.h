@@ -16,7 +16,7 @@
 #define __CRYPTO_MSM_QCEDEVI_H
 
 #include <linux/interrupt.h>
-#include <linux/miscdevice.h>
+#include <linux/cdev.h>
 #include <crypto/hash.h>
 #include <linux/platform_data/qcom_crypto_device.h>
 #include <linux/fips_status.h>
@@ -74,11 +74,11 @@ struct qcedev_async_req {
 };
 
 /**********************************************************************
- * Register ourselves as a misc device to be able to access the dev driver
+ * Register ourselves as a char device to be able to access the dev driver
  * from userspace.
  */
 
-#define QCEDEV_DEV	"qcedev"
+#define QCEDEV_DEV	"qce"
 
 struct qcedev_control {
 
@@ -93,8 +93,10 @@ struct qcedev_control {
 
 	uint32_t  bus_scale_handle;
 
-	/* misc device */
-	struct miscdevice miscdevice;
+	/* char device */
+	struct cdev cdev;
+
+	int minor;
 
 	/* qce handle */
 	void *qce;

@@ -58,14 +58,23 @@ config POWER_RESET_BRCMKONA
 
 config POWER_RESET_BRCMSTB
 	bool "Broadcom STB reset driver"
-	depends on ARM || MIPS || COMPILE_TEST
+	depends on ARM || ARM64 || MIPS || COMPILE_TEST
 	depends on MFD_SYSCON
-	default ARCH_BRCMSTB
+	default ARCH_BRCMSTB || BMIPS_GENERIC
 	help
 	  This driver provides restart support for Broadcom STB boards.
 
 	  Say Y here if you have a Broadcom STB board and you wish
 	  to have restart support.
+
+config POWER_RESET_GEMINI_POWEROFF
+	bool "Cortina Gemini power-off driver"
+	depends on ARCH_GEMINI || COMPILE_TEST
+	depends on OF && HAS_IOMEM
+	default ARCH_GEMINI
+	help
+	  This driver supports turning off the Cortina Gemini SoC.
+	  Select this if you're building a kernel with Gemini SoC support.
 
 config POWER_RESET_GPIO
 	bool "GPIO power-off driver"
@@ -98,6 +107,16 @@ config POWER_RESET_IMX
 	  say N here or disable in dts to make sure pm_power_off never be
 	  overwrote wrongly by this driver.
 
+config POWER_RESET_PIIX4_POWEROFF
+	tristate "Intel PIIX4 power-off driver"
+	depends on PCI
+	depends on MIPS || COMPILE_TEST
+	help
+	  This driver supports powering off a system using the Intel PIIX4
+	  southbridge, for example the MIPS Malta development board. The
+	  southbridge SOff state is entered in response to a request to
+	  power off the system.
+
 config POWER_RESET_LTC2952
 	bool "LTC2952 PowerPath power-off driver"
 	depends on OF_GPIO
@@ -114,6 +133,15 @@ config POWER_RESET_QCOM
 	  This driver supports board power down and restart using PMIC PS_HOLD.
 	  Say Y here if you have a Qualcomm Tecnologies, Inc. board and wish to
 	  enable restart driver.
+
+config POWER_RESET_QCOM_VM
+	bool "Qualcomm Technologies, Inc. MSM VM power-off driver"
+	depends on QTI_GVM
+	help
+	  Power off and restart support for Qualcomm Technologies, Inc. virtual
+	  machine. This driver supports virtual machine power down and restart.
+	  Say Y here if you have a MSM virtual machine and wish to enable
+	  restart driver.
 
 config QCOM_DLOAD_MODE
 	bool "Qualcomm Technologies, Inc. download mode"

@@ -88,15 +88,15 @@ static struct sk_buff *ipv6_gso_segment(struct sk_buff *skb,
 
 	if (skb->encapsulation &&
 	    skb_shinfo(skb)->gso_type & (SKB_GSO_IPXIP4 | SKB_GSO_IPXIP6))
-		udpfrag = proto == IPPROTO_UDP && encap;
+		udpfrag = proto == IPPROTO_UDP && encap &&
+			  (skb_shinfo(skb)->gso_type & SKB_GSO_UDP);
 	else
-		udpfrag = proto == IPPROTO_UDP && !skb->encapsulation;
+		udpfrag = proto == IPPROTO_UDP && !skb->encapsulation &&
+			  (skb_shinfo(skb)->gso_type & SKB_GSO_UDP);
 
 	ops = rcu_dereference(inet6_offloads[proto]);
 	if (likely(ops && ops->callbacks.gso_segment)) {
-		if (!skb_reset_transport_header_careful(skb))
-			goto out;
-
+		skb_reset_transport_header(skb);
 		segs = ops->callbacks.gso_segment(skb, features);
 		if (!segs)
 			skb->network_header = skb_mac_header(skb) + nhoff - skb->head;
@@ -254,7 +254,7 @@ out_unlock:
 	rcu_read_unlock();
 
 out:
-	NAPI_GRO_CB(skb)->flush |= flush;
+	skb_gro_flush_final(skb, pp, flush);
 
 	return pp;
 }

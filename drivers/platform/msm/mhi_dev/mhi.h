@@ -272,7 +272,7 @@ struct mhi_config {
 #define NUM_CHANNELS			128
 #define HW_CHANNEL_BASE			100
 #define NUM_HW_CHANNELS			15
-#define HW_CHANNEL_END			107
+#define HW_CHANNEL_END			110
 #define MHI_ENV_VALUE			2
 #define MHI_MASK_ROWS_CH_EV_DB		4
 #define TRB_MAX_DATA_SIZE		8192
@@ -330,8 +330,8 @@ struct mhi_meminfo {
 
 struct mhi_addr {
 	uint64_t	host_pa;
-	uintptr_t	device_pa;
-	uintptr_t	device_va;
+	size_t	device_pa;
+	size_t	device_va;
 	size_t		size;
 	dma_addr_t	phy_addr;
 	void		*virt_addr;
@@ -370,6 +370,11 @@ enum mhi_dev_transfer_type {
 	MHI_DEV_DMA_ASYNC,
 };
 
+struct msi_buf_cb_data {
+	u32 *buf;
+	dma_addr_t dma_addr;
+};
+
 struct mhi_dev_channel;
 
 struct mhi_dev_ring {
@@ -377,13 +382,17 @@ struct mhi_dev_ring {
 	struct mhi_dev				*mhi_dev;
 
 	uint32_t				id;
-	uint32_t				rd_offset;
-	uint32_t				wr_offset;
-	uint32_t				ring_size;
+	size_t				rd_offset;
+	size_t				wr_offset;
+	size_t				ring_size;
 
 	enum mhi_dev_ring_type			type;
 	enum mhi_dev_ring_state			state;
-
+	/*
+	 * Lock to prevent race in updating event ring
+	 * which is shared by multiple channels
+	 */
+	struct mutex	event_lock;
 	/* device virtual address location of the cached host ring ctx data */
 	union mhi_dev_ring_element_type		*ring_cache;
 	/* Physical address of the cached ring copy on the device side */
@@ -394,13 +403,14 @@ struct mhi_dev_ring {
 	union mhi_dev_ring_ctx			*ring_ctx;
 	/* ring_ctx_shadow -> tracking ring_ctx in the host */
 	union mhi_dev_ring_ctx			*ring_ctx_shadow;
+	struct msi_buf_cb_data		msi_buf;
 	void (*ring_cb)(struct mhi_dev *dev,
 			union mhi_dev_ring_element_type *el,
 			void *ctx);
 };
 
 static inline void mhi_dev_ring_inc_index(struct mhi_dev_ring *ring,
-						uint32_t rd_offset)
+						size_t rd_offset)
 {
 	ring->rd_offset++;
 	if (ring->rd_offset == ring->ring_size)
@@ -457,8 +467,8 @@ struct mhi_dev_channel {
 	uint32_t			evt_buf_wp;
 	uint32_t			evt_buf_size;
 	/*
-	 * Pointer to a block of event request structs used to temporarily store
-	 * completion events and meta data before sending them to host
+	 * Pointer to a block of event request structs used to temporarily
+	 * store completion events and meta data before sending them to host
 	 */
 	struct event_req		*ereqs;
 	/* Linked list head for event request structs */
@@ -468,7 +478,6 @@ struct mhi_dev_channel {
 	struct list_head		flush_event_req_buffers;
 	/* Pointer to the currently used event request struct */
 	struct event_req		*curr_ereq;
-
 	/* current TRE being processed */
 	uint64_t			tre_loc;
 	/* current TRE size */
@@ -493,6 +502,9 @@ struct mhi_dev {
 
 	uint32_t			*mmio_backup;
 	struct mhi_config		cfg;
+	u32				msi_data;
+	u32				msi_lower;
+	spinlock_t			msi_lock;
 	bool				mmio_initialized;
 
 	spinlock_t			lock;
@@ -533,9 +545,9 @@ struct mhi_dev {
 	struct list_head		event_ring_list;
 	struct list_head		process_ring_list;
 
-	uint32_t			cmd_ring_idx;
-	uint32_t			ev_ring_start;
-	uint32_t			ch_ring_start;
+	size_t			cmd_ring_idx;
+	size_t			ev_ring_start;
+	size_t			ch_ring_start;
 
 	/* IPA Handles */
 	u32				ipa_clnt_hndl[NUM_HW_CHANNELS];
@@ -577,6 +589,9 @@ struct mhi_dev {
 	/* Use IPA DMA for Software channel data transfer */
 	bool				use_ipa;
 
+	/* Use  PCI eDMA for data transfer */
+	bool				use_edma;
+
 	/* iATU is required to map control and data region */
 	bool				config_iatu;
 
@@ -589,8 +604,27 @@ struct mhi_dev {
 	/*Register for interrupt*/
 	bool				mhi_int;
 	bool				mhi_int_en;
+	/* Enable M2 autonomous mode from MHI */
+	bool				enable_m2;
+
 	/* Registered client callback list */
 	struct list_head		client_cb_list;
+	/* Tx, Rx DMA channels */
+	struct dma_chan			*tx_dma_chan;
+	struct dma_chan			*rx_dma_chan;
+
+	int (*device_to_host)(uint64_t dst_pa, void *src, uint32_t len,
+				struct mhi_dev *mhi, struct mhi_req *req);
+
+	int (*host_to_device)(void *device, uint64_t src_pa, uint32_t len,
+				struct mhi_dev *mhi, struct mhi_req *mreq);
+
+	void (*write_to_host)(struct mhi_dev *mhi,
+			struct mhi_addr *mhi_transfer, struct event_req *ereq,
+			enum mhi_dev_transfer_type type);
+
+	void (*read_from_host)(struct mhi_dev *mhi,
+				struct mhi_addr *mhi_transfer);
 
 	struct kobj_uevent_env		kobj_env;
 };
@@ -624,6 +658,8 @@ extern void *mhi_ipc_log;
 
 /* Use ID 0 for legacy /dev/mhi_ctrl. Channel 0 used for internal only */
 #define MHI_DEV_UEVENT_CTRL	0
+
+#define MHI_USE_DMA(mhi) (mhi->use_ipa || mhi->use_edma)
 
 struct mhi_dev_uevent_info {
 	enum mhi_client_channel	channel;
@@ -671,7 +707,7 @@ int mhi_ring_start(struct mhi_dev_ring *ring,
  * @ring:	Ring for the respective context - Channel/Event/Command.
  * @wr_offset:	Cache the TRE's upto the write offset value.
  */
-int mhi_dev_cache_ring(struct mhi_dev_ring *ring, uint32_t wr_offset);
+int mhi_dev_cache_ring(struct mhi_dev_ring *ring, size_t wr_offset);
 
 /**
  * mhi_dev_update_wr_offset() - Check for any updates in the write offset.
@@ -692,7 +728,7 @@ int mhi_dev_process_ring(struct mhi_dev_ring *ring);
  * @ring:	Ring for the respective context - Channel/Event/Command.
  * @offset:	Offset index into the respective ring's cache element.
  */
-int mhi_dev_process_ring_element(struct mhi_dev_ring *ring, uint32_t offset);
+int mhi_dev_process_ring_element(struct mhi_dev_ring *ring, size_t offset);
 
 /**
  * mhi_dev_add_element() - Copy the element to the respective transfer rings
@@ -703,57 +739,13 @@ int mhi_dev_process_ring_element(struct mhi_dev_ring *ring, uint32_t offset);
 int mhi_dev_add_element(struct mhi_dev_ring *ring,
 				union mhi_dev_ring_element_type *element,
 				struct event_req *ereq, int evt_offset);
-/**
- * mhi_transfer_device_to_host() - memcpy equivalent API to transfer data
- *		from device to the host.
- * @dst_pa:	Physical destination address.
- * @src:	Source virtual address.
- * @len:	Numer of bytes to be transferred.
- * @mhi:	MHI dev structure.
- * @req:        mhi_req structure
- */
-int mhi_transfer_device_to_host(uint64_t dst_pa, void *src, uint32_t len,
-				struct mhi_dev *mhi, struct mhi_req *req);
 
-/**
- * mhi_transfer_host_to_dev() - memcpy equivalent API to transfer data
- *		from host to the device.
- * @dst:	Physical destination virtual address.
- * @src_pa:	Source physical address.
- * @len:	Numer of bytes to be transferred.
- * @mhi:	MHI dev structure.
- * @req:        mhi_req structure
+/*
+ * mhi_ring_set_cb () - Call back function of the ring.
+ *
+ * @ring:	Ring for the respective context - Channel/Event/Command.
+ * @ring_cb:	callback function.
  */
-int mhi_transfer_host_to_device(void *device, uint64_t src_pa, uint32_t len,
-				struct mhi_dev *mhi, struct mhi_req *mreq);
-
-/**
- * mhi_dev_write_to_host() - Transfer data from device to host.
- *		Based on support available, either IPA DMA or memcpy is used.
- * @host:	Host and device address details.
- * @buf:	Data buffer that needs to be written to the host.
- * @size:	Data buffer size.
- */
-void mhi_dev_write_to_host(struct mhi_dev *mhi, struct mhi_addr *mhi_transfer,
-		struct event_req *ereq, enum mhi_dev_transfer_type type);
-/**
- * mhi_dev_read_from_host() - memcpy equivalent API to transfer data
- *		from host to device.
- * @host:	Host and device address details.
- * @buf:	Data buffer that needs to be read from the host.
- * @size:	Data buffer size.
- */
-void mhi_dev_read_from_host(struct mhi_dev *mhi,
-				struct mhi_addr *mhi_transfer);
-
-/**
- * mhi_dev_read_from_host() - memcpy equivalent API to transfer data
- *		from host to device.
- * @host:	Host and device address details.
- * @buf:	Data buffer that needs to be read from the host.
- * @size:	Data buffer size.
- */
-
 void mhi_ring_set_cb(struct mhi_dev_ring *ring,
 			void (*ring_cb)(struct mhi_dev *dev,
 			union mhi_dev_ring_element_type *el, void *ctx));
@@ -1125,4 +1117,5 @@ void mhi_uci_chan_state_notify_all(struct mhi_dev *mhi,
 void mhi_uci_chan_state_notify(struct mhi_dev *mhi,
 		enum mhi_client_channel ch_id, enum mhi_ctrl_info ch_state);
 
+void mhi_dev_pm_relax(void);
 #endif /* _MHI_H */

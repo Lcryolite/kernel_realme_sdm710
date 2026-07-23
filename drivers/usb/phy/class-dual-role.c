@@ -23,7 +23,6 @@
 #include <linux/slab.h>
 #include <linux/stat.h>
 #include <linux/types.h>
-#include <soc/oplus/system/oppo_project.h>
 
 #define DUAL_ROLE_NOTIFICATION_TIMEOUT 2000
 
@@ -83,6 +82,9 @@ static void dual_role_changed_work(struct work_struct *work)
 
 void dual_role_instance_changed(struct dual_role_phy_instance *dual_role)
 {
+	if (!dual_role)
+		return;
+
 	dev_dbg(&dual_role->dev, "%s\n", __func__);
 	pm_wakeup_event(&dual_role->dev, DUAL_ROLE_NOTIFICATION_TIMEOUT);
 	schedule_work(&dual_role->changed_work);
@@ -510,10 +512,6 @@ out:
 
 static int __init dual_role_class_init(void)
 {
-	if (get_project() == 18621 || get_project() == 18637) {
-		pr_info("micro usb project no need to dual_role_usb init\n");
-		return 0;
-	}
 	dual_role_class = class_create(THIS_MODULE, "dual_role_usb");
 
 	if (IS_ERR(dual_role_class))

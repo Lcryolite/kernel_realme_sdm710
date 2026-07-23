@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2014,2016-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2014,2016-2017, 2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -263,6 +263,7 @@ static ssize_t twm_enable_show(struct class *c,
 
 	return snprintf(buf, PAGE_SIZE, "%d\n", mdev->twm_enable);
 }
+static CLASS_ATTR_RW(twm_enable);
 
 static ssize_t twm_exit_show(struct class *c,
 			struct class_attribute *attr, char *buf)
@@ -282,14 +283,14 @@ static ssize_t twm_exit_show(struct class *c,
 
 	return snprintf(buf, PAGE_SIZE, "%d\n", !!(val & TWM_EXIT_BIT));
 }
+static CLASS_ATTR_RO(twm_exit);
 
-static struct class_attribute twm_attributes[] = {
-	[TWM_ENABLE]		= __ATTR(twm_enable, 0644,
-					twm_enable_show, twm_enable_store),
-	[TWM_EXIT]		= __ATTR(twm_exit, 0644,
-					twm_exit_show, NULL),
-	__ATTR_NULL,
+static struct attribute *twm_attrs[] = {
+	&class_attr_twm_enable.attr,
+	&class_attr_twm_exit.attr,
+	NULL,
 };
+ATTRIBUTE_GROUPS(twm);
 
 int qpnp_misc_twm_notifier_register(struct notifier_block *nb)
 {
@@ -378,7 +379,7 @@ static int qpnp_misc_config(struct qpnp_misc_dev *mdev)
 	if (mdev->support_twm_config) {
 		mdev->twm_class.name = "pmic_twm",
 		mdev->twm_class.owner = THIS_MODULE,
-		mdev->twm_class.class_attrs = twm_attributes;
+		mdev->twm_class.class_groups = twm_groups;
 
 		rc = class_register(&mdev->twm_class);
 		if (rc < 0) {

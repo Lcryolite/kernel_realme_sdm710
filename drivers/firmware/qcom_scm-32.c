@@ -1,4 +1,4 @@
-/* Copyright (c) 2010,2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010,2015,2020 The Linux Foundation. All rights reserved.
  * Copyright (C) 2015 Linaro Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -559,4 +559,47 @@ int __qcom_scm_pas_mss_reset(struct device *dev, bool reset)
 			&out, sizeof(out));
 
 	return ret ? : le32_to_cpu(out);
+}
+
+int __qcom_scm_set_remote_state(struct device *dev, u32 state, u32 id)
+{
+	struct {
+		__le32 state;
+		__le32 id;
+	} req;
+	__le32 scm_ret = 0;
+	int ret;
+
+	req.state = cpu_to_le32(state);
+	req.id = cpu_to_le32(id);
+
+	ret = qcom_scm_call(dev, QCOM_SCM_SVC_BOOT, QCOM_SCM_SET_REMOTE_STATE,
+			    &req, sizeof(req), &scm_ret, sizeof(scm_ret));
+
+	return ret ? : le32_to_cpu(scm_ret);
+}
+
+int __qcom_scm_assign_mem(struct device *dev, phys_addr_t mem_region,
+			  size_t mem_sz, phys_addr_t src, size_t src_sz,
+			  phys_addr_t dest, size_t dest_sz)
+{
+	return -ENODEV;
+}
+
+int __qcom_scm_restore_sec_cfg(struct device *dev, u32 device_id,
+			       u32 spare)
+{
+	return -ENODEV;
+}
+
+int __qcom_scm_iommu_secure_ptbl_size(struct device *dev, u32 spare,
+				      size_t *size)
+{
+	return -ENODEV;
+}
+
+int __qcom_scm_iommu_secure_ptbl_init(struct device *dev, u64 addr, u32 size,
+				      u32 spare)
+{
+	return -ENODEV;
 }

@@ -1,4 +1,4 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -12,6 +12,9 @@
 
 #ifndef _CAM_HW_MGR_INTF_H_
 #define _CAM_HW_MGR_INTF_H_
+
+#include <linux/time.h>
+#include <linux/types.h>
 
 /*
  * This file declares Constants, Enums, Structures and APIs to be used as
@@ -29,6 +32,10 @@
 typedef int (*cam_hw_event_cb_func)(void *context, uint32_t evt_id,
 	void *evt_data);
 
+/* hardware page fault callback function type */
+typedef int (*cam_hw_pagefault_cb_func)(void *context, unsigned long iova,
+	uint32_t buf_info);
+
 /**
  * struct cam_hw_update_entry - Entry for hardware config
  *
@@ -44,7 +51,7 @@ struct cam_hw_update_entry {
 	uint32_t           offset;
 	uint32_t           len;
 	uint32_t           flags;
-	uint64_t           addr;
+	uintptr_t          addr;
 };
 
 /**
@@ -89,7 +96,8 @@ struct cam_hw_acquire_args {
 	void                        *context_data;
 	cam_hw_event_cb_func         event_cb;
 	uint32_t                     num_acq;
-	uint64_t                     acquire_info;
+	uint32_t                     acquire_info_size;
+	uintptr_t                    acquire_info;
 	void                        *ctxt_to_hw_map;
 };
 
@@ -131,10 +139,23 @@ struct cam_hw_stop_args {
 	void              *args;
 };
 
+
+/**
+ * struct cam_hw_mgr_dump_pf_data - page fault debug data
+ *
+ * packet:     pointer to packet
+ * ctx:        pointer to cam context
+ */
+struct cam_hw_mgr_dump_pf_data {
+	void *packet;
+	void *ctx;
+};
+
 /**
  * struct cam_hw_prepare_update_args - Payload for prepare command
  *
  * @packet:                CSL packet from user mode driver
+ * @remain_len             Remaining length of CPU buffer after config offset
  * @ctxt_to_hw_map:        HW context from the acquire
  * @max_hw_update_entries: Maximum hardware update entries supported
  * @hw_update_entries:     Actual hardware update configuration (returned)
@@ -146,10 +167,12 @@ struct cam_hw_stop_args {
  * @in_map_entries:        Actual input fence mapping list (returned)
  * @num_in_map_entries:    Number of acutal input fence mapping (returned)
  * @priv:                  Private pointer of hw update
+ * @pf_data:               Debug data for page fault
  *
  */
 struct cam_hw_prepare_update_args {
 	struct cam_packet              *packet;
+	size_t                          remain_len;
 	void                           *ctxt_to_hw_map;
 	uint32_t                        max_hw_update_entries;
 	struct cam_hw_update_entry     *hw_update_entries;
@@ -160,6 +183,21 @@ struct cam_hw_prepare_update_args {
 	uint32_t                        max_in_map_entries;
 	struct cam_hw_fence_map_entry  *in_map_entries;
 	uint32_t                        num_in_map_entries;
+	void                           *priv;
+	struct cam_hw_mgr_dump_pf_data *pf_data;
+};
+
+/**
+ * struct cam_hw_stream_setttings - Payload for config stream command
+ *
+ * @packet:                CSL packet from user mode driver
+ * @ctxt_to_hw_map:        HW context from the acquire
+ * @priv:                  Private pointer of hw update
+ *
+ */
+struct cam_hw_stream_setttings {
+	struct cam_packet              *packet;
+	void                           *ctxt_to_hw_map;
 	void                           *priv;
 };
 
@@ -173,6 +211,7 @@ struct cam_hw_prepare_update_args {
  * @num_out_map_entries:   Number of out map entries
  * @priv:                  Private pointer
  * @request_id:            Request ID
+ * @reapply                True if reapplying after bubble
  *
  */
 struct cam_hw_config_args {
@@ -183,10 +222,8 @@ struct cam_hw_config_args {
 	uint32_t                        num_out_map_entries;
 	void                           *priv;
 	uint64_t                        request_id;
-#ifdef VENDOR_EDIT
-	/*Xinlan.He@Camera case 03543839 for issue config done completion timeout*/
 	bool                            init_packet;
-#endif
+	bool                            reapply;
 };
 
 /**
@@ -198,6 +235,8 @@ struct cam_hw_config_args {
  * @num_req_active:        Num request to flush, valid when flush type is REQ
  * @flush_req_active:      Request active pointers to flush
  * @flush_type:            The flush type
+ * @last_flush_req:        last flush req_id notified to hw_mgr for the
+ *                         given stream
  *
  */
 struct cam_hw_flush_args {
@@ -207,33 +246,105 @@ struct cam_hw_flush_args {
 	uint32_t                        num_req_active;
 	void                           *flush_req_active[20];
 	enum flush_type_t               flush_type;
+	uint32_t                        last_flush_req;
+};
+
+/**
+ * struct cam_hw_dump_pf_args - Payload for dump pf info command
+ *
+ * @pf_data:               Debug data for page fault
+ * @iova:                  Page fault address
+ * @buf_info:              Info about memory buffer where page
+ *                               fault occurred
+ * @mem_found:             If fault memory found in current
+ *                               request
+ *
+ */
+struct cam_hw_dump_pf_args {
+	struct cam_hw_mgr_dump_pf_data  pf_data;
+	unsigned long                   iova;
+	uint32_t                        buf_info;
+	bool                           *mem_found;
+};
+
+/**
+ * struct cam_hw_reset_args -hw reset arguments
+ *
+ * @ctxt_to_hw_map:        HW context from the acquire
+ *
+ */
+struct cam_hw_reset_args {
+	void                           *ctxt_to_hw_map;
+};
+
+/**
+ * struct cam_hw_dump_args - Dump arguments
+ *
+ * @request_id:            request_id
+ * @buf_handle:            Buffer handle
+ * @offset:                Buffer offset. This is updated by the drivers.
+ * @ctxt_to_hw_map:        HW context from the acquire
+ */
+struct cam_hw_dump_args {
+	uint64_t          request_id;
+	uint32_t          buf_handle;
+	int32_t           offset;
+	void             *ctxt_to_hw_map;
+};
+
+/* enum cam_hw_mgr_command - Hardware manager command type */
+enum cam_hw_mgr_command {
+	CAM_HW_MGR_CMD_INTERNAL,
+	CAM_HW_MGR_CMD_DUMP_PF_INFO,
+};
+
+/**
+ * struct cam_hw_cmd_args - Payload for hw manager command
+ *
+ * @ctxt_to_hw_map:        HW context from the acquire
+ * @cmd_type               HW command type
+ * @internal_args          Arguments for internal command
+ * @pf_args                Arguments for Dump PF info command
+ *
+ */
+struct cam_hw_cmd_args {
+	void                               *ctxt_to_hw_map;
+	uint32_t                            cmd_type;
+	union {
+		void                       *internal_args;
+		struct cam_hw_dump_pf_args  pf_args;
+	} u;
 };
 
 /**
  * cam_hw_mgr_intf - HW manager interface
  *
- * @hw_mgr_priv:           HW manager object
- * @hw_get_caps:           Function pointer for get hw caps
+ * @hw_mgr_priv:               HW manager object
+ * @hw_get_caps:               Function pointer for get hw caps
  *                               args = cam_query_cap_cmd
- * @hw_acquire:            Function poniter for acquire hw resources
+ * @hw_acquire:                Function poniter for acquire hw resources
  *                               args = cam_hw_acquire_args
- * @hw_release:            Function pointer for release hw device resource
+ * @hw_release:                Function pointer for release hw device resource
  *                               args = cam_hw_release_args
- * @hw_start:              Function pointer for start hw devices
+ * @hw_start:                  Function pointer for start hw devices
  *                               args = cam_hw_start_args
- * @hw_stop:               Function pointer for stop hw devices
+ * @hw_stop:                   Function pointer for stop hw devices
  *                               args = cam_hw_stop_args
- * @hw_prepare_update:     Function pointer for prepare hw update for hw devices
- *                               args = cam_hw_prepare_update_args
- * @hw_config:             Function pointer for configure hw devices
+ * @hw_prepare_update:         Function pointer for prepare hw update for hw
+ *                             devices args = cam_hw_prepare_update_args
+ * @hw_config_stream_settings: Function pointer for configure stream for hw
+ *                             devices args = cam_hw_stream_setttings
+ * @hw_config:                 Function pointer for configure hw devices
  *                               args = cam_hw_config_args
- * @hw_read:               Function pointer for read hardware registers
- * @hw_write:              Function pointer for Write hardware registers
- * @hw_cmd:                Function pointer for any customized commands for the
- *                         hardware manager
- * @hw_open:               Function pointer for HW init
- * @hw_close:              Function pointer for HW deinit
- * @hw_flush:              Function pointer for HW flush
+ * @hw_read:                   Function pointer for read hardware registers
+ * @hw_write:                  Function pointer for Write hardware registers
+ * @hw_cmd:                    Function pointer for any customized commands for
+ *                             the hardware manager
+ * @hw_open:                   Function pointer for HW init
+ * @hw_close:                  Function pointer for HW deinit
+ * @hw_flush:                  Function pointer for HW flush
+ * @hw_reset:                  Function pointer for HW reset
+ * @hw_dump:                   Function pointer for HW dump
  *
  */
 struct cam_hw_mgr_intf {
@@ -245,6 +356,8 @@ struct cam_hw_mgr_intf {
 	int (*hw_start)(void *hw_priv, void *hw_start_args);
 	int (*hw_stop)(void *hw_priv, void *hw_stop_args);
 	int (*hw_prepare_update)(void *hw_priv, void *hw_prepare_update_args);
+	int (*hw_config_stream_settings)(void *hw_priv,
+		void *hw_stream_settings);
 	int (*hw_config)(void *hw_priv, void *hw_config_args);
 	int (*hw_read)(void *hw_priv, void *read_args);
 	int (*hw_write)(void *hw_priv, void *write_args);
@@ -252,6 +365,8 @@ struct cam_hw_mgr_intf {
 	int (*hw_open)(void *hw_priv, void *fw_download_args);
 	int (*hw_close)(void *hw_priv, void *hw_close_args);
 	int (*hw_flush)(void *hw_priv, void *hw_flush_args);
+	int (*hw_reset)(void *hw_priv, void *hw_reset_args);
+	int (*hw_dump)(void *hw_priv, void *hw_dump_args);
 };
 
 #endif /* _CAM_HW_MGR_INTF_H_ */

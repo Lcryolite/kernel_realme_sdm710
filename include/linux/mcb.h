@@ -66,7 +66,6 @@ static inline struct mcb_bus *to_mcb_bus(struct device *dev)
 struct mcb_device {
 	struct device dev;
 	struct mcb_bus *bus;
-	bool is_added;
 	struct mcb_driver *driver;
 	u16 id;
 	int inst;
@@ -136,5 +135,7 @@ extern struct resource *mcb_request_mem(struct mcb_device *dev,
 					const char *name);
 extern void mcb_release_mem(struct resource *mem);
 extern int mcb_get_irq(struct mcb_device *dev);
+extern struct resource *mcb_get_resource(struct mcb_device *dev,
+					 unsigned int type);
 
 #endif /* _LINUX_MCB_H */

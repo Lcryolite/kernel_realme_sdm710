@@ -366,9 +366,6 @@ static void __init enumerate_scm_devices(struct dentry *parent)
 	struct remoteqdss_data *data;
 	struct dentry *dentry;
 
-	if (!is_scm_armv8())
-		return;
-
 	data = create_remoteqdss_data(0);
 	if (!data)
 		return;

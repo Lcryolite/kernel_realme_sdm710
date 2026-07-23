@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -17,6 +17,227 @@
 #include <linux/of_gpio.h>
 #include "cam_soc_util.h"
 #include "cam_debug_util.h"
+#include "cam_cx_ipeak.h"
+
+static char supported_clk_info[256];
+static char debugfs_dir_name[64];
+
+static int cam_soc_util_get_clk_level(struct cam_hw_soc_info *soc_info,
+	int32_t src_clk_idx, int64_t clk_rate)
+{
+	int i;
+	long clk_rate_round;
+
+	clk_rate_round = clk_round_rate(soc_info->clk[src_clk_idx], clk_rate);
+	if (clk_rate_round < 0) {
+		CAM_ERR(CAM_UTIL, "round failed rc = %ld",
+			clk_rate_round);
+		return -EINVAL;
+	}
+
+	for (i = 0; i < CAM_MAX_VOTE; i++) {
+		if (soc_info->clk_rate[i][src_clk_idx] >= clk_rate_round) {
+			CAM_DBG(CAM_UTIL,
+				"soc = %d round rate = %ld actual = %lld",
+				soc_info->clk_rate[i][src_clk_idx],
+				clk_rate_round,	clk_rate);
+			return i;
+		}
+	}
+
+	CAM_WARN(CAM_UTIL, "Invalid clock rate %ld", clk_rate_round);
+	return -EINVAL;
+}
+
+/**
+ * cam_soc_util_get_string_from_level()
+ *
+ * @brief:     Returns the string for a given clk level
+ *
+ * @level:     Clock level
+ *
+ * @return:    String corresponding to the clk level
+ */
+static const char *cam_soc_util_get_string_from_level(
+	enum cam_vote_level level)
+{
+	switch (level) {
+	case CAM_SUSPEND_VOTE:
+		return "";
+	case CAM_MINSVS_VOTE:
+		return "MINSVS[1]";
+	case CAM_LOWSVS_VOTE:
+		return "LOWSVS[2]";
+	case CAM_SVS_VOTE:
+		return "SVS[3]";
+	case CAM_SVSL1_VOTE:
+		return "SVSL1[4]";
+	case CAM_NOMINAL_VOTE:
+		return "NOM[5]";
+	case CAM_NOMINALL1_VOTE:
+		return "NOML1[6]";
+	case CAM_TURBO_VOTE:
+		return "TURBO[7]";
+	default:
+		return "";
+	}
+}
+
+/**
+ * cam_soc_util_get_supported_clk_levels()
+ *
+ * @brief:      Returns the string of all the supported clk levels for
+ *              the given device
+ *
+ * @soc_info:   Device soc information
+ *
+ * @return:     String containing all supported clk levels
+ */
+static const char *cam_soc_util_get_supported_clk_levels(
+	struct cam_hw_soc_info *soc_info)
+{
+	int i = 0;
+
+	memset(supported_clk_info, 0, sizeof(supported_clk_info));
+	strlcat(supported_clk_info, "Supported levels: ",
+		sizeof(supported_clk_info));
+
+	for (i = 0; i < CAM_MAX_VOTE; i++) {
+		if (soc_info->clk_level_valid[i] == true) {
+			strlcat(supported_clk_info,
+				cam_soc_util_get_string_from_level(i),
+				sizeof(supported_clk_info));
+			strlcat(supported_clk_info, " ",
+				sizeof(supported_clk_info));
+		}
+	}
+
+	strlcat(supported_clk_info, "\n", sizeof(supported_clk_info));
+	return supported_clk_info;
+}
+
+static int cam_soc_util_clk_lvl_options_open(struct inode *inode,
+	struct file *file)
+{
+	file->private_data = inode->i_private;
+	return 0;
+}
+
+static ssize_t cam_soc_util_clk_lvl_options_read(struct file *file,
+	char __user *clk_info, size_t size_t, loff_t *loff_t)
+{
+	struct cam_hw_soc_info *soc_info =
+		(struct cam_hw_soc_info *)file->private_data;
+	const char *display_string =
+		cam_soc_util_get_supported_clk_levels(soc_info);
+
+	return simple_read_from_buffer(clk_info, size_t, loff_t, display_string,
+		strlen(display_string));
+}
+
+static const struct file_operations cam_soc_util_clk_lvl_options = {
+	.open = cam_soc_util_clk_lvl_options_open,
+	.read = cam_soc_util_clk_lvl_options_read,
+};
+
+static int cam_soc_util_set_clk_lvl(void *data, u64 val)
+{
+	struct cam_hw_soc_info *soc_info = (struct cam_hw_soc_info *)data;
+
+	if (val <= CAM_SUSPEND_VOTE || val >= CAM_MAX_VOTE)
+		return 0;
+
+	if (soc_info->clk_level_valid[val] == true)
+		soc_info->clk_level_override = val;
+	else
+		soc_info->clk_level_override = 0;
+
+	return 0;
+}
+
+static int cam_soc_util_get_clk_lvl(void *data, u64 *val)
+{
+	struct cam_hw_soc_info *soc_info = (struct cam_hw_soc_info *)data;
+
+	*val = soc_info->clk_level_override;
+
+	return 0;
+}
+
+DEFINE_SIMPLE_ATTRIBUTE(cam_soc_util_clk_lvl_control,
+	cam_soc_util_get_clk_lvl, cam_soc_util_set_clk_lvl, "%08llu");
+
+/**
+ * cam_soc_util_create_clk_lvl_debugfs()
+ *
+ * @brief:      Creates debugfs files to view/control device clk rates
+ *
+ * @soc_info:   Device soc information
+ *
+ * @return:     Success or failure
+ */
+static int cam_soc_util_create_clk_lvl_debugfs(
+	struct cam_hw_soc_info *soc_info)
+{
+	struct dentry *dentry = NULL;
+
+	if (!soc_info) {
+		CAM_ERR(CAM_UTIL, "soc info is NULL");
+		return -EINVAL;
+	}
+
+	if (soc_info->dentry)
+		return 0;
+
+	memset(debugfs_dir_name, 0, sizeof(debugfs_dir_name));
+	strlcat(debugfs_dir_name, "clk_dir_", sizeof(debugfs_dir_name));
+	strlcat(debugfs_dir_name, soc_info->dev_name, sizeof(debugfs_dir_name));
+
+	dentry = soc_info->dentry;
+	dentry = debugfs_create_dir(debugfs_dir_name, NULL);
+	if (!dentry) {
+		CAM_ERR(CAM_UTIL, "failed to create debug directory");
+		return -ENOMEM;
+	}
+
+	if (!debugfs_create_file("clk_lvl_options", 0444,
+		dentry, soc_info, &cam_soc_util_clk_lvl_options)) {
+		CAM_ERR(CAM_UTIL, "failed to create clk_lvl_options");
+		goto err;
+	}
+
+	if (!debugfs_create_file("clk_lvl_control", 0644,
+		dentry, soc_info, &cam_soc_util_clk_lvl_control)) {
+		CAM_ERR(CAM_UTIL, "failed to create clk_lvl_control");
+		goto err;
+	}
+
+	CAM_DBG(CAM_UTIL, "clk lvl debugfs for %s successfully created",
+		soc_info->dev_name);
+
+	return 0;
+
+err:
+	debugfs_remove_recursive(dentry);
+	dentry = NULL;
+	return -ENOMEM;
+}
+
+/**
+ * cam_soc_util_remove_clk_lvl_debugfs()
+ *
+ * @brief:      Removes the debugfs files used to view/control
+ *              device clk rates
+ *
+ * @soc_info:   Device soc information
+ *
+ */
+static void cam_soc_util_remove_clk_lvl_debugfs(
+	struct cam_hw_soc_info *soc_info)
+{
+	debugfs_remove_recursive(soc_info->dentry);
+	soc_info->dentry = NULL;
+}
 
 int cam_soc_util_get_level_from_string(const char *string,
 	enum cam_vote_level *level)
@@ -36,6 +257,8 @@ int cam_soc_util_get_level_from_string(const char *string,
 		*level = CAM_SVSL1_VOTE;
 	} else if (!strcmp(string, "nominal")) {
 		*level = CAM_NOMINAL_VOTE;
+	} else if (!strcmp(string, "nominal_l1")) {
+		*level = CAM_NOMINALL1_VOTE;
 	} else if (!strcmp(string, "turbo")) {
 		*level = CAM_TURBO_VOTE;
 	} else {
@@ -152,8 +375,19 @@ int cam_soc_util_set_clk_flags(struct cam_hw_soc_info *soc_info,
 	return clk_set_flags(soc_info->clk[clk_index], flags);
 }
 
-int cam_soc_util_set_clk_rate(struct clk *clk, const char *clk_name,
-	int32_t clk_rate)
+/**
+ * cam_soc_util_set_clk_rate()
+ *
+ * @brief:          Sets the given rate for the clk requested for
+ *
+ * @clk:            Clock structure information for which rate is to be set
+ * @clk_name:       Name of the clock for which rate is being set
+ * @clk_rate        Clock rate to be set
+ *
+ * @return:         Success or failure
+ */
+static int cam_soc_util_set_clk_rate(struct clk *clk, const char *clk_name,
+	int64_t clk_rate)
 {
 	int rc = 0;
 	long clk_rate_round;
@@ -161,7 +395,7 @@ int cam_soc_util_set_clk_rate(struct clk *clk, const char *clk_name,
 	if (!clk || !clk_name)
 		return -EINVAL;
 
-	CAM_DBG(CAM_UTIL, "set %s, rate %d", clk_name, clk_rate);
+	CAM_DBG(CAM_UTIL, "set %s, rate %lld", clk_name, clk_rate);
 	if (clk_rate > 0) {
 		clk_rate_round = clk_round_rate(clk, clk_rate);
 		CAM_DBG(CAM_UTIL, "new_rate %ld", clk_rate_round);
@@ -194,6 +428,41 @@ int cam_soc_util_set_clk_rate(struct clk *clk, const char *clk_name,
 	}
 
 	return rc;
+}
+
+int cam_soc_util_set_src_clk_rate(struct cam_hw_soc_info *soc_info,
+	int64_t clk_rate)
+{
+	int32_t src_clk_idx;
+	struct clk *clk = NULL;
+	int32_t apply_level;
+	uint32_t clk_level_override = 0;
+
+	if (!soc_info || (soc_info->src_clk_idx < 0))
+		return -EINVAL;
+
+	src_clk_idx = soc_info->src_clk_idx;
+	clk_level_override = soc_info->clk_level_override;
+	if (clk_level_override && clk_rate)
+		clk_rate =
+			soc_info->clk_rate[clk_level_override][src_clk_idx];
+
+	clk = soc_info->clk[src_clk_idx];
+
+	if (soc_info->cam_cx_ipeak_enable && clk_rate >= 0) {
+		apply_level = cam_soc_util_get_clk_level(soc_info, src_clk_idx,
+				clk_rate);
+		CAM_DBG(CAM_UTIL, "set %s, rate %lld dev_name = %s\n"
+			"apply level = %d",
+			soc_info->clk_name[src_clk_idx], clk_rate,
+			soc_info->dev_name, apply_level);
+		if (apply_level >= 0)
+			cam_cx_ipeak_update_vote_cx_ipeak(soc_info,
+				apply_level);
+	}
+	return cam_soc_util_set_clk_rate(clk,
+		soc_info->clk_name[src_clk_idx], clk_rate);
+
 }
 
 int cam_soc_util_clk_put(struct clk **clk)
@@ -343,17 +612,30 @@ int cam_soc_util_clk_enable_default(struct cam_hw_soc_info *soc_info,
 	if (rc)
 		return rc;
 
+	if (soc_info->cam_cx_ipeak_enable)
+		cam_cx_ipeak_update_vote_cx_ipeak(soc_info, apply_level);
+
 	for (i = 0; i < soc_info->num_clk; i++) {
 		rc = cam_soc_util_clk_enable(soc_info->clk[i],
 			soc_info->clk_name[i],
 			soc_info->clk_rate[apply_level][i]);
 		if (rc)
 			goto clk_disable;
+		if (soc_info->cam_cx_ipeak_enable) {
+			CAM_DBG(CAM_UTIL,
+			"dev name = %s clk name = %s idx = %d\n"
+			"apply_level = %d clc idx = %d",
+			soc_info->dev_name, soc_info->clk_name[i], i,
+			apply_level, i);
+		}
+
 	}
 
 	return rc;
 
 clk_disable:
+	if (soc_info->cam_cx_ipeak_enable)
+		cam_cx_ipeak_update_vote_cx_ipeak(soc_info, 0);
 	for (i--; i >= 0; i--) {
 		cam_soc_util_clk_disable(soc_info->clk[i],
 			soc_info->clk_name[i]);
@@ -379,6 +661,8 @@ void cam_soc_util_clk_disable_default(struct cam_hw_soc_info *soc_info)
 	if (soc_info->num_clk == 0)
 		return;
 
+	if (soc_info->cam_cx_ipeak_enable)
+		cam_cx_ipeak_unvote_cx_ipeak(soc_info);
 	for (i = soc_info->num_clk - 1; i >= 0; i--)
 		cam_soc_util_clk_disable(soc_info->clk[i],
 			soc_info->clk_name[i]);
@@ -402,6 +686,7 @@ static int cam_soc_util_get_dt_clk_info(struct cam_hw_soc_info *soc_info)
 	int i, j, rc;
 	int32_t num_clk_level_strings;
 	const char *src_clk_str = NULL;
+	const char *clk_control_debugfs = NULL;
 	const char *clk_cntl_lvl_string = NULL;
 	enum cam_vote_level level;
 
@@ -419,7 +704,8 @@ static int cam_soc_util_get_dt_clk_info(struct cam_hw_soc_info *soc_info)
 
 	count = of_property_count_strings(of_node, "clock-names");
 
-	CAM_DBG(CAM_UTIL, "count = %d", count);
+	CAM_DBG(CAM_UTIL, "E: dev_name = %s count = %d",
+		soc_info->dev_name, count);
 	if (count > CAM_SOC_MAX_CLK) {
 		CAM_ERR(CAM_UTIL, "invalid count of clocks, count=%d", count);
 		rc = -EINVAL;
@@ -515,8 +801,7 @@ static int cam_soc_util_get_dt_clk_info(struct cam_hw_soc_info *soc_info)
 	if (rc || !src_clk_str) {
 		CAM_DBG(CAM_UTIL, "No src_clk_str found");
 		rc = 0;
-		/* Bottom loop is dependent on src_clk_str. So return here */
-		return rc;
+		goto end;
 	}
 
 	for (i = 0; i < soc_info->num_clk; i++) {
@@ -528,6 +813,20 @@ static int cam_soc_util_get_dt_clk_info(struct cam_hw_soc_info *soc_info)
 		}
 	}
 
+	rc = of_property_read_string_index(of_node,
+		"clock-control-debugfs", 0, &clk_control_debugfs);
+	if (rc || !clk_control_debugfs) {
+		CAM_DBG(CAM_UTIL, "No clock_control_debugfs property found");
+		rc = 0;
+		goto end;
+	}
+
+	if (strcmp("true", clk_control_debugfs) == 0)
+		soc_info->clk_control_enable = true;
+
+	CAM_DBG(CAM_UTIL, "X: dev_name = %s count = %d",
+		soc_info->dev_name, count);
+end:
 	return rc;
 }
 
@@ -549,12 +848,23 @@ int cam_soc_util_set_clk_rate_level(struct cam_hw_soc_info *soc_info,
 	if (rc)
 		return rc;
 
+	if (soc_info->cam_cx_ipeak_enable)
+		cam_cx_ipeak_update_vote_cx_ipeak(soc_info, apply_level);
+
 	for (i = 0; i < soc_info->num_clk; i++) {
 		rc = cam_soc_util_set_clk_rate(soc_info->clk[i],
 			soc_info->clk_name[i],
 			soc_info->clk_rate[apply_level][i]);
-		if (rc)
+		if (rc < 0) {
+			CAM_DBG(CAM_UTIL,
+				"dev name = %s clk_name = %s idx = %d\n"
+				"apply_level = %d",
+				soc_info->dev_name, soc_info->clk_name[i],
+				i, apply_level);
+			if (soc_info->cam_cx_ipeak_enable)
+				cam_cx_ipeak_update_vote_cx_ipeak(soc_info, 0);
 			break;
+		}
 	}
 
 	return rc;
@@ -922,6 +1232,9 @@ int cam_soc_util_get_dt_properties(struct cam_hw_soc_info *soc_info)
 	if (rc)
 		return rc;
 
+	if (of_find_property(of_node, "qcom,cam-cx-ipeak", NULL))
+		rc = cam_cx_ipeak_register_cx_ipeak(soc_info);
+
 	return rc;
 }
 
@@ -1030,7 +1343,8 @@ int cam_soc_util_regulator_enable(struct regulator *rgltr,
 }
 
 static int cam_soc_util_request_pinctrl(
-	struct cam_hw_soc_info *soc_info) {
+	struct cam_hw_soc_info *soc_info)
+{
 
 	struct cam_soc_pinctrl_info *device_pctrl = &soc_info->pinctrl_info;
 	struct device *dev = soc_info->dev;
@@ -1215,6 +1529,9 @@ int cam_soc_util_request_platform_resource(
 		goto put_clk;
 	}
 
+	if (soc_info->clk_control_enable)
+		cam_soc_util_create_clk_lvl_debugfs(soc_info);
+
 	return rc;
 
 put_clk:
@@ -1299,6 +1616,9 @@ int cam_soc_util_release_platform_resource(struct cam_hw_soc_info *soc_info)
 	/* release for gpio */
 	cam_soc_util_request_gpio_table(soc_info, false);
 
+	if (soc_info->clk_control_enable)
+		cam_soc_util_remove_clk_lvl_debugfs(soc_info);
+
 	return 0;
 }
 
@@ -1355,14 +1675,14 @@ disable_regulator:
 }
 
 int cam_soc_util_disable_platform_resource(struct cam_hw_soc_info *soc_info,
-	bool disable_clocks, bool disble_irq)
+	bool disable_clocks, bool disable_irq)
 {
 	int rc = 0;
 
 	if (!soc_info)
 		return -EINVAL;
 
-	if (disble_irq)
+	if (disable_irq)
 		rc |= cam_soc_util_irq_disable(soc_info);
 
 	if (disable_clocks)
@@ -1401,3 +1721,24 @@ int cam_soc_util_reg_dump(struct cam_hw_soc_info *soc_info,
 	return 0;
 }
 
+uint32_t cam_soc_util_get_vote_level(struct cam_hw_soc_info *soc_info,
+	uint64_t clock_rate)
+{
+	int i = 0;
+
+	if (!clock_rate)
+		return CAM_SVS_VOTE;
+
+	for (i = 0; i < CAM_MAX_VOTE; i++) {
+		if (soc_info->clk_level_valid[i] &&
+			soc_info->clk_rate[i][soc_info->src_clk_idx] >=
+			clock_rate) {
+			CAM_DBG(CAM_UTIL,
+				"Clock rate %lld, selected clock level %d",
+				clock_rate, i);
+			return i;
+		}
+	}
+
+	return CAM_TURBO_VOTE;
+}

@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -25,6 +25,8 @@
 #include <linux/delay.h>
 #include <linux/input/qpnp-power-on.h>
 #include <linux/of_address.h>
+#include <linux/syscore_ops.h>
+#include <linux/crash_dump.h>
 
 #include <asm/cacheflush.h>
 #include <asm/system_misc.h>
@@ -57,17 +59,27 @@ static bool scm_deassert_ps_hold_supported;
 static void __iomem *msm_ps_hold;
 static phys_addr_t tcsr_boot_misc_detect;
 static void scm_disable_sdi(void);
-static bool force_warm_reboot;
 
-#ifdef CONFIG_QCOM_DLOAD_MODE
-/* Runtime could be only changed value once.
+/*
+ * Runtime could be only changed value once.
  * There is no API from TZ to re-enable the registers.
  * So the SDI cannot be re-enabled when it already by-passed.
  */
 static int download_mode = 1;
-#else
-static const int download_mode;
-#endif
+static bool force_warm_reboot;
+
+static int in_panic;
+
+static int panic_prep_restart(struct notifier_block *this,
+			      unsigned long event, void *ptr)
+{
+	in_panic = 1;
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block panic_blk = {
+	.notifier_call	= panic_prep_restart,
+};
 
 #ifdef CONFIG_QCOM_DLOAD_MODE
 #define EDL_MODE_PROP "qcom,msm-imem-emergency_download_mode"
@@ -76,30 +88,18 @@ static const int download_mode;
 #define KASLR_OFFSET_PROP "qcom,msm-imem-kaslr_offset"
 #endif
 
-static int in_panic;
-int dload_type = SCM_DLOAD_FULLDUMP;
-
+static struct kobject dload_kobj;
+static int dload_type = SCM_DLOAD_FULLDUMP;
 static void *dload_mode_addr;
+static void *dload_type_addr;
 static bool dload_mode_enabled;
 static void *emergency_dload_mode_addr;
 #ifdef CONFIG_RANDOMIZE_BASE
-static void *kaslr_imem_addr;
+static void __iomem *kaslr_imem_addr;
 #endif
 static bool scm_dload_supported;
 
-static struct kobject dload_kobj;
-static void *dload_type_addr;
-
 static int dload_set(const char *val, const struct kernel_param *kp);
-
-//#ifdef VENDOR_EDIT
-//Wanghao@BSP.Kernel.Function 2018/12/07, add for 5G modem dump issue
-int get_download_mode(void)
-{
-	return download_mode && (dload_type & SCM_DLOAD_FULLDUMP);
-}
-EXPORT_SYMBOL(get_download_mode);
-//#endif
 /* interface for exporting attributes */
 struct reset_attribute {
 	struct attribute        attr;
@@ -117,18 +117,7 @@ struct reset_attribute {
 module_param_call(download_mode, dload_set, param_get_int,
 			&download_mode, 0644);
 
-static int panic_prep_restart(struct notifier_block *this,
-			      unsigned long event, void *ptr)
-{
-	in_panic = 1;
-	return NOTIFY_DONE;
-}
-
-static struct notifier_block panic_blk = {
-	.notifier_call	= panic_prep_restart,
-};
-
-static int scm_set_dload_mode(int arg1, int arg2)
+int scm_set_dload_mode(int arg1, int arg2)
 {
 	struct scm_desc desc = {
 		.args[0] = arg1,
@@ -142,7 +131,6 @@ static int scm_set_dload_mode(int arg1, int arg2)
 
 		return 0;
 	}
-
 	if (!is_scm_armv8())
 		return scm_call_atomic2(SCM_SVC_BOOT, SCM_DLOAD_CMD, arg1,
 					arg2);
@@ -150,42 +138,6 @@ static int scm_set_dload_mode(int arg1, int arg2)
 	return scm_call2_atomic(SCM_SIP_FNID(SCM_SVC_BOOT, SCM_DLOAD_CMD),
 				&desc);
 }
-#ifdef OPLUS_BUG_STABILITY
-bool is_fulldump_enable(void)
-{
-	return download_mode && (dload_type & SCM_DLOAD_FULLDUMP);
-}
-
-void oppo_switch_fulldump(int on)
-{
-	int ret;
-
-	if (dload_mode_addr) {
-		__raw_writel(0xE47B337D, dload_mode_addr);
-		__raw_writel(0xCE14091A,
-			dload_mode_addr + sizeof(unsigned int));
-		mb();
-	}
-	if(on){
-		ret = scm_set_dload_mode(SCM_DLOAD_FULLDUMP, 0);
-		if (ret)
-			pr_err("Failed to set secure DLOAD mode: %d\n", ret);
-		dload_type = SCM_DLOAD_FULLDUMP;
-	}else{
-		ret = scm_set_dload_mode(SCM_DLOAD_MINIDUMP, 0);
-		if (ret)
-			pr_err("Failed to set secure DLOAD mode: %d\n", ret);
-		dload_type = SCM_DLOAD_MINIDUMP;
-	}
-
-	if(dload_type == SCM_DLOAD_MINIDUMP)
-		__raw_writel(EMMC_DLOAD_TYPE, dload_type_addr);
-	else
-		__raw_writel(0, dload_type_addr);
-	dload_mode_enabled = on;
-}
-EXPORT_SYMBOL(oppo_switch_fulldump);
-#endif /* OPLUS_BUG_STABILITY */
 
 static void set_dload_mode(int on)
 {
@@ -202,7 +154,6 @@ static void set_dload_mode(int on)
 	ret = scm_set_dload_mode(on ? dload_type : 0, 0);
 	if (ret)
 		pr_err("Failed to set secure DLOAD mode: %d\n", ret);
-
 
 	dload_mode_enabled = on;
 }
@@ -245,6 +196,11 @@ static int dload_set(const char *val, const struct kernel_param *kp)
 
 	int old_val = download_mode;
 
+	if (!download_mode) {
+		pr_err("Error: SDI dynamic enablement is not supported\n");
+		return -EINVAL;
+	}
+
 	ret = param_set_int(val, kp);
 
 	if (ret)
@@ -257,6 +213,9 @@ static int dload_set(const char *val, const struct kernel_param *kp)
 	}
 
 	set_dload_mode(download_mode);
+
+	if (!download_mode)
+		scm_disable_sdi();
 
 	return 0;
 }
@@ -289,7 +248,7 @@ static void scm_disable_sdi(void)
 	/* Needed to bypass debug image on some chips */
 	if (!is_scm_armv8())
 		ret = scm_call_atomic2(SCM_SVC_BOOT,
-			       SCM_WDOG_DEBUG_BOOT_PART, 1, 0);
+			SCM_WDOG_DEBUG_BOOT_PART, 1, 0);
 	else
 		ret = scm_call2_atomic(SCM_SIP_FNID(SCM_SVC_BOOT,
 			  SCM_WDOG_DEBUG_BOOT_PART), &desc);
@@ -320,10 +279,10 @@ static void halt_spmi_pmic_arbiter(void)
 		pr_crit("Calling SCM to disable SPMI PMIC arbiter\n");
 		if (!is_scm_armv8())
 			scm_call_atomic1(SCM_SVC_PWR,
-					 SCM_IO_DISABLE_PMIC_ARBITER, 0);
+					SCM_IO_DISABLE_PMIC_ARBITER, 0);
 		else
 			scm_call2_atomic(SCM_SIP_FNID(SCM_SVC_PWR,
-				  SCM_IO_DISABLE_PMIC_ARBITER), &desc);
+				SCM_IO_DISABLE_PMIC_ARBITER), &desc);
 	}
 }
 
@@ -331,12 +290,13 @@ static void msm_restart_prepare(const char *cmd)
 {
 	bool need_warm_reset = false;
 #ifdef CONFIG_QCOM_DLOAD_MODE
-	/* Write download mode flags if restart_mode says so
+	/* Write download mode flags if we're panic'ing
+	 * Write download mode flags if restart_mode says so
 	 * Kill download mode if master-kill switch is set
 	 */
-
-	set_dload_mode(download_mode &&
-			(restart_mode == RESTART_DLOAD));
+	if (!is_kdump_kernel())
+		set_dload_mode(download_mode &&
+			(in_panic || restart_mode == RESTART_DLOAD));
 #endif
 
 	if (qpnp_pon_check_hard_reset_stored()) {
@@ -350,9 +310,6 @@ static void msm_restart_prepare(const char *cmd)
 				(cmd != NULL && cmd[0] != '\0'));
 	}
 
-
-	force_warm_reboot = true;
-
 	if (force_warm_reboot)
 		pr_info("Forcing a warm reset of the system\n");
 
@@ -362,16 +319,6 @@ static void msm_restart_prepare(const char *cmd)
 	else
 		qpnp_pon_system_pwr_off(PON_POWER_OFF_HARD_RESET);
 
-	if (in_panic) {
-		// Reboot to recovery
-		qpnp_pon_set_restart_reason(
-			PON_RESTART_REASON_RECOVERY);
-		__raw_writel(0x77665502, restart_reason);
-		goto finish_set_restart_reason;
-	}
-
-#ifndef VENDOR_EDIT
-/* OPLUS 2013.07.09 hewei modify begin for restart mode*/
 	if (cmd != NULL) {
 		if (!strncmp(cmd, "bootloader", 10)) {
 			qpnp_pon_set_restart_reason(
@@ -399,117 +346,19 @@ static void msm_restart_prepare(const char *cmd)
 			__raw_writel(0x7766550a, restart_reason);
 		} else if (!strncmp(cmd, "oem-", 4)) {
 			unsigned long code;
-			unsigned long reset_reason;
 			int ret;
 
-			ret = kstrtoul(cmd + 4, 16, &code);
-			if (!ret) {
-				/* Bit-2 to bit-7 of SOFT_RB_SPARE for hard
-				 * reset reason:
-				 * Value 0 to 31 for common defined features
-				 * Value 32 to 63 for oem specific features
-				 */
-				reset_reason = code +
-						PON_RESTART_REASON_OEM_MIN;
-				if (reset_reason > PON_RESTART_REASON_OEM_MAX ||
-				   reset_reason < PON_RESTART_REASON_OEM_MIN) {
-					pr_err("Invalid oem reset reason: %lx\n",
-						reset_reason);
-				} else {
-					qpnp_pon_set_restart_reason(
-						reset_reason);
-				}
-				__raw_writel(0x6f656d00 | (code & 0xff),
-					     restart_reason);
-			}
-		} else if (!strncmp(cmd, "edl", 3)) {
-			enable_emergency_dload_mode();
-		} else {
-			__raw_writel(0x77665501, restart_reason);
-		}
-	}
-#else //VENDOR_EDIT
-	if (cmd != NULL) {
-		#ifndef DISABLE_FASTBOOT_CMDS //disable fastboot modem at release soft
-		if (!strncmp(cmd, "bootloader", 10)) {
-			qpnp_pon_set_restart_reason(
-				PON_RESTART_REASON_BOOTLOADER);
-			__raw_writel(0x77665500, restart_reason);
-		} else 
-		#endif
-		if (!strncmp(cmd, "recovery", 8)) {
-			qpnp_pon_set_restart_reason(
-				PON_RESTART_REASON_RECOVERY);
-			__raw_writel(0x77665502, restart_reason);
-		} else if (!strcmp(cmd, "rtc")) {
-			qpnp_pon_set_restart_reason(
-				PON_RESTART_REASON_RTC);
-			__raw_writel(0x77665503, restart_reason);
-		} else if (!strcmp(cmd, "dm-verity device corrupted")) {
-			qpnp_pon_set_restart_reason(
-				PON_RESTART_REASON_DMVERITY_CORRUPTED);
-			__raw_writel(0x77665508, restart_reason);
-		} else if (!strcmp(cmd, "dm-verity enforcing")) {
-			qpnp_pon_set_restart_reason(
-				PON_RESTART_REASON_DMVERITY_ENFORCE);
-			__raw_writel(0x77665509, restart_reason);
-		} else if (!strcmp(cmd, "keys clear")) {
-			qpnp_pon_set_restart_reason(
-				PON_RESTART_REASON_KEYS_CLEAR);
-			__raw_writel(0x7766550a, restart_reason);
-		} else if (!strncmp(cmd, "oem-", 4)) { //we donot need oem-
-			unsigned long code;
-			int ret;
 			ret = kstrtoul(cmd + 4, 16, &code);
 			if (!ret)
 				__raw_writel(0x6f656d00 | (code & 0xff),
 					     restart_reason);
 		} else if (!strncmp(cmd, "edl", 3)) {
 			enable_emergency_dload_mode();
-		} else if (!strncmp(cmd, "rf", 2)) {
-			qpnp_pon_set_restart_reason(
-				PON_RESTART_REASON_RF);
-		} else if (!strncmp(cmd, "wlan", 4)) {
-			qpnp_pon_set_restart_reason(
-				PON_RESTART_REASON_WLAN);
-		#ifdef USE_MOS_MODE	
-		} else if (!strncmp(cmd, "mos", 3)) {
-			qpnp_pon_set_restart_reason(
-				PON_RESTART_REASON_MOS);
-		#endif			   
-		} else if (!strncmp(cmd, "ftm", 3)) {
-			qpnp_pon_set_restart_reason(
-					PON_RESTART_REASON_FACTORY);
-		} else if (!strncmp(cmd, "kernel", 6)) {
-			qpnp_pon_set_restart_reason(
-					PON_RESTART_REASON_KERNEL);
-        } else if (!strncmp(cmd, "modem", 5)) {
-        	qpnp_pon_set_restart_reason(
-					PON_RESTART_REASON_MODEM);
-        } else if (!strncmp(cmd, "android", 7)) {
-        	qpnp_pon_set_restart_reason(
-					PON_RESTART_REASON_ANDROID);
-		} else if (!strncmp(cmd, "silence", 7)) {
-			qpnp_pon_set_restart_reason(
-				PON_RESTART_REASON_SILENCE);
-		}else if (!strncmp(cmd, "sau", 3)) {
-			qpnp_pon_set_restart_reason(
-				PON_RESTART_REASON_SAU);
-		} else if (!strncmp(cmd, "safe", 4)) {
-			qpnp_pon_set_restart_reason(
-				PON_RESTART_REASON_SAFE);
 		} else {
-			qpnp_pon_set_restart_reason(
-				PON_RESTART_REASON_NORMAL);
+			__raw_writel(0x77665501, restart_reason);
 		}
-	}else{
-		qpnp_pon_set_restart_reason(
-				PON_RESTART_REASON_NORMAL);
 	}
-/* OPLUS 2013.07.09 hewei modify en for restart mode*/
-#endif //VENDOR_EDIT
 
-finish_set_restart_reason:
 	flush_cache_all();
 
 	/*outer_flush_all is not supported by 64bit kernel*/
@@ -699,6 +548,7 @@ static size_t store_dload_mode(struct kobject *kobj, struct attribute *attr,
 }
 RESET_ATTR(dload_mode, 0644, show_dload_mode, store_dload_mode);
 #endif
+
 RESET_ATTR(emmc_dload, 0644, show_emmc_dload, store_emmc_dload);
 
 static struct attribute *reset_attrs[] = {
@@ -714,6 +564,25 @@ static struct attribute_group reset_attr_group = {
 };
 #endif
 
+#if defined(CONFIG_RANDOMIZE_BASE) && defined(CONFIG_HIBERNATION)
+static void msm_poweroff_syscore_resume(void)
+{
+#define KASLR_OFFSET_BIT_MASK	0x00000000FFFFFFFF
+	if (kaslr_imem_addr) {
+		__raw_writel(0xdead4ead, kaslr_imem_addr);
+		__raw_writel(KASLR_OFFSET_BIT_MASK &
+		(kimage_vaddr - KIMAGE_VADDR), kaslr_imem_addr + 4);
+		__raw_writel(KASLR_OFFSET_BIT_MASK &
+			((kimage_vaddr - KIMAGE_VADDR) >> 32),
+			kaslr_imem_addr + 8);
+	}
+}
+
+static struct syscore_ops msm_poweroff_syscore_ops = {
+	.resume = msm_poweroff_syscore_resume,
+};
+#endif
+
 static int msm_restart_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -721,11 +590,12 @@ static int msm_restart_probe(struct platform_device *pdev)
 	struct device_node *np;
 	int ret = 0;
 
+	atomic_notifier_chain_register(&panic_notifier_list, &panic_blk);
+
 #ifdef CONFIG_QCOM_DLOAD_MODE
 	if (scm_is_call_available(SCM_SVC_BOOT, SCM_DLOAD_CMD) > 0)
 		scm_dload_supported = true;
 
-	atomic_notifier_chain_register(&panic_notifier_list, &panic_blk);
 	np = of_find_compatible_node(NULL, NULL, DL_MODE_PROP);
 	if (!np) {
 		pr_err("unable to find DT imem DLOAD mode node\n");
@@ -762,8 +632,11 @@ static int msm_restart_probe(struct platform_device *pdev)
 		__raw_writel(KASLR_OFFSET_BIT_MASK &
 			((kimage_vaddr - KIMAGE_VADDR) >> 32),
 			kaslr_imem_addr + 8);
-		iounmap(kaslr_imem_addr);
 	}
+
+#ifdef CONFIG_HIBERNATION
+	register_syscore_ops(&msm_poweroff_syscore_ops);
+#endif
 #endif
 	np = of_find_compatible_node(NULL, NULL,
 				"qcom,msm-imem-dload-type");
@@ -824,8 +697,8 @@ skip_sysfs_create:
 
 	if (scm_is_call_available(SCM_SVC_PWR, SCM_IO_DEASSERT_PS_HOLD) > 0)
 		scm_deassert_ps_hold_supported = true;
-
-	set_dload_mode(download_mode);
+	if (!is_kdump_kernel())
+		set_dload_mode(download_mode);
 	if (!download_mode)
 		scm_disable_sdi();
 
@@ -838,6 +711,9 @@ err_restart_reason:
 #ifdef CONFIG_QCOM_DLOAD_MODE
 	iounmap(emergency_dload_mode_addr);
 	iounmap(dload_mode_addr);
+#ifdef CONFIG_RANDOMIZE_BASE
+	iounmap(kaslr_imem_addr);
+#endif
 #endif
 	return ret;
 }

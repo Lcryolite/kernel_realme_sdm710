@@ -1,4 +1,4 @@
-/* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2018 - 2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -64,15 +64,18 @@
 	} while (0)
 
 #define IPA_GSB_MAX_MSG_LEN 512
+
+#ifdef CONFIG_DEBUG_FS
 static char dbg_buff[IPA_GSB_MAX_MSG_LEN];
+static struct dentry *dent;
+static struct dentry *dfile_stats;
+#endif
 
 #define IPA_GSB_SKB_HEADROOM 256
 #define IPA_GSB_SKB_DUMMY_HEADER 42
 #define IPA_GSB_AGGR_BYTE_LIMIT 14
-#define IPA_GSB_AGGR_TIME_LIMIT 1
+#define IPA_GSB_AGGR_TIME_LIMIT 1000 /* 1000 us */
 
-static struct dentry *dent;
-static struct dentry *dfile_stats;
 
 /**
  * struct stats - driver statistics,
@@ -173,32 +176,34 @@ static ssize_t ipa_gsb_debugfs_stats(struct file *file,
 				  loff_t *ppos)
 {
 	int i, nbytes = 0;
+	struct ipa_gsb_iface_info *iface = NULL;
+	struct stats iface_stats;
 
-	for (i = 0; i < MAX_SUPPORTED_IFACE; i++)
-		if (ipa_gsb_ctx->iface[i] != NULL) {
+	for (i = 0; i < MAX_SUPPORTED_IFACE; i++) {
+		iface = ipa_gsb_ctx->iface[i];
+		if (iface != NULL) {
+			iface_stats = iface->iface_stats;
 			nbytes += scnprintf(&dbg_buff[nbytes],
 				IPA_GSB_MAX_MSG_LEN - nbytes,
 				"netdev: %s\n",
-				ipa_gsb_ctx->iface[i]->netdev_name);
+				iface->netdev_name);
 
 			nbytes += scnprintf(&dbg_buff[nbytes],
 				IPA_GSB_MAX_MSG_LEN - nbytes,
 				"UL packets: %lld\n",
-				ipa_gsb_ctx->iface[i]->
 				iface_stats.num_ul_packets);
 
 			nbytes += scnprintf(&dbg_buff[nbytes],
 				IPA_GSB_MAX_MSG_LEN - nbytes,
 				"DL packets: %lld\n",
-				ipa_gsb_ctx->iface[i]->
 				iface_stats.num_dl_packets);
 
 			nbytes += scnprintf(&dbg_buff[nbytes],
 				IPA_GSB_MAX_MSG_LEN - nbytes,
 				"packets with insufficient headroom: %lld\n",
-				ipa_gsb_ctx->iface[i]->
 				iface_stats.num_insufficient_headroom_packets);
 		}
+	}
 	return simple_read_from_buffer(ubuf, count, ppos, dbg_buff, nbytes);
 }
 
@@ -438,9 +443,7 @@ static void ipa_gsb_pm_cb(void *user_data, enum ipa_pm_cb_event event)
 
 	IPA_GSB_DBG_LOW("wake up clients\n");
 	for (i = 0; i < MAX_SUPPORTED_IFACE; i++)
-		if (ipa_gsb_ctx->iface[i] != NULL &&
-			ipa_gsb_ctx->iface[i]->is_connected &&
-			!ipa_gsb_ctx->iface[i]->is_resumed)
+		if (ipa_gsb_ctx->iface[i] != NULL)
 			ipa_gsb_ctx->iface[i]->wakeup_request(
 				ipa_gsb_ctx->iface[i]->priv);
 }
@@ -477,53 +480,6 @@ fail_pm_cons:
 	ipa_pm_deregister(ipa_gsb_ctx->pm_hdl);
 	ipa_gsb_ctx->pm_hdl = ~0;
 fail_pm_reg:
-	return ret;
-}
-
-static int ipa_bridge_stop_channel_deactivate_pm(u32 hdl)
-{
-	int ret = 0;
-
-	if (ipa_gsb_ctx->num_resumed_iface == 1) {
-		ret = ipa_stop_gsi_channel(
-			ipa_gsb_ctx->cons_hdl);
-		if (ret) {
-			IPA_GSB_ERR(
-				"fail to stop cons ep %d\n",
-				ret);
-			return ret;
-		}
-
-		ret = ipa_pm_deactivate_sync(ipa_gsb_ctx->pm_hdl);
-		if (ret) {
-			IPA_GSB_ERR("fail to deactivate ipa pm\n");
-			ipa_start_gsi_channel(ipa_gsb_ctx->cons_hdl);
-			return ret;
-		}
-	}
-	return ret;
-}
-
-static int ipa_bridge_activate_pm_start_channel(u32 hdl)
-{
-	int ret = 0;
-
-	if (ipa_gsb_ctx->num_resumed_iface == 0) {
-		ret = ipa_pm_activate_sync(ipa_gsb_ctx->pm_hdl);
-		if (ret) {
-			IPA_GSB_ERR("fail to activate ipa pm\n");
-			return ret;
-		}
-
-		ret = ipa_start_gsi_channel(
-			ipa_gsb_ctx->cons_hdl);
-		if (ret) {
-			IPA_GSB_ERR(
-				"fail to start con ep %d\n",
-				ret);
-			return ret;
-		}
-	}
 	return ret;
 }
 
@@ -725,12 +681,13 @@ static void ipa_gsb_cons_cb(void *priv, enum ipa_dp_evt_type evt,
 		return;
 	}
 
-	if (!data) {
-		IPA_GSB_ERR("Invalid data\n");
+	skb = (struct sk_buff *)data;
+
+	if (skb == NULL) {
+		IPA_GSB_ERR("unexpected NULL data\n");
+		WARN_ON(1);
 		return;
 	}
-
-	skb = (struct sk_buff *)data;
 
 	while (skb->len) {
 		mux_hdr = (struct ipa_gsb_mux_hdr *)skb->data;
@@ -787,6 +744,12 @@ static void ipa_gsb_tx_dp_notify(void *priv, enum ipa_dp_evt_type evt,
 	u8 hdl;
 
 	skb = (struct sk_buff *)data;
+
+	if (skb == NULL) {
+		IPA_GSB_ERR("unexpected NULL data\n");
+		WARN_ON(1);
+		return;
+	}
 
 	if (evt != IPA_WRITE_DONE && evt != IPA_RECEIVE) {
 		IPA_GSB_ERR("unexpected event: %d\n", evt);
@@ -930,18 +893,9 @@ int ipa_bridge_connect(u32 hdl)
 	ipa_gsb_ctx->iface[hdl]->is_connected = true;
 	ipa_gsb_ctx->iface[hdl]->is_resumed = true;
 
-	/* Connected == 0, would have started above already,
-	 * So, ignore it.
-	 */
-	if (ipa_gsb_ctx->num_connected_iface != 0)
-		ipa_bridge_activate_pm_start_channel(hdl);
-
 	ipa_gsb_ctx->num_connected_iface++;
 	IPA_GSB_DBG("connected iface: %d\n",
 		ipa_gsb_ctx->num_connected_iface);
-	/* Wake up remaining clients. */
-	if (ipa_gsb_ctx->num_resumed_iface == 0)
-		ipa_gsb_pm_cb(NULL, IPA_PM_REQUEST_WAKEUP);
 	ipa_gsb_ctx->num_resumed_iface++;
 	IPA_GSB_DBG("num resumed iface: %d\n",
 		ipa_gsb_ctx->num_resumed_iface);
@@ -1031,13 +985,6 @@ int ipa_bridge_disconnect(u32 hdl)
 
 	if (ipa_gsb_ctx->iface[hdl]->is_resumed) {
 		ipa_gsb_ctx->iface[hdl]->is_resumed = false;
-
-		/* Connected < 1, would have stopped above already,
-		 * So, ignore it.
-		 */
-		if (ipa_gsb_ctx->num_connected_iface >= 1)
-			ipa_bridge_stop_channel_deactivate_pm(hdl);
-
 		ipa_gsb_ctx->num_resumed_iface--;
 		IPA_GSB_DBG("num resumed iface: %d\n",
 			ipa_gsb_ctx->num_resumed_iface);
@@ -1087,11 +1034,25 @@ int ipa_bridge_resume(u32 hdl)
 	}
 
 	mutex_lock(&ipa_gsb_ctx->lock);
-	ret = ipa_bridge_activate_pm_start_channel(hdl);
-	if (ret) {
-		mutex_unlock(&ipa_gsb_ctx->lock);
-		mutex_unlock(&ipa_gsb_ctx->iface_lock[hdl]);
-		return ret;
+	if (ipa_gsb_ctx->num_resumed_iface == 0) {
+		ret = ipa_pm_activate_sync(ipa_gsb_ctx->pm_hdl);
+		if (ret) {
+			IPA_GSB_ERR("fail to activate ipa pm\n");
+			mutex_unlock(&ipa_gsb_ctx->lock);
+			mutex_unlock(&ipa_gsb_ctx->iface_lock[hdl]);
+			return ret;
+		}
+
+		ret = ipa_start_gsi_channel(
+			ipa_gsb_ctx->cons_hdl);
+		if (ret) {
+			IPA_GSB_ERR(
+				"fail to start con ep %d\n",
+				ret);
+			mutex_unlock(&ipa_gsb_ctx->lock);
+			mutex_unlock(&ipa_gsb_ctx->iface_lock[hdl]);
+			return ret;
+		}
 	}
 
 	ipa_gsb_ctx->iface[hdl]->is_resumed = true;
@@ -1145,13 +1106,30 @@ int ipa_bridge_suspend(u32 hdl)
 	}
 
 	mutex_lock(&ipa_gsb_ctx->lock);
-	ret = ipa_bridge_stop_channel_deactivate_pm(hdl);
-	if (ret) {
-		atomic_set(&ipa_gsb_ctx->suspend_in_progress, 0);
-		mutex_unlock(&ipa_gsb_ctx->lock);
-		mutex_unlock(&ipa_gsb_ctx->iface_lock[hdl]);
-		return ret;
+	if (ipa_gsb_ctx->num_resumed_iface == 1) {
+		ret = ipa_stop_gsi_channel(
+			ipa_gsb_ctx->cons_hdl);
+		if (ret) {
+			IPA_GSB_ERR(
+				"fail to stop cons ep %d\n",
+				ret);
+			atomic_set(&ipa_gsb_ctx->suspend_in_progress, 0);
+			mutex_unlock(&ipa_gsb_ctx->lock);
+			mutex_unlock(&ipa_gsb_ctx->iface_lock[hdl]);
+			return ret;
+		}
+
+		ret = ipa_pm_deactivate_sync(ipa_gsb_ctx->pm_hdl);
+		if (ret) {
+			IPA_GSB_ERR("fail to deactivate ipa pm\n");
+			ipa_start_gsi_channel(ipa_gsb_ctx->cons_hdl);
+			atomic_set(&ipa_gsb_ctx->suspend_in_progress, 0);
+			mutex_unlock(&ipa_gsb_ctx->lock);
+			mutex_unlock(&ipa_gsb_ctx->iface_lock[hdl]);
+			return ret;
+		}
 	}
+
 	ipa_gsb_ctx->iface[hdl]->is_resumed = false;
 	ipa_gsb_ctx->num_resumed_iface--;
 	IPA_GSB_DBG_LOW("num resumed iface: %d\n",
@@ -1181,7 +1159,7 @@ int ipa_bridge_set_perf_profile(u32 hdl, u32 bandwidth)
 
 	mutex_lock(&ipa_gsb_ctx->iface_lock[hdl]);
 
-	ret = ipa_pm_set_perf_profile(ipa_gsb_ctx->pm_hdl,
+	ret = ipa_pm_set_throughput(ipa_gsb_ctx->pm_hdl,
 		bandwidth);
 	if (ret)
 		IPA_GSB_ERR("fail to set perf profile\n");
@@ -1196,10 +1174,12 @@ int ipa_bridge_tx_dp(u32 hdl, struct sk_buff *skb,
 {
 	struct ipa_gsb_mux_hdr *mux_hdr;
 	struct sk_buff *skb2;
+	struct stats iface_stats;
 	int ret;
 
 	IPA_GSB_DBG_LOW("client hdl: %d\n", hdl);
 
+	iface_stats = ipa_gsb_ctx->iface[hdl]->iface_stats;
 	if (!ipa_gsb_ctx->iface[hdl]) {
 		IPA_GSB_ERR("fail to find interface, hdl: %d\n", hdl);
 		return -EFAULT;
@@ -1231,8 +1211,7 @@ int ipa_bridge_tx_dp(u32 hdl, struct sk_buff *skb,
 		}
 		dev_kfree_skb_any(skb);
 		skb = skb2;
-		ipa_gsb_ctx->iface[hdl]->iface_stats.
-			num_insufficient_headroom_packets++;
+		iface_stats.num_insufficient_headroom_packets++;
 	}
 
 	/* add 4 byte header for mux */

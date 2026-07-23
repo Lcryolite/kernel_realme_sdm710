@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2020 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -29,6 +29,28 @@
 
 #define WBID(wb_enc) \
 	((wb_enc && wb_enc->wb_dev) ? wb_enc->wb_dev->wb_idx - WB_0 : -1)
+
+#define TO_S15D16(_x_)	((_x_) << 7)
+
+static const u32 cwb_irq_tbl[PINGPONG_MAX] = {SDE_NONE, INTR_IDX_PP1_OVFL,
+	INTR_IDX_PP2_OVFL, INTR_IDX_PP3_OVFL, INTR_IDX_PP4_OVFL,
+	INTR_IDX_PP5_OVFL, SDE_NONE, SDE_NONE};
+
+/**
+ * sde_rgb2yuv_601l - rgb to yuv color space conversion matrix
+ *
+ */
+static struct sde_csc_cfg sde_encoder_phys_wb_rgb2yuv_601l = {
+	{
+		TO_S15D16(0x0083), TO_S15D16(0x0102), TO_S15D16(0x0032),
+		TO_S15D16(0x1fb5), TO_S15D16(0x1f6c), TO_S15D16(0x00e1),
+		TO_S15D16(0x00e1), TO_S15D16(0x1f45), TO_S15D16(0x1fdc)
+	},
+	{ 0x00, 0x00, 0x00 },
+	{ 0x0040, 0x0200, 0x0200 },
+	{ 0x000, 0x3ff, 0x000, 0x3ff, 0x000, 0x3ff },
+	{ 0x040, 0x3ac, 0x040, 0x3c0, 0x040, 0x3c0 },
+};
 
 /**
  * sde_encoder_phys_wb_is_master - report wb always as master encoder
@@ -75,20 +97,6 @@ static void sde_encoder_phys_wb_set_ot_limit(
 }
 
 /**
- * sde_encoder_phys_wb_set_traffic_shaper - set traffic shaper for writeback
- * @phys_enc:	Pointer to physical encoder
- */
-static void sde_encoder_phys_wb_set_traffic_shaper(
-		struct sde_encoder_phys *phys_enc)
-{
-	struct sde_encoder_phys_wb *wb_enc = to_sde_encoder_phys_wb(phys_enc);
-	struct sde_hw_wb_cfg *wb_cfg = &wb_enc->wb_cfg;
-
-	/* traffic shaper is only enabled for rotator */
-	wb_cfg->ts_cfg.en = false;
-}
-
-/**
  * sde_encoder_phys_wb_set_qos_remap - set QoS remapper for writeback
  * @phys_enc:	Pointer to physical encoder
  */
@@ -125,14 +133,192 @@ static void sde_encoder_phys_wb_set_qos_remap(
 	qos_params.xin_id = hw_wb->caps->xin_id;
 	qos_params.clk_ctrl = hw_wb->caps->clk_ctrl;
 	qos_params.num = hw_wb->idx - WB_0;
-	qos_params.is_rt = sde_crtc_get_client_type(crtc) != NRT_CLIENT;
+	qos_params.client_type = phys_enc->in_clone_mode ?
+					VBIF_CWB_CLIENT : VBIF_NRT_CLIENT;
 
-	SDE_DEBUG("[qos_remap] wb:%d vbif:%d xin:%d rt:%d\n",
+	SDE_DEBUG("[qos_remap] wb:%d vbif:%d xin:%d rt:%d clone:%d\n",
 			qos_params.num,
 			qos_params.vbif_idx,
-			qos_params.xin_id, qos_params.is_rt);
+			qos_params.xin_id, qos_params.client_type);
 
 	sde_vbif_set_qos_remap(phys_enc->sde_kms, &qos_params);
+}
+
+static u64 _sde_encoder_phys_wb_get_qos_lut(const struct sde_qos_lut_tbl *tbl,
+		u32 total_fl)
+{
+	int i;
+
+	if (!tbl || !tbl->nentry || !tbl->entries)
+		return 0;
+
+	for (i = 0; i < tbl->nentry; i++)
+		if (total_fl <= tbl->entries[i].fl)
+			return tbl->entries[i].lut;
+
+	/* if last fl is zero, use as default */
+	if (!tbl->entries[i-1].fl)
+		return tbl->entries[i-1].lut;
+
+	return 0;
+}
+
+/**
+ * sde_encoder_phys_wb_set_qos - set QoS/danger/safe LUTs for writeback
+ * @phys_enc:	Pointer to physical encoder
+ */
+static void sde_encoder_phys_wb_set_qos(struct sde_encoder_phys *phys_enc)
+{
+	struct sde_encoder_phys_wb *wb_enc;
+	struct sde_hw_wb *hw_wb;
+	struct sde_hw_wb_qos_cfg qos_cfg;
+	struct sde_mdss_cfg *catalog;
+
+	if (!phys_enc || !phys_enc->sde_kms || !phys_enc->sde_kms->catalog) {
+		SDE_ERROR("invalid parameter(s)\n");
+		return;
+	}
+	catalog = phys_enc->sde_kms->catalog;
+
+	wb_enc = to_sde_encoder_phys_wb(phys_enc);
+	if (!wb_enc->hw_wb) {
+		SDE_ERROR("invalid writeback hardware\n");
+		return;
+	}
+
+	hw_wb = wb_enc->hw_wb;
+
+	memset(&qos_cfg, 0, sizeof(struct sde_hw_wb_qos_cfg));
+	qos_cfg.danger_safe_en = true;
+	qos_cfg.danger_lut =
+		catalog->perf.danger_lut_tbl[SDE_QOS_LUT_USAGE_NRT];
+
+	if (phys_enc->in_clone_mode)
+		qos_cfg.safe_lut = (u32) _sde_encoder_phys_wb_get_qos_lut(
+			&catalog->perf.sfe_lut_tbl[SDE_QOS_LUT_USAGE_CWB], 0);
+	else
+		qos_cfg.safe_lut = (u32) _sde_encoder_phys_wb_get_qos_lut(
+			&catalog->perf.sfe_lut_tbl[SDE_QOS_LUT_USAGE_NRT], 0);
+
+	if (phys_enc->in_clone_mode)
+		qos_cfg.creq_lut = _sde_encoder_phys_wb_get_qos_lut(
+			&catalog->perf.qos_lut_tbl[SDE_QOS_LUT_USAGE_CWB], 0);
+	else
+		qos_cfg.creq_lut = _sde_encoder_phys_wb_get_qos_lut(
+			&catalog->perf.qos_lut_tbl[SDE_QOS_LUT_USAGE_NRT], 0);
+
+	if (hw_wb->ops.setup_danger_safe_lut)
+		hw_wb->ops.setup_danger_safe_lut(hw_wb, &qos_cfg);
+
+	if (hw_wb->ops.setup_creq_lut)
+		hw_wb->ops.setup_creq_lut(hw_wb, &qos_cfg);
+
+	if (hw_wb->ops.setup_qos_ctrl)
+		hw_wb->ops.setup_qos_ctrl(hw_wb, &qos_cfg);
+}
+
+/**
+ * sde_encoder_phys_setup_cdm - setup chroma down block
+ * @phys_enc:	Pointer to physical encoder
+ * @fb:		Pointer to output framebuffer
+ * @format:	Output format
+ */
+void sde_encoder_phys_setup_cdm(struct sde_encoder_phys *phys_enc,
+		struct drm_framebuffer *fb, const struct sde_format *format,
+		struct sde_rect *wb_roi)
+{
+	struct sde_hw_cdm *hw_cdm;
+	struct sde_hw_cdm_cfg *cdm_cfg;
+	struct sde_hw_pingpong *hw_pp;
+	int ret;
+
+	if (!phys_enc || !format)
+		return;
+
+	cdm_cfg = &phys_enc->cdm_cfg;
+	hw_pp = phys_enc->hw_pp;
+	hw_cdm = phys_enc->hw_cdm;
+	if (!hw_cdm)
+		return;
+
+	if (!SDE_FORMAT_IS_YUV(format)) {
+		SDE_DEBUG("[cdm_disable fmt:%x]\n",
+				format->base.pixel_format);
+
+		if (hw_cdm && hw_cdm->ops.disable)
+			hw_cdm->ops.disable(hw_cdm);
+
+		return;
+	}
+
+	memset(cdm_cfg, 0, sizeof(struct sde_hw_cdm_cfg));
+
+	if (!wb_roi)
+		return;
+
+	cdm_cfg->output_width = wb_roi->w;
+	cdm_cfg->output_height = wb_roi->h;
+	cdm_cfg->output_fmt = format;
+	cdm_cfg->output_type = CDM_CDWN_OUTPUT_WB;
+	cdm_cfg->output_bit_depth = SDE_FORMAT_IS_DX(format) ?
+		CDM_CDWN_OUTPUT_10BIT : CDM_CDWN_OUTPUT_8BIT;
+
+	/* enable 10 bit logic */
+	switch (cdm_cfg->output_fmt->chroma_sample) {
+	case SDE_CHROMA_RGB:
+		cdm_cfg->h_cdwn_type = CDM_CDWN_DISABLE;
+		cdm_cfg->v_cdwn_type = CDM_CDWN_DISABLE;
+		break;
+	case SDE_CHROMA_H2V1:
+		cdm_cfg->h_cdwn_type = CDM_CDWN_COSITE;
+		cdm_cfg->v_cdwn_type = CDM_CDWN_DISABLE;
+		break;
+	case SDE_CHROMA_420:
+		cdm_cfg->h_cdwn_type = CDM_CDWN_COSITE;
+		cdm_cfg->v_cdwn_type = CDM_CDWN_OFFSITE;
+		break;
+	case SDE_CHROMA_H1V2:
+	default:
+		SDE_ERROR("unsupported chroma sampling type\n");
+		cdm_cfg->h_cdwn_type = CDM_CDWN_DISABLE;
+		cdm_cfg->v_cdwn_type = CDM_CDWN_DISABLE;
+		break;
+	}
+
+	SDE_DEBUG("[cdm_enable:%d,%d,%X,%d,%d,%d,%d]\n",
+			cdm_cfg->output_width,
+			cdm_cfg->output_height,
+			cdm_cfg->output_fmt->base.pixel_format,
+			cdm_cfg->output_type,
+			cdm_cfg->output_bit_depth,
+			cdm_cfg->h_cdwn_type,
+			cdm_cfg->v_cdwn_type);
+
+	if (hw_cdm && hw_cdm->ops.setup_csc_data) {
+		ret = hw_cdm->ops.setup_csc_data(hw_cdm,
+				&sde_encoder_phys_wb_rgb2yuv_601l);
+		if (ret < 0) {
+			SDE_ERROR("failed to setup CSC %d\n", ret);
+			return;
+		}
+	}
+
+	if (hw_cdm && hw_cdm->ops.setup_cdwn) {
+		ret = hw_cdm->ops.setup_cdwn(hw_cdm, cdm_cfg);
+		if (ret < 0) {
+			SDE_ERROR("failed to setup CDM %d\n", ret);
+			return;
+		}
+	}
+
+	if (hw_cdm && hw_pp && hw_cdm->ops.enable) {
+		cdm_cfg->pp_id = hw_pp->idx;
+		ret = hw_cdm->ops.enable(hw_cdm, cdm_cfg);
+		if (ret < 0) {
+			SDE_ERROR("failed to enable CDM %d\n", ret);
+			return;
+		}
+	}
 }
 
 /**
@@ -190,6 +376,7 @@ static void sde_encoder_phys_wb_setup_fb(struct sde_encoder_phys *phys_enc,
 	/* cache framebuffer for cleanup in writeback done */
 	wb_enc->wb_fb = fb;
 	wb_enc->wb_aspace = aspace;
+	drm_framebuffer_get(fb);
 
 	format = msm_framebuffer_format(fb);
 	if (!format) {
@@ -199,8 +386,7 @@ static void sde_encoder_phys_wb_setup_fb(struct sde_encoder_phys *phys_enc,
 
 	wb_cfg->dest.format = sde_get_sde_format_ext(
 			format->pixel_format,
-			fb->modifier,
-			drm_format_num_planes(fb->pixel_format));
+			fb->modifier);
 	if (!wb_cfg->dest.format) {
 		/* this error should be detected during atomic_check */
 		SDE_ERROR("failed to get format %x\n", format->pixel_format);
@@ -284,49 +470,139 @@ static void _sde_encoder_phys_wb_setup_cwb(struct sde_encoder_phys *phys_enc,
 {
 	struct sde_encoder_phys_wb *wb_enc = to_sde_encoder_phys_wb(phys_enc);
 	struct sde_hw_wb *hw_wb = wb_enc->hw_wb;
-	struct sde_hw_intf_cfg *intf_cfg = &wb_enc->intf_cfg;
 	struct sde_hw_ctl *hw_ctl = phys_enc->hw_ctl;
 	struct sde_crtc *crtc = to_sde_crtc(wb_enc->crtc);
+	struct sde_hw_pingpong *hw_pp = phys_enc->hw_pp;
+	bool need_merge = crtc->num_mixers > 1 ? true : false;
+	int i = 0;
 
 	if (!phys_enc->in_clone_mode) {
 		SDE_DEBUG("not in CWB mode. early return\n");
 		return;
 	}
 
-	memset(intf_cfg, 0, sizeof(struct sde_hw_intf_cfg));
-	intf_cfg->intf = SDE_NONE;
-	intf_cfg->wb = hw_wb->idx;
+	if (!hw_pp || !hw_ctl || !hw_wb || hw_pp->idx >= PINGPONG_MAX) {
+		SDE_ERROR("invalid hw resources - return\n");
+		return;
+	}
 
 	hw_ctl = crtc->mixers[0].hw_ctl;
-	if (hw_ctl && hw_ctl->ops.update_wb_cfg) {
-		hw_ctl->ops.update_wb_cfg(hw_ctl, intf_cfg, enable);
-		SDE_DEBUG("in CWB mode adding WB for CTL_%d\n",
-				hw_ctl->idx - CTL_0);
+	if (hw_ctl && hw_ctl->ops.setup_intf_cfg_v1 &&
+			test_bit(SDE_WB_CWB_CTRL, &hw_wb->caps->features)) {
+		struct sde_hw_intf_cfg_v1 intf_cfg = { 0, };
+
+		for (i = 0; i < crtc->num_mixers; i++)
+			intf_cfg.cwb[intf_cfg.cwb_count++] =
+				(enum sde_cwb)(hw_pp->idx + i);
+
+		if (enable && hw_pp->merge_3d && (intf_cfg.merge_3d_count <
+				MAX_MERGE_3D_PER_CTL_V1) && need_merge)
+			intf_cfg.merge_3d[intf_cfg.merge_3d_count++] =
+				hw_pp->merge_3d->idx;
+
+		if (hw_pp->ops.setup_3d_mode)
+			hw_pp->ops.setup_3d_mode(hw_pp, (enable && need_merge) ?
+					BLEND_3D_H_ROW_INT : 0);
+
+		if (hw_wb->ops.bind_pingpong_blk)
+			hw_wb->ops.bind_pingpong_blk(hw_wb, enable, hw_pp->idx);
+
+		if (hw_ctl->ops.update_cwb_cfg) {
+			hw_ctl->ops.update_cwb_cfg(hw_ctl, &intf_cfg, enable);
+			SDE_DEBUG("in CWB mode on CTL_%d PP-%d merge3d:%d\n",
+					hw_ctl->idx - CTL_0,
+					hw_pp->idx - PINGPONG_0,
+					hw_pp->merge_3d ?
+					hw_pp->merge_3d->idx - MERGE_3D_0 : -1);
+		}
+	} else {
+		struct sde_hw_intf_cfg *intf_cfg = &phys_enc->intf_cfg;
+
+		memset(intf_cfg, 0, sizeof(struct sde_hw_intf_cfg));
+		intf_cfg->intf = SDE_NONE;
+		intf_cfg->wb = hw_wb->idx;
+
+		if (hw_ctl && hw_ctl->ops.update_wb_cfg) {
+			hw_ctl->ops.update_wb_cfg(hw_ctl, intf_cfg, enable);
+			SDE_DEBUG("in CWB mode adding WB for CTL_%d\n",
+					hw_ctl->idx - CTL_0);
+		}
 	}
 }
+
 /**
  * sde_encoder_phys_wb_setup_cdp - setup chroma down prefetch block
  * @phys_enc:	Pointer to physical encoder
  */
-static void sde_encoder_phys_wb_setup_cdp(struct sde_encoder_phys *phys_enc)
+static void sde_encoder_phys_wb_setup_cdp(struct sde_encoder_phys *phys_enc,
+		const struct sde_format *format)
 {
-	struct sde_encoder_phys_wb *wb_enc = to_sde_encoder_phys_wb(phys_enc);
-	struct sde_hw_wb *hw_wb = wb_enc->hw_wb;
-	struct sde_hw_intf_cfg *intf_cfg = &wb_enc->intf_cfg;
+	struct sde_encoder_phys_wb *wb_enc;
+	struct sde_hw_wb *hw_wb;
+	struct sde_hw_cdm *hw_cdm;
+	struct sde_hw_ctl *ctl;
+	const int num_wb = 1;
+
+	if (!phys_enc) {
+		SDE_ERROR("invalid encoder\n");
+		return;
+	}
 
 	if (phys_enc->in_clone_mode) {
 		SDE_DEBUG("in CWB mode. early return\n");
 		return;
 	}
 
-	memset(intf_cfg, 0, sizeof(struct sde_hw_intf_cfg));
-	intf_cfg->intf = SDE_NONE;
-	intf_cfg->wb = hw_wb->idx;
-	intf_cfg->mode_3d = sde_encoder_helper_get_3d_blend_mode(phys_enc);
+	wb_enc = to_sde_encoder_phys_wb(phys_enc);
+	hw_wb = wb_enc->hw_wb;
+	hw_cdm = phys_enc->hw_cdm;
+	ctl = phys_enc->hw_ctl;
 
-	if (phys_enc->hw_ctl && phys_enc->hw_ctl->ops.setup_intf_cfg)
+	if (test_bit(SDE_CTL_ACTIVE_CFG, &ctl->caps->features) &&
+		(phys_enc->hw_ctl &&
+		 phys_enc->hw_ctl->ops.setup_intf_cfg_v1)) {
+		struct sde_hw_intf_cfg_v1 *intf_cfg_v1 = &phys_enc->intf_cfg_v1;
+		struct sde_hw_pingpong *hw_pp = phys_enc->hw_pp;
+		enum sde_3d_blend_mode mode_3d;
+
+		memset(intf_cfg_v1, 0, sizeof(struct sde_hw_intf_cfg_v1));
+
+		mode_3d = sde_encoder_helper_get_3d_blend_mode(phys_enc);
+		intf_cfg_v1->intf_count = SDE_NONE;
+		intf_cfg_v1->wb_count = num_wb;
+		intf_cfg_v1->wb[0] = hw_wb->idx;
+		if (SDE_FORMAT_IS_YUV(format)) {
+			intf_cfg_v1->cdm_count = num_wb;
+			intf_cfg_v1->cdm[0] = hw_cdm->idx;
+		}
+
+		if (mode_3d && hw_pp && hw_pp->merge_3d &&
+			intf_cfg_v1->merge_3d_count < MAX_MERGE_3D_PER_CTL_V1)
+			intf_cfg_v1->merge_3d[intf_cfg_v1->merge_3d_count++] =
+					hw_pp->merge_3d->idx;
+
+		if (hw_pp && hw_pp->ops.setup_3d_mode)
+			hw_pp->ops.setup_3d_mode(hw_pp, mode_3d);
+
+		/* setup which pp blk will connect to this wb */
+		if (hw_pp && hw_wb->ops.bind_pingpong_blk)
+			hw_wb->ops.bind_pingpong_blk(hw_wb, true,
+					hw_pp->idx);
+
+		phys_enc->hw_ctl->ops.setup_intf_cfg_v1(phys_enc->hw_ctl,
+				intf_cfg_v1);
+	} else if (phys_enc->hw_ctl && phys_enc->hw_ctl->ops.setup_intf_cfg) {
+		struct sde_hw_intf_cfg *intf_cfg = &phys_enc->intf_cfg;
+
+		memset(intf_cfg, 0, sizeof(struct sde_hw_intf_cfg));
+
+		intf_cfg->intf = SDE_NONE;
+		intf_cfg->wb = hw_wb->idx;
+		intf_cfg->mode_3d =
+			sde_encoder_helper_get_3d_blend_mode(phys_enc);
 		phys_enc->hw_ctl->ops.setup_intf_cfg(phys_enc->hw_ctl,
 				intf_cfg);
+	}
 
 }
 
@@ -343,10 +619,11 @@ static void _sde_enc_phys_wb_detect_cwb(struct sde_encoder_phys *phys_enc,
 	if (!(wb_cfg->features & BIT(SDE_WB_HAS_CWB)))
 		return;
 
-	 /* if any other encoder is connected to same crtc enable clone mode*/
+	/* if any other encoder is connected to same crtc enable clone mode*/
 	drm_for_each_encoder(encoder, crtc_state->crtc->dev) {
 		if (encoder->crtc != crtc_state->crtc)
 			continue;
+
 		if (phys_enc->parent != encoder) {
 			phys_enc->in_clone_mode = true;
 			break;
@@ -362,6 +639,7 @@ static int _sde_enc_phys_wb_validate_cwb(struct sde_encoder_phys *phys_enc,
 {
 	struct sde_crtc_state *cstate = to_sde_crtc_state(crtc_state);
 	struct sde_rect wb_roi = {0,};
+	struct sde_rect pu_roi = {0,};
 	int data_pt;
 	int ds_outw = 0;
 	int ds_outh = 0;
@@ -400,12 +678,11 @@ static int _sde_enc_phys_wb_validate_cwb(struct sde_encoder_phys *phys_enc,
 	}
 
 	/* validate conn roi against pu rect */
-	if (!sde_kms_rect_is_null(&cstate->crtc_roi)) {
-		if (wb_roi.w != cstate->crtc_roi.w ||
-				wb_roi.h != cstate->crtc_roi.h) {
+	if (cstate->user_roi_list.num_rects) {
+		sde_kms_rect_merge_rectangles(&cstate->user_roi_list, &pu_roi);
+		if (wb_roi.w != pu_roi.w || wb_roi.h != pu_roi.h) {
 			SDE_ERROR("invalid wb roi with pu [%dx%d vs %dx%d]\n",
-					wb_roi.w, wb_roi.h, cstate->crtc_roi.w,
-					 cstate->crtc_roi.h);
+					wb_roi.w, wb_roi.h, pu_roi.w, pu_roi.h);
 			ret = -EINVAL;
 			goto exit;
 		}
@@ -471,16 +748,15 @@ static int sde_encoder_phys_wb_atomic_check(
 	SDE_DEBUG("[fb_id:%u][fb:%u,%u]\n", fb->base.id,
 			fb->width, fb->height);
 
-	fmt = sde_get_sde_format_ext(fb->pixel_format, fb->modifier,
-			drm_format_num_planes(fb->pixel_format));
+	fmt = sde_get_sde_format_ext(fb->format->format, fb->modifier);
 	if (!fmt) {
 		SDE_ERROR("unsupported output pixel format:%x\n",
-				fb->pixel_format);
+				fb->format->format);
 		return -EINVAL;
 	}
 
-	SDE_DEBUG("[fb_fmt:%x,%llx]\n", fb->pixel_format,
-			fb->modifier[0]);
+	SDE_DEBUG("[fb_fmt:%x,%llx]\n", fb->format->format,
+			fb->modifier);
 
 	if (SDE_FORMAT_IS_YUV(fmt) &&
 			!(wb_cfg->features & BIT(SDE_WB_YUV_CONFIG))) {
@@ -549,16 +825,21 @@ static int sde_encoder_phys_wb_atomic_check(
 }
 
 static void _sde_encoder_phys_wb_update_cwb_flush(
-		struct sde_encoder_phys *phys_enc)
+		struct sde_encoder_phys *phys_enc, bool enable)
 {
 	struct sde_encoder_phys_wb *wb_enc;
 	struct sde_hw_wb *hw_wb;
 	struct sde_hw_ctl *hw_ctl;
 	struct sde_hw_cdm *hw_cdm;
+	struct sde_hw_pingpong *hw_pp;
 	struct sde_crtc *crtc;
 	struct sde_crtc_state *crtc_state;
-	u32 flush_mask = 0;
-	int capture_point = 0;
+	int i = 0;
+	int cwb_capture_mode = 0;
+	enum sde_cwb cwb_idx = 0;
+	enum sde_cwb src_pp_idx = 0;
+	bool dspp_out = false;
+	bool need_merge = false;
 
 	if (!phys_enc->in_clone_mode) {
 		SDE_DEBUG("not in CWB mode. early return\n");
@@ -568,33 +849,59 @@ static void _sde_encoder_phys_wb_update_cwb_flush(
 	wb_enc = to_sde_encoder_phys_wb(phys_enc);
 	crtc = to_sde_crtc(wb_enc->crtc);
 	crtc_state = to_sde_crtc_state(wb_enc->crtc->state);
+	cwb_capture_mode = sde_crtc_get_property(crtc_state,
+			CRTC_PROP_CAPTURE_OUTPUT);
 
+	hw_pp = phys_enc->hw_pp;
 	hw_wb = wb_enc->hw_wb;
 	hw_cdm = phys_enc->hw_cdm;
 
 	/* In CWB mode, program actual source master sde_hw_ctl from crtc */
 	hw_ctl = crtc->mixers[0].hw_ctl;
-	if (!hw_ctl) {
-		SDE_DEBUG("[wb:%d] no ctl assigned for CWB\n",
-				hw_wb->idx - WB_0);
+	if (!hw_ctl || !hw_wb || !hw_pp) {
+		SDE_ERROR("[wb] HW resource not available for CWB\n");
 		return;
 	}
 
-	capture_point  = sde_crtc_get_property(crtc_state,
-			CRTC_PROP_CAPTURE_OUTPUT);
+	/* treating LM idx of primary display ctl path as source ping-pong idx*/
+	src_pp_idx = (enum sde_cwb)crtc->mixers[0].hw_lm->idx;
+	cwb_idx = (enum sde_cwb)hw_pp->idx;
+	dspp_out = (cwb_capture_mode == CAPTURE_DSPP_OUT);
+	need_merge = (crtc->num_mixers > 1) ? true : false;
 
-	phys_enc->hw_mdptop->ops.set_cwb_ppb_cntl(phys_enc->hw_mdptop,
-			crtc->num_mixers == CRTC_DUAL_MIXERS,
-			capture_point == CAPTURE_DSPP_OUT);
+	if (src_pp_idx > CWB_0 ||  ((cwb_idx + crtc->num_mixers) > CWB_MAX)) {
+		SDE_ERROR("invalid hw config for CWB\n");
+		return;
+	}
 
-	if (hw_ctl->ops.get_bitmask_wb)
-		hw_ctl->ops.get_bitmask_wb(hw_ctl, &flush_mask, hw_wb->idx);
+	if (hw_ctl->ops.update_bitmask_wb)
+		hw_ctl->ops.update_bitmask_wb(hw_ctl, hw_wb->idx, 1);
 
-	if (hw_ctl->ops.get_bitmask_cdm && hw_cdm)
-		hw_ctl->ops.get_bitmask_cdm(hw_ctl, &flush_mask, hw_cdm->idx);
+	if (hw_ctl->ops.update_bitmask_cdm && hw_cdm)
+		hw_ctl->ops.update_bitmask_cdm(hw_ctl, hw_cdm->idx, 1);
 
-	if (hw_ctl->ops.update_pending_flush)
-		hw_ctl->ops.update_pending_flush(hw_ctl, flush_mask);
+	if (test_bit(SDE_WB_CWB_CTRL, &hw_wb->caps->features)) {
+		for (i = 0; i < crtc->num_mixers; i++) {
+			cwb_idx = (enum sde_cwb) (hw_pp->idx + i);
+			src_pp_idx = (enum sde_cwb) (src_pp_idx + i);
+
+			if (hw_wb->ops.program_cwb_ctrl)
+				hw_wb->ops.program_cwb_ctrl(hw_wb, cwb_idx,
+						src_pp_idx, dspp_out, enable);
+
+			if (hw_ctl->ops.update_bitmask_cwb)
+				hw_ctl->ops.update_bitmask_cwb(hw_ctl,
+						cwb_idx, 1);
+		}
+
+		if (need_merge && hw_ctl->ops.update_bitmask_merge3d
+				&& hw_pp && hw_pp->merge_3d)
+			hw_ctl->ops.update_bitmask_merge3d(hw_ctl,
+					hw_pp->merge_3d->idx, 1);
+	} else {
+		phys_enc->hw_mdptop->ops.set_cwb_ppb_cntl(phys_enc->hw_mdptop,
+				need_merge, dspp_out);
+	}
 }
 
 /**
@@ -607,7 +914,8 @@ static void _sde_encoder_phys_wb_update_flush(struct sde_encoder_phys *phys_enc)
 	struct sde_hw_wb *hw_wb;
 	struct sde_hw_ctl *hw_ctl;
 	struct sde_hw_cdm *hw_cdm;
-	u32 flush_mask = 0;
+	struct sde_hw_pingpong *hw_pp;
+	struct sde_ctl_flush_cfg pending_flush = {0,};
 
 	if (!phys_enc)
 		return;
@@ -615,6 +923,7 @@ static void _sde_encoder_phys_wb_update_flush(struct sde_encoder_phys *phys_enc)
 	wb_enc = to_sde_encoder_phys_wb(phys_enc);
 	hw_wb = wb_enc->hw_wb;
 	hw_cdm = phys_enc->hw_cdm;
+	hw_pp = phys_enc->hw_pp;
 	hw_ctl = phys_enc->hw_ctl;
 
 	SDE_DEBUG("[wb:%d]\n", hw_wb->idx - WB_0);
@@ -629,20 +938,23 @@ static void _sde_encoder_phys_wb_update_flush(struct sde_encoder_phys *phys_enc)
 		return;
 	}
 
-	if (hw_ctl->ops.get_bitmask_wb)
-		hw_ctl->ops.get_bitmask_wb(hw_ctl, &flush_mask, hw_wb->idx);
+	if (hw_ctl->ops.update_bitmask_wb)
+		hw_ctl->ops.update_bitmask_wb(hw_ctl, hw_wb->idx, 1);
 
-	if (hw_ctl->ops.get_bitmask_cdm && hw_cdm)
-		hw_ctl->ops.get_bitmask_cdm(hw_ctl, &flush_mask, hw_cdm->idx);
+	if (hw_ctl->ops.update_bitmask_cdm && hw_cdm)
+		hw_ctl->ops.update_bitmask_cdm(hw_ctl, hw_cdm->idx, 1);
 
-	if (hw_ctl->ops.update_pending_flush)
-		hw_ctl->ops.update_pending_flush(hw_ctl, flush_mask);
+	if (hw_ctl->ops.update_bitmask_merge3d && hw_pp && hw_pp->merge_3d)
+		hw_ctl->ops.update_bitmask_merge3d(hw_ctl,
+				hw_pp->merge_3d->idx, 1);
 
 	if (hw_ctl->ops.get_pending_flush)
-		flush_mask = hw_ctl->ops.get_pending_flush(hw_ctl);
+		hw_ctl->ops.get_pending_flush(hw_ctl,
+				&pending_flush);
 
 	SDE_DEBUG("Pending flush mask for CTL_%d is 0x%x, WB %d\n",
-			hw_ctl->idx - CTL_0, flush_mask, hw_wb->idx - WB_0);
+			hw_ctl->idx - CTL_0, pending_flush.pending_flush_mask,
+			hw_wb->idx - WB_0);
 }
 
 /**
@@ -695,29 +1007,28 @@ static void sde_encoder_phys_wb_setup(
 	SDE_DEBUG("[roi:%u,%u,%u,%u]\n", wb_roi->x, wb_roi->y,
 			wb_roi->w, wb_roi->h);
 
-	wb_enc->wb_fmt = sde_get_sde_format_ext(fb->pixel_format, fb->modifier,
-			drm_format_num_planes(fb->pixel_format));
+	wb_enc->wb_fmt = sde_get_sde_format_ext(fb->format->format,
+							fb->modifier);
 	if (!wb_enc->wb_fmt) {
 		SDE_ERROR("unsupported output pixel format: %d\n",
-				fb->pixel_format);
+				fb->format->format);
 		return;
 	}
 
-	SDE_DEBUG("[fb_fmt:%x,%llx]\n", fb->pixel_format,
-			fb->modifier[0]);
+	SDE_DEBUG("[fb_fmt:%x,%llx]\n", fb->format->format,
+			fb->modifier);
 
 	sde_encoder_phys_wb_set_ot_limit(phys_enc);
 
-	sde_encoder_phys_wb_set_traffic_shaper(phys_enc);
-
 	sde_encoder_phys_wb_set_qos_remap(phys_enc);
 
-	sde_encoder_phys_setup_cdm(phys_enc, wb_enc->wb_fmt,
-		CDM_CDWN_OUTPUT_WB, wb_roi);
+	sde_encoder_phys_wb_set_qos(phys_enc);
+
+	sde_encoder_phys_setup_cdm(phys_enc, fb, wb_enc->wb_fmt, wb_roi);
 
 	sde_encoder_phys_wb_setup_fb(phys_enc, fb, wb_roi);
 
-	sde_encoder_phys_wb_setup_cdp(phys_enc);
+	sde_encoder_phys_wb_setup_cdp(phys_enc, wb_enc->wb_fmt);
 
 	_sde_encoder_phys_wb_setup_cwb(phys_enc, true);
 }
@@ -729,31 +1040,33 @@ static void _sde_encoder_phys_wb_frame_done_helper(void *arg, bool frame_error)
 	struct sde_hw_wb *hw_wb = wb_enc->hw_wb;
 	u32 event = frame_error ? SDE_ENCODER_FRAME_EVENT_ERROR : 0;
 
-	event |= SDE_ENCODER_FRAME_EVENT_DONE |
-		SDE_ENCODER_FRAME_EVENT_SIGNAL_RETIRE_FENCE;
-
 	SDE_DEBUG("[wb:%d,%u]\n", hw_wb->idx - WB_0, wb_enc->frame_count);
 
 	/* don't notify upper layer for internal commit */
 	if (phys_enc->enable_state == SDE_ENC_DISABLING)
 		goto complete;
 
-	if (!phys_enc->in_clone_mode)
-		event |= SDE_ENCODER_FRAME_EVENT_SIGNAL_RELEASE_FENCE;
+	if (phys_enc->parent_ops.handle_frame_done &&
+	    atomic_add_unless(&phys_enc->pending_retire_fence_cnt, -1, 0)) {
+		event |= SDE_ENCODER_FRAME_EVENT_DONE |
+			SDE_ENCODER_FRAME_EVENT_SIGNAL_RETIRE_FENCE;
 
-	atomic_add_unless(&phys_enc->pending_retire_fence_cnt, -1, 0);
-	if (phys_enc->parent_ops.handle_frame_done)
+		if (!phys_enc->in_clone_mode)
+			event |= SDE_ENCODER_FRAME_EVENT_SIGNAL_RELEASE_FENCE;
+
 		phys_enc->parent_ops.handle_frame_done(phys_enc->parent,
 				phys_enc, event);
+	}
 
-	if (phys_enc->parent_ops.handle_vblank_virt)
+	if (phys_enc->parent_ops.handle_vblank_virt && !phys_enc->in_clone_mode)
 		phys_enc->parent_ops.handle_vblank_virt(phys_enc->parent,
 				phys_enc);
 
-	SDE_EVT32_IRQ(DRMID(phys_enc->parent), hw_wb->idx - WB_0, event);
+	SDE_EVT32_IRQ(DRMID(phys_enc->parent), hw_wb->idx - WB_0, event,
+		frame_error);
 
 complete:
-	complete_all(&wb_enc->wbdone_complete);
+	wake_up_all(&phys_enc->pending_kickoff_wq);
 }
 
 /**
@@ -787,7 +1100,7 @@ static void sde_encoder_phys_wb_irq_ctrl(
 
 	struct sde_encoder_phys_wb *wb_enc = to_sde_encoder_phys_wb(phys);
 	int index = 0, refcount;
-	int ret = 0;
+	int ret = 0, pp = 0;
 
 	if (!wb_enc)
 		return;
@@ -795,38 +1108,33 @@ static void sde_encoder_phys_wb_irq_ctrl(
 	if (wb_enc->bypass_irqreg)
 		return;
 
+	pp = phys->hw_pp->idx - PINGPONG_0;
+	if ((pp + CRTC_DUAL_MIXERS) >= PINGPONG_MAX) {
+		SDE_ERROR("invalid pingpong index for WB or CWB\n");
+		return;
+	}
+
 	refcount = atomic_read(&phys->wbirq_refcount);
 
-	if (!enable && !refcount)
-		return;
-
-	SDE_EVT32(DRMID(phys->parent), enable,
-			atomic_read(&phys->wbirq_refcount));
-
 	if (enable && atomic_inc_return(&phys->wbirq_refcount) == 1) {
-		ret = sde_encoder_helper_register_irq(phys, INTR_IDX_WB_DONE);
+		sde_encoder_helper_register_irq(phys, INTR_IDX_WB_DONE);
 		if (ret)
 			atomic_dec_return(&phys->wbirq_refcount);
 
+		for (index = 0; index < CRTC_DUAL_MIXERS; index++)
+			if (cwb_irq_tbl[index + pp] != SDE_NONE)
+				sde_encoder_helper_register_irq(phys,
+					cwb_irq_tbl[index + pp]);
 	} else if (!enable &&
 			atomic_dec_return(&phys->wbirq_refcount) == 0) {
-		ret = sde_encoder_helper_unregister_irq(phys, INTR_IDX_WB_DONE);
+		sde_encoder_helper_unregister_irq(phys, INTR_IDX_WB_DONE);
 		if (ret)
 			atomic_inc_return(&phys->wbirq_refcount);
-	}
 
-	if (phys->in_clone_mode) {
-		if (enable) {
-			for (index = 0; index < CRTC_DUAL_MIXERS; index++)
-				sde_encoder_helper_register_irq(phys,
-						index ? INTR_IDX_PP3_OVFL
-						: INTR_IDX_PP2_OVFL);
-		} else {
-			for (index = 0; index < CRTC_DUAL_MIXERS; index++)
+		for (index = 0; index < CRTC_DUAL_MIXERS; index++)
+			if (cwb_irq_tbl[index + pp] != SDE_NONE)
 				sde_encoder_helper_unregister_irq(phys,
-						index ? INTR_IDX_PP3_OVFL
-						: INTR_IDX_PP2_OVFL);
-		}
+					cwb_irq_tbl[index + pp]);
 	}
 }
 
@@ -886,20 +1194,40 @@ static void sde_encoder_phys_wb_mode_set(
 	}
 }
 
+static int sde_encoder_phys_wb_frame_timeout(struct sde_encoder_phys *phys_enc)
+{
+	u32 event = 0;
+
+	while (atomic_add_unless(&phys_enc->pending_retire_fence_cnt, -1, 0) &&
+			phys_enc->parent_ops.handle_frame_done) {
+
+		event = SDE_ENCODER_FRAME_EVENT_SIGNAL_RETIRE_FENCE
+			| SDE_ENCODER_FRAME_EVENT_ERROR;
+
+		if (!phys_enc->in_clone_mode)
+			event |= SDE_ENCODER_FRAME_EVENT_SIGNAL_RELEASE_FENCE;
+
+		phys_enc->parent_ops.handle_frame_done(
+				phys_enc->parent, phys_enc, event);
+
+		SDE_EVT32(DRMID(phys_enc->parent), event,
+			atomic_read(&phys_enc->pending_retire_fence_cnt));
+	}
+
+	return event;
+}
 /**
  * sde_encoder_phys_wb_wait_for_commit_done - wait until request is committed
  * @phys_enc:	Pointer to physical encoder
  */
-static int sde_encoder_phys_wb_wait_for_commit_done(
-		struct sde_encoder_phys *phys_enc)
+static int _sde_encoder_phys_wb_wait_for_commit_done(
+		struct sde_encoder_phys *phys_enc, bool is_disable)
 {
-	unsigned long ret;
 	struct sde_encoder_phys_wb *wb_enc = to_sde_encoder_phys_wb(phys_enc);
-	u32 irq_status, event = 0;
+	u32 event = 0;
 	u64 wb_time = 0;
 	int rc = 0;
-	int irq_idx = phys_enc->irq[INTR_IDX_WB_DONE].irq_idx;
-	u32 timeout = max_t(u32, wb_enc->wbdone_timeout, KICKOFF_TIMEOUT_MS);
+	struct sde_encoder_wait_info wait_info;
 
 	/* Return EWOULDBLOCK since we know the wait isn't necessary */
 	if (phys_enc->enable_state == SDE_ENC_DISABLED) {
@@ -908,7 +1236,12 @@ static int sde_encoder_phys_wb_wait_for_commit_done(
 	}
 
 	SDE_EVT32(DRMID(phys_enc->parent), WBID(wb_enc), wb_enc->frame_count,
-			!!wb_enc->wb_fb);
+			wb_enc->kickoff_count, !!wb_enc->wb_fb, is_disable,
+			phys_enc->in_clone_mode);
+
+	if (!is_disable && phys_enc->in_clone_mode &&
+	    (atomic_read(&phys_enc->pending_retire_fence_cnt) <= 1))
+		goto skip_wait;
 
 	/* signal completion if commit with no framebuffer */
 	if (!wb_enc->wb_fb) {
@@ -916,65 +1249,63 @@ static int sde_encoder_phys_wb_wait_for_commit_done(
 		_sde_encoder_phys_wb_frame_done_helper(wb_enc, false);
 	}
 
-	ret = wait_for_completion_timeout(&wb_enc->wbdone_complete,
-			msecs_to_jiffies(timeout));
-
-	if (!ret) {
+	wait_info.wq = &phys_enc->pending_kickoff_wq;
+	wait_info.atomic_cnt = &phys_enc->pending_retire_fence_cnt;
+	wait_info.timeout_ms = max_t(u32, wb_enc->wbdone_timeout,
+		KICKOFF_TIMEOUT_MS);
+	rc = sde_encoder_helper_wait_for_irq(phys_enc, INTR_IDX_WB_DONE,
+		&wait_info);
+	if (rc == -ETIMEDOUT) {
 		SDE_EVT32(DRMID(phys_enc->parent), WBID(wb_enc),
-				wb_enc->frame_count);
-		irq_status = sde_core_irq_read(phys_enc->sde_kms,
-				irq_idx, true);
-		if (irq_status) {
-			SDE_DEBUG("wb:%d done but irq not triggered\n",
-					WBID(wb_enc));
-			_sde_encoder_phys_wb_frame_done_helper(wb_enc, false);
-		} else {
-			SDE_ERROR("wb:%d kickoff timed out\n",
-					WBID(wb_enc));
-			atomic_add_unless(
-				&phys_enc->pending_retire_fence_cnt, -1, 0);
+			wb_enc->frame_count, SDE_EVTLOG_ERROR);
+		SDE_ERROR("wb:%d kickoff timed out\n", WBID(wb_enc));
 
-			event = SDE_ENCODER_FRAME_EVENT_SIGNAL_RELEASE_FENCE
-				| SDE_ENCODER_FRAME_EVENT_SIGNAL_RETIRE_FENCE
-				| SDE_ENCODER_FRAME_EVENT_ERROR;
-			if (phys_enc->parent_ops.handle_frame_done)
-				phys_enc->parent_ops.handle_frame_done(
-					phys_enc->parent, phys_enc, event);
-			rc = -ETIMEDOUT;
-		}
+		event = sde_encoder_phys_wb_frame_timeout(phys_enc);
 	}
 
-	if (!rc)
-		wb_enc->end_time = ktime_get();
 
-	/* once operation is done, disable traffic shaper */
-	if (wb_enc->wb_cfg.ts_cfg.en && wb_enc->hw_wb &&
-			wb_enc->hw_wb->ops.setup_trafficshaper) {
-		wb_enc->wb_cfg.ts_cfg.en = false;
-		wb_enc->hw_wb->ops.setup_trafficshaper(
-				wb_enc->hw_wb, &wb_enc->wb_cfg);
+	/* cleanup writeback framebuffer */
+	if (wb_enc->wb_fb && wb_enc->wb_aspace) {
+		msm_framebuffer_cleanup(wb_enc->wb_fb, wb_enc->wb_aspace);
+		drm_framebuffer_put(wb_enc->wb_fb);
+		wb_enc->wb_fb = NULL;
+		wb_enc->wb_aspace = NULL;
 	}
 
+skip_wait:
 	/* remove vote for iommu/clk/bus */
 	wb_enc->frame_count++;
 
 	if (!rc) {
+		wb_enc->end_time = ktime_get();
 		wb_time = (u64)ktime_to_us(wb_enc->end_time) -
 				(u64)ktime_to_us(wb_enc->start_time);
 		SDE_DEBUG("wb:%d took %llu us\n", WBID(wb_enc), wb_time);
 	}
 
-	/* cleanup writeback framebuffer */
-	if (wb_enc->wb_fb && wb_enc->wb_aspace) {
-		msm_framebuffer_cleanup(wb_enc->wb_fb, wb_enc->wb_aspace);
-		wb_enc->wb_fb = NULL;
-		wb_enc->wb_aspace = NULL;
+	/* cleanup previous buffer if pending */
+	if (wb_enc->cwb_old_fb && wb_enc->cwb_old_aspace) {
+		msm_framebuffer_cleanup(wb_enc->cwb_old_fb,
+				wb_enc->cwb_old_aspace);
+		drm_framebuffer_put(wb_enc->cwb_old_fb);
+		wb_enc->cwb_old_fb = NULL;
+		wb_enc->cwb_old_aspace = NULL;
 	}
 
 	SDE_EVT32(DRMID(phys_enc->parent), WBID(wb_enc), wb_enc->frame_count,
 			wb_time, event, rc);
 
 	return rc;
+}
+
+/**
+ * sde_encoder_phys_wb_wait_for_commit_done - wait until request is committed
+ * @phys_enc:	Pointer to physical encoder
+ */
+static int sde_encoder_phys_wb_wait_for_commit_done(
+		struct sde_encoder_phys *phys_enc)
+{
+	return _sde_encoder_phys_wb_wait_for_commit_done(phys_enc, false);
 }
 
 /**
@@ -992,7 +1323,10 @@ static int sde_encoder_phys_wb_prepare_for_kickoff(
 	SDE_DEBUG("[wb:%d,%u]\n", wb_enc->hw_wb->idx - WB_0,
 			wb_enc->kickoff_count);
 
-	reinit_completion(&wb_enc->wbdone_complete);
+	if (phys_enc->in_clone_mode) {
+		wb_enc->cwb_old_fb = wb_enc->wb_fb;
+		wb_enc->cwb_old_aspace = wb_enc->wb_aspace;
+	}
 
 	wb_enc->kickoff_count++;
 
@@ -1001,12 +1335,14 @@ static int sde_encoder_phys_wb_prepare_for_kickoff(
 
 	_sde_encoder_phys_wb_update_flush(phys_enc);
 
-	_sde_encoder_phys_wb_update_cwb_flush(phys_enc);
+	_sde_encoder_phys_wb_update_cwb_flush(phys_enc, true);
 
 	/* vote for iommu/clk/bus */
 	wb_enc->start_time = ktime_get();
 
-	SDE_EVT32(DRMID(phys_enc->parent), WBID(wb_enc), wb_enc->kickoff_count);
+	SDE_EVT32(DRMID(phys_enc->parent), WBID(wb_enc),
+		wb_enc->kickoff_count, wb_enc->frame_count,
+		phys_enc->in_clone_mode);
 	return 0;
 }
 
@@ -1102,7 +1438,7 @@ static int _sde_encoder_phys_wb_init_internal_fb(
 
 	size = sde_format_get_framebuffer_size(pixel_format,
 			mode_cmd.width, mode_cmd.height,
-			mode_cmd.pitches, NULL, 0);
+			mode_cmd.pitches, 0);
 	if (!size) {
 		SDE_DEBUG("not creating zero size buffer\n");
 		return -EINVAL;
@@ -1110,15 +1446,13 @@ static int _sde_encoder_phys_wb_init_internal_fb(
 
 	/* allocate gem tracking object */
 	nplanes = drm_format_num_planes(pixel_format);
-	if (nplanes > SDE_MAX_PLANES) {
+	if (nplanes >= SDE_MAX_PLANES) {
 		SDE_ERROR("requested format has too many planes\n");
 		return -EINVAL;
 	}
-	mutex_lock(&dev->struct_mutex);
+
 	wb_enc->bo_disable[0] = msm_gem_new(dev, size,
 			MSM_BO_SCANOUT | MSM_BO_WC);
-	mutex_unlock(&dev->struct_mutex);
-
 	if (IS_ERR_OR_NULL(wb_enc->bo_disable[0])) {
 		ret = PTR_ERR(wb_enc->bo_disable[0]);
 		wb_enc->bo_disable[0] = NULL;
@@ -1136,7 +1470,7 @@ static int _sde_encoder_phys_wb_init_internal_fb(
 	fb = msm_framebuffer_init(dev, &mode_cmd, wb_enc->bo_disable);
 	if (IS_ERR_OR_NULL(fb)) {
 		ret = PTR_ERR(fb);
-		drm_gem_object_unreference(wb_enc->bo_disable[0]);
+		drm_gem_object_put(wb_enc->bo_disable[0]);
 		wb_enc->bo_disable[0] = NULL;
 
 		SDE_ERROR("failed to init fb, %d\n", ret);
@@ -1167,7 +1501,7 @@ static void _sde_encoder_phys_wb_destroy_internal_fb(
 	}
 
 	if (wb_enc->bo_disable[0]) {
-		drm_gem_object_unreference(wb_enc->bo_disable[0]);
+		drm_gem_object_put(wb_enc->bo_disable[0]);
 		wb_enc->bo_disable[0] = NULL;
 	}
 }
@@ -1225,12 +1559,10 @@ static void sde_encoder_phys_wb_disable(struct sde_encoder_phys *phys_enc)
 		return;
 	}
 
-	if (wb_enc->frame_count != wb_enc->kickoff_count) {
-		SDE_DEBUG("[wait_for_done: wb:%d, frame:%u, kickoff:%u]\n",
-				hw_wb->idx - WB_0, wb_enc->frame_count,
-				wb_enc->kickoff_count);
-		sde_encoder_phys_wb_wait_for_commit_done(phys_enc);
-	}
+	SDE_DEBUG("[wait_for_done: wb:%d, frame:%u, kickoff:%u]\n",
+			hw_wb->idx - WB_0, wb_enc->frame_count,
+			wb_enc->kickoff_count);
+	_sde_encoder_phys_wb_wait_for_commit_done(phys_enc, true);
 
 	if (!phys_enc->hw_ctl || !phys_enc->parent ||
 			!phys_enc->sde_kms || !wb_enc->fb_disable) {
@@ -1241,6 +1573,7 @@ static void sde_encoder_phys_wb_disable(struct sde_encoder_phys *phys_enc)
 	/* avoid reset frame for CWB */
 	if (phys_enc->in_clone_mode) {
 		_sde_encoder_phys_wb_setup_cwb(phys_enc, false);
+		_sde_encoder_phys_wb_update_cwb_flush(phys_enc, false);
 		phys_enc->in_clone_mode = false;
 		goto exit;
 	}
@@ -1248,20 +1581,49 @@ static void sde_encoder_phys_wb_disable(struct sde_encoder_phys *phys_enc)
 	/* reset h/w before final flush */
 	if (phys_enc->hw_ctl->ops.clear_pending_flush)
 		phys_enc->hw_ctl->ops.clear_pending_flush(phys_enc->hw_ctl);
+
+	/*
+	 * New CTL reset sequence from 5.0 MDP onwards.
+	 * If has_3d_merge_reset is not set, legacy reset
+	 * sequence is executed.
+	 */
+	if (hw_wb->catalog->has_3d_merge_reset) {
+		sde_encoder_helper_phys_disable(phys_enc, wb_enc);
+		goto exit;
+	}
+
 	if (sde_encoder_helper_reset_mixers(phys_enc, NULL))
 		goto exit;
 
 	phys_enc->enable_state = SDE_ENC_DISABLING;
+
 	sde_encoder_phys_wb_prepare_for_kickoff(phys_enc, NULL);
 	sde_encoder_phys_wb_irq_ctrl(phys_enc, true);
 	if (phys_enc->hw_ctl->ops.trigger_flush)
 		phys_enc->hw_ctl->ops.trigger_flush(phys_enc->hw_ctl);
+
 	sde_encoder_helper_trigger_start(phys_enc);
-	sde_encoder_phys_wb_wait_for_commit_done(phys_enc);
+	_sde_encoder_phys_wb_wait_for_commit_done(phys_enc, true);
 	sde_encoder_phys_wb_irq_ctrl(phys_enc, false);
 exit:
+	/*
+	 * frame count and kickoff count are only used for debug purpose. Frame
+	 * count can be more than kickoff count at the end of disable call due
+	 * to extra frame_done wait. It does not cause any issue because
+	 * frame_done wait is based on retire_fence count. Leaving these
+	 * counters for debugging purpose.
+	 */
+	if (wb_enc->frame_count != wb_enc->kickoff_count) {
+		SDE_EVT32(DRMID(phys_enc->parent), WBID(wb_enc),
+			wb_enc->kickoff_count, wb_enc->frame_count,
+			phys_enc->in_clone_mode);
+		wb_enc->frame_count = wb_enc->kickoff_count;
+	}
+
 	phys_enc->enable_state = SDE_ENC_DISABLED;
 	wb_enc->crtc = NULL;
+	phys_enc->hw_cdm = NULL;
+	phys_enc->hw_ctl = NULL;
 }
 
 /**
@@ -1286,11 +1648,10 @@ static void sde_encoder_phys_wb_get_hw_resources(
 
 	fb = sde_wb_connector_state_get_output_fb(conn_state);
 	if (fb) {
-		fmt = sde_get_sde_format_ext(fb->pixel_format, fb->modifier,
-				drm_format_num_planes(fb->pixel_format));
+		fmt = sde_get_sde_format_ext(fb->format->format, fb->modifier);
 		if (!fmt) {
 			SDE_ERROR("unsupported output pixel format:%d\n",
-					fb->pixel_format);
+					fb->format->format);
 			return;
 		}
 	}
@@ -1415,7 +1776,6 @@ struct sde_encoder_phys *sde_encoder_phys_wb_init(
 		goto fail_alloc;
 	}
 	wb_enc->wbdone_timeout = KICKOFF_TIMEOUT_MS;
-	init_completion(&wb_enc->wbdone_complete);
 
 	phys_enc = &wb_enc->base;
 
@@ -1478,6 +1838,7 @@ struct sde_encoder_phys *sde_encoder_phys_wb_init(
 	phys_enc->vblank_ctl_lock = p->vblank_ctl_lock;
 	atomic_set(&phys_enc->pending_retire_fence_cnt, 0);
 	atomic_set(&phys_enc->wbirq_refcount, 0);
+	init_waitqueue_head(&phys_enc->pending_kickoff_wq);
 
 	irq = &phys_enc->irq[INTR_IDX_WB_DONE];
 	INIT_LIST_HEAD(&irq->cb.list);
@@ -1488,6 +1849,16 @@ struct sde_encoder_phys *sde_encoder_phys_wb_init(
 	irq->intr_idx = INTR_IDX_WB_DONE;
 	irq->cb.arg = wb_enc;
 	irq->cb.func = sde_encoder_phys_wb_done_irq;
+
+	irq = &phys_enc->irq[INTR_IDX_PP1_OVFL];
+	INIT_LIST_HEAD(&irq->cb.list);
+	irq->name = "pp1_overflow";
+	irq->hw_idx = CWB_1;
+	irq->irq_idx = -1;
+	irq->intr_type = SDE_IRQ_TYPE_CWB_OVERFLOW;
+	irq->intr_idx = INTR_IDX_PP1_OVFL;
+	irq->cb.arg = wb_enc;
+	irq->cb.func = sde_encoder_phys_cwb_ovflow;
 
 	irq = &phys_enc->irq[INTR_IDX_PP2_OVFL];
 	INIT_LIST_HEAD(&irq->cb.list);
@@ -1506,6 +1877,26 @@ struct sde_encoder_phys *sde_encoder_phys_wb_init(
 	irq->irq_idx = -1;
 	irq->intr_type = SDE_IRQ_TYPE_CWB_OVERFLOW;
 	irq->intr_idx = INTR_IDX_PP3_OVFL;
+	irq->cb.arg = wb_enc;
+	irq->cb.func = sde_encoder_phys_cwb_ovflow;
+
+	irq = &phys_enc->irq[INTR_IDX_PP4_OVFL];
+	INIT_LIST_HEAD(&irq->cb.list);
+	irq->name = "pp4_overflow";
+	irq->hw_idx = CWB_4;
+	irq->irq_idx = -1;
+	irq->intr_type = SDE_IRQ_TYPE_CWB_OVERFLOW;
+	irq->intr_idx = INTR_IDX_PP4_OVFL;
+	irq->cb.arg = wb_enc;
+	irq->cb.func = sde_encoder_phys_cwb_ovflow;
+
+	irq = &phys_enc->irq[INTR_IDX_PP5_OVFL];
+	INIT_LIST_HEAD(&irq->cb.list);
+	irq->name = "pp5_overflow";
+	irq->hw_idx = CWB_5;
+	irq->irq_idx = -1;
+	irq->intr_type = SDE_IRQ_TYPE_CWB_OVERFLOW;
+	irq->intr_idx = INTR_IDX_PP5_OVFL;
 	irq->cb.arg = wb_enc;
 	irq->cb.func = sde_encoder_phys_cwb_ovflow;
 

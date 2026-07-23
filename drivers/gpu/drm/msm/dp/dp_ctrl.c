@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -17,14 +17,17 @@
 #include <linux/types.h>
 #include <linux/completion.h>
 #include <linux/delay.h>
+#include <drm/drm_fixed.h>
 
-#include "msm_kms.h"
 #include "dp_ctrl.h"
 
-#define DP_KHZ_TO_HZ 1000
+#define DP_MST_DEBUG(fmt, ...) pr_debug(fmt, ##__VA_ARGS__)
 
 #define DP_CTRL_INTR_READY_FOR_VIDEO     BIT(0)
 #define DP_CTRL_INTR_IDLE_PATTERN_SENT  BIT(3)
+
+#define DP_CTRL_INTR_MST_DP0_VCPF_SENT	BIT(0)
+#define DP_CTRL_INTR_MST_DP1_VCPF_SENT	BIT(3)
 
 /* dp state ctrl */
 #define ST_TRAIN_PATTERN_1		BIT(0)
@@ -36,6 +39,10 @@
 #define ST_CUSTOM_80_BIT_PATTERN	BIT(6)
 #define ST_SEND_VIDEO			BIT(7)
 #define ST_PUSH_IDLE			BIT(8)
+#define MST_DP0_PUSH_VCPF		BIT(12)
+#define MST_DP0_FORCE_VCPF		BIT(13)
+#define MST_DP1_PUSH_VCPF		BIT(14)
+#define MST_DP1_FORCE_VCPF		BIT(15)
 
 #define MR_LINK_TRAINING1  0x8
 #define MR_LINK_SYMBOL_ERM 0x80
@@ -43,18 +50,13 @@
 #define MR_LINK_CUSTOM80 0x200
 #define MR_LINK_TRAINING4  0x40
 
-struct dp_vc_tu_mapping_table {
-	u32 vic;
-	u8 lanes;
-	u8 lrate; /* DP_LINK_RATE -> 162(6), 270(10), 540(20), 810 (30) */
-	u8 bpp;
-	u8 valid_boundary_link;
-	u16 delay_start_link;
-	bool boundary_moderation_en;
-	u8 valid_lower_boundary_link;
-	u8 upper_boundary_count;
-	u8 lower_boundary_count;
-	u8 tu_size_minus1;
+struct dp_mst_ch_slot_info {
+	u32 start_slot;
+	u32 tot_slots;
+};
+
+struct dp_mst_channel_info {
+	struct dp_mst_ch_slot_info slot_info[DP_STREAM_MAX];
 };
 
 struct dp_ctrl_private {
@@ -73,11 +75,14 @@ struct dp_ctrl_private {
 
 	bool orientation;
 	bool power_on;
+	bool mst_mode;
+	bool fec_mode;
 
 	atomic_t aborted;
 
-	u32 pixel_rate;
 	u32 vic;
+	u32 stream_count;
+	struct dp_mst_channel_info mst_ch_info;
 };
 
 enum notification_status {
@@ -100,7 +105,7 @@ static void dp_ctrl_video_ready(struct dp_ctrl_private *ctrl)
 	complete(&ctrl->video_comp);
 }
 
-static void dp_ctrl_abort(struct dp_ctrl *dp_ctrl)
+static void dp_ctrl_abort(struct dp_ctrl *dp_ctrl, bool reset)
 {
 	struct dp_ctrl_private *ctrl;
 
@@ -111,7 +116,7 @@ static void dp_ctrl_abort(struct dp_ctrl *dp_ctrl)
 
 	ctrl = container_of(dp_ctrl, struct dp_ctrl_private, dp_ctrl);
 
-	atomic_set(&ctrl->aborted, 1);
+	atomic_set(&ctrl->aborted, !reset);
 }
 
 static void dp_ctrl_state_ctrl(struct dp_ctrl_private *ctrl, u32 state)
@@ -119,667 +124,70 @@ static void dp_ctrl_state_ctrl(struct dp_ctrl_private *ctrl, u32 state)
 	ctrl->catalog->state_ctrl(ctrl->catalog, state);
 }
 
-static void dp_ctrl_push_idle(struct dp_ctrl *dp_ctrl)
+static void dp_ctrl_push_idle(struct dp_ctrl_private *ctrl,
+				enum dp_stream_id strm)
 {
-	int const idle_pattern_completion_timeout_ms = 3 * HZ / 100;
-	struct dp_ctrl_private *ctrl;
+	int const idle_pattern_completion_timeout_ms = HZ / 10;
+	u32 state = 0x0;
 
-	if (!dp_ctrl) {
-		pr_err("Invalid input data\n");
+	if (!ctrl->power_on)
+		return;
+
+	if (!ctrl->mst_mode) {
+		state = ST_PUSH_IDLE;
+		goto trigger_idle;
+	}
+
+	if (strm >= DP_STREAM_MAX) {
+		pr_err("mst push idle, invalid stream:%d\n", strm);
 		return;
 	}
 
-	ctrl = container_of(dp_ctrl, struct dp_ctrl_private, dp_ctrl);
+	state |= (strm == DP_STREAM_0) ? MST_DP0_PUSH_VCPF : MST_DP1_PUSH_VCPF;
 
-	if (!ctrl->power_on) {
-		pr_err("CTRL off, return\n");
-		return;
-	}
-
+trigger_idle:
 	reinit_completion(&ctrl->idle_comp);
-	dp_ctrl_state_ctrl(ctrl, ST_PUSH_IDLE);
+	dp_ctrl_state_ctrl(ctrl, state);
 
 	if (!wait_for_completion_timeout(&ctrl->idle_comp,
 			idle_pattern_completion_timeout_ms))
-		pr_warn("PUSH_IDLE pattern timedout\n");
-
-	pr_debug("mainlink off done\n");
-}
-
-static void dp_ctrl_config_ctrl(struct dp_ctrl_private *ctrl)
-{
-	u32 config = 0, tbd;
-	u8 *dpcd = ctrl->panel->dpcd;
-	u32 out_format = ctrl->panel->pinfo.out_format;
-
-	config |= (2 << 13); /* Default-> LSCLK DIV: 1/4 LCLK  */
-
-	if (out_format & MSM_MODE_FLAG_COLOR_FORMAT_YCBCR420)
-		config |= (1 << 11); /* YUV420 */
-	else if (out_format & MSM_MODE_FLAG_COLOR_FORMAT_YCBCR422)
-		config |= (2 << 11); /* YUV422 */
+		pr_warn("time out\n");
 	else
-		config |= (0 << 11); /* RGB */
-
-	/* Scrambler reset enable */
-	if (dpcd[DP_EDP_CONFIGURATION_CAP] & DP_ALTERNATE_SCRAMBLER_RESET_CAP)
-		config |= (1 << 10);
-
-	tbd = ctrl->link->get_test_bits_depth(ctrl->link,
-			ctrl->panel->pinfo.bpp);
-
-	if (tbd == DP_TEST_BIT_DEPTH_UNKNOWN)
-		tbd = DP_TEST_BIT_DEPTH_8;
-
-	config |= tbd << 8;
-
-	/* Num of Lanes */
-	config |= ((ctrl->link->link_params.lane_count - 1) << 4);
-
-	if (drm_dp_enhanced_frame_cap(dpcd))
-		config |= 0x40;
-
-	config |= 0x04; /* progressive video */
-
-	config |= 0x03;	/* sycn clock & static Mvid */
-
-	ctrl->catalog->config_ctrl(ctrl->catalog, config);
-}
-
-static void dp_ctrl_misc_ctrl(struct dp_ctrl_private *ctrl)
-{
-	u32 out_format = ctrl->panel->pinfo.out_format;
-	u32 yres = ctrl->panel->pinfo.v_active;
-	u32 cc, tb;
-
-	tb = ctrl->link->get_test_bits_depth(ctrl->link,
-		ctrl->panel->pinfo.bpp);
-	cc = ctrl->link->get_colorimetry_config(ctrl->link);
-	if (out_format == MSM_MODE_FLAG_COLOR_FORMAT_YCBCR422) {
-		cc |= (0x01 << 1); /* Set 4:2:2 Pixel Encoding */
-		cc |= BIT(3); /* Set YCbCr Colorimetry */
-		if (yres >= 720)
-			cc |= BIT(4); /* Set BT709 */
-	}
-
-	ctrl->catalog->config_misc(ctrl->catalog, cc, tb);
+		pr_debug("mainlink off done\n");
 }
 
 /**
- * dp_ctrl_configure_source_params() - configures DP transmitter source params
+ * dp_ctrl_configure_source_link_params() - configures DP TX source params
  * @ctrl: Display Port Driver data
+ * @enable: enable or disable DP transmitter
  *
  * Configures the DP transmitter source params including details such as lane
  * configuration, output format and sink/panel timing information.
  */
-static void dp_ctrl_configure_source_params(struct dp_ctrl_private *ctrl)
+static void dp_ctrl_configure_source_link_params(struct dp_ctrl_private *ctrl,
+		bool enable)
 {
-
-	ctrl->catalog->lane_mapping(ctrl->catalog);
-	ctrl->catalog->mainlink_ctrl(ctrl->catalog, true);
-
-	dp_ctrl_config_ctrl(ctrl);
-	dp_ctrl_misc_ctrl(ctrl);
-
-	ctrl->panel->timing_cfg(ctrl->panel);
-}
-
-static void dp_ctrl_get_extra_req_bytes(u64 result_valid,
-					int valid_bdary_link,
-					u64 value1, u64 value2,
-					bool *negative, u64 *result,
-					u64 compare)
-{
-	*negative = false;
-	if (result_valid >= compare) {
-		if (valid_bdary_link
-				>= compare)
-			*result = value1 + value2;
-		else {
-			if (value1 < value2)
-				*negative = true;
-			*result = (value1 >= value2) ?
-				(value1 - value2) : (value2 - value1);
-		}
+	if (enable) {
+		ctrl->catalog->lane_mapping(ctrl->catalog, ctrl->orientation,
+						ctrl->parser->l_map);
+		ctrl->catalog->lane_pnswap(ctrl->catalog,
+						ctrl->parser->l_pnswap);
+		ctrl->catalog->mst_config(ctrl->catalog, ctrl->mst_mode);
+		ctrl->catalog->config_ctrl(ctrl->catalog,
+				ctrl->link->link_params.lane_count);
+		ctrl->catalog->mainlink_levels(ctrl->catalog,
+				ctrl->link->link_params.lane_count);
+		ctrl->catalog->fec_config(ctrl->catalog, false);
+		ctrl->catalog->mainlink_ctrl(ctrl->catalog, true);
 	} else {
-		if (valid_bdary_link
-				>= compare) {
-			if (value1 >= value2)
-				*negative = true;
-			*result = (value1 >= value2) ?
-				(value1 - value2) : (value2 - value1);
-		} else {
-			*result = value1 + value2;
-			*negative = true;
-		}
+		ctrl->catalog->mainlink_ctrl(ctrl->catalog, false);
 	}
 }
 
-static u64 roundup_u64(u64 x, u64 y)
+static void dp_ctrl_wait4video_ready(struct dp_ctrl_private *ctrl)
 {
-	x += (y - 1);
-	return (div64_ul(x, y) * y);
-}
-
-static u64 rounddown_u64(u64 x, u64 y)
-{
-	u64 rem;
-
-	div64_u64_rem(x, y, &rem);
-	return (x - rem);
-}
-
-static void dp_ctrl_calc_tu_parameters(struct dp_ctrl_private *ctrl,
-		struct dp_vc_tu_mapping_table *tu_table)
-{
-	u32 const multiplier = 1000000;
-	u64 pclk, lclk;
-	u32 bpp;
-	u8 ln_cnt;
-	int run_idx = 0;
-	u32 lwidth, h_blank;
-	u32 fifo_empty = 0;
-	u32 ratio_scale = 1001;
-	u64 temp, ratio, original_ratio;
-	u64 temp2, reminder;
-	u64 temp3, temp4, result = 0;
-
-	u64 err = multiplier;
-	u64 n_err = 0, n_n_err = 0;
-	bool n_err_neg, nn_err_neg;
-	u8 hblank_margin = 16;
-
-	u8 tu_size, tu_size_desired = 0, tu_size_minus1;
-	int valid_boundary_link;
-	u64 resulting_valid;
-	u64 total_valid;
-	u64 effective_valid;
-	u64 effective_valid_recorded;
-	int n_tus;
-	int n_tus_per_lane;
-	int paired_tus;
-	int remainder_tus;
-	int remainder_tus_upper, remainder_tus_lower;
-	int extra_bytes;
-	int filler_size;
-	int delay_start_link;
-	int boundary_moderation_en = 0;
-	int upper_bdry_cnt = 0;
-	int lower_bdry_cnt = 0;
-	int i_upper_bdry_cnt = 0;
-	int i_lower_bdry_cnt = 0;
-	int valid_lower_boundary_link = 0;
-	int even_distribution_bf = 0;
-	int even_distribution_legacy = 0;
-	int even_distribution = 0;
-	int min_hblank = 0;
-	int extra_pclk_cycles;
-	u8 extra_pclk_cycle_delay = 4;
-	int extra_pclk_cycles_in_link_clk;
-	u64 ratio_by_tu;
-	u64 average_valid2;
-	u64 extra_buffer_margin;
-	int new_valid_boundary_link;
-
-	u64 resulting_valid_tmp;
-	u64 ratio_by_tu_tmp;
-	int n_tus_tmp;
-	int extra_pclk_cycles_tmp;
-	int extra_pclk_cycles_in_lclk_tmp;
-	int extra_req_bytes_new_tmp;
-	int filler_size_tmp;
-	int lower_filler_size_tmp;
-	int delay_start_link_tmp;
-	int min_hblank_tmp = 0;
-	bool extra_req_bytes_is_neg = false;
-	struct dp_panel_info *pinfo = &ctrl->panel->pinfo;
-	int div = 0;
-	u32 out_format = pinfo->out_format;
-
-	u8 dp_brute_force = 1;
-	u64 brute_force_threshold = 10;
-	u64 diff_abs;
-
-	ln_cnt =  ctrl->link->link_params.lane_count;
-
-	bpp = pinfo->bpp;
-	if (out_format == MSM_MODE_FLAG_COLOR_FORMAT_YCBCR422) {
-		switch (pinfo->bpp) {
-		case 24:
-			bpp = 16;
-			break;
-		case 30:
-			bpp = 20;
-			break;
-		default:
-			bpp = 16;
-			break;
-		};
-	} else if (out_format == MSM_MODE_FLAG_COLOR_FORMAT_YCBCR420) {
-		div = 1;
-	}
-
-	lwidth = pinfo->h_active >> div;
-	h_blank = (pinfo->h_back_porch + pinfo->h_front_porch +
-			pinfo->h_sync_width) >> div;
-	pclk = (pinfo->pixel_clk_khz * 1000) >> div;
-
-	boundary_moderation_en = 0;
-	upper_bdry_cnt = 0;
-	lower_bdry_cnt = 0;
-	i_upper_bdry_cnt = 0;
-	i_lower_bdry_cnt = 0;
-	valid_lower_boundary_link = 0;
-	even_distribution_bf = 0;
-	even_distribution_legacy = 0;
-	even_distribution = 0;
-	min_hblank = 0;
-
-	lclk = drm_dp_bw_code_to_link_rate(
-		ctrl->link->link_params.bw_code) * DP_KHZ_TO_HZ;
-
-	pr_debug("pclk=%lld, active_width=%d, h_blank=%d\n",
-						pclk, lwidth, h_blank);
-	pr_debug("lclk = %lld, ln_cnt = %d\n", lclk, ln_cnt);
-	ratio = div64_u64_rem(pclk * bpp * multiplier,
-				8 * ln_cnt * lclk, &reminder);
-	ratio = div64_u64((pclk * bpp * multiplier), (8 * ln_cnt * lclk));
-	original_ratio = ratio;
-
-	extra_buffer_margin = roundup_u64(div64_u64(extra_pclk_cycle_delay
-				* lclk * multiplier, pclk), multiplier);
-	extra_buffer_margin = div64_u64(extra_buffer_margin, multiplier);
-
-	/* To deal with cases where lines are not distributable */
-	if (((lwidth % ln_cnt) != 0) && ratio < multiplier) {
-		ratio = ratio * ratio_scale;
-		ratio = ratio < (1000 * multiplier)
-				? ratio : (1000 * multiplier);
-	}
-	pr_debug("ratio = %lld\n", ratio);
-
-	for (tu_size = 32; tu_size <= 64; tu_size++) {
-		temp = ratio * tu_size;
-		temp2 = ((temp / multiplier) + 1) * multiplier;
-		n_err = roundup_u64(temp, multiplier) - temp;
-
-		if (n_err < err) {
-			err = n_err;
-			tu_size_desired = tu_size;
-		}
-	}
-	pr_debug("Info: tu_size_desired = %d\n", tu_size_desired);
-
-	tu_size_minus1 = tu_size_desired - 1;
-
-	valid_boundary_link = roundup_u64(ratio * tu_size_desired, multiplier);
-	valid_boundary_link /= multiplier;
-	n_tus = rounddown((lwidth * bpp * multiplier)
-			/ (8 * valid_boundary_link), multiplier) / multiplier;
-	even_distribution_legacy = n_tus % ln_cnt == 0 ? 1 : 0;
-	pr_debug("Info: n_symbol_per_tu=%d, number_of_tus=%d\n",
-					valid_boundary_link, n_tus);
-
-	extra_bytes = roundup_u64((n_tus + 1)
-			* ((valid_boundary_link * multiplier)
-			- (original_ratio * tu_size_desired)), multiplier);
-	extra_bytes /= multiplier;
-	extra_pclk_cycles = roundup(extra_bytes * 8 * multiplier / bpp,
-			multiplier);
-	extra_pclk_cycles /= multiplier;
-	extra_pclk_cycles_in_link_clk = roundup_u64(div64_u64(extra_pclk_cycles
-				* lclk * multiplier, pclk), multiplier);
-	extra_pclk_cycles_in_link_clk /= multiplier;
-	filler_size = roundup_u64((tu_size_desired - valid_boundary_link)
-						* multiplier, multiplier);
-	filler_size /= multiplier;
-	ratio_by_tu = div64_u64(ratio * tu_size_desired, multiplier);
-
-	pr_debug("extra_pclk_cycles_in_link_clk=%d, extra_bytes=%d\n",
-				extra_pclk_cycles_in_link_clk, extra_bytes);
-	pr_debug("extra_pclk_cycles_in_link_clk=%d\n",
-				extra_pclk_cycles_in_link_clk);
-	pr_debug("filler_size=%d, extra_buffer_margin=%lld\n",
-				filler_size, extra_buffer_margin);
-
-	delay_start_link = ((extra_bytes > extra_pclk_cycles_in_link_clk)
-			? extra_bytes
-			: extra_pclk_cycles_in_link_clk)
-				+ filler_size + extra_buffer_margin;
-	resulting_valid = valid_boundary_link;
-	pr_debug("Info: delay_start_link=%d, filler_size=%d\n",
-				delay_start_link, filler_size);
-	pr_debug("valid_boundary_link=%d ratio_by_tu=%lld\n",
-				valid_boundary_link, ratio_by_tu);
-
-	diff_abs = (resulting_valid >= ratio_by_tu)
-				? (resulting_valid - ratio_by_tu)
-				: (ratio_by_tu - resulting_valid);
-
-	if (err != 0 && ((diff_abs > brute_force_threshold)
-			|| (even_distribution_legacy == 0)
-			|| (dp_brute_force == 1))) {
-		err = multiplier;
-		for (tu_size = 32; tu_size <= 64; tu_size++) {
-			for (i_upper_bdry_cnt = 1; i_upper_bdry_cnt <= 15;
-						i_upper_bdry_cnt++) {
-				for (i_lower_bdry_cnt = 1;
-					i_lower_bdry_cnt <= 15;
-					i_lower_bdry_cnt++) {
-					new_valid_boundary_link =
-						roundup_u64(ratio
-						* tu_size, multiplier);
-					average_valid2 = (i_upper_bdry_cnt
-						* new_valid_boundary_link
-						+ i_lower_bdry_cnt
-						* (new_valid_boundary_link
-							- multiplier))
-						/ (i_upper_bdry_cnt
-							+ i_lower_bdry_cnt);
-					n_tus = rounddown_u64(div64_u64(lwidth
-						* multiplier * multiplier
-						* (bpp / 8), average_valid2),
-							multiplier);
-					n_tus /= multiplier;
-					n_tus_per_lane
-						= rounddown(n_tus
-							* multiplier
-							/ ln_cnt, multiplier);
-					n_tus_per_lane /= multiplier;
-					paired_tus =
-						rounddown((n_tus_per_lane)
-							* multiplier
-							/ (i_upper_bdry_cnt
-							+ i_lower_bdry_cnt),
-							multiplier);
-					paired_tus /= multiplier;
-					remainder_tus = n_tus_per_lane
-							- paired_tus
-						* (i_upper_bdry_cnt
-							+ i_lower_bdry_cnt);
-					if ((remainder_tus
-						- i_upper_bdry_cnt) > 0) {
-						remainder_tus_upper
-							= i_upper_bdry_cnt;
-						remainder_tus_lower =
-							remainder_tus
-							- i_upper_bdry_cnt;
-					} else {
-						remainder_tus_upper
-							= remainder_tus;
-						remainder_tus_lower = 0;
-					}
-					total_valid = paired_tus
-						* (i_upper_bdry_cnt
-						* new_valid_boundary_link
-							+ i_lower_bdry_cnt
-						* (new_valid_boundary_link
-							- multiplier))
-						+ (remainder_tus_upper
-						* new_valid_boundary_link)
-						+ (remainder_tus_lower
-						* (new_valid_boundary_link
-							- multiplier));
-					n_err_neg = nn_err_neg = false;
-					effective_valid
-						= div_u64(total_valid,
-							n_tus_per_lane);
-					n_n_err = (effective_valid
-							>= (ratio * tu_size))
-						? (effective_valid
-							- (ratio * tu_size))
-						: ((ratio * tu_size)
-							- effective_valid);
-					if (effective_valid < (ratio * tu_size))
-						nn_err_neg = true;
-					n_err = (average_valid2
-						>= (ratio * tu_size))
-						? (average_valid2
-							- (ratio * tu_size))
-						: ((ratio * tu_size)
-							- average_valid2);
-					if (average_valid2 < (ratio * tu_size))
-						n_err_neg = true;
-					even_distribution =
-						n_tus % ln_cnt == 0 ? 1 : 0;
-					diff_abs =
-						resulting_valid >= ratio_by_tu
-						? (resulting_valid
-							- ratio_by_tu)
-						: (ratio_by_tu
-							- resulting_valid);
-
-					resulting_valid_tmp = div64_u64(
-						(i_upper_bdry_cnt
-						* new_valid_boundary_link
-						+ i_lower_bdry_cnt
-						* (new_valid_boundary_link
-							- multiplier)),
-						(i_upper_bdry_cnt
-							+ i_lower_bdry_cnt));
-					ratio_by_tu_tmp =
-						original_ratio * tu_size;
-					ratio_by_tu_tmp /= multiplier;
-					n_tus_tmp = rounddown_u64(
-						div64_u64(lwidth
-						* multiplier * multiplier
-						* bpp / 8,
-						resulting_valid_tmp),
-						multiplier);
-					n_tus_tmp /= multiplier;
-
-					temp3 = (resulting_valid_tmp
-						>= (original_ratio * tu_size))
-						? (resulting_valid_tmp
-						- original_ratio * tu_size)
-						: (original_ratio * tu_size)
-						- resulting_valid_tmp;
-					temp3 = (n_tus_tmp + 1) * temp3;
-					temp4 = (new_valid_boundary_link
-						>= (original_ratio * tu_size))
-						? (new_valid_boundary_link
-							- original_ratio
-							* tu_size)
-						: (original_ratio * tu_size)
-						- new_valid_boundary_link;
-					temp4 = (i_upper_bdry_cnt
-							* ln_cnt * temp4);
-
-					temp3 = roundup_u64(temp3, multiplier);
-					temp4 = roundup_u64(temp4, multiplier);
-					dp_ctrl_get_extra_req_bytes
-						(resulting_valid_tmp,
-						new_valid_boundary_link,
-						temp3, temp4,
-						&extra_req_bytes_is_neg,
-						&result,
-						(original_ratio * tu_size));
-					extra_req_bytes_new_tmp
-						= div64_ul(result, multiplier);
-					if ((extra_req_bytes_is_neg)
-						&& (extra_req_bytes_new_tmp
-							> 1))
-						extra_req_bytes_new_tmp
-						= extra_req_bytes_new_tmp - 1;
-					if (extra_req_bytes_new_tmp == 0)
-						extra_req_bytes_new_tmp = 1;
-					extra_pclk_cycles_tmp =
-						(u64)(extra_req_bytes_new_tmp
-						      * 8 * multiplier) / bpp;
-					extra_pclk_cycles_tmp /= multiplier;
-
-					if (extra_pclk_cycles_tmp <= 0)
-						extra_pclk_cycles_tmp = 1;
-					extra_pclk_cycles_in_lclk_tmp =
-						roundup_u64(div64_u64(
-							extra_pclk_cycles_tmp
-							* lclk * multiplier,
-							pclk), multiplier);
-					extra_pclk_cycles_in_lclk_tmp
-						/= multiplier;
-					filler_size_tmp = roundup_u64(
-						(tu_size * multiplier *
-						new_valid_boundary_link),
-						multiplier);
-					filler_size_tmp /= multiplier;
-					lower_filler_size_tmp =
-						filler_size_tmp + 1;
-					if (extra_req_bytes_is_neg)
-						temp3 = (extra_req_bytes_new_tmp
-						> extra_pclk_cycles_in_lclk_tmp
-						? extra_pclk_cycles_in_lclk_tmp
-						: extra_req_bytes_new_tmp);
-					else
-						temp3 = (extra_req_bytes_new_tmp
-						> extra_pclk_cycles_in_lclk_tmp
-						? extra_req_bytes_new_tmp :
-						extra_pclk_cycles_in_lclk_tmp);
-
-					temp4 = lower_filler_size_tmp
-						+ extra_buffer_margin;
-					if (extra_req_bytes_is_neg)
-						delay_start_link_tmp
-							= (temp3 >= temp4)
-							? (temp3 - temp4)
-							: (temp4 - temp3);
-					else
-						delay_start_link_tmp
-							= temp3 + temp4;
-
-					min_hblank_tmp = (int)div64_u64(
-						roundup_u64(
-						div64_u64(delay_start_link_tmp
-						* pclk * multiplier, lclk),
-						multiplier), multiplier)
-						+ hblank_margin;
-
-					if (((even_distribution == 1)
-						|| ((even_distribution_bf == 0)
-						&& (even_distribution_legacy
-								== 0)))
-						&& !n_err_neg && !nn_err_neg
-						&& n_n_err < err
-						&& (n_n_err < diff_abs
-						|| (dp_brute_force == 1))
-						&& (new_valid_boundary_link
-									- 1) > 0
-						&& (h_blank >=
-							(u32)min_hblank_tmp)) {
-						upper_bdry_cnt =
-							i_upper_bdry_cnt;
-						lower_bdry_cnt =
-							i_lower_bdry_cnt;
-						err = n_n_err;
-						boundary_moderation_en = 1;
-						tu_size_desired = tu_size;
-						valid_boundary_link =
-							new_valid_boundary_link;
-						effective_valid_recorded
-							= effective_valid;
-						delay_start_link
-							= delay_start_link_tmp;
-						filler_size = filler_size_tmp;
-						min_hblank = min_hblank_tmp;
-						n_tus = n_tus_tmp;
-						even_distribution_bf = 1;
-
-						pr_debug("upper_bdry_cnt=%d, lower_boundary_cnt=%d, err=%lld, tu_size_desired=%d, valid_boundary_link=%d, effective_valid=%lld\n",
-							upper_bdry_cnt,
-							lower_bdry_cnt, err,
-							tu_size_desired,
-							valid_boundary_link,
-							effective_valid);
-					}
-				}
-			}
-		}
-
-		if (boundary_moderation_en == 1) {
-			resulting_valid = (u64)(upper_bdry_cnt
-					*valid_boundary_link + lower_bdry_cnt
-					* (valid_boundary_link - 1))
-					/ (upper_bdry_cnt + lower_bdry_cnt);
-			ratio_by_tu = original_ratio * tu_size_desired;
-			valid_lower_boundary_link =
-				(valid_boundary_link / multiplier) - 1;
-
-			tu_size_minus1 = tu_size_desired - 1;
-			even_distribution_bf = 1;
-			valid_boundary_link /= multiplier;
-			pr_debug("Info: Boundary_moderation enabled\n");
-		}
-	}
-
-	min_hblank = ((int) roundup_u64(div64_u64(delay_start_link * pclk
-			* multiplier, lclk), multiplier))
-			/ multiplier + hblank_margin;
-	if (h_blank < (u32)min_hblank) {
-		pr_debug(" WARNING: run_idx=%d Programmed h_blank %d is smaller than the min_hblank %d supported.\n",
-					run_idx, h_blank, min_hblank);
-	}
-
-	if (fifo_empty)	{
-		tu_size_minus1 = 31;
-		valid_boundary_link = 32;
-		delay_start_link = 0;
-		boundary_moderation_en = 0;
-	}
-
-	pr_debug("tu_size_minus1=%d valid_boundary_link=%d delay_start_link=%d boundary_moderation_en=%d\n upper_boundary_cnt=%d lower_boundary_cnt=%d valid_lower_boundary_link=%d min_hblank=%d\n",
-		tu_size_minus1, valid_boundary_link, delay_start_link,
-		boundary_moderation_en, upper_bdry_cnt, lower_bdry_cnt,
-		valid_lower_boundary_link, min_hblank);
-
-	tu_table->valid_boundary_link = valid_boundary_link;
-	tu_table->delay_start_link = delay_start_link;
-	tu_table->boundary_moderation_en = boundary_moderation_en;
-	tu_table->valid_lower_boundary_link = valid_lower_boundary_link;
-	tu_table->upper_boundary_count = upper_bdry_cnt;
-	tu_table->lower_boundary_count = lower_bdry_cnt;
-	tu_table->tu_size_minus1 = tu_size_minus1;
-}
-
-static void dp_ctrl_setup_tr_unit(struct dp_ctrl_private *ctrl)
-{
-	u32 dp_tu = 0x0;
-	u32 valid_boundary = 0x0;
-	u32 valid_boundary2 = 0x0;
-	struct dp_vc_tu_mapping_table tu_calc_table;
-
-	dp_ctrl_calc_tu_parameters(ctrl, &tu_calc_table);
-
-	dp_tu |= tu_calc_table.tu_size_minus1;
-	valid_boundary |= tu_calc_table.valid_boundary_link;
-	valid_boundary |= (tu_calc_table.delay_start_link << 16);
-
-	valid_boundary2 |= (tu_calc_table.valid_lower_boundary_link << 1);
-	valid_boundary2 |= (tu_calc_table.upper_boundary_count << 16);
-	valid_boundary2 |= (tu_calc_table.lower_boundary_count << 20);
-
-	if (tu_calc_table.boundary_moderation_en)
-		valid_boundary2 |= BIT(0);
-
-	pr_debug("dp_tu=0x%x, valid_boundary=0x%x, valid_boundary2=0x%x\n",
-			dp_tu, valid_boundary, valid_boundary2);
-
-	ctrl->catalog->dp_tu = dp_tu;
-	ctrl->catalog->valid_boundary = valid_boundary;
-	ctrl->catalog->valid_boundary2 = valid_boundary2;
-
-	ctrl->catalog->update_transfer_unit(ctrl->catalog);
-}
-
-static int dp_ctrl_wait4video_ready(struct dp_ctrl_private *ctrl)
-{
-	int ret = 0;
-
-	ret = wait_for_completion_timeout(&ctrl->video_comp, HZ / 2);
-	if (ret <= 0) {
-		pr_err("Link Train timedout\n");
-		ret = -EINVAL;
-	}
-
-	return ret;
+	if (!wait_for_completion_timeout(&ctrl->video_comp, HZ / 2))
+		pr_warn("SEND_VIDEO time out\n");
 }
 
 static int dp_ctrl_update_sink_vx_px(struct dp_ctrl_private *ctrl,
@@ -813,9 +221,13 @@ static int dp_ctrl_update_sink_vx_px(struct dp_ctrl_private *ctrl,
 static int dp_ctrl_update_vx_px(struct dp_ctrl_private *ctrl)
 {
 	struct dp_link *link = ctrl->link;
+	bool high = false;
 
+	if (ctrl->link->link_params.bw_code == DP_LINK_BW_5_4 ||
+		 ctrl->link->link_params.bw_code == DP_LINK_BW_8_1)
+		high = true;
 	ctrl->catalog->update_vx_px(ctrl->catalog,
-		link->phy_params.v_level, link->phy_params.p_level);
+		link->phy_params.v_level, link->phy_params.p_level, high);
 
 	return dp_ctrl_update_sink_vx_px(ctrl, link->phy_params.v_level,
 		link->phy_params.p_level);
@@ -886,7 +298,12 @@ static int dp_ctrl_link_train_1(struct dp_ctrl_private *ctrl)
 
 	tries = 0;
 	old_v_level = ctrl->link->phy_params.v_level;
-	while (!atomic_read(&ctrl->aborted)) {
+	while (1) {
+		if (atomic_read(&ctrl->aborted)) {
+			ret = -EINVAL;
+			break;
+		}
+
 		drm_dp_link_train_clock_recovery_delay(ctrl->panel->dpcd);
 
 		ret = dp_ctrl_read_link_status(ctrl, link_status);
@@ -995,13 +412,18 @@ static int dp_ctrl_link_training_2(struct dp_ctrl_private *ctrl)
 	}
 	ctrl->catalog->set_pattern(ctrl->catalog, pattern);
 	ret = dp_ctrl_train_pattern_set(ctrl,
-		pattern | DP_RECOVERED_CLOCK_OUT_EN);
+		pattern | DP_LINK_SCRAMBLING_DISABLE);
 	if (ret <= 0) {
 		ret = -EINVAL;
 		goto end;
 	}
 
 	do  {
+		if (atomic_read(&ctrl->aborted)) {
+			ret = -EINVAL;
+			break;
+		}
+
 		drm_dp_link_train_channel_eq_delay(ctrl->panel->dpcd);
 
 		ret = dp_ctrl_read_link_status(ctrl, link_status);
@@ -1024,7 +446,7 @@ static int dp_ctrl_link_training_2(struct dp_ctrl_private *ctrl)
 			ret = -EINVAL;
 			break;
 		}
-	} while (!atomic_read(&ctrl->aborted));
+	} while (1);
 end:
 	ctrl->aux->state &= ~DP_STATE_TRAIN_2_STARTED;
 
@@ -1043,8 +465,6 @@ static int dp_ctrl_link_train(struct dp_ctrl_private *ctrl)
 
 	ctrl->link->phy_params.p_level = 0;
 	ctrl->link->phy_params.v_level = 0;
-
-	dp_ctrl_config_ctrl(ctrl);
 
 	link_info.num_lanes = ctrl->link->link_params.lane_count;
 	link_info.rate = drm_dp_bw_code_to_link_rate(
@@ -1089,18 +509,13 @@ end:
 	return ret;
 }
 
-static int dp_ctrl_setup_main_link(struct dp_ctrl_private *ctrl, bool train)
+static int dp_ctrl_setup_main_link(struct dp_ctrl_private *ctrl)
 {
-	bool mainlink_ready = false;
 	int ret = 0;
-
-	ctrl->catalog->mainlink_ctrl(ctrl->catalog, true);
+	const unsigned int fec_cfg_dpcd = 0x120;
 
 	if (ctrl->link->sink_request & DP_TEST_LINK_PHY_TEST_PATTERN)
 		goto end;
-
-	if (!train)
-		goto send_video;
 
 	/*
 	 * As part of previous calls, DP controller state might have
@@ -1109,30 +524,20 @@ static int dp_ctrl_setup_main_link(struct dp_ctrl_private *ctrl, bool train)
 	 */
 	ctrl->catalog->reset(ctrl->catalog);
 
+	if (ctrl->fec_mode)
+		drm_dp_dpcd_writeb(ctrl->aux->drm_aux, fec_cfg_dpcd, 0x01);
+
 	ret = dp_ctrl_link_train(ctrl);
-	if (ret)
-		goto end;
 
-send_video:
-	/*
-	 * Set up transfer unit values and set controller state to send
-	 * video.
-	 */
-	dp_ctrl_setup_tr_unit(ctrl);
-	ctrl->catalog->state_ctrl(ctrl->catalog, ST_SEND_VIDEO);
-
-	dp_ctrl_wait4video_ready(ctrl);
-	mainlink_ready = ctrl->catalog->mainlink_ready(ctrl->catalog);
-	pr_debug("mainlink %s\n", mainlink_ready ? "READY" : "NOT READY");
 end:
 	return ret;
 }
 
 static void dp_ctrl_set_clock_rate(struct dp_ctrl_private *ctrl,
-		char *name, u32 rate)
+		char *name, enum dp_pm_type clk_type, u32 rate)
 {
-	u32 num = ctrl->parser->mp[DP_CTRL_PM].num_clk;
-	struct dss_clk *cfg = ctrl->parser->mp[DP_CTRL_PM].clk_config;
+	u32 num = ctrl->parser->mp[clk_type].num_clk;
+	struct dss_clk *cfg = ctrl->parser->mp[clk_type].clk_config;
 
 	while (num && strcmp(cfg->clk_name, name)) {
 		num--;
@@ -1147,18 +552,17 @@ static void dp_ctrl_set_clock_rate(struct dp_ctrl_private *ctrl,
 		pr_err("%s clock could not be set with rate %d\n", name, rate);
 }
 
-static int dp_ctrl_enable_mainlink_clocks(struct dp_ctrl_private *ctrl)
+static int dp_ctrl_enable_link_clock(struct dp_ctrl_private *ctrl)
 {
 	int ret = 0;
+	u32 rate = drm_dp_bw_code_to_link_rate(ctrl->link->link_params.bw_code);
+	enum dp_pm_type type = DP_LINK_PM;
 
-	ctrl->power->set_pixel_clk_parent(ctrl->power);
+	pr_debug("rate=%d\n", rate);
 
-	dp_ctrl_set_clock_rate(ctrl, "ctrl_link_clk",
-		drm_dp_bw_code_to_link_rate(ctrl->link->link_params.bw_code));
+	dp_ctrl_set_clock_rate(ctrl, "link_clk", type, rate);
 
-	dp_ctrl_set_clock_rate(ctrl, "ctrl_pixel_clk", ctrl->pixel_rate);
-
-	ret = ctrl->power->clk_enable(ctrl->power, DP_CTRL_PM, true);
+	ret = ctrl->power->clk_enable(ctrl->power, type, true);
 	if (ret) {
 		pr_err("Unabled to start link clocks\n");
 		ret = -EINVAL;
@@ -1167,11 +571,122 @@ static int dp_ctrl_enable_mainlink_clocks(struct dp_ctrl_private *ctrl)
 	return ret;
 }
 
-static int dp_ctrl_disable_mainlink_clocks(struct dp_ctrl_private *ctrl)
+static void dp_ctrl_disable_link_clock(struct dp_ctrl_private *ctrl)
 {
-	return ctrl->power->clk_enable(ctrl->power, DP_CTRL_PM, false);
+	ctrl->power->clk_enable(ctrl->power, DP_LINK_PM, false);
 }
 
+static int dp_ctrl_link_setup(struct dp_ctrl_private *ctrl, bool shallow)
+{
+	int rc = -EINVAL;
+	u32 link_train_max_retries = 100;
+	struct dp_catalog_ctrl *catalog;
+	struct dp_link_params *link_params;
+
+	catalog = ctrl->catalog;
+	link_params = &ctrl->link->link_params;
+
+	catalog->phy_lane_cfg(catalog, ctrl->orientation,
+				link_params->lane_count);
+
+	do {
+		pr_debug("bw_code=%d, lane_count=%d\n",
+			link_params->bw_code, link_params->lane_count);
+
+		rc = dp_ctrl_enable_link_clock(ctrl);
+		if (rc)
+			break;
+
+		dp_ctrl_configure_source_link_params(ctrl, true);
+
+		rc = dp_ctrl_setup_main_link(ctrl);
+		if (!rc)
+			break;
+
+		/*
+		 * Shallow means link training failure is not important.
+		 * If it fails, we still keep the link clocks on.
+		 * In this mode, the system expects DP to be up
+		 * even though the cable is removed. Disconnect interrupt
+		 * will eventually trigger and shutdown DP.
+		 */
+		if (shallow) {
+			rc = 0;
+			break;
+		}
+
+		dp_ctrl_link_rate_down_shift(ctrl);
+
+		dp_ctrl_configure_source_link_params(ctrl, false);
+		dp_ctrl_disable_link_clock(ctrl);
+
+		/* hw recommended delays before retrying link training */
+		msleep(20);
+	} while (--link_train_max_retries && !atomic_read(&ctrl->aborted));
+
+	return rc;
+}
+
+static int dp_ctrl_enable_stream_clocks(struct dp_ctrl_private *ctrl,
+		struct dp_panel *dp_panel)
+{
+	int ret = 0;
+	u32 pclk;
+	enum dp_pm_type clk_type;
+	char clk_name[32] = "";
+
+	ret = ctrl->power->set_pixel_clk_parent(ctrl->power,
+			dp_panel->stream_id);
+
+	if (ret)
+		return ret;
+
+	if (dp_panel->stream_id == DP_STREAM_0) {
+		clk_type = DP_STREAM0_PM;
+		strlcpy(clk_name, "strm0_pixel_clk", 32);
+	} else if (dp_panel->stream_id == DP_STREAM_1) {
+		clk_type = DP_STREAM1_PM;
+		strlcpy(clk_name, "strm1_pixel_clk", 32);
+	} else {
+		pr_err("Invalid stream:%d for clk enable\n",
+				dp_panel->stream_id);
+		return -EINVAL;
+	}
+
+	pclk = dp_panel->pinfo.widebus_en ?
+		(dp_panel->pinfo.pixel_clk_khz >> 1) :
+		(dp_panel->pinfo.pixel_clk_khz);
+
+	dp_ctrl_set_clock_rate(ctrl, clk_name, clk_type, pclk);
+
+	ret = ctrl->power->clk_enable(ctrl->power, clk_type, true);
+	if (ret) {
+		pr_err("Unabled to start stream:%d clocks\n",
+				dp_panel->stream_id);
+		ret = -EINVAL;
+	}
+
+	return ret;
+}
+
+static int dp_ctrl_disable_stream_clocks(struct dp_ctrl_private *ctrl,
+		struct dp_panel *dp_panel)
+{
+	int ret = 0;
+
+	if (dp_panel->stream_id == DP_STREAM_0) {
+		return ctrl->power->clk_enable(ctrl->power,
+				DP_STREAM0_PM, false);
+	} else if (dp_panel->stream_id == DP_STREAM_1) {
+		return ctrl->power->clk_enable(ctrl->power,
+				DP_STREAM1_PM, false);
+	} else {
+		pr_err("Invalid stream:%d for clk disable\n",
+				dp_panel->stream_id);
+		ret = -EINVAL;
+	}
+	return ret;
+}
 static int dp_ctrl_host_init(struct dp_ctrl *dp_ctrl, bool flip, bool reset)
 {
 	struct dp_ctrl_private *ctrl;
@@ -1192,6 +707,7 @@ static int dp_ctrl_host_init(struct dp_ctrl *dp_ctrl, bool flip, bool reset)
 		catalog->phy_reset(ctrl->catalog);
 	}
 	catalog->enable_irq(ctrl->catalog, true);
+	atomic_set(&ctrl->aborted, 0);
 
 	return 0;
 }
@@ -1219,6 +735,11 @@ static void dp_ctrl_host_deinit(struct dp_ctrl *dp_ctrl)
 	pr_debug("Host deinitialized successfully\n");
 }
 
+static void dp_ctrl_send_video(struct dp_ctrl_private *ctrl)
+{
+	ctrl->catalog->state_ctrl(ctrl->catalog, ST_SEND_VIDEO);
+}
+
 static int dp_ctrl_link_maintenance(struct dp_ctrl *dp_ctrl)
 {
 	int ret = 0;
@@ -1231,62 +752,34 @@ static int dp_ctrl_link_maintenance(struct dp_ctrl *dp_ctrl)
 
 	ctrl = container_of(dp_ctrl, struct dp_ctrl_private, dp_ctrl);
 
-	if (!ctrl->power_on || atomic_read(&ctrl->aborted)) {
-		pr_err("CTRL off, return\n");
-		return -EINVAL;
-	}
-
 	ctrl->aux->state &= ~DP_STATE_LINK_MAINTENANCE_COMPLETED;
 	ctrl->aux->state &= ~DP_STATE_LINK_MAINTENANCE_FAILED;
+
+	if (!ctrl->power_on) {
+		pr_err("ctrl off\n");
+		ret = -EINVAL;
+		goto end;
+	}
+
+	if (atomic_read(&ctrl->aborted))
+		goto end;
+
 	ctrl->aux->state |= DP_STATE_LINK_MAINTENANCE_STARTED;
-
-	ctrl->dp_ctrl.push_idle(&ctrl->dp_ctrl);
-	ctrl->dp_ctrl.reset(&ctrl->dp_ctrl);
-
-	ctrl->pixel_rate = ctrl->panel->get_pixel_clk(ctrl->panel);
-
-	do {
-		if (ret == -EAGAIN) {
-			/* try with lower link rate */
-			dp_ctrl_link_rate_down_shift(ctrl);
-
-			ctrl->catalog->mainlink_ctrl(ctrl->catalog, false);
-		}
-
-		ctrl->catalog->phy_lane_cfg(ctrl->catalog,
-			ctrl->orientation, ctrl->link->link_params.lane_count);
-
-		/*
-		 * Disable and re-enable the mainlink clock since the
-		 * link clock might have been adjusted as part of the
-		 * link maintenance.
-		 */
-		dp_ctrl_disable_mainlink_clocks(ctrl);
-
-		ret = dp_ctrl_enable_mainlink_clocks(ctrl);
-		if (ret)
-			continue;
-
-		dp_ctrl_configure_source_params(ctrl);
-
-		ctrl->catalog->config_msa(ctrl->catalog,
-			drm_dp_bw_code_to_link_rate(
-			ctrl->link->link_params.bw_code),
-			ctrl->pixel_rate,
-			ctrl->panel->pinfo.out_format);
-
-		reinit_completion(&ctrl->idle_comp);
-
-		ret = dp_ctrl_setup_main_link(ctrl, true);
-	} while (ret == -EAGAIN);
-
+	ret = dp_ctrl_setup_main_link(ctrl);
 	ctrl->aux->state &= ~DP_STATE_LINK_MAINTENANCE_STARTED;
 
-	if (ret)
+	if (ret) {
 		ctrl->aux->state |= DP_STATE_LINK_MAINTENANCE_FAILED;
-	else
-		ctrl->aux->state |= DP_STATE_LINK_MAINTENANCE_COMPLETED;
+		goto end;
+	}
 
+	ctrl->aux->state |= DP_STATE_LINK_MAINTENANCE_COMPLETED;
+
+	if (ctrl->stream_count) {
+		dp_ctrl_send_video(ctrl);
+		dp_ctrl_wait4video_ready(ctrl);
+	}
+end:
 	return ret;
 }
 
@@ -1309,19 +802,24 @@ static void dp_ctrl_process_phy_test_request(struct dp_ctrl *dp_ctrl)
 
 	pr_debug("start\n");
 
-	ctrl->dp_ctrl.push_idle(&ctrl->dp_ctrl);
 	/*
 	 * The global reset will need DP link ralated clocks to be
 	 * running. Add the global reset just before disabling the
 	 * link clocks and core clocks.
 	 */
-	ctrl->dp_ctrl.reset(&ctrl->dp_ctrl);
+	ctrl->catalog->reset(ctrl->catalog);
+	ctrl->dp_ctrl.stream_pre_off(&ctrl->dp_ctrl, ctrl->panel);
+	ctrl->dp_ctrl.stream_off(&ctrl->dp_ctrl, ctrl->panel);
 	ctrl->dp_ctrl.off(&ctrl->dp_ctrl);
 
-	ret = ctrl->dp_ctrl.on(&ctrl->dp_ctrl);
+	ctrl->aux->init(ctrl->aux, ctrl->parser->aux_cfg);
+
+	ret = ctrl->dp_ctrl.on(&ctrl->dp_ctrl, ctrl->mst_mode,
+					ctrl->fec_mode, false);
 	if (ret)
 		pr_err("failed to enable DP controller\n");
 
+	ctrl->dp_ctrl.stream_on(&ctrl->dp_ctrl, ctrl->panel);
 	pr_debug("end\n");
 }
 
@@ -1376,26 +874,291 @@ static void dp_ctrl_send_phy_test_pattern(struct dp_ctrl_private *ctrl)
 			dp_link_get_phy_test_pattern(pattern_requested));
 }
 
-static void dp_ctrl_reset(struct dp_ctrl *dp_ctrl)
+static void dp_ctrl_mst_calculate_rg(struct dp_ctrl_private *ctrl,
+		struct dp_panel *panel, u32 *p_x_int, u32 *p_y_frac_enum)
+{
+	u64 min_slot_cnt, max_slot_cnt;
+	u64 raw_target_sc, target_sc_fixp;
+	u64 ts_denom, ts_enum, ts_int;
+	u64 pclk = panel->pinfo.pixel_clk_khz;
+	u64 lclk = panel->link_info.rate;
+	u64 lanes = panel->link_info.num_lanes;
+	u64 bpp = panel->pinfo.bpp;
+	u64 pbn = panel->pbn;
+	u64 numerator, denominator, temp, temp1, temp2;
+	u32 x_int = 0, y_frac_enum = 0;
+	u64 target_strm_sym, ts_int_fixp, ts_frac_fixp, y_frac_enum_fixp;
+
+	if (panel->pinfo.comp_info.comp_ratio)
+		bpp = panel->pinfo.comp_info.dsc_info.bpp;
+
+	/* min_slot_cnt */
+	numerator = pclk * bpp * 64 * 1000;
+	denominator = lclk * lanes * 8 * 1000;
+	min_slot_cnt = drm_fixp_from_fraction(numerator, denominator);
+
+	/* max_slot_cnt */
+	numerator = pbn * 54 * 1000;
+	denominator = lclk * lanes;
+	max_slot_cnt = drm_fixp_from_fraction(numerator, denominator);
+
+	/* raw_target_sc */
+	numerator = max_slot_cnt + min_slot_cnt;
+	denominator = drm_fixp_from_fraction(2, 1);
+	raw_target_sc = drm_fixp_div(numerator, denominator);
+
+	pr_debug("raw_target_sc before overhead:0x%llx\n", raw_target_sc);
+	pr_debug("dsc_overhead_fp:0x%llx\n", panel->pinfo.dsc_overhead_fp);
+
+	/* apply fec and dsc overhead factor */
+	if (panel->pinfo.dsc_overhead_fp)
+		raw_target_sc = drm_fixp_mul(raw_target_sc,
+					panel->pinfo.dsc_overhead_fp);
+
+	if (panel->fec_overhead_fp)
+		raw_target_sc = drm_fixp_mul(raw_target_sc,
+					panel->fec_overhead_fp);
+
+	pr_debug("raw_target_sc after overhead:0x%llx\n", raw_target_sc);
+
+	/* target_sc */
+	temp = drm_fixp_from_fraction(256 * lanes, 1);
+	numerator = drm_fixp_mul(raw_target_sc, temp);
+	denominator = drm_fixp_from_fraction(256 * lanes, 1);
+	target_sc_fixp = drm_fixp_div(numerator, denominator);
+
+	ts_enum = 256 * lanes;
+	ts_denom = drm_fixp_from_fraction(256 * lanes, 1);
+	ts_int = drm_fixp2int(target_sc_fixp);
+
+	temp = drm_fixp2int_ceil(raw_target_sc);
+	if (temp != ts_int) {
+		temp = drm_fixp_from_fraction(ts_int, 1);
+		temp1 = raw_target_sc - temp;
+		temp2 = drm_fixp_mul(temp1, ts_denom);
+		ts_enum = drm_fixp2int(temp2);
+	}
+
+	/* target_strm_sym */
+	ts_int_fixp = drm_fixp_from_fraction(ts_int, 1);
+	ts_frac_fixp = drm_fixp_from_fraction(ts_enum, drm_fixp2int(ts_denom));
+	temp = ts_int_fixp + ts_frac_fixp;
+	temp1 = drm_fixp_from_fraction(lanes, 1);
+	target_strm_sym = drm_fixp_mul(temp, temp1);
+
+	/* x_int */
+	x_int = drm_fixp2int(target_strm_sym);
+
+	/* y_enum_frac */
+	temp = drm_fixp_from_fraction(x_int, 1);
+	temp1 = target_strm_sym - temp;
+	temp2 = drm_fixp_from_fraction(256, 1);
+	y_frac_enum_fixp = drm_fixp_mul(temp1, temp2);
+
+	temp1 = drm_fixp2int(y_frac_enum_fixp);
+	temp2 = drm_fixp2int_ceil(y_frac_enum_fixp);
+
+	y_frac_enum = (u32)((temp1 == temp2) ? temp1 : temp1 + 1);
+
+	*p_x_int = x_int;
+	*p_y_frac_enum = y_frac_enum;
+
+	pr_debug("x_int: %d, y_frac_enum: %d\n", x_int, y_frac_enum);
+}
+
+static int dp_ctrl_mst_send_act(struct dp_ctrl_private *ctrl)
+{
+	bool act_complete;
+
+	if (!ctrl->mst_mode)
+		return 0;
+
+	ctrl->catalog->trigger_act(ctrl->catalog);
+	msleep(20); /* needs 1 frame time */
+
+	ctrl->catalog->read_act_complete_sts(ctrl->catalog, &act_complete);
+
+	if (!act_complete)
+		pr_err("mst act trigger complete failed\n");
+	else
+		DP_MST_DEBUG("mst ACT trigger complete SUCCESS\n");
+
+	return 0;
+}
+
+static void dp_ctrl_mst_stream_setup(struct dp_ctrl_private *ctrl,
+		struct dp_panel *panel)
+{
+	u32 x_int, y_frac_enum, lanes, bw_code;
+	int i;
+
+	if (!ctrl->mst_mode)
+		return;
+
+	DP_MST_DEBUG("mst stream channel allocation\n");
+
+	for (i = DP_STREAM_0; i < DP_STREAM_MAX; i++) {
+		ctrl->catalog->channel_alloc(ctrl->catalog,
+				i,
+				ctrl->mst_ch_info.slot_info[i].start_slot,
+				ctrl->mst_ch_info.slot_info[i].tot_slots);
+	}
+
+	lanes = ctrl->link->link_params.lane_count;
+	bw_code = ctrl->link->link_params.bw_code;
+
+	dp_ctrl_mst_calculate_rg(ctrl, panel, &x_int, &y_frac_enum);
+
+	ctrl->catalog->update_rg(ctrl->catalog, panel->stream_id,
+			x_int, y_frac_enum);
+
+	DP_MST_DEBUG("mst stream:%d, start_slot:%d, tot_slots:%d\n",
+			panel->stream_id,
+			panel->channel_start_slot, panel->channel_total_slots);
+
+	DP_MST_DEBUG("mst lane_cnt:%d, bw:%d, x_int:%d, y_frac:%d\n",
+			lanes, bw_code, x_int, y_frac_enum);
+}
+
+static void dp_ctrl_fec_dsc_setup(struct dp_ctrl_private *ctrl)
+{
+	u8 fec_sts = 0;
+	int rlen;
+	u32 dsc_enable;
+	const unsigned int fec_sts_dpcd = 0x280;
+
+	if (ctrl->stream_count || !ctrl->fec_mode)
+		return;
+
+	ctrl->catalog->fec_config(ctrl->catalog, ctrl->fec_mode);
+
+	/* wait for controller to start fec sequence */
+	usleep_range(900, 1000);
+	drm_dp_dpcd_readb(ctrl->aux->drm_aux, fec_sts_dpcd, &fec_sts);
+	pr_debug("sink fec status:%d\n", fec_sts);
+
+	dsc_enable = ctrl->fec_mode ? 1 : 0;
+	rlen = drm_dp_dpcd_writeb(ctrl->aux->drm_aux, DP_DSC_ENABLE,
+			dsc_enable);
+	if (rlen < 1)
+		pr_debug("failed to enable sink dsc\n");
+}
+
+static int dp_ctrl_stream_on(struct dp_ctrl *dp_ctrl, struct dp_panel *panel)
+{
+	int rc = 0;
+	bool link_ready = false;
+	struct dp_ctrl_private *ctrl;
+
+	if (!dp_ctrl || !panel) {
+		return -EINVAL;
+	}
+
+	ctrl = container_of(dp_ctrl, struct dp_ctrl_private, dp_ctrl);
+
+	rc = dp_ctrl_enable_stream_clocks(ctrl, panel);
+	if (rc) {
+		pr_err("failure on stream clock enable\n");
+		return rc;
+	}
+
+	rc = panel->hw_cfg(panel, true);
+	if (rc)
+		return rc;
+
+	if (ctrl->link->sink_request & DP_TEST_LINK_PHY_TEST_PATTERN) {
+		dp_ctrl_send_phy_test_pattern(ctrl);
+		return 0;
+	}
+
+	dp_ctrl_mst_stream_setup(ctrl, panel);
+
+	dp_ctrl_send_video(ctrl);
+
+	dp_ctrl_mst_send_act(ctrl);
+
+	dp_ctrl_wait4video_ready(ctrl);
+
+	dp_ctrl_fec_dsc_setup(ctrl);
+
+	ctrl->stream_count++;
+
+	link_ready = ctrl->catalog->mainlink_ready(ctrl->catalog);
+	pr_debug("mainlink %s\n", link_ready ? "READY" : "NOT READY");
+
+	return rc;
+}
+
+static void dp_ctrl_mst_stream_pre_off(struct dp_ctrl *dp_ctrl,
+		struct dp_panel *panel)
+{
+	struct dp_ctrl_private *ctrl;
+	bool act_complete;
+	int i;
+
+	ctrl = container_of(dp_ctrl, struct dp_ctrl_private, dp_ctrl);
+
+	if (!ctrl->mst_mode)
+		return;
+
+	for (i = DP_STREAM_0; i < DP_STREAM_MAX; i++) {
+		ctrl->catalog->channel_alloc(ctrl->catalog,
+				i,
+				ctrl->mst_ch_info.slot_info[i].start_slot,
+				ctrl->mst_ch_info.slot_info[i].tot_slots);
+	}
+
+	ctrl->catalog->trigger_act(ctrl->catalog);
+	msleep(20); /* needs 1 frame time */
+	ctrl->catalog->read_act_complete_sts(ctrl->catalog, &act_complete);
+
+	if (!act_complete)
+		pr_err("mst stream_off act trigger complete failed\n");
+	else
+		DP_MST_DEBUG("mst stream_off ACT trigger complete SUCCESS\n");
+}
+
+static void dp_ctrl_stream_pre_off(struct dp_ctrl *dp_ctrl,
+		struct dp_panel *panel)
 {
 	struct dp_ctrl_private *ctrl;
 
-	if (!dp_ctrl) {
-		pr_err("invalid params\n");
+	if (!dp_ctrl || !panel) {
+		pr_err("invalid input\n");
 		return;
 	}
 
 	ctrl = container_of(dp_ctrl, struct dp_ctrl_private, dp_ctrl);
-	ctrl->catalog->reset(ctrl->catalog);
+
+	dp_ctrl_push_idle(ctrl, panel->stream_id);
+
+	dp_ctrl_mst_stream_pre_off(dp_ctrl, panel);
 }
 
-static int dp_ctrl_on(struct dp_ctrl *dp_ctrl)
+static void dp_ctrl_stream_off(struct dp_ctrl *dp_ctrl, struct dp_panel *panel)
+{
+	struct dp_ctrl_private *ctrl;
+
+	if (!dp_ctrl || !panel)
+		return;
+
+	ctrl = container_of(dp_ctrl, struct dp_ctrl_private, dp_ctrl);
+
+	if (!ctrl->power_on)
+		return;
+
+	panel->hw_cfg(panel, false);
+
+	dp_ctrl_disable_stream_clocks(ctrl, panel);
+	ctrl->stream_count--;
+}
+
+static int dp_ctrl_on(struct dp_ctrl *dp_ctrl, bool mst_mode,
+				bool fec_mode, bool shallow)
 {
 	int rc = 0;
 	struct dp_ctrl_private *ctrl;
 	u32 rate = 0;
-	u32 link_train_max_retries = 100;
-	u32 const phy_cts_pixel_clk_khz = 148500;
 
 	if (!dp_ctrl) {
 		rc = -EINVAL;
@@ -1404,66 +1167,36 @@ static int dp_ctrl_on(struct dp_ctrl *dp_ctrl)
 
 	ctrl = container_of(dp_ctrl, struct dp_ctrl_private, dp_ctrl);
 
-	atomic_set(&ctrl->aborted, 0);
-	rate = ctrl->panel->link_info.rate;
+	if (ctrl->power_on)
+		goto end;
 
-	ctrl->catalog->hpd_config(ctrl->catalog, true);
+	if (atomic_read(&ctrl->aborted)) {
+		rc = -EPERM;
+		goto end;
+	}
+
+	ctrl->mst_mode = mst_mode;
+	ctrl->fec_mode = fec_mode;
+	rate = ctrl->panel->link_info.rate;
 
 	if (ctrl->link->sink_request & DP_TEST_LINK_PHY_TEST_PATTERN) {
 		pr_debug("using phy test link parameters\n");
-		if (!ctrl->panel->pinfo.pixel_clk_khz)
-			ctrl->pixel_rate = phy_cts_pixel_clk_khz;
 	} else {
 		ctrl->link->link_params.bw_code =
 			drm_dp_link_rate_to_bw_code(rate);
 		ctrl->link->link_params.lane_count =
 			ctrl->panel->link_info.num_lanes;
-		ctrl->pixel_rate = ctrl->panel->get_pixel_clk(ctrl->panel);
 	}
 
-	pr_debug("bw_code=%d, lane_count=%d, pixel_rate=%d\n",
+	pr_debug("bw_code=%d, lane_count=%d\n",
 		ctrl->link->link_params.bw_code,
-		ctrl->link->link_params.lane_count, ctrl->pixel_rate);
+		ctrl->link->link_params.lane_count);
 
-	ctrl->catalog->phy_lane_cfg(ctrl->catalog,
-			ctrl->orientation, ctrl->link->link_params.lane_count);
-
-	rc = dp_ctrl_enable_mainlink_clocks(ctrl);
+	rc = dp_ctrl_link_setup(ctrl, shallow);
 	if (rc)
 		goto end;
 
-	reinit_completion(&ctrl->idle_comp);
-
-	dp_ctrl_configure_source_params(ctrl);
-
-	while (--link_train_max_retries && !atomic_read(&ctrl->aborted)) {
-		ctrl->catalog->config_msa(ctrl->catalog,
-			drm_dp_bw_code_to_link_rate(
-			ctrl->link->link_params.bw_code),
-			ctrl->pixel_rate, ctrl->panel->pinfo.out_format);
-
-		rc = dp_ctrl_setup_main_link(ctrl, true);
-		if (!rc)
-			break;
-
-		/* try with lower link rate */
-		dp_ctrl_link_rate_down_shift(ctrl);
-
-		ctrl->catalog->mainlink_ctrl(ctrl->catalog, false);
-
-		dp_ctrl_disable_mainlink_clocks(ctrl);
-		/* hw recommended delay before re-enabling clocks */
-		msleep(20);
-
-		dp_ctrl_enable_mainlink_clocks(ctrl);
-	}
-
-	if (ctrl->link->sink_request & DP_TEST_LINK_PHY_TEST_PATTERN)
-		dp_ctrl_send_phy_test_pattern(ctrl);
-
 	ctrl->power_on = true;
-	pr_debug("End-\n");
-
 end:
 	return rc;
 }
@@ -1477,16 +1210,39 @@ static void dp_ctrl_off(struct dp_ctrl *dp_ctrl)
 
 	ctrl = container_of(dp_ctrl, struct dp_ctrl_private, dp_ctrl);
 
-	ctrl->catalog->mainlink_ctrl(ctrl->catalog, false);
+	if (!ctrl->power_on)
+		return;
+
+	dp_ctrl_configure_source_link_params(ctrl, false);
 	ctrl->catalog->reset(ctrl->catalog);
 
 	/* Make sure DP is disabled before clk disable */
 	wmb();
 
-	dp_ctrl_disable_mainlink_clocks(ctrl);
+	dp_ctrl_disable_link_clock(ctrl);
 
+	ctrl->mst_mode = false;
+	ctrl->fec_mode = false;
 	ctrl->power_on = false;
+	memset(&ctrl->mst_ch_info, 0, sizeof(ctrl->mst_ch_info));
 	pr_debug("DP off done\n");
+}
+
+static void dp_ctrl_set_mst_channel_info(struct dp_ctrl *dp_ctrl,
+		enum dp_stream_id strm,
+		u32 start_slot, u32 tot_slots)
+{
+	struct dp_ctrl_private *ctrl;
+
+	if (!dp_ctrl || strm >= DP_STREAM_MAX) {
+		pr_err("invalid input\n");
+		return;
+	}
+
+	ctrl = container_of(dp_ctrl, struct dp_ctrl_private, dp_ctrl);
+
+	ctrl->mst_ch_info.slot_info[strm].start_slot = start_slot;
+	ctrl->mst_ch_info.slot_info[strm].tot_slots = tot_slots;
 }
 
 static void dp_ctrl_isr(struct dp_ctrl *dp_ctrl)
@@ -1504,6 +1260,12 @@ static void dp_ctrl_isr(struct dp_ctrl *dp_ctrl)
 		dp_ctrl_video_ready(ctrl);
 
 	if (ctrl->catalog->isr & DP_CTRL_INTR_IDLE_PATTERN_SENT)
+		dp_ctrl_idle_patterns_sent(ctrl);
+
+	if (ctrl->catalog->isr5 & DP_CTRL_INTR_MST_DP0_VCPF_SENT)
+		dp_ctrl_idle_patterns_sent(ctrl);
+
+	if (ctrl->catalog->isr5 & DP_CTRL_INTR_MST_DP1_VCPF_SENT)
 		dp_ctrl_idle_patterns_sent(ctrl);
 }
 
@@ -1537,6 +1299,8 @@ struct dp_ctrl *dp_ctrl_get(struct dp_ctrl_in *in)
 	ctrl->link     = in->link;
 	ctrl->catalog  = in->catalog;
 	ctrl->dev  = in->dev;
+	ctrl->mst_mode = false;
+	ctrl->fec_mode = false;
 
 	dp_ctrl = &ctrl->dp_ctrl;
 
@@ -1545,12 +1309,14 @@ struct dp_ctrl *dp_ctrl_get(struct dp_ctrl_in *in)
 	dp_ctrl->deinit    = dp_ctrl_host_deinit;
 	dp_ctrl->on        = dp_ctrl_on;
 	dp_ctrl->off       = dp_ctrl_off;
-	dp_ctrl->push_idle = dp_ctrl_push_idle;
 	dp_ctrl->abort     = dp_ctrl_abort;
 	dp_ctrl->isr       = dp_ctrl_isr;
-	dp_ctrl->reset	   = dp_ctrl_reset;
 	dp_ctrl->link_maintenance = dp_ctrl_link_maintenance;
 	dp_ctrl->process_phy_test_request = dp_ctrl_process_phy_test_request;
+	dp_ctrl->stream_on = dp_ctrl_stream_on;
+	dp_ctrl->stream_off = dp_ctrl_stream_off;
+	dp_ctrl->stream_pre_off = dp_ctrl_stream_pre_off;
+	dp_ctrl->set_mst_channel_info = dp_ctrl_set_mst_channel_info;
 
 	return dp_ctrl;
 error:

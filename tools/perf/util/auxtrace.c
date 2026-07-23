@@ -13,10 +13,10 @@
  *
  */
 
+#include <inttypes.h>
 #include <sys/types.h>
 #include <sys/mman.h>
 #include <stdbool.h>
-#include <ctype.h>
 #include <string.h>
 #include <limits.h>
 #include <errno.h>
@@ -46,7 +46,6 @@
 #include "cpumap.h"
 #include "thread_map.h"
 #include "asm/bug.h"
-#include "symbol/kallsyms.h"
 #include "auxtrace.h"
 
 #include <linux/hash.h>
@@ -58,6 +57,9 @@
 
 #include "intel-pt.h"
 #include "intel-bts.h"
+
+#include "sane_ctype.h"
+#include "symbol/kallsyms.h"
 
 int auxtrace_mmap__mmap(struct auxtrace_mmap *mm,
 			struct auxtrace_mmap_params *mp,
@@ -319,6 +321,13 @@ static int auxtrace_queues__add_event_buffer(struct auxtrace_queues *queues,
 	return auxtrace_queues__add_buffer(queues, idx, buffer);
 }
 
+static bool filter_cpu(struct perf_session *session, int cpu)
+{
+	unsigned long *cpu_bitmap = session->itrace_synth_opts->cpu_bitmap;
+
+	return cpu_bitmap && cpu != -1 && !test_bit(cpu, cpu_bitmap);
+}
+
 int auxtrace_queues__add_event(struct auxtrace_queues *queues,
 			       struct perf_session *session,
 			       union perf_event *event, off_t data_offset,
@@ -327,6 +336,9 @@ int auxtrace_queues__add_event(struct auxtrace_queues *queues,
 	struct auxtrace_buffer *buffer;
 	unsigned int idx;
 	int err;
+
+	if (filter_cpu(session, event->auxtrace.cpu))
+		return 0;
 
 	buffer = zalloc(sizeof(struct auxtrace_buffer));
 	if (!buffer)
@@ -944,6 +956,8 @@ void itrace_synth_opts__set_default(struct itrace_synth_opts *synth_opts)
 	synth_opts->instructions = true;
 	synth_opts->branches = true;
 	synth_opts->transactions = true;
+	synth_opts->ptwrites = true;
+	synth_opts->pwr_events = true;
 	synth_opts->errors = true;
 	synth_opts->period_type = PERF_ITRACE_DEFAULT_PERIOD_TYPE;
 	synth_opts->period = PERF_ITRACE_DEFAULT_PERIOD;
@@ -1026,6 +1040,12 @@ int itrace_parse_synth_opts(const struct option *opt, const char *str,
 			break;
 		case 'x':
 			synth_opts->transactions = true;
+			break;
+		case 'w':
+			synth_opts->ptwrites = true;
+			break;
+		case 'p':
+			synth_opts->pwr_events = true;
 			break;
 		case 'e':
 			synth_opts->errors = true;
@@ -1756,6 +1776,7 @@ static int find_entire_kern_cb(void *arg, const char *name __maybe_unused,
 			       char type, u64 start)
 {
 	struct sym_args *args = arg;
+	u64 size;
 
 	if (!symbol_type__is_a(type, MAP__FUNCTION))
 		return 0;
@@ -1765,7 +1786,9 @@ static int find_entire_kern_cb(void *arg, const char *name __maybe_unused,
 		args->start = start;
 	}
 	/* Don't know exactly where the kernel ends, so we add a page */
-	args->size = round_up(start, page_size) + page_size - args->start;
+	size = round_up(start, page_size) + page_size - args->start;
+	if (size > args->size)
+		args->size = size;
 
 	return 0;
 }
@@ -1925,7 +1948,7 @@ static int find_dso_sym(struct dso *dso, const char *sym_name, u64 *start,
 				*size = sym->start - *start;
 			if (idx > 0) {
 				if (*size)
-					return 1;
+					return 0;
 			} else if (dso_sym_match(sym, sym_name, &cnt, idx)) {
 				print_duplicate_syms(dso, sym_name);
 				return -EINVAL;

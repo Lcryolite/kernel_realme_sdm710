@@ -1,4 +1,4 @@
-/* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -55,6 +55,7 @@ bool cam_cdm_set_cam_hw_version(
 {
 	switch (ver) {
 	case CAM_CDM170_VERSION:
+	case CAM_CDM175_VERSION:
 		cam_version->major    = (ver & 0xF0000000);
 		cam_version->minor    = (ver & 0xFFF0000);
 		cam_version->incr     = (ver & 0xFFFF);
@@ -84,15 +85,27 @@ struct cam_cdm_utils_ops *cam_cdm_get_ops(
 	if (by_cam_version == false) {
 		switch (ver) {
 		case CAM_CDM170_VERSION:
+		case CAM_CDM175_VERSION:
 			return &CDM170_ops;
 		default:
 			CAM_ERR(CAM_CDM, "CDM Version=%x not supported in util",
 				ver);
 		}
 	} else if (cam_version) {
-		if ((cam_version->major == 1) && (cam_version->minor == 0) &&
-			(cam_version->incr == 0))
+		if (((cam_version->major == 1) &&
+			(cam_version->minor == 0) &&
+			(cam_version->incr == 0)) ||
+			((cam_version->major == 1) &&
+			(cam_version->minor == 1) &&
+			(cam_version->incr == 0))) {
+
+			CAM_DBG(CAM_CDM,
+				"cam_hw_version=%x:%x:%x supported",
+				cam_version->major, cam_version->minor,
+				cam_version->incr);
 			return &CDM170_ops;
+		}
+
 		CAM_ERR(CAM_CDM, "cam_hw_version=%x:%x:%x not supported",
 			cam_version->major, cam_version->minor,
 			cam_version->incr);
@@ -241,7 +254,7 @@ int cam_cdm_stream_ops_internal(void *hw_priv,
 	cam_cdm_get_client_refcount(client);
 	if (*handle != client->handle) {
 		CAM_ERR(CAM_CDM, "client id given handle=%x invalid", *handle);
-		rc =  -EINVAL;
+		rc = -EINVAL;
 		goto end;
 	}
 	if (operation == true) {
@@ -266,6 +279,7 @@ int cam_cdm_stream_ops_internal(void *hw_priv,
 			ahb_vote.type = CAM_VOTE_ABSOLUTE;
 			ahb_vote.vote.level = CAM_SVS_VOTE;
 			axi_vote.compressed_bw = CAM_CPAS_DEFAULT_AXI_BW;
+			axi_vote.compressed_bw_ab = CAM_CPAS_DEFAULT_AXI_BW;
 			axi_vote.uncompressed_bw = CAM_CPAS_DEFAULT_AXI_BW;
 
 			rc = cam_cpas_start(core->cpas_handle,

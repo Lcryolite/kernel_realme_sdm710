@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * ioctl32.c: Conversion between 32bit and 64bit native ioctls.
  *
@@ -76,7 +77,7 @@
 #include <scsi/sg.h>
 #endif
 
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <linux/ethtool.h>
 #include <linux/mii.h>
 #include <linux/if_bonding.h>
@@ -741,23 +742,22 @@ static int do_i2c_smbus_ioctl(struct file *file,
 		unsigned int cmd, struct i2c_smbus_ioctl_data32   __user *udata)
 {
 	struct i2c_smbus_ioctl_data	__user *tdata;
-	compat_caddr_t			datap;
+	union {
+		/* beginnings of those have identical layouts */
+		struct i2c_smbus_ioctl_data32	data32;
+		struct i2c_smbus_ioctl_data	data;
+	} v;
 
 	tdata = compat_alloc_user_space(sizeof(*tdata));
 	if (tdata == NULL)
 		return -ENOMEM;
-	if (!access_ok(VERIFY_WRITE, tdata, sizeof(*tdata)))
-		return -EFAULT;
 
-	if (!access_ok(VERIFY_READ, udata, sizeof(*udata)))
+	memset(&v, 0, sizeof(v));
+	if (copy_from_user(&v.data32, udata, sizeof(v.data32)))
 		return -EFAULT;
+	v.data.data = compat_ptr(v.data32.data);
 
-	if (__copy_in_user(&tdata->read_write, &udata->read_write, 2 * sizeof(u8)))
-		return -EFAULT;
-	if (__copy_in_user(&tdata->size, &udata->size, 2 * sizeof(u32)))
-		return -EFAULT;
-	if (__get_user(datap, &udata->data) ||
-	    __put_user(compat_ptr(datap), &tdata->data))
+	if (copy_to_user(tdata, &v.data, sizeof(v.data)))
 		return -EFAULT;
 
 	return do_ioctl(file, cmd, (unsigned long)tdata);
@@ -868,9 +868,11 @@ COMPATIBLE_IOCTL(TIOCGDEV)
 COMPATIBLE_IOCTL(TIOCCBRK)
 COMPATIBLE_IOCTL(TIOCGSID)
 COMPATIBLE_IOCTL(TIOCGICOUNT)
-COMPATIBLE_IOCTL(TIOCGPKT)
-COMPATIBLE_IOCTL(TIOCGPTLCK)
 COMPATIBLE_IOCTL(TIOCGEXCL)
+/*UART CLOCK*/
+COMPATIBLE_IOCTL(TIOCPMGET)
+COMPATIBLE_IOCTL(TIOCPMPUT)
+COMPATIBLE_IOCTL(TIOCPMACT)
 /* Little t */
 COMPATIBLE_IOCTL(TIOCGETD)
 COMPATIBLE_IOCTL(TIOCSETD)
@@ -885,16 +887,12 @@ COMPATIBLE_IOCTL(TIOCMGET)
 COMPATIBLE_IOCTL(TIOCMBIC)
 COMPATIBLE_IOCTL(TIOCMBIS)
 COMPATIBLE_IOCTL(TIOCMSET)
-COMPATIBLE_IOCTL(TIOCPKT)
 COMPATIBLE_IOCTL(TIOCNOTTY)
 COMPATIBLE_IOCTL(TIOCSTI)
 COMPATIBLE_IOCTL(TIOCOUTQ)
 COMPATIBLE_IOCTL(TIOCSPGRP)
 COMPATIBLE_IOCTL(TIOCGPGRP)
-COMPATIBLE_IOCTL(TIOCGPTN)
-COMPATIBLE_IOCTL(TIOCSPTLCK)
 COMPATIBLE_IOCTL(TIOCSERGETLSR)
-COMPATIBLE_IOCTL(TIOCSIG)
 #ifdef TIOCSRS485
 COMPATIBLE_IOCTL(TIOCSRS485)
 #endif
@@ -1337,9 +1335,24 @@ COMPATIBLE_IOCTL(DMX_SET_FILTER)
 COMPATIBLE_IOCTL(DMX_SET_PES_FILTER)
 COMPATIBLE_IOCTL(DMX_SET_BUFFER_SIZE)
 COMPATIBLE_IOCTL(DMX_GET_PES_PIDS)
-COMPATIBLE_IOCTL(DMX_GET_CAPS)
-COMPATIBLE_IOCTL(DMX_SET_SOURCE)
 COMPATIBLE_IOCTL(DMX_GET_STC)
+COMPATIBLE_IOCTL(FE_GET_INFO)
+COMPATIBLE_IOCTL(FE_DISEQC_RESET_OVERLOAD)
+COMPATIBLE_IOCTL(FE_DISEQC_SEND_MASTER_CMD)
+COMPATIBLE_IOCTL(FE_DISEQC_RECV_SLAVE_REPLY)
+COMPATIBLE_IOCTL(FE_DISEQC_SEND_BURST)
+COMPATIBLE_IOCTL(FE_SET_TONE)
+COMPATIBLE_IOCTL(FE_SET_VOLTAGE)
+COMPATIBLE_IOCTL(FE_ENABLE_HIGH_LNB_VOLTAGE)
+COMPATIBLE_IOCTL(FE_READ_STATUS)
+COMPATIBLE_IOCTL(FE_READ_BER)
+COMPATIBLE_IOCTL(FE_READ_SIGNAL_STRENGTH)
+COMPATIBLE_IOCTL(FE_READ_SNR)
+COMPATIBLE_IOCTL(FE_READ_UNCORRECTED_BLOCKS)
+COMPATIBLE_IOCTL(FE_SET_FRONTEND)
+COMPATIBLE_IOCTL(FE_GET_FRONTEND)
+COMPATIBLE_IOCTL(FE_GET_EVENT)
+COMPATIBLE_IOCTL(FE_DISHNETWORK_SEND_LEGACY_CMD)
 COMPATIBLE_IOCTL(VIDEO_STOP)
 COMPATIBLE_IOCTL(VIDEO_PLAY)
 COMPATIBLE_IOCTL(VIDEO_FREEZE)
@@ -1537,8 +1550,7 @@ COMPAT_SYSCALL_DEFINE3(ioctl, unsigned int, fd, unsigned int, cmd,
 	if (!f.file)
 		goto out;
 
-	/* RED-PEN how should LSM module know it's handling 32bit? */
-	error = security_file_ioctl(f.file, cmd, arg);
+	error = security_file_ioctl_compat(f.file, cmd, arg);
 	if (error)
 		goto out_fput;
 

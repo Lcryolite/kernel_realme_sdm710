@@ -57,7 +57,7 @@ to specify in a pin configuration subnode:
 	Value type: <string-array>
 	Definition: List of gpio pins affected by the properties specified in
 		    this subnode.  Valid pins are:
-		    gpio1-gpio5 for wcd9340
+		    gpio1-gpio5 for wcd9360
 
 - bias-disable:
 	Usage: optional
@@ -110,7 +110,7 @@ Example:
 
 	wcd: wcd_pinctrl@5 {
 		compatible = "qcom,wcd-pinctl";
-		qcom,num-gpios = <5>
+		qcom,num-gpios = <5>;
 		gpio-controller;
 		#gpio-cells = <2>;
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *  linux/fs/pipe.c
  *
@@ -23,7 +24,7 @@
 #include <linux/fcntl.h>
 #include <linux/memcontrol.h>
 
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/ioctls.h>
 
 #include "internal.h"
@@ -773,13 +774,12 @@ int create_pipe_files(struct file **res, int flags)
 	struct inode *inode = get_pipe_inode();
 	struct file *f;
 	struct path path;
-	static struct qstr name = { .name = "" };
 
 	if (!inode)
 		return -ENFILE;
 
 	err = -ENOMEM;
-	path.dentry = d_alloc_pseudo(pipe_mnt->mnt_sb, &name);
+	path.dentry = d_alloc_pseudo(pipe_mnt->mnt_sb, &empty_name);
 	if (!path.dentry)
 		goto err_inode;
 	path.mnt = mntget(pipe_mnt);
@@ -1068,57 +1068,6 @@ static inline unsigned int round_pipe_size(unsigned int size)
 	return roundup_pow_of_two(nr_pages) << PAGE_SHIFT;
 }
 
-#ifdef VENDOR_EDIT
-static inline bool is_zygote_process(struct task_struct *t)
-{
-	const struct cred *tcred = __task_cred(t);
-
-	struct task_struct * first_child = NULL;
-	if(t->children.next && t->children.next != (struct list_head*)&t->children.next)
-		first_child = container_of(t->children.next, struct task_struct, sibling);
-	if(!strcmp(t->comm, "main") && (tcred->uid.val == 0) && (t->parent != 0 && !strcmp(t->parent->comm,"init"))  )
-		return true;
-	else
-		return false;
-	return false;
-}
-#define SYSTEM_APP_UID 1000
-static inline bool is_system_uid(struct task_struct *t)
-{
-	int cur_uid;
-	cur_uid = task_uid(t).val;
-	if (cur_uid ==  SYSTEM_APP_UID)
-		return true;
-
-	return false;
-}
-
-static inline bool is_system_process(struct task_struct *t)
-{
-        pr_err("in system_process, t->comm is %s,grouplead command is %s",t->comm,t->group_leader->comm);
-	if (is_system_uid(t)) {
-		if (t->group_leader  && (!strncmp(t->group_leader->comm,"system_server", 13) ||
-			!strncmp(t->group_leader->comm, "surfaceflinger", 14) ||
-			!strncmp(t->group_leader->comm, "Binder:", 7) ||
-			!strncmp(t->group_leader->comm, "sensor", 6) ||
-			!strncmp(t->group_leader->comm, "suspend", 7) ||
-			!strncmp(t->group_leader->comm, "composer", 8)))
-				return true;
-	}
-	return false;
-}
-
-static inline bool is_critial_process(struct task_struct *t)
-{
-	if( is_zygote_process(t) || is_system_process(t)) {
-                pr_err("in pipe set buffer size, critical svc, we are not gonna return EPERM");
-		return true;
-        }
-
-	return false;
-}
-#endif /* VENDOR_EDIT */
-
 /*
  * Allocate a new array of pipe buffers and copy the info over. Returns the
  * pipe size if successful, or return -ERROR on error.
@@ -1145,27 +1094,16 @@ static long pipe_set_size(struct pipe_inode_info *pipe, unsigned long arg)
 	 * Decreasing the pipe capacity is always permitted, even
 	 * if the user is currently over a limit.
 	 */
-    #ifndef VENDOR_EDIT
-    if (nr_pages > pipe->buffers &&
+	if (nr_pages > pipe->buffers &&
 			size > pipe_max_size && !capable(CAP_SYS_RESOURCE))
-    #else /* VENDOR_EDIT */
-    if (nr_pages > pipe->buffers &&
-			size > pipe_max_size && !capable(CAP_SYS_RESOURCE) && !is_critial_process(current))
-    #endif /* VENDOR_EDIT */
 		return -EPERM;
-    #ifndef VENDOR_EDIT
-    user_bufs = account_pipe_buffers(pipe->user, pipe->buffers, nr_pages);
 
-    if (nr_pages > pipe->buffers &&
+	user_bufs = account_pipe_buffers(pipe->user, pipe->buffers, nr_pages);
+
+	if (nr_pages > pipe->buffers &&
 			(too_many_pipe_buffers_hard(user_bufs) ||
 			 too_many_pipe_buffers_soft(user_bufs)) &&
 			is_unprivileged_user()) {
-    #else /* VENDOR_EDIT */
-    if (nr_pages > pipe->buffers &&
-			(too_many_pipe_buffers_hard(user_bufs) ||
-			 too_many_pipe_buffers_soft(user_bufs)) &&
-			is_unprivileged_user() && !is_critial_process(current)) {
-    #endif /* VENDOR_EDIT */
 		ret = -EPERM;
 		goto out_revert_acct;
 	}
@@ -1230,7 +1168,7 @@ int pipe_proc_fn(struct ctl_table *table, int write, void __user *buf,
 	unsigned int rounded_pipe_max_size;
 	int ret;
 
-	ret = proc_dointvec_minmax(table, write, buf, lenp, ppos);
+	ret = proc_douintvec_minmax(table, write, buf, lenp, ppos);
 	if (ret < 0 || !write)
 		return ret;
 

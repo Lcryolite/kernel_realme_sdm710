@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -13,8 +13,6 @@
 #define __QDSP6VOICE_H__
 
 #include <linux/msm_ion.h>
-#include <linux/power_supply.h>
-#include <uapi/linux/vm_bms.h>
 #include <sound/voice_params.h>
 #include <dsp/rtac.h>
 #include <dsp/q6core.h>
@@ -24,8 +22,9 @@
 #define SESSION_NAME_LEN 20
 #define NUM_OF_MEMORY_BLOCKS 1
 #define NUM_OF_BUFFERS 2
-#define VSS_NUM_CHANNELS_MAX 8
-#define VSS_CHANNEL_MAPPING_SIZE (sizeof(uint8_t) * VSS_NUM_CHANNELS_MAX)
+#define Q6VOICE_NUM_CHANNELS_MAX 32
+#define Q6VOICE_CHANNEL_MAPPING_SIZE \
+	(sizeof(uint8_t) * Q6VOICE_NUM_CHANNELS_MAX)
 /*
  * BUFFER BLOCK SIZE based on
  * the supported page size
@@ -46,13 +45,15 @@
 #define CVD_VERSION_2_1                      "2.1"
 #define CVD_VERSION_2_2                      "2.2"
 #define CVD_VERSION_2_3                      "2.3"
+#define CVD_VERSION_2_4                      "2.4"
 
 #define CVD_INT_VERSION_DEFAULT              0
 #define CVD_INT_VERSION_0_0                  1
 #define CVD_INT_VERSION_2_1                  2
 #define CVD_INT_VERSION_2_2                  3
 #define CVD_INT_VERSION_2_3                  4
-#define CVD_INT_VERSION_LAST                 CVD_INT_VERSION_2_3
+#define CVD_INT_VERSION_2_4                  5
+#define CVD_INT_VERSION_LAST                 CVD_INT_VERSION_2_4
 #define CVD_INT_VERSION_MAX                  (CVD_INT_VERSION_LAST + 1)
 
 struct cvd_version_table {
@@ -104,7 +105,7 @@ struct device_data {
 	uint32_t dev_mute;
 	uint32_t sample_rate;
 	uint16_t bits_per_sample;
-	uint8_t  channel_mapping[VSS_NUM_CHANNELS_MAX];
+	uint8_t  channel_mapping[Q6VOICE_NUM_CHANNELS_MAX];
 	uint32_t enabled;
 	uint32_t dev_id;
 	uint32_t port_id;
@@ -123,7 +124,7 @@ struct media_format_info {
 	uint16_t num_channels;
 	uint16_t bits_per_sample;
 	uint32_t sample_rate;
-	uint8_t  channel_mapping[VSS_NUM_CHANNELS_MAX];
+	uint8_t  channel_mapping[Q6VOICE_NUM_CHANNELS_MAX];
 };
 
 enum {
@@ -159,8 +160,7 @@ struct mem_buffer {
 };
 
 struct share_mem_buf {
-	struct ion_handle	*handle;
-	struct ion_client	*client;
+	struct dma_buf		*dma_buf;
 	struct mem_buffer	buf[NUM_OF_BUFFERS];
 };
 
@@ -168,12 +168,12 @@ struct mem_map_table {
 	dma_addr_t		phys;
 	void			*data;
 	size_t			size; /* size of buffer */
-	struct ion_handle	*handle;
-	struct ion_client	*client;
+	struct dma_buf		*dma_buf;
 };
 
 /* Common */
 #define VSS_ICOMMON_CMD_SET_UI_PROPERTY 0x00011103
+#define VSS_ICOMMON_CMD_SET_UI_PROPERTY_V2 0x00013248
 /* Set a UI property */
 #define VSS_ICOMMON_CMD_MAP_MEMORY   0x00011025
 #define VSS_ICOMMON_CMD_UNMAP_MEMORY 0x00011026
@@ -215,7 +215,7 @@ struct vss_unmap_memory_cmd {
 	struct vss_icommon_cmd_unmap_memory_t vss_unmap_mem;
 } __packed;
 
-struct vss_param_endpoint_media_format_info_t {
+struct vss_param_endpoint_media_format_info {
 	/* AFE port ID to which this media format corresponds to. */
 	uint32_t port_id;
 	/*
@@ -239,13 +239,13 @@ struct vss_param_endpoint_media_format_info_t {
 	 * of the array describes channel i inside the data buffer. An
 	 * unused or unknown channel is set to 0.
 	 */
-	uint8_t channel_mapping[VSS_NUM_CHANNELS_MAX];
+	uint8_t channel_mapping[Q6VOICE_NUM_CHANNELS_MAX];
 } __packed;
 
 struct vss_param_vocproc_dev_channel_info_t {
 	uint32_t num_channels;
 	uint32_t bits_per_sample;
-	uint8_t channel_mapping[VSS_NUM_CHANNELS_MAX];
+	uint8_t channel_mapping[Q6VOICE_NUM_CHANNELS_MAX];
 } __packed;
 
 struct vss_param_channel_mixer_info_t {
@@ -262,28 +262,7 @@ struct vss_param_mfc_config_info_t {
 	uint32_t sample_rate;
 	uint16_t bits_per_sample;
 	uint16_t num_channels;
-	uint16_t channel_type[VSS_NUM_CHANNELS_MAX];
-} __packed;
-
-struct vss_icommon_param_data_t {
-	/* Valid ID of the module. */
-	uint32_t module_id;
-	/* Valid ID of the parameter. */
-	uint32_t param_id;
-	/*
-	 * Data size of the structure relating to the param_id/module_id
-	 * combination in uint8_t bytes.
-	 */
-	uint16_t param_size;
-	/* This field must be set to zero. */
-	uint16_t reserved;
-	/*
-	 * Parameter data payload when inband. Should have size param_size.
-	 * Bit size of payload must be a multiple of 4.
-	 */
-	union {
-		struct vss_param_endpoint_media_format_info_t media_format_info;
-	};
+	uint16_t channel_type[Q6VOICE_NUM_CHANNELS_MAX];
 } __packed;
 
 struct vss_icommon_param_data_channel_info_v2_t {
@@ -409,8 +388,7 @@ struct vss_icommon_cmd_set_param_mfc_config_v2_t {
 	struct vss_icommon_param_data_mfc_config_v2_t param_data;
 } __packed;
 
-/* Payload structure for the VSS_ICOMMON_CMD_SET_PARAM_V2 command. */
-struct vss_icommon_cmd_set_param_v2_t {
+struct vss_icommon_mem_mapping_hdr {
 	/*
 	 * Pointer to the unique identifier for an address (physical/virtual).
 	 *
@@ -430,10 +408,23 @@ struct vss_icommon_cmd_set_param_v2_t {
 	 * mem_handle is 0, this field is ignored.
 	 */
 	uint64_t mem_address;
+} __packed;
+
+struct vss_icommon_cmd_set_param {
+	/* APR Header */
+	struct apr_hdr apr_hdr;
+
+	/* The memory mapping header to be used when sending outband */
+	struct vss_icommon_mem_mapping_hdr mem_hdr;
+
 	/* Size of the parameter data payload in bytes. */
-	uint32_t mem_size;
-	/* Parameter data payload when the data is inband. */
-	struct vss_icommon_param_data_t param_data;
+	uint32_t payload_size;
+
+	/*
+	 * Parameter data payload when inband. Should have size param_size.
+	 * Bit size of payload must be a multiple of 4.
+	 */
+	uint8_t param_data[0];
 } __packed;
 
 /* TO MVM commands */
@@ -826,7 +817,6 @@ struct vss_evt_voice_activity {
 
 #define MODULE_ID_VOICE_MODULE_ST			0x00010EE3
 #define VOICE_PARAM_MOD_ENABLE				0x00010E00
-#define MOD_ENABLE_PARAM_LEN				4
 
 #define VSS_IPLAYBACK_CMD_START				0x000112BD
 /* Start in-call music delivery on the Tx voice path. */
@@ -1101,19 +1091,19 @@ struct vss_istream_cmd_register_calibration_data_v2_t {
 	 */
 } __packed;
 
-struct vss_icommon_cmd_set_ui_property_enable_t {
-	uint32_t module_id;
-	/* Unique ID of the module. */
-	uint32_t param_id;
-	/* Unique ID of the parameter. */
-	uint16_t param_size;
-	/* Size of the parameter in bytes: MOD_ENABLE_PARAM_LEN */
-	uint16_t reserved;
-	/* Reserved; set to 0. */
+struct enable_param {
 	uint16_t enable;
 	uint16_t reserved_field;
 	/* Reserved, set to 0. */
 };
+
+struct vss_icommon_cmd_set_ui_property {
+	/* APR Header */
+	struct apr_hdr apr_hdr;
+
+	/* The parameter data to be filled when sent inband */
+	u8 param_data[0];
+} __packed;
 
 /*
  * Event sent by the stream to the client that enables Rx DTMF
@@ -1223,10 +1213,6 @@ struct cvs_deregister_cal_data_cmd {
 	struct apr_hdr hdr;
 } __packed;
 
-struct cvs_set_pp_enable_cmd {
-	struct apr_hdr hdr;
-	struct vss_icommon_cmd_set_ui_property_enable_t vss_set_pp;
-} __packed;
 struct cvs_start_record_cmd {
 	struct apr_hdr hdr;
 	struct vss_irecord_cmd_start_t rec_mode;
@@ -1299,6 +1285,8 @@ struct vss_istream_cmd_set_packet_exchange_mode_t {
 */
 #define VSS_IVOCPROC_CMD_DEREGISTER_DEVICE_CONFIG	0x00011372
 
+#define CVD_CAL_DATA_FORMAT_MINOR_VERSION_V0		0x00000000
+#define CVD_CAL_DATA_FORMAT_MINOR_VERSION_V1		0x00000001
 #define VSS_IVOCPROC_CMD_REGISTER_CALIBRATION_DATA_V2	0x00011373
 #define VSS_IVOCPROC_CMD_DEREGISTER_CALIBRATION_DATA	0x00011276
 
@@ -1678,11 +1666,6 @@ struct cvp_set_dev_channels_cmd {
 	struct vss_ivocproc_cmd_topology_set_dev_channels_t cvp_set_channels;
 } __packed;
 
-struct cvp_set_media_format_cmd {
-	struct apr_hdr hdr;
-	struct vss_icommon_cmd_set_param_v2_t cvp_set_media_param_v2;
-} __packed;
-
 struct cvp_set_channel_info_cmd_v2 {
 	struct apr_hdr hdr;
 	struct vss_icommon_cmd_set_param_channel_info_v2_t
@@ -1795,6 +1778,7 @@ struct incall_rec_info {
 	uint32_t rec_enable;
 	uint32_t rec_mode;
 	uint32_t recording;
+	uint32_t port_id;
 };
 
 struct incall_music_info {
@@ -1918,14 +1902,6 @@ struct voice_data {
 
 	bool mic_break_status;
 	struct work_struct voice_mic_break_work;
-
-	struct power_supply *psy;
-};
-
-struct cal_mem {
-	struct ion_handle *handle;
-	uint32_t phy;
-	void *buf;
 };
 
 #define MAX_VOC_SESSIONS 8
@@ -1957,9 +1933,6 @@ struct common_data {
 
 	uint32_t voice_host_pcm_mem_handle;
 
-	struct cal_mem cvp_cal;
-	struct cal_mem cvs_cal;
-
 	struct mutex common_lock;
 
 	struct mvs_driver_info mvs_info;
@@ -1984,7 +1957,7 @@ struct common_data {
 	bool sidetone_enable;
 	bool mic_break_enable;
 	struct audio_uevent_data *uevent_data;
-	bool is_vote_bms;
+	int32_t rec_channel_count;
 };
 
 struct voice_session_itr {
@@ -2054,9 +2027,11 @@ enum {
 #define VSID_MAX                     ALL_SESSION_VSID
 
 /* called  by alsa driver */
-int voc_set_pp_enable(uint32_t session_id, uint32_t module_id,
+int voc_set_pp_enable(uint32_t session_id,
+		      struct module_instance_info mod_inst_info,
 		      uint32_t enable);
-int voc_get_pp_enable(uint32_t session_id, uint32_t module_id);
+int voc_get_pp_enable(uint32_t session_id,
+		      struct module_instance_info mod_inst_info);
 int voc_set_hd_enable(uint32_t session_id, uint32_t enable);
 uint8_t voc_get_tty_mode(uint32_t session_id);
 int voc_set_tty_mode(uint32_t session_id, uint8_t tty_mode);
@@ -2112,11 +2087,12 @@ int voc_update_amr_vocoder_rate(uint32_t session_id);
 int voc_disable_device(uint32_t session_id);
 int voc_enable_device(uint32_t session_id);
 void voc_set_destroy_cvd_flag(bool is_destroy_cvd);
-void voc_set_vote_bms_flag(bool is_vote_bms);
 int voc_disable_topology(uint32_t session_id, uint32_t disable);
 int voc_set_device_config(uint32_t session_id, uint8_t path_dir,
 			  struct media_format_info *finfo);
 uint32_t voice_get_topology(uint32_t topology_idx);
+void voc_set_incall_capture_channel_config(int channel_count);
+int voc_get_incall_capture_channel_config(void);
 int voice_set_topology_specific_info(struct voice_data *v,
 				     uint32_t topology_idx);
 int voc_set_sound_focus(struct sound_focus_param sound_focus_param);

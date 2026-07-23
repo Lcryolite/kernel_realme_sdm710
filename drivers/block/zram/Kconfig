@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0
 config ZRAM
 	tristate "Compressed RAM block device support"
 	depends on BLOCK && SYSFS && ZSMALLOC && CRYPTO
@@ -17,7 +18,6 @@ config ZRAM
 config ZRAM_DEDUP
 	bool "Deduplication support for ZRAM data"
 	depends on ZRAM
-	select XXHASH
 	default n
 	help
 	  Deduplicate ZRAM data to reduce amount of memory consumption.
@@ -53,12 +53,3 @@ config ZRAM_MEMORY_TRACKING
 	  /sys/kernel/debug/zram/zramX/block_state.
 
 	  See Documentation/blockdev/zram.txt for more information.
-	
-#ifdef VENDOR_EDIT
-config OPPO_ZRAM_OPT
-	bool "oppo zram  optimization"
-	depends on ZRAM
-	default y
-	help
-	oppo zram optimization
-#endif /*VENDOR_EDIT*/

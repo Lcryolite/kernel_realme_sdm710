@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -15,7 +15,7 @@
 #include "ipa_ut_framework.h"
 
 #define IPA_TEST_DMA_WQ_NAME_BUFF_SZ		64
-#define IPA_TEST_DMA_MT_TEST_NUM_WQ		400
+#define IPA_TEST_DMA_MT_TEST_NUM_WQ		200
 #define IPA_TEST_DMA_MEMCPY_BUFF_SIZE		16384
 #define IPA_TEST_DMA_MAX_PKT_SIZE		0xFF00
 #define IPA_DMA_TEST_LOOP_NUM			1000
@@ -545,13 +545,13 @@ static int ipa_test_dma_sync_memcpy(void *priv)
 }
 
 /**
-* TEST: Small sync memory copy
-*
-*	1. dma enable
-*	2. small sync memcpy
-*	3. small sync memcpy
-*	4. dma disable
-*/
+ * TEST: Small sync memory copy
+ *
+ *	1. dma enable
+ *	2. small sync memcpy
+ *	3. small sync memcpy
+ *	4. dma disable
+ */
 static int ipa_test_dma_sync_memcpy_small(void *priv)
 {
 	int rc;

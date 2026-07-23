@@ -57,14 +57,13 @@ static int sp887x_writereg (struct sp887x_state* state, u16 reg, u16 data)
 	int ret;
 
 	if ((ret = i2c_transfer(state->i2c, &msg, 1)) != 1) {
-		/**
+		/*
 		 *  in case of soft reset we ignore ACK errors...
 		 */
 		if (!(reg == 0xf1a && data == 0x000 &&
 			(ret == -EREMOTEIO || ret == -EFAULT)))
 		{
-			printk("%s: writereg error "
-			       "(reg %03x, data %03x, ret == %i)\n",
+			printk("%s: writereg error (reg %03x, data %03x, ret == %i)\n",
 			       __func__, reg & 0xffff, data & 0xffff, ret);
 			return ret;
 		}
@@ -131,7 +130,7 @@ static void sp887x_setup_agc (struct sp887x_state* state)
 
 #define BLOCKSIZE 30
 #define FW_SIZE 0x4000
-/**
+/*
  *  load firmware and setup MPEG interface...
  */
 static int sp887x_initial_setup (struct dvb_frontend* fe, const struct firmware *fw)
@@ -280,7 +279,7 @@ static int configure_reg0xc05(struct dtv_frontend_properties *p, u16 *reg0xc05)
 	return 0;
 }
 
-/**
+/*
  *  estimates division of two 24bit numbers,
  *  derived from the ves1820/stv0299 driver code
  */
@@ -562,7 +561,7 @@ static void sp887x_release(struct dvb_frontend* fe)
 	kfree(state);
 }
 
-static struct dvb_frontend_ops sp887x_ops;
+static const struct dvb_frontend_ops sp887x_ops;
 
 struct dvb_frontend* sp887x_attach(const struct sp887x_config* config,
 				   struct i2c_adapter* i2c)
@@ -591,7 +590,7 @@ error:
 	return NULL;
 }
 
-static struct dvb_frontend_ops sp887x_ops = {
+static const struct dvb_frontend_ops sp887x_ops = {
 	.delsys = { SYS_DVBT },
 	.info = {
 		.name = "Spase SP887x DVB-T",
@@ -626,4 +625,4 @@ MODULE_PARM_DESC(debug, "Turn on/off frontend debugging (default:off).");
 MODULE_DESCRIPTION("Spase sp887x DVB-T demodulator driver");
 MODULE_LICENSE("GPL");
 
-EXPORT_SYMBOL(sp887x_attach);
+EXPORT_SYMBOL_GPL(sp887x_attach);

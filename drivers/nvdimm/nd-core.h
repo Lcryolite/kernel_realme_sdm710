@@ -1,14 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright(c) 2013-2015 Intel Corporation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of version 2 of the GNU General Public License as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
  */
 #ifndef __ND_CORE_H__
 #define __ND_CORE_H__
@@ -32,6 +24,7 @@ struct nvdimm_bus {
 	struct list_head poison_list;
 	struct list_head mapping_list;
 	struct mutex reconfig_mutex;
+	spinlock_t poison_lock;
 };
 
 struct nvdimm {
@@ -63,7 +56,16 @@ struct blk_alloc_info {
 
 bool is_nvdimm(struct device *dev);
 bool is_nd_pmem(struct device *dev);
+bool is_nd_volatile(struct device *dev);
 bool is_nd_blk(struct device *dev);
+static inline bool is_nd_region(struct device *dev)
+{
+	return is_nd_pmem(dev) || is_nd_blk(dev) || is_nd_volatile(dev);
+}
+static inline bool is_memory(struct device *dev)
+{
+	return is_nd_pmem(dev) || is_nd_volatile(dev);
+}
 struct nvdimm_bus *walk_to_nvdimm_bus(struct device *nd_dev);
 int __init nvdimm_bus_init(void);
 void nvdimm_bus_exit(void);
@@ -95,6 +97,8 @@ resource_size_t nd_pmem_available_dpa(struct nd_region *nd_region,
 		struct nd_mapping *nd_mapping, resource_size_t *overlap);
 resource_size_t nd_blk_available_dpa(struct nd_region *nd_region);
 resource_size_t nd_region_available_dpa(struct nd_region *nd_region);
+int nd_region_conflict(struct nd_region *nd_region, resource_size_t start,
+		resource_size_t size);
 resource_size_t nvdimm_allocated_dpa(struct nvdimm_drvdata *ndd,
 		struct nd_label_id *label_id);
 int alias_dpa_busy(struct device *dev, void *data);

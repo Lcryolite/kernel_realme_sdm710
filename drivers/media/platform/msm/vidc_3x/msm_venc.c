@@ -1,4 +1,5 @@
-/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+/*
+ * Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -8,7 +9,6 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
  */
 #include <linux/slab.h>
 #include "msm_vidc_internal.h"
@@ -715,14 +715,14 @@ static struct msm_vidc_ctrl msm_venc_ctrls[] = {
 		.name = "Intra Refresh Mode",
 		.type = V4L2_CTRL_TYPE_MENU,
 		.minimum = V4L2_CID_MPEG_VIDC_VIDEO_INTRA_REFRESH_NONE,
-		.maximum = V4L2_CID_MPEG_VIDC_VIDEO_INTRA_REFRESH_RANDOM,
+		.maximum = V4L2_CID_MPEG_VIDC_VIDEO_INTRA_REFRESH_RANDOMMODE,
 		.default_value = V4L2_CID_MPEG_VIDC_VIDEO_INTRA_REFRESH_NONE,
 		.menu_skip_mask = ~(
 		(1 << V4L2_CID_MPEG_VIDC_VIDEO_INTRA_REFRESH_NONE) |
 		(1 << V4L2_CID_MPEG_VIDC_VIDEO_INTRA_REFRESH_CYCLIC) |
 		(1 << V4L2_CID_MPEG_VIDC_VIDEO_INTRA_REFRESH_ADAPTIVE) |
 		(1 << V4L2_CID_MPEG_VIDC_VIDEO_INTRA_REFRESH_CYCLIC_ADAPTIVE) |
-		(1 << V4L2_CID_MPEG_VIDC_VIDEO_INTRA_REFRESH_RANDOM)
+		(1 << V4L2_CID_MPEG_VIDC_VIDEO_INTRA_REFRESH_RANDOMMODE)
 		),
 		.qmenu = intra_refresh_modes,
 	},
@@ -823,14 +823,14 @@ static struct msm_vidc_ctrl msm_venc_ctrls[] = {
 		.name = "Extradata Type",
 		.type = V4L2_CTRL_TYPE_MENU,
 		.minimum = V4L2_MPEG_VIDC_EXTRADATA_NONE,
-		.maximum = V4L2_MPEG_VIDC_EXTRADATA_ENC_FRAME_QP,
+		.maximum = V4L2_MPEG_VIDC_EXTRADATA_YUV_STATS,
 		.default_value = V4L2_MPEG_VIDC_EXTRADATA_NONE,
 		.menu_skip_mask = ~(
 			(1 << V4L2_MPEG_VIDC_EXTRADATA_NONE) |
 			(1 << V4L2_MPEG_VIDC_EXTRADATA_MB_QUANTIZATION) |
 			(1 << V4L2_MPEG_VIDC_EXTRADATA_INTERLACE_VIDEO) |
 			(1 << V4L2_MPEG_VIDC_EXTRADATA_VC1_FRAMEDISP) |
-			(1 << V4L2_MPEG_VIDC_EXTRADATA_VC1_SEQDISP) |
+			(1ULL << V4L2_MPEG_VIDC_EXTRADATA_VC1_SEQDISP) |
 			(1 << V4L2_MPEG_VIDC_EXTRADATA_TIMESTAMP) |
 			(1 << V4L2_MPEG_VIDC_EXTRADATA_S3D_FRAME_PACKING) |
 			(1 << V4L2_MPEG_VIDC_EXTRADATA_FRAME_RATE) |
@@ -844,7 +844,7 @@ static struct msm_vidc_ctrl msm_venc_ctrls[] = {
 			(1 << V4L2_MPEG_VIDC_EXTRADATA_ASPECT_RATIO) |
 			(1 << V4L2_MPEG_VIDC_EXTRADATA_LTR) |
 			(1 << V4L2_MPEG_VIDC_EXTRADATA_METADATA_MBI) |
-			(1 << V4L2_MPEG_VIDC_EXTRADATA_YUV_STATS)|
+			(1ULL << V4L2_MPEG_VIDC_EXTRADATA_YUV_STATS)|
 			(1 << V4L2_MPEG_VIDC_EXTRADATA_ROI_QP) |
 			(1 << V4L2_MPEG_VIDC_EXTRADATA_PQ_INFO) |
 			(1ULL << V4L2_MPEG_VIDC_EXTRADATA_ENC_FRAME_QP)
@@ -1696,8 +1696,8 @@ static int msm_venc_queue_setup(struct vb2_queue *q,
 		*num_planes = 1;
 
 		*num_buffers = inst->buff_req.buffer[0].buffer_count_actual =
-			max(*num_buffers, inst->buff_req.buffer[0].
-				buffer_count_min);
+			max(*num_buffers,
+				 inst->buff_req.buffer[0].buffer_count_min);
 
 		temp = *num_buffers;
 
@@ -2286,7 +2286,7 @@ static inline int venc_v4l2_to_hal(int id, int value)
 			return HAL_INTRA_REFRESH_NONE;
 		case V4L2_CID_MPEG_VIDC_VIDEO_INTRA_REFRESH_CYCLIC:
 			return HAL_INTRA_REFRESH_CYCLIC;
-		case V4L2_CID_MPEG_VIDC_VIDEO_INTRA_REFRESH_RANDOM:
+		case V4L2_CID_MPEG_VIDC_VIDEO_INTRA_REFRESH_RANDOMMODE:
 			return HAL_INTRA_REFRESH_RANDOM;
 		case V4L2_CID_MPEG_VIDC_VIDEO_INTRA_REFRESH_ADAPTIVE:
 			return HAL_INTRA_REFRESH_ADAPTIVE;
@@ -3640,18 +3640,11 @@ static int try_set_ctrl(struct msm_vidc_inst *inst, struct v4l2_ctrl *ctrl)
 		}
 		break;
 	case V4L2_CID_MPEG_VIDC_VIDEO_OPERATING_RATE:
-		if ((ctrl->val >> 16) < inst->capability.frame_rate.min ||
-			 (ctrl->val >> 16) > inst->capability.frame_rate.max) {
-			dprintk(VIDC_ERR, "Invalid operating rate %u\n",
-				(ctrl->val >> 16));
-			rc = -ENOTSUPP;
-		} else {
-			dprintk(VIDC_DBG,
-				"inst(%pK) operating rate changed from %d to %d\n",
-				inst, inst->prop.operating_rate >> 16,
-					ctrl->val >> 16);
-			inst->prop.operating_rate = ctrl->val;
-		}
+		dprintk(VIDC_DBG,
+			"inst(%pK) operating rate changed from %d to %d\n",
+			inst, inst->prop.operating_rate >> 16,
+				ctrl->val >> 16);
+		inst->prop.operating_rate = ctrl->val;
 		break;
 	case V4L2_CID_MPEG_VIDC_VIDEO_VENC_BITRATE_TYPE:
 	{

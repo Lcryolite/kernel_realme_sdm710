@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -215,7 +215,6 @@ static int msm_isp_prepare_v4l2_buf(struct msm_isp_buf_mgr *buf_mgr,
 			ret = cam_smmu_get_stage2_phy_addr(buf_mgr->iommu_hdl,
 					mapped_info->buf_fd,
 					CAM_SMMU_MAP_RW,
-					buf_mgr->client,
 					&(mapped_info->paddr),
 					&(mapped_info->len));
 		else
@@ -304,7 +303,6 @@ static int msm_isp_map_buf(struct msm_isp_buf_mgr *buf_mgr,
 		ret = cam_smmu_get_stage2_phy_addr(buf_mgr->iommu_hdl,
 				fd,
 				CAM_SMMU_MAP_RW,
-				buf_mgr->client,
 				&(mapped_info->paddr),
 				&(mapped_info->len));
 	else
@@ -676,6 +674,10 @@ static int msm_isp_put_buf_unsafe(struct msm_isp_buf_mgr *buf_mgr,
 		rc = 0;
 		break;
 	case MSM_ISP_BUFFER_STATE_QUEUED:
+		if (IS_ENABLED(CONFIG_MSM_ISP_V1)) {
+			rc = 0;
+			break;
+		}
 	case MSM_ISP_BUFFER_STATE_DIVERTED:
 	default:
 		WARN(1, "%s: bufq 0x%x, buf idx 0x%x, incorrect state = %d",
@@ -752,6 +754,62 @@ static int msm_isp_buf_divert(struct msm_isp_buf_mgr *buf_mgr,
 	spin_unlock_irqrestore(&bufq->bufq_lock, flags);
 	return 0;
 }
+
+static int msm_isp_buf_err(struct msm_isp_buf_mgr *buf_mgr,
+	uint32_t bufq_handle, uint32_t buf_index,
+	struct timeval *tv, uint32_t frame_id, uint32_t output_format)
+{
+	int rc = 0;
+	unsigned long flags;
+	struct msm_isp_bufq *bufq = NULL;
+	struct msm_isp_buffer *buf_info = NULL;
+	enum msm_isp_buffer_state state;
+
+	bufq = msm_isp_get_bufq(buf_mgr, bufq_handle);
+	if (!bufq) {
+		pr_err("Invalid bufq\n");
+		return -EINVAL;
+	}
+
+	buf_info = msm_isp_get_buf_ptr(buf_mgr, bufq_handle, buf_index);
+	if (!buf_info) {
+		pr_err("%s: buf not found\n", __func__);
+		return -EINVAL;
+	}
+
+	spin_lock_irqsave(&bufq->bufq_lock, flags);
+	state = buf_info->state;
+
+	if (BUF_SRC(bufq->stream_id) == MSM_ISP_BUFFER_SRC_HAL) {
+		if (state == MSM_ISP_BUFFER_STATE_DEQUEUED) {
+			buf_info->state = MSM_ISP_BUFFER_STATE_DISPATCHED;
+			spin_unlock_irqrestore(&bufq->bufq_lock, flags);
+			buf_mgr->vb2_ops->buf_error(buf_info->vb2_v4l2_buf,
+				bufq->session_id, bufq->stream_id,
+				frame_id, tv, output_format);
+		} else {
+			spin_unlock_irqrestore(&bufq->bufq_lock, flags);
+		}
+		goto done;
+	}
+
+	/*
+	 * For native buffer put the diverted buffer back to queue since caller
+	 * is not going to send it to CPP, this is error case like
+	 * drop_frame/empty_buffer
+	 */
+	if (state == MSM_ISP_BUFFER_STATE_DIVERTED) {
+		buf_info->state = MSM_ISP_BUFFER_STATE_PREPARED;
+		rc = msm_isp_put_buf_unsafe(buf_mgr, buf_info->bufq_handle,
+			buf_info->buf_idx);
+		if (rc < 0)
+			pr_err("%s: Buf put failed\n", __func__);
+	}
+	spin_unlock_irqrestore(&bufq->bufq_lock, flags);
+done:
+	return rc;
+}
+
 
 static int msm_isp_buf_done(struct msm_isp_buf_mgr *buf_mgr,
 	uint32_t bufq_handle, uint32_t buf_index,
@@ -1105,7 +1163,7 @@ static int msm_isp_buf_put_scratch(struct msm_isp_buf_mgr *buf_mgr)
 
 	if (buf_mgr->secure_enable == SECURE_MODE) {
 		rc = cam_smmu_free_stage2_scratch_mem(buf_mgr->iommu_hdl,
-				buf_mgr->client, buf_mgr->sc_handle);
+				buf_mgr->dmabuf);
 		if (buf_mgr->scratch_buf_stats_addr)
 			rc = cam_smmu_put_phy_addr_scratch(buf_mgr->iommu_hdl,
 				buf_mgr->scratch_buf_stats_addr);
@@ -1147,8 +1205,7 @@ static int msm_isp_buf_get_scratch(struct msm_isp_buf_mgr *buf_mgr)
 	if (buf_mgr->secure_enable == SECURE_MODE) {
 		rc = cam_smmu_alloc_get_stage2_scratch_mem(buf_mgr->iommu_hdl,
 				CAM_SMMU_MAP_RW,
-				buf_mgr->client,
-				&buf_mgr->sc_handle,
+				&buf_mgr->dmabuf,
 				&buf_mgr->scratch_buf_addr,
 				&range);
 		if (rc)
@@ -1261,8 +1318,6 @@ static int msm_isp_init_isp_buf_mgr(struct msm_isp_buf_mgr *buf_mgr,
 
 	buf_mgr->pagefault_debug_disable = 0;
 	buf_mgr->frameId_mismatch_recovery = 0;
-	/* create ION client */
-	buf_mgr->client = msm_ion_client_create("vfe");
 get_handle_error:
 	mutex_unlock(&buf_mgr->lock);
 	return 0;
@@ -1295,10 +1350,6 @@ static int msm_isp_deinit_isp_buf_mgr(
 	buf_mgr->attach_ref_cnt = 0;
 	buf_mgr->secure_enable = 0;
 	buf_mgr->attach_ref_cnt = 0;
-	if (buf_mgr->client) {
-		ion_client_destroy(buf_mgr->client);
-		buf_mgr->client = NULL;
-	}
 	mutex_unlock(&buf_mgr->lock);
 	return 0;
 }
@@ -1396,8 +1447,8 @@ static int msm_isp_buf_mgr_debug(struct msm_isp_buf_mgr *buf_mgr,
 				continue;
 
 			for (k = 0; k < bufs->num_planes; k++) {
-				start_addr = bufs->
-						mapped_info[k].paddr;
+				start_addr =
+					bufs->mapped_info[k].paddr;
 				end_addr = bufs->mapped_info[k].paddr +
 					bufs->mapped_info[k].len - 1;
 				temp_delta = fault_addr - start_addr;
@@ -1433,10 +1484,8 @@ static int msm_isp_buf_mgr_debug(struct msm_isp_buf_mgr *buf_mgr,
 
 	if (BUF_DEBUG_FULL) {
 		print_buf = kzalloc(print_buf_size, GFP_ATOMIC);
-		if (!print_buf) {
-			pr_err("%s failed: No memory", __func__);
+		if (!print_buf)
 			return -ENOMEM;
-		}
 		snprintf(print_buf, print_buf_size, "%s\n", __func__);
 		for (i = 0; i < BUF_MGR_NUM_BUF_Q; i++) {
 			if (i % 2 == 0 && i > 0) {
@@ -1452,21 +1501,30 @@ static int msm_isp_buf_mgr_debug(struct msm_isp_buf_mgr *buf_mgr,
 				strlcat(print_buf, temp_buf, print_buf_size);
 				for (j = 0; j < buf_mgr->bufq[i].num_bufs;
 					j++) {
-					bufs = &buf_mgr->bufq[i].bufs[j];
+					bufs =
+						&buf_mgr->bufq[i].bufs[j];
 					if (!bufs)
 						break;
 
 					for (k = 0; k < bufs->num_planes; k++) {
-						start_addr = bufs->
-							mapped_info[k].paddr;
-						end_addr = bufs->mapped_info[k].
-							paddr + bufs->
-							mapped_info[k].len;
+						start_addr =
+							bufs->mapped_info[
+							k].paddr;
+						end_addr =
+							bufs->mapped_info[
+							k].paddr +
+							bufs->mapped_info[
+							k].len;
 						snprintf(temp_buf,
 							sizeof(temp_buf),
-							" buf %d plane %d start_addr %pK end_addr %pK\n",
-							j, k,
-							(void *)start_addr,
+							"buf%d plane%d", j, k);
+						snprintf(temp_buf,
+							sizeof(temp_buf),
+							"start_addr %pK",
+							(void *)start_addr);
+						snprintf(temp_buf,
+							sizeof(temp_buf),
+							"end_addr %pK\n",
 							(void *)end_addr);
 						strlcat(print_buf, temp_buf,
 							print_buf_size);
@@ -1501,6 +1559,7 @@ static struct msm_isp_buf_ops isp_buf_ops = {
 	.buf_mgr_debug = msm_isp_buf_mgr_debug,
 	.get_bufq = msm_isp_get_bufq,
 	.buf_divert = msm_isp_buf_divert,
+	.buf_err = msm_isp_buf_err,
 };
 
 int msm_isp_create_isp_buf_mgr(

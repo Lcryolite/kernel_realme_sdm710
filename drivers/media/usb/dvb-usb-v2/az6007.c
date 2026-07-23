@@ -208,9 +208,10 @@ static int az6007_rc_query(struct dvb_usb_device *d)
 {
 	struct az6007_device_state *st = d_to_priv(d);
 	unsigned code;
-	enum rc_type proto;
+	enum rc_proto proto;
 
-	az6007_read(d, AZ6007_READ_IR, 0, 0, st->data, 10);
+	if (az6007_read(d, AZ6007_READ_IR, 0, 0, st->data, 10) < 0)
+		return -EIO;
 
 	if (st->data[1] == 0x44)
 		return 0;
@@ -218,18 +219,18 @@ static int az6007_rc_query(struct dvb_usb_device *d)
 	if ((st->data[3] ^ st->data[4]) == 0xff) {
 		if ((st->data[1] ^ st->data[2]) == 0xff) {
 			code = RC_SCANCODE_NEC(st->data[1], st->data[3]);
-			proto = RC_TYPE_NEC;
+			proto = RC_PROTO_NEC;
 		} else {
 			code = RC_SCANCODE_NECX(st->data[1] << 8 | st->data[2],
 						st->data[3]);
-			proto = RC_TYPE_NECX;
+			proto = RC_PROTO_NECX;
 		}
 	} else {
 		code = RC_SCANCODE_NEC32(st->data[1] << 24 |
 					 st->data[2] << 16 |
 					 st->data[3] << 8  |
 					 st->data[4]);
-		proto = RC_TYPE_NEC32;
+		proto = RC_PROTO_NEC32;
 	}
 
 	rc_keydown(d->rc_dev, proto, code, st->data[5]);
@@ -241,7 +242,8 @@ static int az6007_get_rc_config(struct dvb_usb_device *d, struct dvb_usb_rc *rc)
 {
 	pr_debug("Getting az6007 Remote Control properties\n");
 
-	rc->allowed_protos = RC_BIT_NEC | RC_BIT_NECX | RC_BIT_NEC32;
+	rc->allowed_protos = RC_PROTO_BIT_NEC | RC_PROTO_BIT_NECX |
+						RC_PROTO_BIT_NEC32;
 	rc->query          = az6007_rc_query;
 	rc->interval       = 400;
 
@@ -794,6 +796,10 @@ static int az6007_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[],
 			if (az6007_xfer_debug)
 				printk(KERN_DEBUG "az6007: I2C W addr=0x%x len=%d\n",
 				       addr, msgs[i].len);
+			if (msgs[i].len < 1) {
+				ret = -EIO;
+				goto err;
+			}
 			req = AZ6007_I2C_WR;
 			index = msgs[i].buf[0];
 			value = addr | (1 << 8);
@@ -808,6 +814,10 @@ static int az6007_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[],
 			if (az6007_xfer_debug)
 				printk(KERN_DEBUG "az6007: I2C R addr=0x%x len=%d\n",
 				       addr, msgs[i].len);
+			if (msgs[i].len < 1) {
+				ret = -EIO;
+				goto err;
+			}
 			req = AZ6007_I2C_RD;
 			index = msgs[i].buf[0];
 			value = addr;
@@ -933,7 +943,7 @@ static struct dvb_usb_device_properties az6007_cablestar_hdci_props = {
 	}
 };
 
-static struct usb_device_id az6007_usb_table[] = {
+static const struct usb_device_id az6007_usb_table[] = {
 	{DVB_USB_DEVICE(USB_VID_AZUREWAVE, USB_PID_AZUREWAVE_6007,
 		&az6007_props, "Azurewave 6007", RC_MAP_EMPTY)},
 	{DVB_USB_DEVICE(USB_VID_TERRATEC, USB_PID_TERRATEC_H7,

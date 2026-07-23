@@ -1,3 +1,15 @@
+/* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ */
+
 #ifndef __LINUX_MSM_CAM_SENSOR_H
 #define __LINUX_MSM_CAM_SENSOR_H
 
@@ -5,6 +17,8 @@
 #include <uapi/media/msm_camsensor_sdk.h>
 
 #include <linux/compat.h>
+
+#define SECURE_CAM_RST_MODULES
 
 #ifdef CONFIG_COMPAT
 
@@ -71,7 +85,15 @@ struct msm_camera_csid_params32 {
 	uint8_t phy_sel;
 	uint32_t csi_clk;
 	struct msm_camera_csid_lut_params32 lut_params;
-	uint8_t csi_3p_sel;
+	union {
+		struct {
+			u8 csi_3p_sel;
+			u8 is_secure;
+			u8 is_streamon;
+			u8 reserved;
+		};
+		u32 topology;
+	};
 };
 
 struct msm_camera_csi2_params32 {

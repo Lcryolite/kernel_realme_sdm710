@@ -1,4 +1,4 @@
-/* Copyright (c) 2017-2018, 2020 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -13,22 +13,6 @@
 #include <linux/debugfs.h>
 #include "ipa_pm.h"
 #include "ipa_i.h"
-
-static const char *client_state_to_str[IPA_PM_STATE_MAX] = {
-	__stringify(IPA_PM_DEACTIVATED),
-	__stringify(IPA_PM_DEACTIVATE_IN_PROGRESS),
-	__stringify(IPA_PM_ACTIVATE_IN_PROGRESS),
-	__stringify(IPA_PM_ACTIVATED),
-	__stringify(IPA_PM_ACTIVATED_PENDING_DEACTIVATION),
-	__stringify(IPA_PM_ACTIVATED_TIMER_SET),
-	__stringify(IPA_PM_ACTIVATED_PENDING_RESCHEDULE),
-};
-
-static const char *ipa_pm_group_to_str[IPA_PM_GROUP_MAX] = {
-	__stringify(IPA_PM_GROUP_DEFAULT),
-	__stringify(IPA_PM_GROUP_APPS),
-	__stringify(IPA_PM_GROUP_MODEM),
-};
 
 
 #define IPA_PM_DRV_NAME "ipa_pm"
@@ -130,6 +114,7 @@ enum ipa_pm_state {
 	IPA_PM_ACTIVATED_PENDING_DEACTIVATION,
 	IPA_PM_ACTIVATED_TIMER_SET,
 	IPA_PM_ACTIVATED_PENDING_RESCHEDULE,
+	IPA_PM_STATE_MAX
 };
 
 #define IPA_PM_STATE_ACTIVE(state) \
@@ -195,6 +180,24 @@ struct ipa_pm_ctx {
 };
 
 static struct ipa_pm_ctx *ipa_pm_ctx;
+
+static const char *client_state_to_str[IPA_PM_STATE_MAX] = {
+	__stringify(IPA_PM_DEACTIVATED),
+	__stringify(IPA_PM_DEACTIVATE_IN_PROGRESS),
+	__stringify(IPA_PM_ACTIVATE_IN_PROGRESS),
+	__stringify(IPA_PM_ACTIVATED),
+	__stringify(IPA_PM_ACTIVATED_PENDING_DEACTIVATION),
+	__stringify(IPA_PM_ACTIVATED_TIMER_SET),
+	__stringify(IPA_PM_ACTIVATED_PENDING_RESCHEDULE),
+};
+
+static const char *ipa_pm_group_to_str[IPA_PM_GROUP_MAX] = {
+	__stringify(IPA_PM_GROUP_DEFAULT),
+	__stringify(IPA_PM_GROUP_APPS),
+	__stringify(IPA_PM_GROUP_MODEM),
+};
+
+static int dummy_hdl_1, dummy_hdl_2, tput_modem, tput_apps;
 
 /**
  * pop_max_from_array() -pop the max and move the last element to where the
@@ -351,6 +354,11 @@ static int do_clk_scaling(void)
 	int new_th_idx = 1;
 	struct clk_scaling_db *clk_scaling;
 
+	if (atomic_read(&ipa3_ctx->ipa_clk_vote) == 0) {
+		IPA_PM_DBG("IPA clock is gated\n");
+		return 0;
+	}
+
 	clk_scaling = &ipa_pm_ctx->clk_scaling;
 
 	mutex_lock(&ipa_pm_ctx->client_mutex);
@@ -362,7 +370,7 @@ static int do_clk_scaling(void)
 	mutex_unlock(&ipa_pm_ctx->client_mutex);
 
 	for (i = 0; i < clk_scaling->threshold_size; i++) {
-		if (tput > clk_scaling->current_threshold[i])
+		if (tput >= clk_scaling->current_threshold[i])
 			new_th_idx++;
 	}
 
@@ -453,6 +461,7 @@ static void delayed_deferred_deactivate_work_func(struct work_struct *work)
 	struct delayed_work *dwork;
 	struct ipa_pm_client *client;
 	unsigned long flags;
+	unsigned long delay;
 
 	dwork = container_of(work, struct delayed_work, work);
 	client = container_of(dwork, struct ipa_pm_client, deactivate_work);
@@ -464,8 +473,13 @@ static void delayed_deferred_deactivate_work_func(struct work_struct *work)
 		client->state = IPA_PM_ACTIVATED;
 		goto bail;
 	case IPA_PM_ACTIVATED_PENDING_RESCHEDULE:
+		delay = IPA_PM_DEFERRED_TIMEOUT;
+		if (ipa3_ctx->ipa3_hw_mode == IPA_HW_MODE_VIRTUAL ||
+			ipa3_ctx->ipa3_hw_mode == IPA_HW_MODE_EMULATION)
+			delay *= 5;
+
 		queue_delayed_work(ipa_pm_ctx->wq, &client->deactivate_work,
-			msecs_to_jiffies(IPA_PM_DEFERRED_TIMEOUT));
+			msecs_to_jiffies(delay));
 		client->state = IPA_PM_ACTIVATED_PENDING_DEACTIVATION;
 		goto bail;
 	case IPA_PM_ACTIVATED_PENDING_DEACTIVATION:
@@ -521,15 +535,19 @@ static int find_next_open_array_element(const char *name)
  */
 static int add_client_to_exception_list(u32 hdl)
 {
-	int i;
+	int i, len = 0;
 	struct ipa_pm_exception_list *exception;
 
 	mutex_lock(&ipa_pm_ctx->client_mutex);
+	len = strlen(ipa_pm_ctx->clients[hdl]->name);
 	for (i = 0; i < ipa_pm_ctx->clk_scaling.exception_size; i++) {
 		exception = &ipa_pm_ctx->clk_scaling.exception_list[i];
 		if (strnstr(exception->clients, ipa_pm_ctx->clients[hdl]->name,
-			strlen(exception->clients))) {
+			len) && (strlen(exception->clients)
+			== len)) {
 			exception->pending--;
+			IPA_PM_DBG("Pending: %d\n",
+			exception->pending);
 
 			if (exception->pending < 0) {
 				WARN_ON(1);
@@ -563,6 +581,8 @@ static int remove_client_from_exception_list(u32 hdl)
 		exception = &ipa_pm_ctx->clk_scaling.exception_list[i];
 		if (exception->bitmask & (1 << hdl)) {
 			exception->pending++;
+			IPA_PM_DBG("Pending: %d\n",
+			exception->pending);
 			exception->bitmask &= ~(1 << hdl);
 		}
 	}
@@ -647,9 +667,10 @@ int ipa_pm_init(struct ipa_pm_init_params *params)
 				clk_scaling->exception_list[i].pending++;
 		}
 
+		/* for the first client */
 		clk_scaling->exception_list[i].pending++;
-		IPA_PM_DBG("Pending: %d\n", clk_scaling->
-			exception_list[i].pending);
+		IPA_PM_DBG("Pending: %d\n",
+			clk_scaling->exception_list[i].pending);
 
 		/* populate the threshold */
 		for (j = 0; j < params->threshold_size; j++) {
@@ -744,6 +765,8 @@ int ipa_pm_register(struct ipa_pm_register_params *params, u32 *hdl)
 	client->skip_clk_vote = params->skip_clk_vote;
 	wlock = &client->wlock;
 	wakeup_source_init(wlock, client->name);
+
+	init_completion(&client->complete);
 
 	/* add client to exception list */
 	if (add_client_to_exception_list(*hdl)) {
@@ -843,9 +866,13 @@ int ipa_pm_associate_ipa_cons_to_client(u32 hdl, enum ipa_client_type consumer)
 	}
 
 	mutex_lock(&ipa_pm_ctx->client_mutex);
-	idx = ipa_get_ep_mapping(consumer);
+	if (ipa_pm_ctx->clients[hdl] == NULL) {
+		mutex_unlock(&ipa_pm_ctx->client_mutex);
+		IPA_PM_ERR("Client is NULL\n");
+		return -EPERM;
+	}
 
-	IPA_PM_DBG("Mapping pipe %d to client %d\n", idx, hdl);
+	idx = ipa_get_ep_mapping(consumer);
 
 	if (idx < 0) {
 		mutex_unlock(&ipa_pm_ctx->client_mutex);
@@ -853,11 +880,7 @@ int ipa_pm_associate_ipa_cons_to_client(u32 hdl, enum ipa_client_type consumer)
 		return 0;
 	}
 
-	if (ipa_pm_ctx->clients[hdl] == NULL) {
-		mutex_unlock(&ipa_pm_ctx->client_mutex);
-		IPA_PM_ERR("Client is NULL\n");
-		return -EPERM;
-	}
+	IPA_PM_DBG("Mapping pipe %d to client %d\n", idx, hdl);
 
 	if (ipa_pm_ctx->clients_by_pipe[idx] != NULL) {
 		mutex_unlock(&ipa_pm_ctx->client_mutex);
@@ -939,7 +962,7 @@ static int ipa_pm_activate_helper(struct ipa_pm_client *client, bool sync)
 	}
 
 	client->state = IPA_PM_ACTIVATE_IN_PROGRESS;
-	init_completion(&client->complete);
+	reinit_completion(&client->complete);
 	queue_work(ipa_pm_ctx->wq, &client->activate_work);
 	spin_unlock_irqrestore(&client->state_lock, flags);
 	IPA_PM_DBG_STATE(client->hdl, client->name, client->state);
@@ -1002,6 +1025,7 @@ int ipa_pm_deferred_deactivate(u32 hdl)
 {
 	struct ipa_pm_client *client;
 	unsigned long flags;
+	unsigned long delay;
 
 	if (ipa_pm_ctx == NULL) {
 		IPA_PM_ERR("PM_ctx is null\n");
@@ -1025,9 +1049,14 @@ int ipa_pm_deferred_deactivate(u32 hdl)
 		spin_unlock_irqrestore(&client->state_lock, flags);
 		return 0;
 	case IPA_PM_ACTIVATED:
+		delay = IPA_PM_DEFERRED_TIMEOUT;
+		if (ipa3_ctx->ipa3_hw_mode == IPA_HW_MODE_VIRTUAL ||
+			ipa3_ctx->ipa3_hw_mode == IPA_HW_MODE_EMULATION)
+			delay *= 5;
+
 		client->state = IPA_PM_ACTIVATED_PENDING_DEACTIVATION;
 		queue_delayed_work(ipa_pm_ctx->wq, &client->deactivate_work,
-			msecs_to_jiffies(IPA_PM_DEFERRED_TIMEOUT));
+			msecs_to_jiffies(delay));
 		break;
 	case IPA_PM_ACTIVATED_TIMER_SET:
 	case IPA_PM_ACTIVATED_PENDING_DEACTIVATION:
@@ -1035,6 +1064,11 @@ int ipa_pm_deferred_deactivate(u32 hdl)
 	case IPA_PM_DEACTIVATE_IN_PROGRESS:
 	case IPA_PM_ACTIVATED_PENDING_RESCHEDULE:
 		break;
+	case IPA_PM_STATE_MAX:
+	default:
+		IPA_PM_ERR("Bad State");
+		spin_unlock_irqrestore(&client->state_lock, flags);
+		return -EINVAL;
 	}
 	IPA_PM_DBG_STATE(hdl, client->name, client->state);
 	spin_unlock_irqrestore(&client->state_lock, flags);
@@ -1204,14 +1238,14 @@ int ipa_pm_handle_suspend(u32 pipe_bitmask)
 }
 
 /**
- * ipa_pm_set_perf_profile(): Adds/changes the throughput requirement to IPA PM
+ * ipa_pm_set_throughput(): Adds/changes the throughput requirement to IPA PM
  * to be used for clock scaling
  * @hdl: index of the client in the array
  * @throughput: the new throughput value to be set for that client
  *
  * Returns: 0 on success, negative on failure
  */
-int ipa_pm_set_perf_profile(u32 hdl, int throughput)
+int ipa_pm_set_throughput(u32 hdl, int throughput)
 {
 	struct ipa_pm_client *client;
 	unsigned long flags;
@@ -1260,6 +1294,14 @@ int ipa_pm_set_perf_profile(u32 hdl, int throughput)
 	}
 
 	return 0;
+}
+
+void ipa_pm_set_clock_index(int index)
+{
+	if (ipa_pm_ctx && index >= 0)
+		ipa_pm_ctx->clk_scaling.cur_vote = index;
+
+	IPA_PM_DBG("Setting pm clock vote to %d\n", index);
 }
 
 /**
@@ -1343,7 +1385,7 @@ int ipa_pm_stat(char *buf, int size)
  * ipa_pm_exceptions_stat() - print PM exceptions stat
  * @buf: [in] The user buff used to print
  * @size: [in] The size of buf
- * Returns: number of bytes used on success, negative on failure
+ * Returns: 0 on success, negative on failure
  *
  * This function is called by ipa_debugfs in order to receive
  * a full picture of the exceptions in the PM
@@ -1385,4 +1427,145 @@ int ipa_pm_exceptions_stat(char *buf, int size)
 	mutex_unlock(&ipa_pm_ctx->client_mutex);
 
 	return cnt;
+}
+
+/**
+ * ipa_pm_add_dummy_clients() - add 2 dummy clients for modem and apps
+ * @power_plan: [in] The power plan for the dummy clients
+ * 0 = SVS (lowest plan), 1 = SVS2, ... etc
+ *
+ * Returns: 0 on success, negative on failure
+ */
+int ipa_pm_add_dummy_clients(s8 power_plan)
+{
+	int rc = 0;
+	int tput;
+	int hdl_1, hdl_2;
+
+	struct ipa_pm_register_params dummy1_params = {
+		.name = "DummyModem",
+		.group = IPA_PM_GROUP_MODEM,
+		.skip_clk_vote = 0,
+		.callback = NULL,
+		.user_data = NULL
+	};
+
+	struct ipa_pm_register_params dummy2_params = {
+		.name = "DummyApps",
+		.group = IPA_PM_GROUP_APPS,
+		.skip_clk_vote = 0,
+		.callback = NULL,
+		.user_data = NULL
+	};
+
+	if (power_plan < 0 ||
+		(power_plan - 1) >= ipa_pm_ctx->clk_scaling.threshold_size) {
+		pr_err("Invalid power plan(%d)\n", power_plan);
+		return -EFAULT;
+	}
+
+	/* 0 is SVS case which is not part of the threshold */
+	if (power_plan == 0)
+		tput = 0;
+	else
+		tput = ipa_pm_ctx->clk_scaling.current_threshold[power_plan-1];
+
+	/*
+	 * register with local handles to prevent overwriting global handles
+	 * in the case of a failure
+	 */
+	rc = ipa_pm_register(&dummy1_params, &hdl_1);
+	if (rc) {
+		pr_err("fail to register client 1 rc = %d\n", rc);
+		return -EFAULT;
+	}
+
+	rc = ipa_pm_register(&dummy2_params, &hdl_2);
+	if (rc) {
+		pr_err("fail to register client 2 rc = %d\n", rc);
+		return -EFAULT;
+	}
+
+	/* replace global handles */
+	dummy_hdl_1 = hdl_1;
+	dummy_hdl_2 = hdl_2;
+
+	/* save the old throughputs for removal */
+	tput_modem = ipa_pm_ctx->group_tput[IPA_PM_GROUP_MODEM];
+	tput_apps = ipa_pm_ctx->group_tput[IPA_PM_GROUP_APPS];
+
+	rc = ipa_pm_set_throughput(dummy_hdl_1, tput);
+	if (rc) {
+		IPAERR("fail to set tput for client 1 rc = %d\n", rc);
+		return -EFAULT;
+	}
+
+	rc = ipa_pm_set_throughput(dummy_hdl_2, tput);
+	if (rc) {
+		IPAERR("fail to set tput for client 2 rc = %d\n", rc);
+		return -EFAULT;
+	}
+
+	rc = ipa_pm_activate_sync(dummy_hdl_1);
+	if (rc) {
+		IPAERR("fail to activate sync for client 1 rc = %d\n", rc);
+		return -EFAULT;
+	}
+
+	rc = ipa_pm_activate_sync(dummy_hdl_2);
+	if (rc) {
+		IPAERR("fail to activate sync for client 2 rc = %d\n", rc);
+		return -EFAULT;
+	}
+
+	return rc;
+}
+
+/**
+ * ipa_pm_remove_dummy_clients() - remove the 2 dummy clients for modem and apps
+ *
+ * Returns: 0 on success, negative on failure
+ */
+int ipa_pm_remove_dummy_clients(void)
+{
+	int rc = 0;
+
+	rc = ipa_pm_deactivate_sync(dummy_hdl_1);
+	if (rc) {
+		IPAERR("fail to deactivate client 1 rc = %d\n", rc);
+		return -EFAULT;
+	}
+
+	rc = ipa_pm_deactivate_sync(dummy_hdl_2);
+	if (rc) {
+		IPAERR("fail to deactivate client 2 rc = %d\n", rc);
+		return -EFAULT;
+	}
+
+	/* reset the modem and apps tputs back to old values */
+	rc = ipa_pm_set_throughput(dummy_hdl_1, tput_modem);
+	if (rc) {
+		IPAERR("fail to reset tput for client 1 rc = %d\n", rc);
+		return -EFAULT;
+	}
+
+	rc = ipa_pm_set_throughput(dummy_hdl_2, tput_apps);
+	if (rc) {
+		IPAERR("fail to reset tput for client 2 rc = %d\n", rc);
+		return -EFAULT;
+	}
+
+	rc = ipa_pm_deregister(dummy_hdl_1);
+	if (rc) {
+		IPAERR("fail to deregister client 1 rc = %d\n", rc);
+		return -EFAULT;
+	}
+
+	rc = ipa_pm_deregister(dummy_hdl_2);
+	if (rc) {
+		IPAERR("fail to deregister client 2 rc = %d\n", rc);
+		return -EFAULT;
+	}
+
+	return rc;
 }

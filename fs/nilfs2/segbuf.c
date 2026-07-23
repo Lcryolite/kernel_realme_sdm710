@@ -110,6 +110,12 @@ int nilfs_segbuf_extend_segsum(struct nilfs_segment_buffer *segbuf)
 	if (unlikely(!bh))
 		return -ENOMEM;
 
+	lock_buffer(bh);
+	if (!buffer_uptodate(bh)) {
+		memset(bh->b_data, 0, bh->b_size);
+		set_buffer_uptodate(bh);
+	}
+	unlock_buffer(bh);
 	nilfs_segbuf_add_segsum_buffer(segbuf, bh);
 	return 0;
 }
@@ -130,7 +136,7 @@ int nilfs_segbuf_extend_payload(struct nilfs_segment_buffer *segbuf,
 }
 
 int nilfs_segbuf_reset(struct nilfs_segment_buffer *segbuf, unsigned int flags,
-		       time_t ctime, __u64 cno)
+		       time64_t ctime, __u64 cno)
 {
 	int err;
 
@@ -338,7 +344,7 @@ static void nilfs_end_bio_write(struct bio *bio)
 {
 	struct nilfs_segment_buffer *segbuf = bio->bi_private;
 
-	if (bio->bi_error)
+	if (bio->bi_status)
 		atomic_inc(&segbuf->sb_err);
 
 	bio_put(bio);
@@ -400,7 +406,7 @@ static struct bio *nilfs_alloc_seg_bio(struct the_nilfs *nilfs, sector_t start,
 			bio = bio_alloc(GFP_NOIO, nr_vecs);
 	}
 	if (likely(bio)) {
-		bio->bi_bdev = nilfs->ns_bdev;
+		bio_set_dev(bio, nilfs->ns_bdev);
 		bio->bi_iter.bi_sector =
 			start << (nilfs->ns_blocksize_bits - 9);
 	}
@@ -514,7 +520,7 @@ static int nilfs_segbuf_wait(struct nilfs_segment_buffer *segbuf)
 	} while (--segbuf->sb_nbio > 0);
 
 	if (unlikely(atomic_read(&segbuf->sb_err) > 0)) {
-		nilfs_msg(segbuf->sb_super, KERN_ERR,
+		nilfs_err(segbuf->sb_super,
 			  "I/O error writing log (start-blocknr=%llu, block-count=%lu) in segment %llu",
 			  (unsigned long long)segbuf->sb_pseg_start,
 			  segbuf->sb_sum.nblocks,

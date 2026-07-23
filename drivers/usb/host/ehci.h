@@ -219,6 +219,7 @@ struct ehci_hcd {			/* one per controller */
 	unsigned		no_selective_suspend:1;
 	unsigned		has_fsl_port_bug:1; /* FreeScale */
 	unsigned		has_fsl_hs_errata:1;	/* Freescale HS quirk */
+	unsigned		has_fsl_susp_errata:1;	/* NXP SUSP quirk */
 	unsigned		big_endian_mmio:1;
 	unsigned		big_endian_desc:1;
 	unsigned		big_endian_capbase:1;
@@ -229,8 +230,13 @@ struct ehci_hcd {			/* one per controller */
 	unsigned		has_synopsys_hc_bug:1; /* Synopsys HC */
 	unsigned		frame_index_bug:1; /* MosChip (AKA NetMos) */
 	unsigned		need_oc_pp_cycle:1; /* MPC834X port power */
-	bool			no_testmode_suspend; /* MSM Chipidea HC */
 	unsigned		imx28_write_fix:1; /* For Freescale i.MX28 */
+	unsigned                susp_sof_bug:1; /*Chip Idea HC*/
+	unsigned                resume_sof_bug:1;/*Chip Idea HC*/
+	unsigned                reset_sof_bug:1; /*Chip Idea HC*/
+	u32                     reset_delay;
+	unsigned int            log2_irq_thresh;
+	bool                    disable_cerr;
 
 	/* required for usb32 quirk */
 	#define OHCI_CTRL_HCFS          (3 << 6)
@@ -243,6 +249,7 @@ struct ehci_hcd {			/* one per controller */
 	unsigned		has_hostpc:1;
 	unsigned		has_tdi_phy_lpm:1;
 	unsigned		has_ppcd:1; /* support per-port change bits */
+	unsigned                pool_64_bit_align:1; /* for 64 bit alignment */
 	u8			sbrn;		/* packed release number */
 
 	/* irq statistics */
@@ -709,6 +716,13 @@ ehci_port_speed(struct ehci_hcd *ehci, unsigned int portsc)
 #else
 #define ehci_has_fsl_hs_errata(e)	(0)
 #endif
+
+/*
+ * Some Freescale/NXP processors have an erratum (USB A-005697)
+ * in which we need to wait for 10ms for bus to enter suspend mode
+ * after setting SUSP bit.
+ */
+#define ehci_has_fsl_susp_errata(e)	((e)->has_fsl_susp_errata)
 
 /*
  * While most USB host controllers implement their registers in

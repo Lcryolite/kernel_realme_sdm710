@@ -13,7 +13,7 @@ Required properties:
 			counter configuration.
 
 Optional properties:
-- qcom,secure_io	Indicates register access are secured.
+- qcom,secure-io	Indicates register access are secured.
 - qcom,shared-irq       Indicates ccci-hwmon counters share the interrupt.
 
 Example:

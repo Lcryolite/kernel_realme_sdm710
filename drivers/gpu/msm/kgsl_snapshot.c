@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -627,47 +627,6 @@ static void kgsl_free_snapshot(struct kgsl_snapshot *snapshot)
 	KGSL_CORE_ERR("snapshot: objects released\n");
 }
 
-#if defined(OPLUS_FEATURE_GPU_MINIDUMP)
-
-/************************************************
-adreno.h
-#define ADRENO_SOFT_FAULT BIT(0)
-#define ADRENO_HARD_FAULT BIT(1)
-#define ADRENO_TIMEOUT_FAULT BIT(2)
-#define ADRENO_IOMMU_PAGE_FAULT BIT(3)
-#define ADRENO_PREEMPT_FAULT BIT(4)
-#define ADRENO_GMU_FAULT BIT(5)
-#define ADRENO_CTX_DETATCH_TIMEOUT_FAULT BIT(6)
-#define ADRENO_GMU_FAULT_SKIP_SNAPSHOT BIT(7)
-*************************************************/
-char* kgsl_get_reason(int faulttype, bool gmu_fault){
-	if(gmu_fault){
-		return "GMUFAULT";
-	}else{
-		switch(faulttype){
-			case 0:
-				return "SOFTFAULT";
-			case 1:
-				return "HANGFAULT";
-			case 2:
-				return "TIMEOUTFAULT";
-			case 3:
-				return "IOMMUPAGEFAULT";
-			case 4:
-				return "PREEMPTFAULT";
-			case 5:
-				return "GMUFAULT";
-			case 6:
-				return "CTXDETATCHFAULT";
-			case 7:
-				return "GMUSKIPFAULT";
-			default:
-				return "UNKNOW";
-		}
-	}
-}
-#endif /*OPLUS_FEATURE_GPU_MINIDUMP*/
-
 /**
  * kgsl_snapshot() - construct a device snapshot
  * @device: device to snapshot
@@ -698,12 +657,20 @@ void kgsl_device_snapshot(struct kgsl_device *device,
 	/* increment the hang count for good book keeping */
 	device->snapshot_faultcount++;
 
-	/*
-	 * Overwrite a non-GMU fault snapshot if a GMU fault occurs.
-	 */
 	if (device->snapshot != NULL) {
+
+		/*
+		 * Snapshot over-write policy:
+		 * 1. By default, don't over-write the very first snapshot,
+		 *    be it a gmu or gpu fault.
+		 * 2. Never over-write existing snapshot on a gpu fault.
+		 * 3. Never over-write a snapshot that we didn't recover from.
+		 * 4. In order to over-write a new gmu fault snapshot with a
+		 *    previously recovered fault, then set the sysfs knob
+		 *    prioritize_recoverable to true.
+		 */
 		if (!device->prioritize_unrecoverable ||
-				!device->snapshot->recovered)
+			!device->snapshot->recovered || !gmu_fault)
 			return;
 
 		/*
@@ -771,18 +738,8 @@ void kgsl_device_snapshot(struct kgsl_device *device,
 
 	/* log buffer info to aid in ramdump fault tolerance */
 	pa = __pa(device->snapshot_memory.ptr);
-	KGSL_DRV_ERR(device, "snapshot created at pa %pa size %zd\n",
-			&pa, snapshot->size);
-	#if defined(OPLUS_FEATURE_GPU_MINIDUMP)
-	if(context!= NULL){
-		dev_err(device->dev, "falut=%s, pid=%d, processname=%s\n",
-			kgsl_get_reason(device->snapshotfault, gmu_fault), context->proc_priv->pid, context->proc_priv->comm);
-
-		memset(snapshot->snapshot_hashid, '\0', sizeof(snapshot->snapshot_hashid));
-		scnprintf(snapshot->snapshot_hashid, sizeof(snapshot->snapshot_hashid), "%d@%s@%s",
-		context->proc_priv->pid, context->proc_priv->comm, kgsl_get_reason(device->snapshotfault, gmu_fault));
-	}
-	#endif /* OPLUS_FEATURE_GPU_MINIDUMP */
+	KGSL_DRV_ERR(device, "%s snapshot created at pa %pa++0x%zx\n",
+			gmu_fault ? "GMU" : "GPU", &pa, snapshot->size);
 
 	sysfs_notify(&device->snapshot_kobj, NULL, "timestamp");
 
@@ -860,41 +817,6 @@ static int snapshot_release(struct kgsl_device *device,
 	return ret;
 }
 
-#if defined(OPLUS_FEATURE_GPU_MINIDUMP)
-static bool snapshot_ontrol_on = 0;
-
-static ssize_t snapshot_control_show(struct kgsl_device *device, char *buf)
-{
-	return snprintf(buf, PAGE_SIZE, "%d\n", device->snapshot_control);
-}
-
-static ssize_t snapshot_control_store(struct kgsl_device *device, const char *buf,
-	size_t count)
-{
-	unsigned int val = 0;
-	int ret;
-
-	if (device && count > 0)
-		device->snapshot_control = 0;
-
-	ret = kgsl_sysfs_store(buf, &val);
-
-	if (!ret && device){
-		device->snapshot_control = (bool)val;
-		snapshot_ontrol_on = device->snapshot_control;
-	}
-
-	return (ssize_t) ret < 0 ? ret : count;
-}
-
-static ssize_t snapshot_hashid_show(struct kgsl_device *device, char *buf)
-{
-	if(device->snapshot == NULL)
-		return 0;
-	return strlcpy(buf, device->snapshot->snapshot_hashid, PAGE_SIZE);
-}
-#endif /*OPLUS_FEATURE_GPU_MINIDUMP*/
-
 /* Dump the sysfs binary data to the user */
 static ssize_t snapshot_show(struct file *filep, struct kobject *kobj,
 	struct bin_attribute *attr, char *buf, loff_t off,
@@ -908,13 +830,6 @@ static ssize_t snapshot_show(struct file *filep, struct kobject *kobj,
 
 	if (device == NULL)
 		return 0;
-
-	#if defined(OPLUS_FEATURE_GPU_MINIDUMP)
-	if (snapshot_ontrol_on) {
-		dev_err(device->dev, "snapshot: snapshot_ontrol_on is true, skip snapshot\n");
-		return 0;
-	}
-	#endif /* OPLUS_FEATURE_GPU_MINIDUMP */
 
 	mutex_lock(&device->mutex);
 	snapshot = device->snapshot;
@@ -1143,11 +1058,6 @@ static SNAPSHOT_ATTR(snapshot_crashdumper, 0644, snapshot_crashdumper_show,
 static SNAPSHOT_ATTR(snapshot_legacy, 0644, snapshot_legacy_show,
 	snapshot_legacy_store);
 
-#if defined(OPLUS_FEATURE_GPU_MINIDUMP)
-static SNAPSHOT_ATTR(snapshot_hashid, 0666, snapshot_hashid_show, NULL);
-static SNAPSHOT_ATTR(snapshot_control, 0666, snapshot_control_show, snapshot_control_store);
-#endif /* OPLUS_FEATURE_GPU_MINIDUMP */
-
 static ssize_t snapshot_sysfs_show(struct kobject *kobj,
 	struct attribute *attr, char *buf)
 {
@@ -1227,12 +1137,15 @@ int kgsl_device_snapshot_init(struct kgsl_device *device)
 	device->snapshot = NULL;
 	device->snapshot_faultcount = 0;
 	device->force_panic = 0;
-	device->prioritize_unrecoverable = true;
-	device->snapshot_crashdumper = 0;
+	device->snapshot_crashdumper = 1;
 	device->snapshot_legacy = 0;
-	#if defined(OPLUS_FEATURE_GPU_MINIDUMP)
-	device->snapshot_control = 0;
-	#endif /* OPLUS_FEATURE_GPU_MINIDUMP */
+
+	/*
+	 * Set this to false so that we only ever keep the first snapshot around
+	 * If we want to over-write with a gmu snapshot, then set it to true
+	 * via sysfs
+	 */
+	device->prioritize_unrecoverable = false;
 
 	ret = kobject_init_and_add(&device->snapshot_kobj, &ktype_snapshot,
 		&device->dev->kobj, "snapshot");
@@ -1268,15 +1181,6 @@ int kgsl_device_snapshot_init(struct kgsl_device *device)
 
 	ret  = sysfs_create_file(&device->snapshot_kobj,
 			&attr_snapshot_legacy.attr);
-	#if defined(OPLUS_FEATURE_GPU_MINIDUMP)
-	ret  = sysfs_create_file(&device->snapshot_kobj, &attr_snapshot_hashid.attr);
-	if (ret)
-		return ret;
-
-	ret  = sysfs_create_file(&device->snapshot_kobj, &attr_snapshot_control.attr);
-	if (ret)
-		return ret;
-	#endif /* OPLUS_FEATURE_GPU_MINIDUMP */
 
 done:
 	return ret;
@@ -1304,9 +1208,6 @@ void kgsl_device_snapshot_close(struct kgsl_device *device)
 	device->snapshot_faultcount = 0;
 	device->force_panic = 0;
 	device->snapshot_crashdumper = 1;
-	#if defined(OPLUS_FEATURE_GPU_MINIDUMP)
-	device->snapshot_control = 0;
-	#endif /* OPLUS_FEATURE_GPU_MINIDUMP */
 }
 EXPORT_SYMBOL(kgsl_device_snapshot_close);
 
@@ -1408,11 +1309,6 @@ static void kgsl_snapshot_save_frozen_objs(struct work_struct *work)
 
 	if (size == 0)
 		goto done;
-
-	if (size > device->snapshot_memory.size) {
-		SNAPSHOT_ERR_NOMEM(device, "OBJS");
-		goto done;
-	}
 
 	snapshot->mempool = vmalloc(size);
 

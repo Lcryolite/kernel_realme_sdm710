@@ -3,7 +3,7 @@
  * Endpoint Independent, Address Restricted and Port-Address Restricted
  * NAT types' kernel side implementation.
  *
- * (C) Copyright 2011, Ubicom, Inc.
+ * (C) Copyright 2018, Ubicom, Inc.
  *
  * This file is part of the Ubicom32 Linux Kernel Port.
  *
@@ -155,7 +155,7 @@ static bool nattype_packet_in_match(const struct ipt_nattype *nte,
 	 * further.
 	 */
 	if (nte->proto != iph->protocol) {
-		DEBUGP("nattype_packet_in_match: protocol failed: nte proto:");
+		DEBUGP("%s: protocol failed: nte proto:", __func__);
 		DEBUGP(" %d, packet proto: %d\n",
 		       nte->proto, iph->protocol);
 		return false;
@@ -166,7 +166,7 @@ static bool nattype_packet_in_match(const struct ipt_nattype *nte,
 	  */
 	if (info->type == TYPE_ADDRESS_RESTRICTED) {
 		if (nte->dest_addr != iph->saddr) {
-			DEBUGP("nattype_packet_in_match: dest/src check");
+			DEBUGP("%s: dest/src check", __func__);
 			DEBUGP(" failed: dest_addr: %pI4, src dest: %pI4\n",
 			       &nte->dest_addr, &iph->saddr);
 			return false;
@@ -200,7 +200,7 @@ static bool nattype_packet_in_match(const struct ipt_nattype *nte,
 	 * destination packet.
 	 */
 	if (nte->nat_port != dst_port) {
-		DEBUGP("nattype_packet_in_match fail: ");
+		DEBUGP("%s fail: ", __func__);
 		DEBUGP(" nat port: %d,dest_port: %d\n",
 		       ntohs(nte->nat_port), ntohs(dst_port));
 		return false;
@@ -223,8 +223,8 @@ static bool nattype_compare(struct ipt_nattype *n1, struct ipt_nattype *n2,
 	 * compare.
 	 */
 	if (n1->proto != n2->proto) {
-		DEBUGP("nattype_compare: protocol mismatch: %d:%d\n",
-		       n1->proto, n2->proto);
+		DEBUGP("%s: protocol mismatch: %d:%d\n",
+		       __func__, n1->proto, n2->proto);
 		return false;
 	}
 
@@ -233,13 +233,15 @@ static bool nattype_compare(struct ipt_nattype *n1, struct ipt_nattype *n2,
 	  * just compare the min values.
 	  */
 	if (n1->range.min_addr.ip != n2->range.min_addr.ip) {
-		DEBUGP("nattype_compare: r.min_addr.ip mismatch: %pI4:%pI4\n",
-		       &n1->range.min_addr.ip, &n2->range.min_addr.ip);
+		DEBUGP("%s: r.min_addr.ip mismatch: %pI4:%pI4\n",
+		       __func__, &n1->range.min_addr.ip,
+			   &n2->range.min_addr.ip);
 		return false;
 	}
 
 	if (n1->range.min_proto.all != n2->range.min_proto.all) {
-		DEBUGP("nattype_compare: r.min mismatch: %d:%d\n",
+		DEBUGP("%s: r.min mismatch: %d:%d\n",
+				__func__,
 				ntohs(n1->range.min_proto.all),
 				ntohs(n2->range.min_proto.all));
 		return false;
@@ -249,18 +251,29 @@ static bool nattype_compare(struct ipt_nattype *n1, struct ipt_nattype *n2,
 	 * NAT port
 	 */
 	if (n1->nat_port != n2->nat_port) {
-		DEBUGP("nattype_compare: nat_port mistmatch: %d:%d\n",
-		       ntohs(n1->nat_port), ntohs(n2->nat_port));
+		DEBUGP("%s: nat_port mistmatch: %d:%d\n",
+		       __func__, ntohs(n1->nat_port), ntohs(n2->nat_port));
 		return false;
 	}
 
+	if (n1->dest_addr != n2->dest_addr) {
+		DEBUGP("%s: dest_addr mismatch: %pI4:%pI4\n",
+		       __func__, &n1->dest_addr, &n2->dest_addr);
+		return false;
+	}
+
+	if (n1->dest_port != n2->dest_port) {
+		DEBUGP("%s: dest_port mismatch: %d:%d\n",
+		       __func__, ntohs(n1->dest_port), ntohs(n2->dest_port));
+		return false;
+	}
 	/* netfilter NATTYPE Destination compare
 	 * Destination Comapre for Address Restricted Cone NAT.
 	 */
-	if ((info->type == TYPE_ADDRESS_RESTRICTED) &&
-	    (n1->dest_addr != n2->dest_addr)) {
-		DEBUGP("nattype_compare: dest_addr mismatch: %pI4:%pI4\n",
-		       &n1->dest_addr, &n2->dest_addr);
+	if (info->type == TYPE_ADDRESS_RESTRICTED &&
+	    n1->dest_addr != n2->dest_addr) {
+		DEBUGP("%s: dest_addr mismatch: %pI4:%pI4\n",
+		       __func__, &n1->dest_addr, &n2->dest_addr);
 		return false;
 	}
 
@@ -277,7 +290,7 @@ static unsigned int nattype_nat(struct sk_buff *skb,
 {
 	struct ipt_nattype *nte;
 
-	if (par->hooknum != NF_INET_PRE_ROUTING)
+	if (xt_hooknum(par) != NF_INET_PRE_ROUTING)
 		return XT_CONTINUE;
 	spin_lock_bh(&nattype_lock);
 	list_for_each_entry(nte, &nattype_list, list) {
@@ -344,8 +357,7 @@ static unsigned int nattype_forward(struct sk_buff *skb,
 	u16 nat_port;
 	enum ip_conntrack_dir dir;
 
-
-	if (par->hooknum != NF_INET_POST_ROUTING)
+	if (xt_hooknum(par) != NF_INET_POST_ROUTING)
 		return XT_CONTINUE;
 
 	/* netfilter
@@ -511,7 +523,7 @@ static unsigned int nattype_target(struct sk_buff *skb,
 	/* netfilter NATTYPE
 	 * We can not perform endpoint filtering on anything but UDP and TCP.
 	 */
-	if ((iph->protocol != IPPROTO_TCP) && (iph->protocol != IPPROTO_UDP))
+	if (iph->protocol != IPPROTO_TCP && iph->protocol != IPPROTO_UDP)
 		return XT_CONTINUE;
 
 	/* netfilter NATTYPE
@@ -523,11 +535,11 @@ static unsigned int nattype_target(struct sk_buff *skb,
 	/* netfilter NATTYPE
 	 * Check that we have valid source and destination addresses.
 	 */
-	if ((iph->daddr == (__be32)0) || (iph->saddr == (__be32)0))
+	if (iph->daddr == (__be32)0 || iph->saddr == (__be32)0)
 		return XT_CONTINUE;
 
-	DEBUGP("nattype_target: type = %s, mode = %s\n",
-	       types[info->type], modes[info->mode]);
+	DEBUGP("%s: type = %s, mode = %s\n",
+	       __func__, types[info->type], modes[info->mode]);
 
 	/* netfilter NATTYPE
 	 * TODO: why have mode at all since par->hooknum provides
@@ -552,25 +564,25 @@ static int nattype_check(const struct xt_tgchk_param *par)
 	const struct ipt_nattype_info *info = par->targinfo;
 	struct list_head *cur, *tmp;
 
-	if ((info->type != TYPE_PORT_ADDRESS_RESTRICTED) &&
-	    (info->type != TYPE_ENDPOINT_INDEPENDENT) &&
-		(info->type != TYPE_ADDRESS_RESTRICTED)) {
-		DEBUGP("nattype_check: unknown type: %d\n", info->type);
+	if (info->type != TYPE_PORT_ADDRESS_RESTRICTED &&
+	    info->type != TYPE_ENDPOINT_INDEPENDENT &&
+		info->type != TYPE_ADDRESS_RESTRICTED) {
+		DEBUGP("%s: unknown type: %d\n", __func__, info->type);
 		return -EINVAL;
 	}
 
 	if (info->mode != MODE_DNAT && info->mode != MODE_FORWARD_IN &&
 	    info->mode != MODE_FORWARD_OUT) {
-		DEBUGP("nattype_check: unknown mode - %d.\n", info->mode);
+		DEBUGP("%s: unknown mode - %d.\n", __func__, info->mode);
 		return -EINVAL;
 	}
 
-	DEBUGP("nattype_check: type = %s, mode = %s\n",
-	       types[info->type], modes[info->mode]);
+	DEBUGP("%s: type = %s, mode = %s\n",
+	       __func__, types[info->type], modes[info->mode]);
 
 	if (par->hook_mask & ~((1 << NF_INET_PRE_ROUTING) |
 		(1 << NF_INET_POST_ROUTING))) {
-		DEBUGP("nattype_check: bad hooks %x.\n", par->hook_mask);
+		DEBUGP("%s: bad hooks %x.\n", __func__, par->hook_mask);
 		return -EINVAL;
 	}
 
@@ -629,4 +641,4 @@ static void __exit fini(void)
 module_init(init);
 module_exit(fini);
 
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");

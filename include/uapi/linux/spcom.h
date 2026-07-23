@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -17,6 +17,7 @@
 #ifndef BIT
 	#define BIT(x) (1 << x)
 #endif
+
 #ifndef PAGE_SIZE
 	#define PAGE_SIZE 4096
 #endif
@@ -38,7 +39,6 @@
 
 /* Maximum size (including null) for channel names */
 #define SPCOM_CHANNEL_NAME_SIZE		32
-
 /*
  * file read(fd, buf, size) with this size,
  * hints the kernel that user space wants to read the next-req-size.
@@ -57,6 +57,9 @@ enum spcom_cmd_id {
 	SPCOM_CMD_UNLOCK_ION_BUF = 0x554C434B, /* "ULCK" = 0x4C4F434B */
 	SPCOM_CMD_FSSR		= 0x46535352, /* "FSSR" = 0x46535352 */
 	SPCOM_CMD_CREATE_CHANNEL = 0x43524554, /* "CRET" = 0x43524554 */
+#define SPCOM_CMD_RESTART_SP \
+	SPCOM_CMD_RESTART_SP
+	SPCOM_CMD_RESTART_SP    = 0x52535452, /* "RSTR" = 0x52535452 */
 };
 
 /*
@@ -89,6 +92,13 @@ struct spcom_send_command {
 struct spcom_user_create_channel_command {
 	enum spcom_cmd_id cmd_id;
 	char ch_name[SPCOM_CHANNEL_NAME_SIZE];
+} __packed;
+
+/* Command structure between userspace spcomlib and spcom driver, on write() */
+#define SPCOM_USER_RESTART_SP_CMD
+struct spcom_user_restart_sp_command {
+	enum spcom_cmd_id cmd_id;
+	uint32_t arg;
 } __packed;
 
 /* maximum ION buf for send-modfied-command */

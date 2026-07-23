@@ -1,13 +1,12 @@
 /*
- * Idle processing for ARMv7-based Qualcomm SoCs.
+ * Idle processing for ARMv7-based Qualcomm Technologies, Inc. SoCs.
  *
  * Copyright (C) 2007 Google, Inc.
- * Copyright (c) 2007-2009, 2011-2014, 2018, The Linux Foundation.
- * All rights reserved.
+ * Copyright (c) 2007-2009, 2011-2014, 2019 The Linux Foundation. All rights reserved.
  *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of

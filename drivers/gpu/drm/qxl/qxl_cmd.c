@@ -388,7 +388,11 @@ void qxl_io_create_primary(struct qxl_device *qdev,
 	create->width = bo->surf.width;
 	create->height = bo->surf.height;
 	create->stride = bo->surf.stride;
-	create->mem = qxl_bo_physical_address(qdev, bo, offset);
+	if (bo->shadow) {
+		create->mem = qxl_bo_physical_address(qdev, bo->shadow, offset);
+	} else {
+		create->mem = qxl_bo_physical_address(qdev, bo, offset);
+	}
 
 	QXL_INFO(qdev, "%s: mem = %llx, from %p\n", __func__, create->mem,
 		 bo->kptr);
@@ -578,7 +582,7 @@ int qxl_hw_surface_dealloc(struct qxl_device *qdev,
 	return 0;
 }
 
-int qxl_update_surface(struct qxl_device *qdev, struct qxl_bo *surf)
+static int qxl_update_surface(struct qxl_device *qdev, struct qxl_bo *surf)
 {
 	struct qxl_rect rect;
 	int ret;

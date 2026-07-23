@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014-2018, 2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -26,12 +26,7 @@
 #include <linux/regulator/machine.h>
 #include <linux/usb/phy.h>
 #include <linux/reset.h>
-#include <linux/nvmem-consumer.h>
 #include <linux/debugfs.h>
-#include <linux/hrtimer.h>
-#ifdef VENDOR_EDIT
-#include <soc/oplus/system/oppo_project.h>
-#endif
 
 /* QUSB2PHY_PWR_CTRL1 register related bits */
 #define PWR_CTRL1_POWR_DOWN		BIT(0)
@@ -72,9 +67,6 @@
 
 #define BIAS_CTRL_2_OVERRIDE_VAL	0x28
 
-#define SQ_CTRL1_CHIRP_DISABLE		0x20
-#define SQ_CTRL2_CHIRP_DISABLE		0x80
-
 #define DEBUG_CTRL1_OVERRIDE_VAL	0x09
 
 /* PERIPH_SS_PHY_REFGEN_NORTH_BG_CTRL register bits */
@@ -98,8 +90,6 @@ enum qusb_phy_reg {
 	PLL_CORE_INPUT_OVERRIDE,
 	TEST1,
 	BIAS_CTRL_2,
-	SQ_CTRL1,
-	SQ_CTRL2,
 	DEBUG_CTRL1,
 	DEBUG_CTRL2,
 	DEBUG_CTRL3,
@@ -136,21 +126,12 @@ struct qusb_phy {
 	int			efuse_bit_pos;
 	int			efuse_num_of_bits;
 
-	int			power_enabled_ref;
 	bool			cable_connected;
 	bool			suspended;
 	bool			dpdm_enable;
 
 	struct regulator_desc	dpdm_rdesc;
 	struct regulator_dev	*dpdm_rdev;
-
-	u32			sq_ctrl1_default;
-	u32			sq_ctrl2_default;
-	bool			chirp_disable;
-
-	struct pinctrl		*pinctrl;
-	struct pinctrl_state	*atest_usb_suspend;
-	struct pinctrl_state	*atest_usb_active;
 
 	/* emulation targets specific */
 	void __iomem		*emu_phy_base;
@@ -167,74 +148,8 @@ struct qusb_phy {
 	u8			tune[5];
 	u8                      bias_ctrl2;
 
-	struct hrtimer		timer;
-	int			soc_min_rev;
-	bool			host_chirp_erratum;
 	bool			override_bias_ctrl2;
 };
-
-#ifdef CONFIG_NVMEM
-/* Parse qfprom data for deciding on errata work-arounds */
-static long qfprom_read(struct device *dev, const char *name)
-{
-	struct nvmem_cell *cell;
-	ssize_t len = 0;
-	u32 *buf, val = 0;
-	long err = 0;
-
-	cell = nvmem_cell_get(dev, name);
-	if (IS_ERR(cell)) {
-		err = PTR_ERR(cell);
-		dev_err(dev, "failed opening nvmem cell err : %ld\n", err);
-		/* If entry does not exist, then that is not an error */
-		if (err == -ENOENT)
-			err = 0;
-		return err;
-	}
-
-	buf = (u32 *)nvmem_cell_read(cell, &len);
-	if (IS_ERR(buf) || !len) {
-		dev_err(dev, "Failed reading nvmem cell, err: %u, bytes fetched: %zd\n",
-				*buf, len);
-		if (!IS_ERR(buf)) {
-			kfree(buf);
-			err = -EINVAL;
-		} else {
-			err = PTR_ERR(buf);
-		}
-	} else {
-		/*
-		 * The bits are read from bit-0 to bit-29
-		 * We're interested in bits 28:29
-		 */
-		val = (*buf >> 28) & 0x3;
-		kfree(buf);
-	}
-
-	nvmem_cell_put(cell);
-	return err ? err : (long) val;
-}
-
-/* Reads the SoC version */
-static int qusb_phy_get_socrev(struct device *dev, struct qusb_phy *qphy)
-{
-	if (!qphy->host_chirp_erratum)
-		return 0;
-
-	qphy->soc_min_rev  = qfprom_read(dev, "minor_rev");
-	if (qphy->soc_min_rev < 0)
-		dev_err(dev, "failed getting soc_min_rev, err : %d\n",
-				qphy->soc_min_rev);
-
-	return qphy->soc_min_rev;
-};
-#else
-/* Reads the SoC version */
-static int qusb_phy_get_socrev(struct device *dev, struct qusb_phy *qphy)
-{
-	return 0;
-}
-#endif
 
 static void qusb_phy_enable_clocks(struct qusb_phy *qphy, bool on)
 {
@@ -276,35 +191,77 @@ static int qusb_phy_config_vdd(struct qusb_phy *qphy, int high)
 	return ret;
 }
 
-static int qusb_phy_enable_power(struct qusb_phy *qphy, bool on)
+static int qusb_phy_disable_power(struct qusb_phy *qphy)
 {
 	int ret = 0;
 
 	mutex_lock(&qphy->lock);
 
-	dev_dbg(qphy->phy.dev,
-		"%s:req to turn %s regulators. power_enabled_ref:%d\n",
-			__func__, on ? "on" : "off", qphy->power_enabled_ref);
+	dev_dbg(qphy->phy.dev, "%s:req to turn off regulators\n",
+			__func__);
 
-	if (on && ++qphy->power_enabled_ref > 1) {
-		dev_dbg(qphy->phy.dev, "PHYs' regulators are already on\n");
-		goto done;
+	ret = regulator_disable(qphy->vdda33);
+	if (ret)
+		dev_err(qphy->phy.dev, "Unable to disable vdda33:%d\n", ret);
+
+	if (!regulator_is_enabled(qphy->vdda33)) {
+		ret = regulator_set_voltage(qphy->vdda33, 0,
+					QUSB2PHY_3P3_VOL_MAX);
+		if (ret)
+			dev_err(qphy->phy.dev,
+				"Unable to set (0) voltage for vdda33:%d\n",
+					ret);
+
+		ret = regulator_set_load(qphy->vdda33, 0);
+		if (ret < 0)
+			dev_err(qphy->phy.dev,
+					"Unable to set (0) HPM of vdda33\n");
+
 	}
 
-	if (!on) {
-		if (on == qphy->power_enabled_ref) {
-			dev_dbg(qphy->phy.dev,
-				"PHYs' regulators are already off\n");
-			goto done;
-		}
+	ret = regulator_disable(qphy->vdda18);
+	if (ret)
+		dev_err(qphy->phy.dev, "Unable to disable vdda18:%d\n", ret);
 
-		qphy->power_enabled_ref--;
-		if (!qphy->power_enabled_ref)
-			goto disable_vdda33;
+	if (!regulator_is_enabled(qphy->vdda18)) {
+		ret = regulator_set_voltage(qphy->vdda18, 0,
+					QUSB2PHY_1P8_VOL_MAX);
+		if (ret)
+			dev_err(qphy->phy.dev,
+			   "Unable to set (0) voltage for vdda18:%d\n", ret);
 
-		dev_dbg(qphy->phy.dev, "Skip turning off PHYs' regulators\n");
-		goto done;
+		ret = regulator_set_load(qphy->vdda18, 0);
+		if (ret < 0)
+			dev_err(qphy->phy.dev,
+					"Unable to set LPM of vdda18\n");
 	}
+
+	ret = regulator_disable(qphy->vdd);
+	if (ret)
+		dev_err(qphy->phy.dev, "Unable to disable vdd:%d\n", ret);
+
+	if (!regulator_is_enabled(qphy->vdd)) {
+		ret = qusb_phy_config_vdd(qphy, false);
+		if (ret)
+			dev_err(qphy->phy.dev, "Unable unconfig VDD:%d\n",
+						ret);
+	}
+
+	pr_debug("%s(): QUSB PHY's regulators are turned OFF.\n", __func__);
+
+	mutex_unlock(&qphy->lock);
+
+	return ret;
+}
+
+static int qusb_phy_enable_power(struct qusb_phy *qphy)
+{
+	int ret = 0;
+
+	mutex_lock(&qphy->lock);
+
+	dev_dbg(qphy->phy.dev, "%s:req to turn on regulators\n",
+			__func__);
 
 	ret = qusb_phy_config_vdd(qphy, true);
 	if (ret) {
@@ -362,12 +319,8 @@ static int qusb_phy_enable_power(struct qusb_phy *qphy, bool on)
 	pr_debug("%s(): QUSB PHY's regulators are turned ON.\n", __func__);
 
 	mutex_unlock(&qphy->lock);
-	return ret;
 
-disable_vdda33:
-	ret = regulator_disable(qphy->vdda33);
-	if (ret)
-		dev_err(qphy->phy.dev, "Unable to disable vdda33:%d\n", ret);
+	return ret;
 
 unset_vdd33:
 	ret = regulator_set_voltage(qphy->vdda33, 0, QUSB2PHY_3P3_VOL_MAX);
@@ -408,23 +361,10 @@ unconfig_vdd:
 		dev_err(qphy->phy.dev, "Unable unconfig VDD:%d\n",
 							ret);
 err_vdd:
-	dev_dbg(qphy->phy.dev, "QUSB PHY's regulators are turned OFF.\n");
-
-	/* in case of error in turning on regulators */
-	if (qphy->power_enabled_ref)
-		qphy->power_enabled_ref--;
-done:
 	mutex_unlock(&qphy->lock);
+
 	return ret;
 }
-#ifdef OPLUS_FEATURE_CHG_BASIC
-unsigned int dev_phy_tune1 = 0x43;
-module_param(dev_phy_tune1, uint, S_IRUGO | S_IWUSR);
-MODULE_PARM_DESC(dev_phy_tune1, "QUSB PHY v2 TUNE1");
-unsigned int dev_phy_bias2 = 0x1b;
-module_param(dev_phy_bias2, uint, S_IRUGO | S_IWUSR);
-MODULE_PARM_DESC(dev_phy_bias2, "QUSB PHY v2 TUNE2");
-#endif /* OPLUS_FEATURE_CHG_BASIC */
 
 static void qusb_phy_get_tune1_param(struct qusb_phy *qphy)
 {
@@ -439,8 +379,8 @@ static void qusb_phy_get_tune1_param(struct qusb_phy *qphy)
 	bit_mask = (bit_mask << qphy->efuse_num_of_bits) - 1;
 
 	/*
-	 * if efuse reg is updated (i.e non-zero) then use it to program
-	 * tune parameters
+	 * For 8nm zero is treated as a valid efuse value and driver
+	 * should program the tune1 reg based on efuse value
 	 */
 	qphy->tune_val = readl_relaxed(qphy->efuse_reg);
 	pr_debug("%s(): bit_mask:%d efuse based tune1 value:%d\n",
@@ -448,37 +388,11 @@ static void qusb_phy_get_tune1_param(struct qusb_phy *qphy)
 
 	qphy->tune_val = TUNE_VAL_MASK(qphy->tune_val,
 				qphy->efuse_bit_pos, bit_mask);
-	if((get_project() == 19691)) {
-		if(dev_phy_tune1 != 0) {
-			dev_phy_tune1 = 0x40;
-			pr_err("%s:get_tune1  tune1 = [0x%x], reg[0x%x]\n", __func__, dev_phy_tune1, qphy->phy_reg[PORT_TUNE1]);
-			writel_relaxed(dev_phy_tune1, qphy->base + qphy->phy_reg[PORT_TUNE1]);
-		}
-	}
-	if((get_project() == 19651)) {
-		if(dev_phy_tune1 != 0) {
-			dev_phy_tune1 = 0x76;
-			pr_err("%s:write_tune1_low4bits  tune1 = [0x%x], reg[0x%x]\n", __func__, dev_phy_tune1, qphy->phy_reg[PORT_TUNE1]);
-			writel_relaxed(dev_phy_tune1, qphy->base + qphy->phy_reg[PORT_TUNE1]);
-			pr_err("%s: tune1 high4bits get_real_efuse = [0x%x]\n", __func__,  qphy->tune_val);
-		}
-	}
-	if((get_project() == 18621)) {
-		if(dev_phy_tune1 != 0) {
-			dev_phy_tune1 = 0x37;
-			pr_err("%s:write_tune1_low4bits  tune1 = [0x%x], reg[0x%x]\n", __func__, dev_phy_tune1, qphy->phy_reg[PORT_TUNE1]);
-			writel_relaxed(dev_phy_tune1, qphy->base + qphy->phy_reg[PORT_TUNE1]);
-			pr_err("%s: tune1 high4bits get_real_efuse = [0x%x]\n", __func__,  qphy->tune_val);
-		}
-	}
 	reg = readb_relaxed(qphy->base + qphy->phy_reg[PORT_TUNE1]);
-	if (qphy->tune_val) {
-		reg = reg & 0x0f;
-		reg |= (qphy->tune_val << 4);
-	}
+	reg = reg & 0x0f;
+	reg |= (qphy->tune_val << 4);
 
 	qphy->tune_val = reg;
-	pr_err("%s: get_tune1_final  tune1 = [0x%x], tune_val[0x%x]\n", __func__, dev_phy_tune1, qphy->tune_val);
 }
 
 static void qusb_phy_write_seq(void __iomem *base, u32 *seq, int cnt,
@@ -494,6 +408,7 @@ static void qusb_phy_write_seq(void __iomem *base, u32 *seq, int cnt,
 			usleep_range(delay, (delay + 2000));
 	}
 }
+
 static void msm_usb_write_readback(void __iomem *base, u32 offset,
 					const u32 mask, u32 val)
 {
@@ -564,21 +479,13 @@ static void qusb_phy_host_init(struct usb_phy *phy)
 					qphy->phy_reg[PORT_TUNE1]);
 	}
 
-	/* If soc revision is mentioned and host_chirp_erratum flag is set
-	 * then override TUNE1 and DEBUG_CTRL1 while honouring efuse values
-	 */
-	if (qphy->soc_min_rev && qphy->host_chirp_erratum) {
-		writel_relaxed(qphy->tune_val | BIT(7),
-			qphy->base + qphy->phy_reg[PORT_TUNE1]);
-		pr_debug("%s(): Programming TUNE1 parameter as:%x\n",
-			__func__, readb_relaxed(qphy->base +
+	writel_relaxed(qphy->tune_val | BIT(7),
+		qphy->base + qphy->phy_reg[PORT_TUNE1]);
+	pr_debug("%s(): Programming TUNE1 parameter as:%x\n",
+		__func__, readb_relaxed(qphy->base +
 					qphy->phy_reg[PORT_TUNE1]));
-		writel_relaxed(DEBUG_CTRL1_OVERRIDE_VAL,
-			qphy->base + qphy->phy_reg[DEBUG_CTRL1]);
-	} else {
-		writel_relaxed(qphy->tune_val,
-			qphy->base + qphy->phy_reg[PORT_TUNE1]);
-	}
+	writel_relaxed(DEBUG_CTRL1_OVERRIDE_VAL,
+		qphy->base + qphy->phy_reg[DEBUG_CTRL1]);
 
 	/* if debugfs based tunex params are set, use that value. */
 	for (p_index = 0; p_index < 5; p_index++) {
@@ -607,22 +514,16 @@ static void qusb_phy_host_init(struct usb_phy *phy)
 	dev_dbg(phy->dev, "QUSB2PHY_PLL_COMMON_STATUS_ONE:%x\n", reg);
 	if (!(reg & CORE_READY_STATUS)) {
 		dev_err(phy->dev, "QUSB PHY PLL LOCK fails:%x\n", reg);
-		WARN_ON(1);
 	}
 }
-
 
 static int qusb_phy_init(struct usb_phy *phy)
 {
 	struct qusb_phy *qphy = container_of(phy, struct qusb_phy, phy);
-	int ret, p_index;
+	int p_index;
 	u8 reg;
 
 	dev_dbg(phy->dev, "%s\n", __func__);
-
-	ret = qusb_phy_enable_power(qphy, true);
-	if (ret)
-		return ret;
 
 	qusb_phy_reset(qphy);
 
@@ -670,16 +571,8 @@ static int qusb_phy_init(struct usb_phy *phy)
 
 		pr_debug("%s(): Programming TUNE1 parameter as:%x\n", __func__,
 				qphy->tune_val);
-#ifndef OPLUS_FEATURE_CHG_BASIC
 		writel_relaxed(qphy->tune_val,
 				qphy->base + qphy->phy_reg[PORT_TUNE1]);
-#else
-		if((get_project() == 18621) || (get_project() == 19691) || (get_project() == 19651)) {
-			qusb_phy_get_tune1_param(qphy);
-			writel_relaxed(qphy->tune_val,
-					qphy->base + qphy->phy_reg[PORT_TUNE1]);
-		}
-#endif /* OPLUS_FEATURE_CHG_BASIC */
 	}
 
 	/* if debugfs based tunex params are set, use that value. */
@@ -698,58 +591,6 @@ static int qusb_phy_init(struct usb_phy *phy)
 	if (qphy->bias_ctrl2)
 		writel_relaxed(qphy->bias_ctrl2,
 				qphy->base + qphy->phy_reg[BIAS_CTRL_2]);
-
-#ifdef VENDOR_EDIT
-	if((get_project() == 18181) || (get_project() == 18385)) {
-		if(dev_phy_tune1 != 0) {
-			dev_err(phy->dev, "%s: oplus rewrite  tune1 = [0x%x], reg[0x%x]\n", __func__, dev_phy_tune1, qphy->phy_reg[PORT_TUNE1]);
-			writel_relaxed(dev_phy_tune1, qphy->base + qphy->phy_reg[PORT_TUNE1]);
-		}
-
-		if(dev_phy_bias2 != 0) {
-			dev_err(phy->dev, "%s: oplus rewrite  bias2 = [0x%x], reg[0x%x]\n", __func__, dev_phy_bias2, qphy->phy_reg[BIAS_CTRL_2]);
-			writel_relaxed(dev_phy_bias2, qphy->base + qphy->phy_reg[BIAS_CTRL_2]);
-		}
-	}
-	if((get_project() == 18097) || (get_project() == 18397) || (get_project() == 18099) || (get_project() == 18041) || (get_project() == 18383)) {
-		if(dev_phy_tune1 != 0) {
-			dev_phy_tune1 = 0x77;
-			dev_err(phy->dev, "%s: oplus rewrite  tune1 = [0x%x], reg[0x%x]\n", __func__, dev_phy_tune1, qphy->phy_reg[PORT_TUNE1]);
-			writel_relaxed(dev_phy_tune1, qphy->base + qphy->phy_reg[PORT_TUNE1]);
-		}
-
-		if(dev_phy_bias2 != 0) {
-			dev_phy_bias2 = 0x20;
-			dev_err(phy->dev, "%s: oplus rewrite  bias2 = [0x%x], reg[0x%x]\n", __func__, dev_phy_bias2, qphy->phy_reg[BIAS_CTRL_2]);
-			writel_relaxed(dev_phy_bias2, qphy->base + qphy->phy_reg[BIAS_CTRL_2]);
-		}
-	}
-	if(get_project() == 18621) {
-		/*if(dev_phy_bias2 != 0) {*/
-			dev_phy_bias2 = 0x18;
-			reg = readb_relaxed(qphy->base + qphy->phy_reg[PORT_TUNE1]);
-			dev_err(phy->dev, "PORT_TUNE1:%x\n", reg);
-			dev_err(phy->dev, "%s: BIAS_CTRL_2 rewrite  bias2 = [0x%x], reg[0x%x]\n", __func__, dev_phy_bias2, qphy->phy_reg[BIAS_CTRL_2]);
-			writel_relaxed(dev_phy_bias2, qphy->base + qphy->phy_reg[BIAS_CTRL_2]);
-		/*}*/
-	}
-	if(get_project() == 19691) {
-		/*if(dev_phy_bias2 != 0) {*/
-			dev_phy_bias2 = 0x10;
-			reg = readb_relaxed(qphy->base + qphy->phy_reg[PORT_TUNE1]);
-			dev_err(phy->dev, "PORT_TUNE1:%x\n", reg);
-			dev_err(phy->dev, "%s: BIAS_CTRL_2 rewrite  bias2 = [0x%x], reg[0x%x]\n", __func__, dev_phy_bias2, qphy->phy_reg[BIAS_CTRL_2]);
-			writel_relaxed(dev_phy_bias2, qphy->base + qphy->phy_reg[BIAS_CTRL_2]);
-		/*}*/
-	}
-	if(get_project() == 19651) {
-		/*if(dev_phy_bias2 != 0) {*/
-			dev_phy_bias2 = 0x13;
-			dev_err(phy->dev, "%s:rewrite  bias2 = [0x%x], reg[0x%x]\n", __func__, dev_phy_bias2, qphy->phy_reg[BIAS_CTRL_2]);
-			writel_relaxed(dev_phy_bias2, qphy->base + qphy->phy_reg[BIAS_CTRL_2]);
-		/*}*/
-	}
-#endif
 
 	/* ensure above writes are completed before re-enabling PHY */
 	wmb();
@@ -774,49 +615,13 @@ static int qusb_phy_init(struct usb_phy *phy)
 	return 0;
 }
 
-static enum hrtimer_restart qusb_dis_ext_pulldown_timer(struct hrtimer *timer)
-{
-	struct qusb_phy *qphy = container_of(timer, struct qusb_phy, timer);
-	int ret = 0;
-
-	if (qphy->pinctrl && qphy->atest_usb_suspend) {
-		ret = pinctrl_select_state(qphy->pinctrl,
-				qphy->atest_usb_suspend);
-		if (ret < 0)
-			dev_err(qphy->phy.dev,
-				"pinctrl state suspend select failed\n");
-	}
-
-	return HRTIMER_NORESTART;
-}
-
-static void qusb_phy_enable_ext_pulldown(struct usb_phy *phy)
-{
-	struct qusb_phy *qphy = container_of(phy, struct qusb_phy, phy);
-	int ret = 0;
-
-	dev_dbg(phy->dev, "%s\n", __func__);
-
-	if (qphy->pinctrl && qphy->atest_usb_active) {
-		ret = pinctrl_select_state(qphy->pinctrl,
-				qphy->atest_usb_active);
-		if (ret < 0) {
-			dev_err(phy->dev,
-					"pinctrl state active select failed\n");
-			return;
-		}
-
-		hrtimer_start(&qphy->timer, ms_to_ktime(10), HRTIMER_MODE_REL);
-	}
-}
-
 static void qusb_phy_shutdown(struct usb_phy *phy)
 {
 	struct qusb_phy *qphy = container_of(phy, struct qusb_phy, phy);
 
 	dev_dbg(phy->dev, "%s\n", __func__);
 
-	qusb_phy_enable_power(qphy, false);
+	qusb_phy_disable_power(qphy);
 
 }
 
@@ -853,8 +658,7 @@ static int qusb_phy_set_suspend(struct usb_phy *phy, int suspend)
 
 	if (suspend) {
 		/* Bus suspend case */
-		if (qphy->cable_connected ||
-			(qphy->phy.flags & PHY_HOST_MODE)) {
+		if (qphy->cable_connected) {
 			/* Disable all interrupts */
 			writel_relaxed(0x00,
 				qphy->base + qphy->phy_reg[INTR_CTRL]);
@@ -900,13 +704,12 @@ static int qusb_phy_set_suspend(struct usb_phy *phy, int suspend)
 				qphy->base + qphy->phy_reg[INTR_CTRL]);
 			qusb_phy_reset(qphy);
 			qusb_phy_enable_clocks(qphy, false);
-			qusb_phy_enable_power(qphy, false);
+			qusb_phy_disable_power(qphy);
 		}
 		qphy->suspended = true;
 	} else {
 		/* Bus resume case */
-		if (qphy->cable_connected ||
-			(qphy->phy.flags & PHY_HOST_MODE)) {
+		if (qphy->cable_connected) {
 			qusb_phy_enable_clocks(qphy, true);
 			/* Clear all interrupts on resume */
 			writel_relaxed(0x00,
@@ -933,6 +736,7 @@ static int qusb_phy_set_suspend(struct usb_phy *phy, int suspend)
 				wmb();
 			}
 		} else { /* Cable connect case */
+			qusb_phy_enable_power(qphy);
 			qusb_phy_enable_clocks(qphy, true);
 		}
 		qphy->suspended = false;
@@ -965,56 +769,18 @@ static int qusb_phy_notify_disconnect(struct usb_phy *phy,
 	return 0;
 }
 
-static int qusb_phy_disable_chirp(struct usb_phy *phy, bool disable)
-{
-	struct qusb_phy *qphy = container_of(phy, struct qusb_phy, phy);
-	int ret = 0;
-
-	dev_dbg(phy->dev, "%s qphy chirp disable %d disable %d\n", __func__,
-			qphy->chirp_disable, disable);
-
-	mutex_lock(&qphy->lock);
-
-	if (qphy->chirp_disable == disable) {
-		ret = -EALREADY;
-		goto done;
-	}
-
-	qphy->chirp_disable = disable;
-
-	if (disable) {
-		qphy->sq_ctrl1_default =
-			readl_relaxed(qphy->base + qphy->phy_reg[SQ_CTRL1]);
-		qphy->sq_ctrl2_default =
-			readl_relaxed(qphy->base + qphy->phy_reg[SQ_CTRL2]);
-
-		writel_relaxed(SQ_CTRL1_CHIRP_DISABLE,
-				qphy->base + qphy->phy_reg[SQ_CTRL1]);
-		readl_relaxed(qphy->base + qphy->phy_reg[SQ_CTRL1]);
-
-		writel_relaxed(SQ_CTRL1_CHIRP_DISABLE,
-				qphy->base + qphy->phy_reg[SQ_CTRL2]);
-		readl_relaxed(qphy->base + qphy->phy_reg[SQ_CTRL2]);
-
-		goto done;
-	}
-
-	writel_relaxed(qphy->sq_ctrl1_default,
-			qphy->base + qphy->phy_reg[SQ_CTRL1]);
-	readl_relaxed(qphy->base + qphy->phy_reg[SQ_CTRL1]);
-
-	writel_relaxed(qphy->sq_ctrl2_default,
-			qphy->base + qphy->phy_reg[SQ_CTRL2]);
-	readl_relaxed(qphy->base + qphy->phy_reg[SQ_CTRL2]);
-done:
-	mutex_unlock(&qphy->lock);
-	return ret;
-}
 static int msm_qusb_phy_drive_dp_pulse(struct usb_phy *phy,
 					unsigned int interval_ms)
 {
 	struct qusb_phy *qphy = container_of(phy, struct qusb_phy, phy);
+	int ret;
 
+	ret = qusb_phy_enable_power(qphy);
+	if (ret < 0) {
+		dev_dbg(qphy->phy.dev,
+			"dpdm regulator enable failed:%d\n", ret);
+		return ret;
+	}
 	qusb_phy_enable_clocks(qphy, true);
 
 	msm_usb_write_readback(qphy->base, qphy->phy_reg[PWR_CTRL1],
@@ -1050,6 +816,12 @@ static int msm_qusb_phy_drive_dp_pulse(struct usb_phy *phy,
 	msleep(20);
 
 	qusb_phy_enable_clocks(qphy, false);
+	ret = qusb_phy_disable_power(qphy);
+		if (ret < 0) {
+			dev_dbg(qphy->phy.dev,
+				"dpdm regulator disable failed:%d\n", ret);
+		}
+
 	return 0;
 }
 
@@ -1062,7 +834,7 @@ static int qusb_phy_dpdm_regulator_enable(struct regulator_dev *rdev)
 				__func__, qphy->dpdm_enable);
 
 	if (!qphy->dpdm_enable) {
-		ret = qusb_phy_enable_power(qphy, true);
+		ret = qusb_phy_enable_power(qphy);
 		if (ret < 0) {
 			dev_dbg(qphy->phy.dev,
 				"dpdm regulator enable failed:%d\n", ret);
@@ -1084,7 +856,7 @@ static int qusb_phy_dpdm_regulator_disable(struct regulator_dev *rdev)
 				__func__, qphy->dpdm_enable);
 
 	if (qphy->dpdm_enable) {
-		ret = qusb_phy_enable_power(qphy, false);
+		ret = qusb_phy_disable_power(qphy);
 		if (ret < 0) {
 			dev_dbg(qphy->phy.dev,
 				"dpdm regulator disable failed:%d\n", ret);
@@ -1413,9 +1185,6 @@ static int qusb_phy_probe(struct platform_device *pdev)
 			return -ENOMEM;
 	}
 
-	qphy->host_chirp_erratum = of_property_read_bool(dev->of_node,
-					"qcom,host-chirp-erratum");
-
 	qphy->override_bias_ctrl2 = of_property_read_bool(dev->of_node,
 					"qcom,override-bias-ctrl2");
 
@@ -1445,46 +1214,6 @@ static int qusb_phy_probe(struct platform_device *pdev)
 		return PTR_ERR(qphy->vdda18);
 	}
 
-	ret = qusb_phy_get_socrev(&pdev->dev, qphy);
-	if (ret == -EPROBE_DEFER) {
-		dev_err(&pdev->dev, "SoC version rd: fail: defer for now\n");
-		return ret;
-	}
-	qphy->pinctrl = devm_pinctrl_get(dev);
-	if (IS_ERR(qphy->pinctrl)) {
-		ret = PTR_ERR(qphy->pinctrl);
-		if (ret == -EPROBE_DEFER)
-			return ret;
-		dev_err(dev, "pinctrl not available\n");
-		goto skip_pinctrl_config;
-	}
-	qphy->atest_usb_suspend = pinctrl_lookup_state(qphy->pinctrl,
-							"atest_usb13_suspend");
-
-	if (IS_ERR(qphy->atest_usb_suspend) &&
-			PTR_ERR(qphy->atest_usb_suspend) == -ENODEV) {
-		qphy->atest_usb_suspend = pinctrl_lookup_state(qphy->pinctrl,
-								"suspend");
-		if (IS_ERR(qphy->atest_usb_suspend)) {
-			dev_err(dev, "pinctrl lookup suspend failed\n");
-			goto skip_pinctrl_config;
-		}
-	}
-
-	qphy->atest_usb_active = pinctrl_lookup_state(qphy->pinctrl,
-							"atest_usb13_active");
-	if (IS_ERR(qphy->atest_usb_active) &&
-			PTR_ERR(qphy->atest_usb_active) == -ENODEV) {
-		qphy->atest_usb_active = pinctrl_lookup_state(qphy->pinctrl,
-							"active");
-		if (IS_ERR(qphy->atest_usb_active))
-			dev_err(dev, "pinctrl lookup active failed\n");
-	}
-
-	hrtimer_init(&qphy->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-	qphy->timer.function = qusb_dis_ext_pulldown_timer;
-
-skip_pinctrl_config:
 	mutex_init(&qphy->lock);
 	platform_set_drvdata(pdev, qphy);
 
@@ -1496,15 +1225,6 @@ skip_pinctrl_config:
 	qphy->phy.notify_connect        = qusb_phy_notify_connect;
 	qphy->phy.notify_disconnect     = qusb_phy_notify_disconnect;
 	qphy->phy.drive_dp_pulse	= msm_qusb_phy_drive_dp_pulse;
-
-	/*
-	 * qusb_phy_disable_chirp is not required if soc version is
-	 * mentioned and is not base version.
-	 */
-	if (!qphy->soc_min_rev)
-		qphy->phy.disable_chirp	= qusb_phy_disable_chirp;
-
-	qphy->phy.start_port_reset	= qusb_phy_enable_ext_pulldown;
 
 	ret = usb_add_phy_dev(&qphy->phy);
 	if (ret)

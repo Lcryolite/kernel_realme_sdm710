@@ -22,7 +22,6 @@
 #include <linux/random.h>
 #include <linux/wait.h>
 #include <linux/fcntl.h>	/* For O_CLOEXEC and O_NONBLOCK */
-#include <linux/kmemcheck.h>
 #include <linux/rcupdate.h>
 #include <linux/once.h>
 #include <linux/fs.h>
@@ -37,7 +36,7 @@ struct net;
 
 /* Historically, SOCKWQ_ASYNC_NOSPACE & SOCKWQ_ASYNC_WAITDATA were located
  * in sock->flags, but moved into sk->sk_wq->flags to be RCU protected.
- * Eventually all flags will be in sk->sk_wq_flags.
+ * Eventually all flags will be in sk->sk_wq->flags.
  */
 #define SOCKWQ_ASYNC_NOSPACE	0
 #define SOCKWQ_ASYNC_WAITDATA	1
@@ -111,9 +110,7 @@ struct socket_wq {
 struct socket {
 	socket_state		state;
 
-	kmemcheck_bitfield_begin(type);
 	short			type;
-	kmemcheck_bitfield_end(type);
 
 	unsigned long		flags;
 
@@ -146,7 +143,7 @@ struct proto_ops {
 	int		(*socketpair)(struct socket *sock1,
 				      struct socket *sock2);
 	int		(*accept)    (struct socket *sock,
-				      struct socket *newsock, int flags);
+				      struct socket *newsock, int flags, bool kern);
 	int		(*getname)   (struct socket *sock,
 				      struct sockaddr *addr,
 				      int *sockaddr_len, int peer);

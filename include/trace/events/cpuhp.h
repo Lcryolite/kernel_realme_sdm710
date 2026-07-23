@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM cpuhp
 
@@ -5,6 +6,7 @@
 #define _TRACE_CPUHP_H
 
 #include <linux/tracepoint.h>
+#include <linux/sched/clock.h>
 
 TRACE_EVENT(cpuhp_enter,
 

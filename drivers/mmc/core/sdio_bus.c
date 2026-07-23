@@ -25,6 +25,7 @@
 #include <linux/of.h>
 
 #include "core.h"
+#include "card.h"
 #include "sdio_cis.h"
 #include "sdio_bus.h"
 
@@ -274,7 +275,8 @@ static void sdio_release_func(struct device *dev)
 	 */
 	if (!func->card->host->embedded_sdio_data.funcs)
 #endif
-		sdio_free_func_cis(func);
+		if (!(func->card->quirks & MMC_QUIRK_NONSTD_SDIO))
+			sdio_free_func_cis(func);
 
 	/*
 	 * We have now removed the link to the tuples in the
@@ -355,6 +357,7 @@ int sdio_add_func(struct sdio_func *func)
 
 	sdio_set_of_node(func);
 	sdio_acpi_set_handle(func);
+	device_enable_async_suspend(&func->dev);
 	ret = device_add(&func->dev);
 	if (ret == 0)
 		sdio_func_set_present(func);

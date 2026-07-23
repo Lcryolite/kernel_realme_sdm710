@@ -163,6 +163,7 @@ struct qce_device {
 	uint8_t *dummyreq_in_buf;
 	struct dma_iommu_mapping *smmu_mapping;
 	bool enable_s1_smmu;
+	bool no_clock_support;
 };
 
 static void print_notify_debug(struct sps_event_notify *notify);
@@ -306,7 +307,7 @@ static int _probe_ce_engine(struct qce_device *pce_dev)
 
 	pce_dev->ce_bam_info.ce_burst_size = MAX_CE_BAM_BURST_SIZE;
 
-	dev_info(pce_dev->pdev, "CE device = %#x IO base, CE = %pK Consumer (IN) PIPE %d,\nProducer (OUT) PIPE %d IO base BAM = %pK\nBAM IRQ %d Engines Availability = %#x\n",
+	dev_dbg(pce_dev->pdev, "CE device = %#x IO base, CE = %pK Consumer (IN) PIPE %d,\nProducer (OUT) PIPE %d IO base BAM = %pK\nBAM IRQ %d Engines Availability = %#x\n",
 			pce_dev->ce_bam_info.ce_device, pce_dev->iobase,
 			pce_dev->ce_bam_info.dest_pipe_index,
 			pce_dev->ce_bam_info.src_pipe_index,
@@ -518,29 +519,26 @@ static struct qce_cmdlist_info *_ce_get_aead_cmdlistinfo(
 	case CIPHER_ALG_AES:
 		switch (creq->mode) {
 		case QCE_MODE_CBC:
-			if (creq->encklen ==  AES128_KEY_SIZE) {
-				if (creq->auth_alg == QCE_HASH_SHA1_HMAC)
-					return &cmdlistptr->
-						aead_hmac_sha1_cbc_aes_128;
-				else if (creq->auth_alg ==
-						QCE_HASH_SHA256_HMAC)
-					return &cmdlistptr->
-						aead_hmac_sha256_cbc_aes_128;
-				else
-					return NULL;
-			} else if (creq->encklen ==  AES256_KEY_SIZE) {
-				if (creq->auth_alg == QCE_HASH_SHA1_HMAC)
-					return &cmdlistptr->
-						aead_hmac_sha1_cbc_aes_256;
-				else if (creq->auth_alg ==
-						QCE_HASH_SHA256_HMAC)
-					return &cmdlistptr->
-						aead_hmac_sha256_cbc_aes_256;
-				else
-					return NULL;
-			} else
+		if (creq->encklen ==  AES128_KEY_SIZE) {
+			if (creq->auth_alg == QCE_HASH_SHA1_HMAC)
+				return
+				&cmdlistptr->aead_hmac_sha1_cbc_aes_128;
+			else if (creq->auth_alg == QCE_HASH_SHA256_HMAC)
+				return
+				&cmdlistptr->aead_hmac_sha256_cbc_aes_128;
+			else
 				return NULL;
-			break;
+		} else if (creq->encklen ==  AES256_KEY_SIZE) {
+			if (creq->auth_alg == QCE_HASH_SHA1_HMAC)
+				return &cmdlistptr->aead_hmac_sha1_cbc_aes_256;
+			else if (creq->auth_alg == QCE_HASH_SHA256_HMAC)
+				return
+				&cmdlistptr->aead_hmac_sha256_cbc_aes_256;
+			else
+				return NULL;
+		} else
+			return NULL;
+		break;
 		default:
 			return NULL;
 		}
@@ -2057,8 +2055,8 @@ static int _qce_unlock_other_pipes(struct qce_device *pce_dev, int req_info)
 		return rc;
 
 	rc = sps_transfer_one(pce_dev->ce_bam_info.consumer.pipe,
-		GET_PHYS_ADDR(pce_sps_data->
-				cmdlistptr.unlock_all_pipes.cmdlist),
+		GET_PHYS_ADDR(
+		pce_sps_data->cmdlistptr.unlock_all_pipes.cmdlist),
 		0, NULL, (SPS_IOVEC_FLAG_CMD | SPS_IOVEC_FLAG_UNLOCK));
 	if (rc) {
 		pr_err("sps_xfr_one() fail rc=%d", rc);
@@ -2104,11 +2102,11 @@ static int _aead_complete(struct qce_device *pce_dev, int req_info)
 	if (preq_info->dir == QCE_DECRYPT) {
 		if (pce_dev->no_get_around)
 			if (pce_dev->no_ccm_mac_status_get_around)
-				ccm_fail_status = be32_to_cpu(pce_sps_data->
-							result->status);
+				ccm_fail_status =
+				be32_to_cpu(pce_sps_data->result->status);
 			else
-				ccm_fail_status = be32_to_cpu(pce_sps_data->
-							result_null->status);
+				ccm_fail_status =
+				be32_to_cpu(pce_sps_data->result_null->status);
 		else
 			ccm_fail_status = readl_relaxed(pce_dev->iobase +
 					CRYPTO_STATUS_REG);
@@ -2893,7 +2891,7 @@ static int qce_sps_get_bam(struct qce_device *pce_dev)
 	bam.virt_addr = pce_dev->ce_bam_info.bam_iobase;
 
 	/*
-	 * This event thresold value is only significant for BAM-to-BAM
+	 * This event threshold value is only significant for BAM-to-BAM
 	 * transfer. It's ignored for BAM-to-System mode transfer.
 	 */
 	bam.event_threshold = 0x10;	/* Pipe event threshold */
@@ -2994,8 +2992,9 @@ static inline int qce_alloc_req_info(struct qce_device *pce_dev)
 		request_index++;
 		if (request_index >= MAX_QCE_BAM_REQ)
 			request_index = 0;
-		if (atomic_xchg(&pce_dev->ce_request_info[request_index].
-						in_use, true) == false) {
+		if (atomic_xchg(
+			&pce_dev->ce_request_info[request_index].in_use, true)
+			== false) {
 			pce_dev->ce_request_index = request_index;
 			return request_index;
 		}
@@ -3731,7 +3730,7 @@ static int _setup_aead_cmdlistptrs(struct qce_device *pdev,
 {
 	struct sps_command_element *ce_vaddr;
 	uintptr_t ce_vaddr_start;
-	struct qce_cmdlistptr_ops *cmdlistptr;
+	struct qce_cmdlistptr_ops *cmd;
 	struct qce_cmdlist_info *pcl_info = NULL;
 	uint32_t key_reg;
 	uint32_t iv_reg;
@@ -3739,7 +3738,7 @@ static int _setup_aead_cmdlistptrs(struct qce_device *pdev,
 	uint32_t  enciv_in_word;
 	uint32_t encr_cfg;
 
-	cmdlistptr = &pdev->ce_request_info[cri_index].ce_sps.cmdlistptr;
+	cmd = &pdev->ce_request_info[cri_index].ce_sps.cmdlistptr;
 	*pvaddr = (unsigned char *)ALIGN(((uintptr_t)(*pvaddr)),
 					pdev->ce_bam_info.ce_burst_size);
 
@@ -3754,15 +3753,15 @@ static int _setup_aead_cmdlistptrs(struct qce_device *pdev,
 
 		case QCE_MODE_CBC:
 			if (sha1) {
-				cmdlistptr->aead_hmac_sha1_cbc_des.cmdlist =
+				cmd->aead_hmac_sha1_cbc_des.cmdlist =
 					(uintptr_t)ce_vaddr;
-				pcl_info = &(cmdlistptr->
-					aead_hmac_sha1_cbc_des);
+				pcl_info =
+				&(cmd->aead_hmac_sha1_cbc_des);
 			} else {
-				cmdlistptr->aead_hmac_sha256_cbc_des.cmdlist =
+				cmd->aead_hmac_sha256_cbc_des.cmdlist =
 					(uintptr_t)ce_vaddr;
-				pcl_info = &(cmdlistptr->
-					aead_hmac_sha256_cbc_des);
+				pcl_info =
+				&(cmd->aead_hmac_sha256_cbc_des);
 			}
 			encr_cfg = pdev->reg.encr_cfg_des_cbc;
 			break;
@@ -3779,15 +3778,15 @@ static int _setup_aead_cmdlistptrs(struct qce_device *pdev,
 
 		case QCE_MODE_CBC:
 			if (sha1) {
-				cmdlistptr->aead_hmac_sha1_cbc_3des.cmdlist =
+				cmd->aead_hmac_sha1_cbc_3des.cmdlist =
 					(uintptr_t)ce_vaddr;
-				pcl_info = &(cmdlistptr->
-					aead_hmac_sha1_cbc_3des);
+				pcl_info =
+				&(cmd->aead_hmac_sha1_cbc_3des);
 			} else {
-				cmdlistptr->aead_hmac_sha256_cbc_3des.cmdlist =
+				cmd->aead_hmac_sha256_cbc_3des.cmdlist =
 					(uintptr_t)ce_vaddr;
-				pcl_info = &(cmdlistptr->
-					aead_hmac_sha256_cbc_3des);
+				pcl_info =
+				&(cmd->aead_hmac_sha256_cbc_3des);
 			}
 			encr_cfg = pdev->reg.encr_cfg_3des_cbc;
 			break;
@@ -3803,40 +3802,36 @@ static int _setup_aead_cmdlistptrs(struct qce_device *pdev,
 		switch (mode) {
 
 		case QCE_MODE_CBC:
-			if (key_size ==  AES128_KEY_SIZE) {
-				if (sha1) {
-					cmdlistptr->
-						aead_hmac_sha1_cbc_aes_128.
-						cmdlist = (uintptr_t)ce_vaddr;
-					pcl_info = &(cmdlistptr->
-						aead_hmac_sha1_cbc_aes_128);
-				} else {
-					cmdlistptr->
-						aead_hmac_sha256_cbc_aes_128.
-						cmdlist = (uintptr_t)ce_vaddr;
-					pcl_info = &(cmdlistptr->
-						aead_hmac_sha256_cbc_aes_128);
-				}
-				encr_cfg = pdev->reg.encr_cfg_aes_cbc_128;
-			} else if (key_size ==  AES256_KEY_SIZE) {
-				if (sha1) {
-					cmdlistptr->
-						aead_hmac_sha1_cbc_aes_256.
-						cmdlist = (uintptr_t)ce_vaddr;
-					pcl_info = &(cmdlistptr->
-						aead_hmac_sha1_cbc_aes_256);
-				} else {
-					cmdlistptr->
-						aead_hmac_sha256_cbc_aes_256.
-						cmdlist = (uintptr_t)ce_vaddr;
-					pcl_info = &(cmdlistptr->
-						aead_hmac_sha256_cbc_aes_256);
-				}
-				encr_cfg = pdev->reg.encr_cfg_aes_cbc_256;
+		if (key_size ==  AES128_KEY_SIZE) {
+			if (sha1) {
+				cmd->aead_hmac_sha1_cbc_aes_128.cmdlist	=
+					(uintptr_t)ce_vaddr;
+				pcl_info =
+					&(cmd->aead_hmac_sha1_cbc_aes_128);
 			} else {
-				return -EINVAL;
+				cmd->aead_hmac_sha256_cbc_aes_128.cmdlist
+					= (uintptr_t)ce_vaddr;
+				pcl_info =
+					&(cmd->aead_hmac_sha256_cbc_aes_128);
 			}
-			break;
+			encr_cfg = pdev->reg.encr_cfg_aes_cbc_128;
+		} else if (key_size ==  AES256_KEY_SIZE) {
+			if (sha1) {
+				cmd->aead_hmac_sha1_cbc_aes_256.cmdlist	=
+					(uintptr_t)ce_vaddr;
+				pcl_info =
+					&(cmd->aead_hmac_sha1_cbc_aes_256);
+			} else {
+				cmd->aead_hmac_sha256_cbc_aes_256.cmdlist =
+					(uintptr_t)ce_vaddr;
+				pcl_info =
+				&(cmd->aead_hmac_sha256_cbc_aes_256);
+			}
+			encr_cfg = pdev->reg.encr_cfg_aes_cbc_256;
+		} else {
+			return -EINVAL;
+		}
+		break;
 		default:
 			return -EINVAL;
 		};
@@ -4369,15 +4364,15 @@ static int qce_setup_ce_sps_data(struct qce_device *pce_dev)
 		pce_dev->ce_request_info[i].ce_sps.in_transfer.iovec =
 				(struct sps_iovec *)iovec_vaddr;
 		pce_dev->ce_request_info[i].ce_sps.in_transfer.iovec_phys =
-			virt_to_phys(pce_dev->ce_request_info[i].
-				ce_sps.in_transfer.iovec);
+			virt_to_phys(
+			pce_dev->ce_request_info[i].ce_sps.in_transfer.iovec);
 		iovec_vaddr += TOTAL_IOVEC_SPACE_PER_PIPE;
 		iovec_memsize -= TOTAL_IOVEC_SPACE_PER_PIPE;
 		pce_dev->ce_request_info[i].ce_sps.out_transfer.iovec =
 				(struct sps_iovec *)iovec_vaddr;
 		pce_dev->ce_request_info[i].ce_sps.out_transfer.iovec_phys =
-			virt_to_phys(pce_dev->ce_request_info[i].
-				ce_sps.out_transfer.iovec);
+			virt_to_phys(
+			pce_dev->ce_request_info[i].ce_sps.out_transfer.iovec);
 		iovec_vaddr += TOTAL_IOVEC_SPACE_PER_PIPE;
 		iovec_memsize -= TOTAL_IOVEC_SPACE_PER_PIPE;
 		if (pce_dev->support_cmd_dscr)
@@ -4635,8 +4630,9 @@ static int qce_dummy_req(struct qce_device *pce_dev)
 {
 	int ret = 0;
 
-	if (!(atomic_xchg(&pce_dev->ce_request_info[DUMMY_REQ_INDEX].
-				in_use, true) == false))
+	if (!(atomic_xchg(
+		&pce_dev->ce_request_info[DUMMY_REQ_INDEX].in_use, true)
+		== false))
 		return -EBUSY;
 	ret = qce_process_sha_req(pce_dev, NULL);
 	pce_dev->qce_stats.no_of_dummy_reqs++;
@@ -5737,6 +5733,9 @@ static int __qce_get_device_tree_data(struct platform_device *pdev,
 	if (of_property_read_bool((&pdev->dev)->of_node, "qcom,smmu-s1-enable"))
 		pce_dev->enable_s1_smmu = true;
 
+	pce_dev->no_clock_support = of_property_read_bool((&pdev->dev)->of_node,
+					"qcom,no-clock-support");
+
 	pce_dev->ce_bam_info.dest_pipe_index	=
 			2 * pce_dev->ce_bam_info.pipe_pair_index;
 	pce_dev->ce_bam_info.src_pipe_index	=
@@ -5790,6 +5789,11 @@ err_getting_bam_info:
 static int __qce_init_clk(struct qce_device *pce_dev)
 {
 	int rc = 0;
+
+	if (pce_dev->no_clock_support == true) {
+		pr_debug("No clock support defined in dts\n");
+		return rc;
+	}
 
 	pce_dev->ce_core_src_clk = clk_get(pce_dev->pdev, "core_clk_src");
 	if (!IS_ERR(pce_dev->ce_core_src_clk)) {
@@ -5857,6 +5861,11 @@ exit_put_core_src_clk:
 
 static void __qce_deinit_clk(struct qce_device *pce_dev)
 {
+	if (pce_dev->no_clock_support == true) {
+		pr_debug("No clock support defined in dts\n");
+		return;
+	}
+
 	if (pce_dev->ce_bus_clk)
 		clk_put(pce_dev->ce_bus_clk);
 	if (pce_dev->ce_clk)
@@ -5871,6 +5880,11 @@ int qce_enable_clk(void *handle)
 {
 	struct qce_device *pce_dev = (struct qce_device *)handle;
 	int rc = 0;
+
+	if (pce_dev->no_clock_support == true) {
+		pr_debug("No clock support defined in dts\n");
+		return rc;
+	}
 
 	if (pce_dev->ce_core_src_clk) {
 		rc = clk_prepare_enable(pce_dev->ce_core_src_clk);
@@ -5925,6 +5939,11 @@ int qce_disable_clk(void *handle)
 {
 	struct qce_device *pce_dev = (struct qce_device *) handle;
 	int rc = 0;
+
+	if (pce_dev->no_clock_support == true) {
+		pr_debug("No clock support defined in dts\n");
+		return rc;
+	}
 
 	if (pce_dev->ce_bus_clk)
 		clk_disable_unprepare(pce_dev->ce_bus_clk);
@@ -5982,6 +6001,7 @@ static int qce_smmu_init(struct qce_device *pce_dev)
 	struct dma_iommu_mapping *mapping;
 	int attr = 1;
 	int ret = 0;
+	struct device *dev = pce_dev->pdev;
 
 	mapping = arm_iommu_create_mapping(&platform_bus_type,
 				CRYPTO_SMMU_IOVA_START, CRYPTO_SMMU_IOVA_SIZE);
@@ -5998,18 +6018,18 @@ static int qce_smmu_init(struct qce_device *pce_dev)
 		goto ext_fail_set_attr;
 	}
 
-	ret = iommu_domain_set_attr(mapping->domain,
-				DOMAIN_ATTR_UPSTREAM_IOVA_ALLOCATOR, &attr);
-	if (ret < 0) {
-		pr_err("Set UPSTREAM_IOVA_ALLOCATOR failed, err = %d\n", ret);
-		goto ext_fail_set_attr;
-	}
-
 	ret = arm_iommu_attach_device(pce_dev->pdev, mapping);
 	if (ret < 0) {
 		pr_err("Attach device failed, err = %d\n", ret);
 		goto ext_fail_set_attr;
 	}
+
+	if (!dev->dma_parms)
+		dev->dma_parms = devm_kzalloc(dev,
+				sizeof(*dev->dma_parms), GFP_KERNEL);
+	dma_set_max_seg_size(dev, DMA_BIT_MASK(32));
+	dma_set_seg_boundary(dev, (unsigned long)DMA_BIT_MASK(64));
+
 	pce_dev->smmu_mapping = mapping;
 	return ret;
 
@@ -6137,15 +6157,13 @@ EXPORT_SYMBOL(qce_open);
 int qce_close(void *handle)
 {
 	struct qce_device *pce_dev = (struct qce_device *) handle;
-	int ret = -1;
 
 	if (handle == NULL)
 		return -ENODEV;
 
 	mutex_lock(&qce_iomap_mutex);
-	ret = qce_enable_clk(pce_dev);
-	if (!ret)
-		qce_sps_exit(pce_dev);
+	qce_enable_clk(pce_dev);
+	qce_sps_exit(pce_dev);
 
 	if (pce_dev->iobase)
 		iounmap(pce_dev->iobase);
@@ -6154,13 +6172,12 @@ int qce_close(void *handle)
 				pce_dev->coh_vmem, pce_dev->coh_pmem);
 	kfree(pce_dev->dummyreq_in_buf);
 	kfree(pce_dev->iovec_vmem);
-	arm_iommu_detach_device(pce_dev->pdev);
 
+	arm_iommu_detach_device(pce_dev->pdev);
 	if (pce_dev->enable_s1_smmu)
 		qce_iommu_release_iomapping(pce_dev);
 
-	if (!ret)
-		qce_disable_clk(pce_dev);
+	qce_disable_clk(pce_dev);
 	__qce_deinit_clk(pce_dev);
 	mutex_unlock(&qce_iomap_mutex);
 	kfree(handle);
@@ -6233,7 +6250,7 @@ void qce_dump_req(void *handle)
 
 	for (i = 0; i < MAX_QCE_BAM_REQ; i++) {
 		req_in_use = atomic_read(&pce_dev->ce_request_info[i].in_use);
-		pr_info("qce_dump_req %d %d\n", i, req_in_use);
+		pr_info("%s: %d %d\n", __func__, i, req_in_use);
 		if (req_in_use == true)
 			_qce_dump_descr_fifos(pce_dev, i);
 	}

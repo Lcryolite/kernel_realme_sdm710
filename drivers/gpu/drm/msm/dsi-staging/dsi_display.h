@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2018, The Linux Foundation.All rights reserved.
+ * Copyright (c) 2015-2020, The Linux Foundation.All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -19,6 +19,7 @@
 #include <linux/bitops.h>
 #include <linux/debugfs.h>
 #include <linux/of_device.h>
+#include <linux/firmware.h>
 #include <drm/drmP.h>
 #include <drm/drm_crtc.h>
 
@@ -27,9 +28,7 @@
 #include "dsi_ctrl.h"
 #include "dsi_phy.h"
 #include "dsi_panel.h"
-#include <linux/dsi_oppo_support.h>
 
-#define MAX_DSI_CTRLS_PER_DISPLAY             2
 #define DSI_CLIENT_NAME_SIZE		20
 #define MAX_CMDLINE_PARAM_LEN	 512
 #define MAX_CMD_PAYLOAD_SIZE	256
@@ -103,23 +102,45 @@ struct dsi_display_ctrl {
  */
 struct dsi_display_boot_param {
 	char name[MAX_CMDLINE_PARAM_LEN];
+	char *boot_param;
 	bool boot_disp_en;
-	bool is_primary;
 	int length;
 	struct device_node *node;
 	int cmdline_topology;
+	void *disp;
 };
 
 /**
  * struct dsi_display_clk_info - dsi display clock source information
  * @src_clks:          Source clocks for DSI display.
  * @mux_clks:          Mux clocks used for DFPS.
- * @shadow_clks:       Used for DFPS.
+ * @shadow_clks:       Used for D-phy clock switch
+ * @shadow_cphy_clks:  Used for C-phy clock switch
+ * @xo_clks:           XO clocks for DSI display
  */
 struct dsi_display_clk_info {
 	struct dsi_clk_link_set src_clks;
 	struct dsi_clk_link_set mux_clks;
+	struct dsi_clk_link_set cphy_clks;
 	struct dsi_clk_link_set shadow_clks;
+	struct dsi_clk_link_set shadow_cphy_clks;
+	struct dsi_clk_link_set xo_clks;
+};
+
+/**
+ * struct dsi_display_ext_bridge - dsi display external bridge information
+ * @display:           Pointer of DSI display.
+ * @node_of:           Bridge node created from bridge driver.
+ * @bridge:            Bridge created from bridge driver
+ * @orig_funcs:        Bridge function from bridge driver (split mode only)
+ * @bridge_funcs:      Overridden function from bridge driver (split mode only)
+ */
+struct dsi_display_ext_bridge {
+	void *display;
+	struct device_node *node_of;
+	struct drm_bridge *bridge;
+	const struct drm_bridge_funcs *orig_funcs;
+	struct drm_bridge_funcs bridge_funcs;
 };
 
 /**
@@ -127,11 +148,14 @@ struct dsi_display_clk_info {
  * @pdev:             Pointer to platform device.
  * @drm_dev:          DRM device associated with the display.
  * @drm_conn:         Pointer to DRM connector associated with the display
+ * @ext_conn:         Pointer to external connector attached to DSI connector
  * @name:             Name of the display.
  * @display_type:     Display type as defined in device tree.
+ * @dsi_type:         Display label as defined in device tree.
  * @list:             List pointer.
  * @is_active:        Is display active.
  * @is_cont_splash_enabled:  Is continuous splash enabled
+ * @sw_te_using_wd:   Is software te enabled
  * @display_lock:     Mutex for dsi_display interface.
  * @disp_te_gpio:     GPIO for panel TE interrupt.
  * @is_te_irq_enabled:bool to specify whether TE interrupt is enabled.
@@ -140,6 +164,7 @@ struct dsi_display_clk_info {
  * @ctrl:             Controller information for DSI display.
  * @panel:            Handle to DSI panel.
  * @panel_of:         pHandle to DSI panel.
+ * @ext_bridge:       External bridge information for DSI display.
  * @modes:            Array of probed DSI modes
  * @type:             DSI display type.
  * @clk_master_idx:   The master controller for controlling clocks. This is an
@@ -154,6 +179,7 @@ struct dsi_display_clk_info {
  * @cmdline_topology: Display topology shared from kernel command line.
  * @cmdline_timing:   Display timing shared from kernel command line.
  * @is_tpg_enabled:   TPG state.
+ * @poms_pending;      Flag indicating the pending panel operating mode switch.
  * @ulps_enabled:     ulps state.
  * @clamp_enabled:    clamp state.
  * @phy_idle_power_off:   PHY power state.
@@ -167,17 +193,20 @@ struct dsi_display_clk_info {
  * @misr_enable       Frame MISR enable/disable
  * @misr_frame_count  Number of frames to accumulate the MISR value
  * @esd_trigger       field indicating ESD trigger through debugfs
+ * @te_source         vsync source pin information
  */
 struct dsi_display {
 	struct platform_device *pdev;
 	struct drm_device *drm_dev;
 	struct drm_connector *drm_conn;
+	struct drm_connector *ext_conn;
 
 	const char *name;
 	const char *display_type;
+	const char *dsi_type;
 	struct list_head list;
-	bool is_active;
 	bool is_cont_splash_enabled;
+	bool sw_te_using_wd;
 	struct mutex display_lock;
 	int disp_te_gpio;
 	bool is_te_irq_enabled;
@@ -188,7 +217,12 @@ struct dsi_display {
 
 	/* panel info */
 	struct dsi_panel *panel;
+	struct device_node *disp_node;
 	struct device_node *panel_of;
+	struct device_node *parser_node;
+
+	/* external bridge */
+	struct dsi_display_ext_bridge ext_bridge[MAX_EXT_BRIDGE_PORT_CONFIG];
 
 	struct dsi_display_mode *modes;
 
@@ -207,12 +241,13 @@ struct dsi_display {
 	int cmdline_topology;
 	int cmdline_timing;
 	bool is_tpg_enabled;
+	bool poms_pending;
 	bool ulps_enabled;
 	bool clamp_enabled;
 	bool phy_idle_power_off;
 	struct drm_gem_object *tx_cmd_buf;
 	u32 cmd_buffer_size;
-	u32 cmd_buffer_iova;
+	u64 cmd_buffer_iova;
 	void *vaddr;
 	struct msm_gem_address_space *aspace;
 
@@ -238,19 +273,15 @@ struct dsi_display {
 	struct work_struct fifo_underflow_work;
 	struct work_struct fifo_overflow_work;
 	struct work_struct lp_rx_timeout_work;
-};
 
-/**
- * dsi_display_has_ext_bridge() - check whether display has ext bridge
- *                                connected.
- *
- * Return: True - ext bridge, False - no ext bridge.
- */
-static inline bool dsi_display_has_ext_bridge(const struct dsi_display *display)
-{
-	return display->type == DSI_DISPLAY_EXT_BRIDGE ||
-		display->type == DSI_DISPLAY_SPLIT_EXT_BRIDGE;
-}
+	/* firmware panel data */
+	const struct firmware *fw;
+	void *parser;
+
+	struct dsi_display_boot_param *boot_disp;
+
+	u32 te_source;
+};
 
 int dsi_display_dev_probe(struct platform_device *pdev);
 int dsi_display_dev_remove(struct platform_device *pdev);
@@ -264,6 +295,14 @@ int dsi_display_dev_remove(struct platform_device *pdev);
 int dsi_display_get_num_of_displays(void);
 
 /**
+ * dsi_display_get_boot_display() - returns the selected display device node
+ * @index: Primary or secondary display index
+ *
+ * Return: selected platform device node, or NULL until initialization succeeds.
+ */
+struct device_node *dsi_display_get_boot_display(int index);
+
+/**
  * dsi_display_get_active_displays - returns pointers for active display devices
  * @display_array: Pointer to display array to be filled
  * @max_display_count: Size of display_array
@@ -271,14 +310,6 @@ int dsi_display_get_num_of_displays(void);
  */
 int dsi_display_get_active_displays(void **display_array,
 		u32 max_display_count);
-
-/**
-  * dsi_display_get_boot_display()- get DSI boot display name
-  * @index:	index of display selection
-  *
-  * Return:	returns the display node pointer
-  */
-struct device_node *dsi_display_get_boot_display(int index);
 
 /**
  * dsi_display_get_display_by_name()- finds display by name
@@ -318,7 +349,7 @@ int dsi_display_drm_bridge_deinit(struct dsi_display *display);
  * dsi_display_drm_ext_bridge_init() - initializes DRM bridge for ext bridge
  * @display:            Handle to the display.
  * @enc:                Pointer to the encoder object which is connected to the
- *			display.
+ *                      display.
  * @connector:          Pointer to the connector object which is connected to
  *                      the display.
  *
@@ -329,21 +360,14 @@ int dsi_display_drm_ext_bridge_init(struct dsi_display *display,
 
 /**
  * dsi_display_get_info() - returns the display properties
+ * @connector:        Pointer to drm connector structure
  * @info:             Pointer to the structure where info is stored.
  * @disp:             Handle to the display.
  *
  * Return: error code.
  */
-int dsi_display_get_info(struct msm_display_info *info, void *disp);
-
-/**
- * dsi_display_ext_bridge_get_info() - returns the ext bridge's display info
- * @info:             Pointer to the structure where info is stored.
- * @disp:             Handle to the display.
- *
- * Return: error code.
- */
-int dsi_display_ext_bridge_get_info(struct msm_display_info *info, void *disp);
+int dsi_display_get_info(struct drm_connector *connector,
+		struct msm_display_info *info, void *disp);
 
 /**
  * dsi_display_get_mode_count() - get number of modes supported by the display
@@ -358,7 +382,7 @@ int dsi_display_get_mode_count(struct dsi_display *display, u32 *count);
  * dsi_display_get_modes() - get modes supported by display
  * @display:            Handle to display.
  * @modes;              Output param, list of DSI modes. Number of modes matches
- *                      count returned by dsi_display_get_mode_count
+ *                      count got from display->panel->num_display_modes;
  *
  * Return: error code.
  */
@@ -576,31 +600,46 @@ int dsi_dispaly_static_frame(struct dsi_display *display, bool enable);
 
 /**
  * dsi_display_enable_event() - enable interrupt based connector event
+ * @connector:          Pointer to drm connector structure
  * @display:            Handle to display.
  * @event_idx:          Event index.
  * @event_info:         Event callback definition.
  * @enable:             Whether to enable/disable the event interrupt.
  */
-void dsi_display_enable_event(struct dsi_display *display,
+void dsi_display_enable_event(struct drm_connector *connector,
+		struct dsi_display *display,
 		uint32_t event_idx, struct dsi_event_cb_info *event_info,
 		bool enable);
 
-int dsi_display_set_backlight(void *display, u32 bl_lvl);
+/**
+ * dsi_display_set_backlight() - set backlight
+ * @connector:          Pointer to drm connector structure
+ * @display:            Handle to display.
+ * @bl_lvl:             Backlight level.
+ * @event_info:         Event callback definition.
+ * @enable:             Whether to enable/disable the event interrupt.
+ */
+int dsi_display_set_backlight(struct drm_connector *connector,
+		void *display, u32 bl_lvl);
 
 /**
  * dsi_display_check_status() - check if panel is dead or alive
+ * @connector:          Pointer to drm connector structure
  * @display:            Handle to display.
  * @te_check_override:	Whether check for TE from panel or default check
  */
-int dsi_display_check_status(void *display, bool te_check_override);
+int dsi_display_check_status(struct drm_connector *connector, void *display,
+				bool te_check_override);
 
 /**
  * dsi_display_cmd_transfer() - transfer command to the panel
+ * @connector:          Pointer to drm connector structure
  * @display:            Handle to display.
  * @cmd_buf:            Command buffer
  * @cmd_buf_len:        Command buffer length in bytes
  */
-int dsi_display_cmd_transfer(void *display, const char *cmd_buffer,
+int dsi_display_cmd_transfer(struct drm_connector *connector,
+		void *display, const char *cmd_buffer,
 		u32 cmd_buf_len);
 
 /**
@@ -636,19 +675,33 @@ int dsi_display_set_power(struct drm_connector *connector,
 
 /*
  * dsi_display_pre_kickoff - program kickoff-time features
+ * @connector: Pointer to drm connector structure
  * @display: Pointer to private display structure
  * @params: Parameters for kickoff-time programming
  * Returns: Zero on success
  */
-int dsi_display_pre_kickoff(struct dsi_display *display,
+int dsi_display_pre_kickoff(struct drm_connector *connector,
+		struct dsi_display *display,
 		struct msm_display_kickoff_params *params);
+/*
+ * dsi_display_pre_commit - program pre commit features
+ * @display: Pointer to private display structure
+ * @params: Parameters for pre commit time programming
+ * Returns: Zero on success
+ */
+int dsi_display_pre_commit(void *display,
+		struct msm_display_conn_params *params);
+
 /**
  * dsi_display_get_dst_format() - get dst_format from DSI display
+ * @connector:        Pointer to drm connector structure
  * @display:         Handle to display
  *
  * Return: enum dsi_pixel_format type
  */
-enum dsi_pixel_format dsi_display_get_dst_format(void *display);
+enum dsi_pixel_format dsi_display_get_dst_format(
+		struct drm_connector *connector,
+		void *display);
 
 /**
  * dsi_display_cont_splash_config() - initialize splash resources
@@ -657,14 +710,6 @@ enum dsi_pixel_format dsi_display_get_dst_format(void *display);
  * Return: Zero on Success
  */
 int dsi_display_cont_splash_config(void *display);
-
-#ifdef VENDOR_EDIT
-struct dsi_display *get_main_display(void);
-
-int dsi_host_alloc_cmd_tx_buffer(struct dsi_display *display);
-int dsi_display_cmd_engine_enable(struct dsi_display *display);
-int dsi_display_cmd_engine_disable(struct dsi_display *display);
-#endif
 /*
  * dsi_display_get_panel_vfp - get panel vsync
  * @display: Pointer to private display structure

@@ -29,7 +29,7 @@
 static inline long syscall_get_nr(struct task_struct *task,
 				  struct pt_regs *regs)
 {
-	return current_thread_info()->syscall;
+	return task_thread_info(task)->syscall;
 }
 
 static inline unsigned long mips_get_syscall_arg(unsigned long *arg,
@@ -85,7 +85,7 @@ static inline void syscall_set_return_value(struct task_struct *task,
 {
 	if (error) {
 		regs->regs[2] = -error;
-		regs->regs[7] = -1;
+		regs->regs[7] = 1;
 	} else {
 		regs->regs[2] = val;
 		regs->regs[7] = 0;

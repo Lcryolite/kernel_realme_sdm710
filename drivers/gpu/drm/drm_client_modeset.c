@@ -16,8 +16,9 @@
 #include <drm/drm_client.h>
 #include <drm/drm_connector.h>
 #include <drm/drm_crtc.h>
-#include <drm/drmP.h>
+#include <drm/drm_device.h>
 #include <drm/drm_encoder.h>
+#include <drm/drm_print.h>
 
 #include "drm_crtc_internal.h"
 #include "drm_internal.h"
@@ -77,7 +78,7 @@ static void drm_client_modeset_release(struct drm_client_dev *client)
 		modeset->fb = NULL;
 
 		for (i = 0; i < modeset->num_connectors; i++) {
-			drm_connector_unreference(modeset->connectors[i]);
+			drm_connector_put(modeset->connectors[i]);
 			modeset->connectors[i] = NULL;
 		}
 		modeset->num_connectors = 0;
@@ -686,6 +687,7 @@ bail:
 int drm_client_modeset_probe(struct drm_client_dev *client, unsigned int width, unsigned int height)
 {
 	struct drm_connector *connector, **connectors = NULL;
+	struct drm_connector_list_iter conn_iter;
 	struct drm_device *dev = client->dev;
 	unsigned int total_modes_count = 0;
 	struct drm_client_offset *offsets;
@@ -702,23 +704,21 @@ int drm_client_modeset_probe(struct drm_client_dev *client, unsigned int width, 
 	if (!height)
 		height = dev->mode_config.max_height;
 
-	mutex_lock(&dev->mode_config.mutex);
-	drm_for_each_connector(connector, dev) {
-		if (connector->connector_type != DRM_MODE_CONNECTOR_VIRTUAL) {
-			struct drm_connector **tmp;
+	drm_connector_list_iter_begin(dev, &conn_iter);
+	drm_client_for_each_connector_iter(connector, &conn_iter) {
+		struct drm_connector **tmp;
 
-			tmp = krealloc(connectors, (connector_count + 1) * sizeof(*connectors), GFP_KERNEL);
-			if (!tmp) {
-				ret = -ENOMEM;
-				goto free_connectors;
-			}
-
-			connectors = tmp;
-			drm_connector_reference(connector);
-			connectors[connector_count++] = connector;
+		tmp = krealloc(connectors, (connector_count + 1) * sizeof(*connectors), GFP_KERNEL);
+		if (!tmp) {
+			ret = -ENOMEM;
+			goto free_connectors;
 		}
+
+		connectors = tmp;
+		drm_connector_get(connector);
+		connectors[connector_count++] = connector;
 	}
-	mutex_unlock(&dev->mode_config.mutex);
+	drm_connector_list_iter_end(&conn_iter);
 
 	if (!connector_count)
 		return 0;
@@ -783,7 +783,7 @@ int drm_client_modeset_probe(struct drm_client_dev *client, unsigned int width, 
 			}
 
 			modeset->mode = drm_mode_duplicate(dev, mode);
-			drm_connector_reference(connector);
+			drm_connector_get(connector);
 			modeset->connectors[modeset->num_connectors++] = connector;
 			modeset->x = offset->x;
 			modeset->y = offset->y;
@@ -798,7 +798,7 @@ out:
 	kfree(enabled);
 free_connectors:
 	for (i = 0; i < connector_count; i++)
-		drm_connector_unreference(connectors[i]);
+		drm_connector_put(connectors[i]);
 	kfree(connectors);
 
 	return ret;

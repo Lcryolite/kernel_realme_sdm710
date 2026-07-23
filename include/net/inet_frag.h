@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __NET_FRAG_H__
 #define __NET_FRAG_H__
 
@@ -75,7 +76,7 @@ struct inet_frag_queue {
 	} key;
 	struct timer_list	timer;
 	spinlock_t		lock;
-	atomic_t		refcnt;
+	refcount_t		refcnt;
 	struct sk_buff		*fragments;  /* used in 6lopwpan IPv6. */
 	struct rb_root		rb_fragments; /* Used in IPv4/IPv6. */
 	struct sk_buff		*fragments_tail;
@@ -90,12 +91,12 @@ struct inet_frag_queue {
 };
 
 struct inet_frags {
-	int			qsize;
+	unsigned int		qsize;
 
 	void			(*constructor)(struct inet_frag_queue *q,
 					       const void *arg);
 	void			(*destructor)(struct inet_frag_queue *);
-	void			(*frag_expire)(unsigned long data);
+	void			(*frag_expire)(struct timer_list *t);
 	struct kmem_cache	*frags_cachep;
 	const char		*frags_cache_name;
 	struct rhashtable_params rhash_params;
@@ -120,7 +121,7 @@ unsigned int inet_frag_rbtree_purge(struct rb_root *root);
 
 static inline void inet_frag_put(struct inet_frag_queue *q)
 {
-	if (atomic_dec_and_test(&q->refcnt))
+	if (refcount_dec_and_test(&q->refcnt))
 		inet_frag_destroy(q);
 }
 

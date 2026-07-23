@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2021, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -39,11 +39,9 @@ struct lpm_type_str {
 static const struct lpm_type_str lpm_types[] = {
 	{IDLE, "idle_enabled"},
 	{SUSPEND, "suspend_enabled"},
-	{LATENCY, "latency_us"},
+	{LATENCY, "exit_latency_us"},
 };
 
-static DEFINE_PER_CPU(uint32_t *, max_residency);
-static DEFINE_PER_CPU(uint32_t *, min_residency);
 static struct lpm_level_avail *cpu_level_available[NR_CPUS];
 static struct platform_device *lpm_pdev;
 
@@ -78,99 +76,6 @@ static struct lpm_level_avail *get_avail_ptr(struct kobject *kobj,
 	return avail;
 }
 
-static void set_optimum_cpu_residency(struct lpm_cpu *cpu, int cpu_id,
-		bool probe_time)
-{
-	int i, j;
-	bool mode_avail;
-	uint32_t *maximum_residency = per_cpu(max_residency, cpu_id);
-	uint32_t *minimum_residency = per_cpu(min_residency, cpu_id);
-
-	for (i = 0; i < cpu->nlevels; i++) {
-		struct power_params *pwr = &cpu->levels[i].pwr;
-
-		mode_avail = probe_time ||
-			lpm_cpu_mode_allow(cpu_id, i, true);
-
-		if (!mode_avail) {
-			maximum_residency[i] = 0;
-			minimum_residency[i] = 0;
-			continue;
-		}
-
-		maximum_residency[i] = ~0;
-		for (j = i + 1; j < cpu->nlevels; j++) {
-			mode_avail = probe_time ||
-					lpm_cpu_mode_allow(cpu_id, j, true);
-
-			if (mode_avail &&
-				(maximum_residency[i] > pwr->residencies[j]) &&
-				(pwr->residencies[j] != 0))
-				maximum_residency[i] = pwr->residencies[j];
-		}
-
-		minimum_residency[i] = pwr->time_overhead_us;
-		for (j = i-1; j >= 0; j--) {
-			if (probe_time || lpm_cpu_mode_allow(cpu_id, j, true)) {
-				minimum_residency[i] = maximum_residency[j] + 1;
-				break;
-			}
-		}
-	}
-}
-
-static void set_optimum_cluster_residency(struct lpm_cluster *cluster,
-		bool probe_time)
-{
-	int i, j;
-	bool mode_avail;
-
-	for (i = 0; i < cluster->nlevels; i++) {
-		struct power_params *pwr = &cluster->levels[i].pwr;
-
-		mode_avail = probe_time ||
-			lpm_cluster_mode_allow(cluster, i,
-					true);
-
-		if (!mode_avail) {
-			pwr->max_residency = 0;
-			pwr->min_residency = 0;
-			continue;
-		}
-
-		pwr->max_residency = ~0;
-		for (j = i+1; j < cluster->nlevels; j++) {
-			mode_avail = probe_time ||
-					lpm_cluster_mode_allow(cluster, j,
-							true);
-			if (mode_avail &&
-				(pwr->max_residency > pwr->residencies[j]) &&
-				(pwr->residencies[j] != 0))
-				pwr->max_residency = pwr->residencies[j];
-		}
-
-		pwr->min_residency = pwr->time_overhead_us;
-		for (j = i-1;  j >= 0; j--) {
-			if (probe_time ||
-				lpm_cluster_mode_allow(cluster, j, true)) {
-				pwr->min_residency =
-				  cluster->levels[j].pwr.max_residency + 1;
-				break;
-			}
-		}
-	}
-}
-
-uint32_t *get_per_cpu_max_residency(int cpu)
-{
-	return per_cpu(max_residency, cpu);
-}
-
-uint32_t *get_per_cpu_min_residency(int cpu)
-{
-	return per_cpu(min_residency, cpu);
-}
-
 static ssize_t lpm_latency_show(struct kobject *kobj,
 		struct kobj_attribute *attr, char *buf)
 {
@@ -181,7 +86,7 @@ static ssize_t lpm_latency_show(struct kobject *kobj,
 	if (WARN_ON(!avail))
 		return -EINVAL;
 
-	kp.arg = &avail->latency_us;
+	kp.arg = &avail->exit_latency;
 
 	ret = param_get_uint(buf, &kp);
 	if (ret > 0) {
@@ -228,11 +133,6 @@ ssize_t lpm_enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 
 	kp.arg = get_enabled_ptr(attr, avail);
 	ret = param_set_bool(buf, &kp);
-
-	if (avail->cpu_node)
-		set_optimum_cpu_residency(avail->data, avail->idx, false);
-	else
-		set_optimum_cluster_residency(avail->data, false);
 
 	return ret ? ret : len;
 }
@@ -349,8 +249,8 @@ static int create_cpu_lvl_nodes(struct lpm_cluster *p, struct kobject *parent)
 			 * be available at all times.
 			 */
 			for (i = 1; i < lpm_cpu->nlevels; i++) {
-				level_list[i].latency_us =
-					p->levels[i].pwr.latency_us;
+				level_list[i].exit_latency =
+					p->levels[i].pwr.exit_latency;
 				ret = create_lvl_avail_nodes(
 						lpm_cpu->levels[i].name,
 						cpu_kobj[cpu_idx],
@@ -389,7 +289,8 @@ int create_cluster_lvl_nodes(struct lpm_cluster *p, struct kobject *kobj)
 		return -ENOMEM;
 
 	for (i = 0; i < p->nlevels; i++) {
-		p->levels[i].available.latency_us = p->levels[i].pwr.latency_us;
+		p->levels[i].available.exit_latency =
+					p->levels[i].pwr.exit_latency;
 		ret = create_lvl_avail_nodes(p->levels[i].level_name,
 				cluster_kobj, &p->levels[i].available,
 				(void *)p, 0, false);
@@ -487,23 +388,18 @@ static int parse_power_params(struct device_node *node,
 	char *key;
 	int ret;
 
-	key = "qcom,latency-us";
-	ret  = of_property_read_u32(node, key, &pwr->latency_us);
+	key = "qcom,entry-latency-us";
+	ret  = of_property_read_u32(node, key, &pwr->entry_latency);
 	if (ret)
 		goto fail;
 
-	key = "qcom,ss-power";
-	ret = of_property_read_u32(node, key, &pwr->ss_power);
+	key = "qcom,exit-latency-us";
+	ret  = of_property_read_u32(node, key, &pwr->exit_latency);
 	if (ret)
 		goto fail;
 
-	key = "qcom,energy-overhead";
-	ret = of_property_read_u32(node, key, &pwr->energy_overhead);
-	if (ret)
-		goto fail;
-
-	key = "qcom,time-overhead";
-	ret = of_property_read_u32(node, key, &pwr->time_overhead_us);
+	key = "qcom,min-residency-us";
+	ret = of_property_read_u32(node, key, &pwr->min_residency);
 	if (ret)
 		goto fail;
 
@@ -621,31 +517,13 @@ static int get_cpumask_for_node(struct device_node *node, struct cpumask *mask)
 	return 0;
 }
 
-static int calculate_residency(struct power_params *base_pwr,
-					struct power_params *next_pwr)
-{
-	int32_t residency = (int32_t)(next_pwr->energy_overhead -
-						base_pwr->energy_overhead) -
-		((int32_t)(next_pwr->ss_power * next_pwr->time_overhead_us)
-		- (int32_t)(base_pwr->ss_power * base_pwr->time_overhead_us));
-
-	residency /= (int32_t)(base_pwr->ss_power  - next_pwr->ss_power);
-
-	if (residency < 0) {
-		pr_err("Residency < 0 for LPM\n");
-		return next_pwr->time_overhead_us;
-	}
-
-	return residency < next_pwr->time_overhead_us ?
-				next_pwr->time_overhead_us : residency;
-}
-
 static int parse_cpu(struct device_node *node, struct lpm_cpu *cpu)
 {
 
 	struct device_node *n;
-	int ret, i, j;
+	int ret, i;
 	const char *key;
+
 	for_each_child_of_node(node, n) {
 		struct lpm_cpu_level *l = &cpu->levels[cpu->nlevels];
 
@@ -670,43 +548,18 @@ static int parse_cpu(struct device_node *node, struct lpm_cpu *cpu)
 
 		key = "qcom,reset-level";
 		ret = of_property_read_u32(n, key, &l->reset_level);
+		of_node_put(n);
 		if (ret == -EINVAL)
 			l->reset_level = LPM_RESET_LVL_NONE;
 		else if (ret)
 			return ret;
-		of_node_put(n);
 	}
 
-	for (i = 0; i < cpu->nlevels; i++) {
-		for (j = 0; j < cpu->nlevels; j++) {
-			if (i >= j) {
-				cpu->levels[i].pwr.residencies[j] = 0;
-				continue;
-			}
+	for (i = 1; i < cpu->nlevels; i++)
+		cpu->levels[i-1].pwr.max_residency =
+			cpu->levels[i].pwr.min_residency - 1;
 
-			cpu->levels[i].pwr.residencies[j] =
-				calculate_residency(&cpu->levels[i].pwr,
-						&cpu->levels[j].pwr);
-
-			pr_info("idx %d %u\n", j,
-					cpu->levels[i].pwr.residencies[j]);
-		}
-	}
-
-	for_each_cpu(i, &cpu->related_cpus) {
-
-		per_cpu(max_residency, i) = devm_kzalloc(&lpm_pdev->dev,
-				sizeof(uint32_t) * cpu->nlevels, GFP_KERNEL);
-		if (!per_cpu(max_residency, i))
-			return -ENOMEM;
-
-		per_cpu(min_residency, i) = devm_kzalloc(&lpm_pdev->dev,
-				sizeof(uint32_t) * cpu->nlevels, GFP_KERNEL);
-		if (!per_cpu(min_residency, i))
-			return -ENOMEM;
-
-		set_optimum_cpu_residency(cpu, i, true);
-	}
+	cpu->levels[i-1].pwr.max_residency = UINT_MAX;
 
 	return 0;
 }
@@ -736,8 +589,11 @@ static int parse_cpu_levels(struct device_node *node, struct lpm_cluster *c)
 	if (ret)
 		goto failed;
 
-	key = "qcom,disable-prediction";
-	cpu->lpm_prediction = !(of_property_read_bool(node, key));
+	cpu->ipi_prediction = !(of_property_read_bool(node,
+					"qcom,disable-ipi-prediction"));
+
+	cpu->lpm_prediction = !(of_property_read_bool(node,
+					"qcom,disable-prediction"));
 
 	if (cpu->lpm_prediction) {
 		key = "qcom,ref-stddev";
@@ -800,8 +656,7 @@ struct lpm_cluster *parse_cluster(struct device_node *node,
 	struct lpm_cluster *c;
 	struct device_node *n;
 	char *key;
-	int ret = 0;
-	int i, j;
+	int ret = 0, i;
 
 	c = devm_kzalloc(&lpm_pdev->dev, sizeof(*c), GFP_KERNEL);
 	if (!c)
@@ -809,7 +664,7 @@ struct lpm_cluster *parse_cluster(struct device_node *node,
 
 	ret = parse_cluster_params(node, c);
 	if (ret)
-		goto failed_parse_params;
+		return NULL;
 
 	INIT_LIST_HEAD(&c->list);
 	INIT_LIST_HEAD(&c->child);
@@ -820,47 +675,36 @@ struct lpm_cluster *parse_cluster(struct device_node *node,
 
 	for_each_child_of_node(node, n) {
 
-		if (!n->name)
-			continue;
-
-		key = "qcom,pm-cluster-level";
-		if (!of_node_cmp(n->name, key)) {
-			if (parse_cluster_level(n, c)) {
-				of_node_put(n);
-				goto failed_parse_cluster;
-			}
+		if (!n->name) {
 			of_node_put(n);
 			continue;
 		}
 
-		key = "qcom,pm-cluster";
-		if (!of_node_cmp(n->name, key)) {
+		if (!of_node_cmp(n->name, "qcom,pm-cluster-level")) {
+			key = "qcom,pm-cluster-level";
+			if (parse_cluster_level(n, c))
+				goto failed_parse_cluster;
+		} else if (!of_node_cmp(n->name, "qcom,pm-cluster")) {
 			struct lpm_cluster *child;
 
+			key = "qcom,pm-cluster";
 			child = parse_cluster(n, c);
-			if (!child) {
-				of_node_put(n);
+			if (!child)
 				goto failed_parse_cluster;
-			}
 
 			list_add(&child->list, &c->child);
 			cpumask_or(&c->child_cpus, &c->child_cpus,
 					&child->child_cpus);
 			c->aff_level = child->aff_level + 1;
-			of_node_put(n);
-			continue;
-		}
-
-		key = "qcom,pm-cpu";
-		if (!of_node_cmp(n->name, key)) {
-			if (parse_cpu_levels(n, c)) {
-				of_node_put(n);
+		} else if (!of_node_cmp(n->name, "qcom,pm-cpu")) {
+			key = "qcom,pm-cpu";
+			if (parse_cpu_levels(n, c))
 				goto failed_parse_cluster;
-			}
 
 			c->aff_level = 1;
-			of_node_put(n);
 		}
+
+		of_node_put(n);
 	}
 
 	if (cpumask_intersects(&c->child_cpus, cpu_online_mask))
@@ -868,28 +712,23 @@ struct lpm_cluster *parse_cluster(struct device_node *node,
 	else
 		c->last_level = c->nlevels-1;
 
-	for (i = 0; i < c->nlevels; i++) {
-		for (j = 0; j < c->nlevels; j++) {
-			if (i >= j) {
-				c->levels[i].pwr.residencies[j] = 0;
-				continue;
-			}
-			c->levels[i].pwr.residencies[j] = calculate_residency(
-				&c->levels[i].pwr, &c->levels[j].pwr);
-		}
-	}
-	set_optimum_cluster_residency(c, true);
+	for (i = 1; i < c->nlevels; i++)
+		c->levels[i-1].pwr.max_residency =
+			c->levels[i].pwr.min_residency - 1;
+
+	c->levels[i-1].pwr.max_residency = UINT_MAX;
+
 	return c;
 
 failed_parse_cluster:
 	pr_err("Failed parse cluster:%s\n", key);
+	of_node_put(n);
 	if (parent)
 		list_del(&c->list);
 	free_cluster_node(c);
-failed_parse_params:
-	pr_err("Failed parse params\n");
 	return NULL;
 }
+
 struct lpm_cluster *lpm_of_parse_cluster(struct platform_device *pdev)
 {
 	struct device_node *top = NULL;

@@ -43,6 +43,11 @@
 #define SDE_MAX_DE_CURVES		3
 #endif
 
+#define MAX_DSI_DISPLAYS		2
+#define MAX_DATA_PATH_PER_DSIPLAY	2
+
+#define SDE_AD4_REG_LEN		0x484
+
 enum sde_format_flags {
 	SDE_FORMAT_FLAG_YUV_BIT,
 	SDE_FORMAT_FLAG_DX_BIT,
@@ -64,8 +69,6 @@ enum sde_format_flags {
 #define SDE_FORMAT_IS_UBWC(X) \
 	(((X)->fetch_mode == SDE_FETCH_UBWC) && \
 			test_bit(SDE_FORMAT_FLAG_COMPRESSED_BIT, (X)->flag))
-
-#define TO_S15D16(_x_) ((_x_) << 7)
 
 #define SDE_BLEND_FG_ALPHA_FG_CONST	(0 << 0)
 #define SDE_BLEND_FG_ALPHA_BG_CONST	(1 << 0)
@@ -91,11 +94,11 @@ enum sde_format_flags {
 #define SDE_VSYNC_SOURCE_INTF_1		4
 #define SDE_VSYNC_SOURCE_INTF_2		5
 #define SDE_VSYNC_SOURCE_INTF_3		6
-#define SDE_VSYNC_SOURCE_WD_TIMER_4	0x11
-#define SDE_VSYNC_SOURCE_WD_TIMER_3	0x12
-#define SDE_VSYNC_SOURCE_WD_TIMER_2	0x13
-#define SDE_VSYNC_SOURCE_WD_TIMER_1	0x14
-#define SDE_VSYNC_SOURCE_WD_TIMER_0	0x15
+#define SDE_VSYNC_SOURCE_WD_TIMER_4	11
+#define SDE_VSYNC_SOURCE_WD_TIMER_3	12
+#define SDE_VSYNC_SOURCE_WD_TIMER_2	13
+#define SDE_VSYNC_SOURCE_WD_TIMER_1	14
+#define SDE_VSYNC_SOURCE_WD_TIMER_0	15
 
 enum sde_hw_blk_type {
 	SDE_HW_BLK_TOP = 0,
@@ -110,6 +113,8 @@ enum sde_hw_blk_type {
 	SDE_HW_BLK_WB,
 	SDE_HW_BLK_DSC,
 	SDE_HW_BLK_ROT,
+	SDE_HW_BLK_MERGE_3D,
+	SDE_HW_BLK_QDSS,
 	SDE_HW_BLK_MAX,
 };
 
@@ -192,6 +197,7 @@ enum sde_ctl {
 	CTL_2,
 	CTL_3,
 	CTL_4,
+	CTL_5,
 	CTL_MAX
 };
 
@@ -207,6 +213,7 @@ enum sde_pingpong {
 	PINGPONG_2,
 	PINGPONG_3,
 	PINGPONG_4,
+	PINGPONG_5,
 	PINGPONG_S0,
 	PINGPONG_MAX
 };
@@ -274,6 +281,8 @@ enum sde_cwb {
 	CWB_1,
 	CWB_2,
 	CWB_3,
+	CWB_4,
+	CWB_5,
 	CWB_MAX
 };
 
@@ -311,6 +320,18 @@ enum sde_inline_rot {
 	INLINE_ROT0_SSPP,
 	INLINE_ROT0_WB,
 	INLINE_ROT_MAX
+};
+
+enum sde_merge_3d {
+	MERGE_3D_0 = 1,
+	MERGE_3D_1,
+	MERGE_3D_2,
+	MERGE_3D_MAX
+};
+
+enum sde_qdss {
+	QDSS_0,
+	QDSS_MAX
 };
 
 /**
@@ -391,18 +412,6 @@ enum sde_3d_blend_mode {
 	BLEND_3D_V_ROW_INT,
 	BLEND_3D_COL_INT,
 	BLEND_3D_MAX
-};
-
-enum sde_csc_type {
-	SDE_CSC_RGB2YUV_601L,
-	SDE_CSC_RGB2YUV_601FR,
-	SDE_CSC_RGB2YUV_709L,
-	SDE_CSC_RGB2YUV_709FR,
-	SDE_CSC_RGB2YUV_2020L,
-	SDE_CSC_RGB2YUV_2020FR,
-	SDE_CSC_RGB2RGB_L,
-	SDE_CSC_RGB2RGB_FR,
-	SDE_MAX_CSC
 };
 
 /** struct sde_format - defines the format configuration which
@@ -512,6 +521,9 @@ struct sde_mdss_color {
 #define SDE_DBG_MASK_DSC      (1 << 11)
 #define SDE_DBG_MASK_ROT      (1 << 12)
 #define SDE_DBG_MASK_DS       (1 << 13)
+#define SDE_DBG_MASK_REGDMA   (1 << 14)
+#define SDE_DBG_MASK_QDSS     (1 << 15)
+#define SDE_DBG_MASK_SID      (1 << 15)
 
 /**
  * struct sde_hw_cp_cfg: hardware dspp/lm feature payload.
@@ -550,68 +562,128 @@ struct sde_hw_dim_layer {
 };
 
 /**
- * struct sde_splash_lm_hw - Struct contains LM block properties
- * @lm_id:	stores the current LM ID
- * @ctl_id:	stores the current CTL ID associated with the LM.
- * @lm_reg_value:Store the LM block register value
+ * struct sde_splash_mem - Struct contains splah memory info
+ * @splash_buf_size: Indicates the size of the memory region
+ * @splash_buf_base: Address of specific splash memory region
+ * @ramdump_size: Size of ramdump buffer region
+ * @ramdump_base: Address of ramdump region reserved by bootloader
+ * @ref_cnt:	Tracks the map count to help in sharing splash memory
  */
-struct sde_splash_lm_hw {
-	u8 lm_id;
-	u8 ctl_id;
-	u32 lm_reg_value;
+struct sde_splash_mem {
+	u32 splash_buf_size;
+	unsigned long splash_buf_base;
+	u32 ramdump_size;
+	unsigned long ramdump_base;
+	u32 ref_cnt;
 };
 
 /**
- * struct ctl_top - Struct contains CTL block properties
- * @value:	Store the CTL block register value
- * @mode_sel:	stores the mode selected in the CTL block
- * @dspp_sel:	stores the dspp selected in the CTL block
- * @pp_sel:	stores the pp selected in the CTL block
- * @intf_sel:	stores the intf selected in the CTL block
- * @lm:		Pointer to store the list of LMs in the CTL block
- * @ctl_lm_cnt:	stores the active number of MDSS "LM" blocks in the CTL block
+ * struct sde_sspp_index_info - Struct containing sspp identifier info
+ * @sspp:	Enum value indicates sspp id
+ * @is_virtual: Boolean to identify if virtual or base
  */
-struct ctl_top {
-	u32 value;
-	u8 mode_sel;
-	u8 dspp_sel;
-	u8 pp_sel;
-	u8 intf_sel;
-	struct sde_splash_lm_hw lm[LM_MAX - LM_0];
-	u8 ctl_lm_cnt;
+struct sde_sspp_index_info {
+	enum sde_sspp sspp;
+	bool is_virtual;
+};
+
+/**
+ * struct sde_splash_data - Struct contains details of resources and hw blocks
+ * used in continuous splash on a specific display.
+ * @cont_splash_enabled:  Stores the cont_splash status (enabled/disabled)
+ * @single_flush_en: Stores if the single flush is enabled
+ * @encoder:	Pointer to the drm encoder object used for this display
+ * @splash:     Pointer to struct sde_splash_mem used for this display
+ * @ctl_ids:	Stores the valid MDSS ctl block ids for the current mode
+ * @lm_ids:	Stores the valid MDSS layer mixer block ids for the current mode
+ * @dsc_ids:	Stores the valid MDSS DSC block ids for the current mode
+ * @pipes:      Array of sspp info detected on this display
+ * @ctl_cnt:    Stores the active number of MDSS "top" blks of the current mode
+ * @lm_cnt:	Stores the active number of MDSS "LM" blks for the current mode
+ * @dsc_cnt:	Stores the active number of MDSS "dsc" blks for the current mode
+ * @pipe_cnt:	Stores the active number of "sspp" blks connected
+ */
+struct sde_splash_display {
+	bool cont_splash_enabled;
+	bool single_flush_en;
+	struct drm_encoder *encoder;
+	struct sde_splash_mem *splash;
+	u8 ctl_ids[MAX_DATA_PATH_PER_DSIPLAY];
+	u8 lm_ids[MAX_DATA_PATH_PER_DSIPLAY];
+	u8 dsc_ids[MAX_DATA_PATH_PER_DSIPLAY];
+	struct sde_sspp_index_info pipes[MAX_DATA_PATH_PER_DSIPLAY];
+	u8 ctl_cnt;
+	u8 lm_cnt;
+	u8 dsc_cnt;
+	u8 pipe_cnt;
 };
 
 /**
  * struct sde_splash_data - Struct contains details of continuous splash
- *	memory region and initial pipeline configuration.
- * @resource_handoff_pending: boolean to notify boot up resource handoff
- *			is pending.
- * @splash_base:	Base address of continuous splash region reserved
- *                      by bootloader
- * @splash_size:	Size of continuous splash region
- * @top:	struct ctl_top objects
- * @ctl_ids:	stores the valid MDSS ctl block ids for the current mode
- * @lm_ids:	stores the valid MDSS layer mixer block ids for the current mode
- * @dsc_ids:	stores the valid MDSS DSC block ids for the current mode
- * @ctl_top_cnt:stores the active number of MDSS "top" blks of the current mode
- * @lm_cnt:	stores the active number of MDSS "LM" blks for the current mode
- * @dsc_cnt:	stores the active number of MDSS "dsc" blks for the current mode
- * @cont_splash_en:	Stores the cont_splash status (enabled/disbled)
- * @single_flush_en: Stores if the single flush is enabled.
+ *	for all the displays connected by probe time
+ * @num_splash_regions:  Indicates number of splash memory regions from dtsi
+ * @num_splash_displays: Indicates count of active displays in continuous splash
+ * @splash_mem:          Array of all struct sde_splash_mem listed from dtsi
+ * @splash_display:      Array of all struct sde_splash_display
  */
 struct sde_splash_data {
-	bool resource_handoff_pending;
-	unsigned long splash_base;
-	u32 splash_size;
-	struct ctl_top top[CTL_MAX - CTL_0];
-	u8 ctl_ids[CTL_MAX - CTL_0];
-	u8 lm_ids[LM_MAX - LM_0];
-	u8 dsc_ids[DSC_MAX - DSC_0];
-	u8 ctl_top_cnt;
-	u8 lm_cnt;
-	u8 dsc_cnt;
-	bool cont_splash_en;
-	bool single_flush_en;
+	u32 num_splash_regions;
+	u32 num_splash_displays;
+	struct sde_splash_mem splash_mem[MAX_DSI_DISPLAYS];
+	struct sde_splash_display splash_display[MAX_DSI_DISPLAYS];
+};
+
+/**
+ * struct sde_hw_tear_check - Struct contains parameters to configure
+ *	tear-effect module. This structure is used to configure tear-check
+ *	logic present either in ping-pong or in interface module.
+ * @vsync_count:	Ratio of MDP VSYNC clk freq(Hz) to refresh rate divided
+ *                      by no of lines
+ * @sync_cfg_height:	Total vertical lines (display height - 1)
+ * @vsync_init_val:	Init value to which the read pointer gets loaded at
+ *                      vsync edge
+ * @sync_threshold_start: Read pointer threshold start ROI for write operation
+ * @sync_threshold_continue: The minimum number of lines the write pointer
+ *                           needs to be above the read pointer
+ * @start_pos:	The position from which the start_threshold value is added
+ * @rd_ptr_irq:	The read pointer line at which interrupt has to be generated
+ * @hw_vsync_mode:	Sync with external frame sync input
+ */
+struct sde_hw_tear_check {
+	u32 vsync_count;
+	u32 sync_cfg_height;
+	u32 vsync_init_val;
+	u32 sync_threshold_start;
+	u32 sync_threshold_continue;
+	u32 start_pos;
+	u32 rd_ptr_irq;
+	u8 hw_vsync_mode;
+};
+
+/**
+ * struct sde_hw_autorefresh - Struct contains parameters to configure
+ *            auto-refresh mode for command mode panels
+ * @enable:	Enalbe or disable the auto-refresh mode
+ * @frame_count:	Auto-refresh frame counter at which update occurs
+ */
+struct sde_hw_autorefresh {
+	bool  enable;
+	u32 frame_count;
+};
+
+/**
+ * struct sde_hw_pp_vsync_info - Struct contains parameters to configure
+ *        read and write pointers for command mode panels
+ * @rd_ptr_init_val:	Value of rd pointer at vsync edge
+ * @rd_ptr_frame_count:	num frames sent since enabling interface
+ * @rd_ptr_line_count:	current line on panel (rd ptr)
+ * @wr_ptr_line_count:	current line within pp fifo (wr ptr)
+ */
+struct sde_hw_pp_vsync_info {
+	u32 rd_ptr_init_val;
+	u32 rd_ptr_frame_count;
+	u32 rd_ptr_line_count;
+	u32 wr_ptr_line_count;
 };
 
 #endif  /* _SDE_HW_MDSS_H */

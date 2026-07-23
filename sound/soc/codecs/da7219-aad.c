@@ -115,19 +115,21 @@ static void da7219_aad_hptest_work(struct work_struct *work)
 	struct da7219_priv *da7219 = snd_soc_codec_get_drvdata(codec);
 
 	u16 tonegen_freq_hptest;
-	u8 pll_srm_sts, gain_ramp_ctrl, accdet_cfg8;
+	u8 pll_srm_sts, pll_ctrl, gain_ramp_ctrl, accdet_cfg8;
 	int report = 0, ret = 0;
 
-	/* Lock DAPM and any Kcontrols that are affected by this test */
+	/* Lock DAPM, Kcontrols affected by this test and the PLL */
 	snd_soc_dapm_mutex_lock(dapm);
-	mutex_lock(&da7219->lock);
+	mutex_lock(&da7219->ctrl_lock);
+	mutex_lock(&da7219->pll_lock);
 
 	/* Ensure MCLK is available for HP test procedure */
 	if (da7219->mclk) {
 		ret = clk_prepare_enable(da7219->mclk);
 		if (ret) {
 			dev_err(codec->dev, "Failed to enable mclk - %d\n", ret);
-			mutex_unlock(&da7219->lock);
+			mutex_unlock(&da7219->pll_lock);
+			mutex_unlock(&da7219->ctrl_lock);
 			snd_soc_dapm_mutex_unlock(dapm);
 			return;
 		}
@@ -136,12 +138,21 @@ static void da7219_aad_hptest_work(struct work_struct *work)
 	/*
 	 * If MCLK not present, then we're using the internal oscillator and
 	 * require different frequency settings to achieve the same result.
+	 *
+	 * If MCLK is present, but PLL is not enabled then we enable it here to
+	 * ensure a consistent detection procedure.
 	 */
 	pll_srm_sts = snd_soc_read(codec, DA7219_PLL_SRM_STS);
-	if (pll_srm_sts & DA7219_PLL_SRM_STS_MCLK)
+	if (pll_srm_sts & DA7219_PLL_SRM_STS_MCLK) {
 		tonegen_freq_hptest = cpu_to_le16(DA7219_AAD_HPTEST_RAMP_FREQ);
-	else
+
+		pll_ctrl = snd_soc_read(codec, DA7219_PLL_CTRL);
+		if ((pll_ctrl & DA7219_PLL_MODE_MASK) == DA7219_PLL_MODE_BYPASS)
+			da7219_set_pll(codec, DA7219_SYSCLK_PLL,
+				       DA7219_PLL_FREQ_OUT_98304);
+	} else {
 		tonegen_freq_hptest = cpu_to_le16(DA7219_AAD_HPTEST_RAMP_FREQ_INT_OSC);
+	}
 
 	/* Ensure gain ramping at fastest rate */
 	gain_ramp_ctrl = snd_soc_read(codec, DA7219_GAIN_RAMP_CTRL);
@@ -204,10 +215,19 @@ static void da7219_aad_hptest_work(struct work_struct *work)
 	snd_soc_update_bits(codec, DA7219_MIXOUT_R_CTRL,
 			    DA7219_MIXOUT_R_AMP_EN_MASK,
 			    DA7219_MIXOUT_R_AMP_EN_MASK);
-	snd_soc_write(codec, DA7219_HP_L_CTRL,
-		      DA7219_HP_L_AMP_OE_MASK | DA7219_HP_L_AMP_EN_MASK);
-	snd_soc_write(codec, DA7219_HP_R_CTRL,
-		      DA7219_HP_R_AMP_OE_MASK | DA7219_HP_R_AMP_EN_MASK);
+	snd_soc_update_bits(codec, DA7219_HP_L_CTRL,
+			    DA7219_HP_L_AMP_OE_MASK | DA7219_HP_L_AMP_EN_MASK,
+			    DA7219_HP_L_AMP_OE_MASK | DA7219_HP_L_AMP_EN_MASK);
+	snd_soc_update_bits(codec, DA7219_HP_R_CTRL,
+			    DA7219_HP_R_AMP_OE_MASK | DA7219_HP_R_AMP_EN_MASK,
+			    DA7219_HP_R_AMP_OE_MASK | DA7219_HP_R_AMP_EN_MASK);
+	msleep(DA7219_SETTLING_DELAY);
+	snd_soc_update_bits(codec, DA7219_HP_L_CTRL,
+			    DA7219_HP_L_AMP_MUTE_EN_MASK |
+			    DA7219_HP_L_AMP_MIN_GAIN_EN_MASK, 0);
+	snd_soc_update_bits(codec, DA7219_HP_R_CTRL,
+			    DA7219_HP_R_AMP_MUTE_EN_MASK |
+			    DA7219_HP_R_AMP_MIN_GAIN_EN_MASK, 0);
 
 	/*
 	 * If we're running from the internal oscillator then give audio paths
@@ -244,6 +264,7 @@ static void da7219_aad_hptest_work(struct work_struct *work)
 	regcache_mark_dirty(da7219->regmap);
 	regcache_sync_region(da7219->regmap, DA7219_HP_L_CTRL,
 			     DA7219_HP_R_CTRL);
+	msleep(DA7219_SETTLING_DELAY);
 	regcache_sync_region(da7219->regmap, DA7219_MIXOUT_L_CTRL,
 			     DA7219_MIXOUT_R_CTRL);
 	regcache_sync_region(da7219->regmap, DA7219_DROUTING_ST_OUTFILT_1L,
@@ -292,11 +313,17 @@ static void da7219_aad_hptest_work(struct work_struct *work)
 	snd_soc_update_bits(codec, DA7219_HP_R_CTRL, DA7219_HP_R_AMP_OE_MASK,
 			    DA7219_HP_R_AMP_OE_MASK);
 
+	/* Restore PLL to previous configuration, if re-configured */
+	if ((pll_srm_sts & DA7219_PLL_SRM_STS_MCLK) &&
+	    ((pll_ctrl & DA7219_PLL_MODE_MASK) == DA7219_PLL_MODE_BYPASS))
+		da7219_set_pll(codec, DA7219_SYSCLK_MCLK, 0);
+
 	/* Remove MCLK, if previously enabled */
 	if (da7219->mclk)
 		clk_disable_unprepare(da7219->mclk);
 
-	mutex_unlock(&da7219->lock);
+	mutex_unlock(&da7219->pll_lock);
+	mutex_unlock(&da7219->ctrl_lock);
 	snd_soc_dapm_mutex_unlock(dapm);
 
 	/*
@@ -598,8 +625,10 @@ static struct da7219_aad_pdata *da7219_aad_fw_to_pdata(struct snd_soc_codec *cod
 		return NULL;
 
 	aad_pdata = devm_kzalloc(codec->dev, sizeof(*aad_pdata), GFP_KERNEL);
-	if (!aad_pdata)
+	if (!aad_pdata) {
+		fwnode_handle_put(aad_np);
 		return NULL;
+	}
 
 	aad_pdata->irq = i2c->irq;
 
@@ -623,7 +652,7 @@ static struct da7219_aad_pdata *da7219_aad_fw_to_pdata(struct snd_soc_codec *cod
 		aad_pdata->mic_det_thr =
 			da7219_aad_fw_mic_det_thr(codec, fw_val32);
 	else
-		aad_pdata->mic_det_thr = DA7219_AAD_MIC_DET_THR_500_OHMS;
+		aad_pdata->mic_det_thr = DA7219_AAD_MIC_DET_THR_200_OHMS;
 
 	if (fwnode_property_read_u32(aad_np, "dlg,jack-ins-deb", &fw_val32) >= 0)
 		aad_pdata->jack_ins_deb =
@@ -673,6 +702,8 @@ static struct da7219_aad_pdata *da7219_aad_fw_to_pdata(struct snd_soc_codec *cod
 			da7219_aad_fw_adc_1bit_rpt(codec, fw_val32);
 	else
 		aad_pdata->adc_1bit_rpt = DA7219_AAD_ADC_1BIT_RPT_1;
+
+	fwnode_handle_put(aad_np);
 
 	return aad_pdata;
 }
@@ -827,6 +858,8 @@ void da7219_aad_suspend(struct snd_soc_codec *codec)
 			}
 		}
 	}
+
+	synchronize_irq(da7219_aad->irq);
 }
 
 void da7219_aad_resume(struct snd_soc_codec *codec)

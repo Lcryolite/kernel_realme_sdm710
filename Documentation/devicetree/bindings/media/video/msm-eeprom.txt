@@ -1,6 +1,6 @@
 * Qualcomm Technologies, Inc. MSM EEPROM
 
-EEPROM is an one time programmed(OTP) device that stores the calibration data
+EEPROM is a one time programmed(OTP) device that stores the calibration data
 use for camera sensor. It may either be integrated in the sensor module or in
 the sensor itself. As a result, the power, clock and GPIOs may be the same as
 the camera sensor. The following describes the page block map, power supply,

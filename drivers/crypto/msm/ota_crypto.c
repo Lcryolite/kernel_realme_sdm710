@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2014,2017 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2014,2017-2018 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -14,6 +14,8 @@
 /* QTI Over the Air (OTA) Crypto driver */
 
 #include <linux/types.h>
+#include <linux/module.h>
+#include <linux/device.h>
 #include <linux/platform_device.h>
 #include <linux/dma-mapping.h>
 #include <linux/kernel.h>
@@ -23,7 +25,7 @@
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/fs.h>
-#include <linux/miscdevice.h>
+#include <linux/cdev.h>
 #include <linux/uaccess.h>
 #include <linux/debugfs.h>
 #include <linux/cache.h>
@@ -52,25 +54,26 @@ struct ota_async_req {
 		struct qce_f9_req f9_req;
 		struct qce_f8_req f8_req;
 		struct qce_f8_multi_pkt_req f8_mp_req;
-		struct qce_f8_varible_multi_pkt_req f8_v_mp_req;
+		struct qce_f8_variable_multi_pkt_req f8_v_mp_req;
 	} req;
 	unsigned int steps;
 	struct ota_qce_dev  *pqce;
 };
 
 /*
- * Register ourselves as a misc device to be able to access the ota
+ * Register ourselves as a char device /dev/qcota0 to be able to access the ota
  * from userspace.
  */
 
 
-#define QCOTA_DEV	"qcota"
+#define QCOTA_DEV	"qcota0"
 
 
 struct ota_dev_control {
 
-	/* misc device */
-	struct miscdevice miscdevice;
+	/* char device */
+	struct cdev cdev;
+	int minor;
 	struct list_head ready_commands;
 	unsigned int magic;
 	struct list_head qce_dev;
@@ -113,13 +116,12 @@ static const struct file_operations qcota_fops = {
 };
 
 static struct ota_dev_control qcota_dev = {
-	.miscdevice = {
-			.minor = MISC_DYNAMIC_MINOR,
-			.name = "qcota0",
-			.fops = &qcota_fops,
-	},
 	.magic = OTA_MAGIC,
 };
+
+static dev_t qcota_device_no;
+static struct class *driver_class;
+static struct device *class_dev;
 
 #define DEBUG_MAX_FNAME  16
 #define DEBUG_MAX_RW_BUF 1024
@@ -216,7 +218,7 @@ static void req_done(unsigned long data)
 	spin_lock_irqsave(&podev->lock, flags);
 	areq = pqce->active_command;
 	if (unlikely(areq == NULL))
-		pr_err("ota_crypto: req_done, no active request\n");
+		pr_err("ota_crypto: %s, no active request\n", __func__);
 	else if (areq->op == QCE_OTA_VAR_MPKT_F8_OPER) {
 		if (_next_v_mp_req(areq)) {
 			/* execute next subcommand */
@@ -243,9 +245,11 @@ static void req_done(unsigned long data)
 			pqce->active_command = new_req;
 			spin_unlock_irqrestore(&podev->lock, flags);
 
-			new_req->err = 0;
-			/* start a new request */
-			ret = start_req(pqce, new_req);
+			if (new_req) {
+				new_req->err = 0;
+				/* start a new request */
+				ret = start_req(pqce, new_req);
+			}
 			if (unlikely(new_req && ret)) {
 				new_req->err = ret;
 				complete(&new_req->complete);
@@ -458,7 +462,7 @@ static long qcota_ioctl(struct file *file,
 		if (!access_ok(VERIFY_WRITE, (void __user *)arg,
 			       sizeof(struct qce_f9_req)))
 			return -EFAULT;
-		if (__copy_from_user(&areq.req.f9_req, (void __user *)arg,
+		if (copy_from_user(&areq.req.f9_req, (void __user *)arg,
 				     sizeof(struct qce_f9_req)))
 			return -EFAULT;
 
@@ -473,7 +477,7 @@ static long qcota_ioctl(struct file *file,
 		if (k_buf == NULL)
 			return -ENOMEM;
 
-		if (__copy_from_user(k_buf, (void __user *)user_src,
+		if (copy_from_user(k_buf, (void __user *)user_src,
 				areq.req.f9_req.msize)) {
 			kfree(k_buf);
 			return -EFAULT;
@@ -486,7 +490,7 @@ static long qcota_ioctl(struct file *file,
 		err = submit_req(&areq, podev);
 
 		areq.req.f9_req.message = user_src;
-		if (err == 0 && __copy_to_user((void __user *)arg,
+		if (err == 0 && copy_to_user((void __user *)arg,
 				&areq.req.f9_req, sizeof(struct qce_f9_req))) {
 			err = -EFAULT;
 		}
@@ -497,7 +501,7 @@ static long qcota_ioctl(struct file *file,
 		if (!access_ok(VERIFY_WRITE, (void __user *)arg,
 			       sizeof(struct qce_f8_req)))
 			return -EFAULT;
-		if (__copy_from_user(&areq.req.f8_req, (void __user *)arg,
+		if (copy_from_user(&areq.req.f8_req, (void __user *)arg,
 				     sizeof(struct qce_f8_req)))
 			return -EFAULT;
 		total = areq.req.f8_req.data_len;
@@ -521,7 +525,7 @@ static long qcota_ioctl(struct file *file,
 			return -ENOMEM;
 
 		/* k_buf returned from kmalloc should be cache line aligned */
-		if (user_src && __copy_from_user(k_buf,
+		if (user_src && copy_from_user(k_buf,
 				(void __user *)user_src, total)) {
 			kfree(k_buf);
 			return -EFAULT;
@@ -538,7 +542,7 @@ static long qcota_ioctl(struct file *file,
 		pstat->f8_req++;
 		err = submit_req(&areq, podev);
 
-		if (err == 0 && __copy_to_user(user_dst, k_buf, total))
+		if (err == 0 && copy_to_user(user_dst, k_buf, total))
 			err = -EFAULT;
 		kfree(k_buf);
 
@@ -548,7 +552,7 @@ static long qcota_ioctl(struct file *file,
 		if (!access_ok(VERIFY_WRITE, (void __user *)arg,
 			       sizeof(struct qce_f8_multi_pkt_req)))
 			return -EFAULT;
-		if (__copy_from_user(&areq.req.f8_mp_req, (void __user *)arg,
+		if (copy_from_user(&areq.req.f8_mp_req, (void __user *)arg,
 				     sizeof(struct qce_f8_multi_pkt_req)))
 			return -EFAULT;
 		temp = areq.req.f8_mp_req.qce_f8_req.data_len;
@@ -574,7 +578,7 @@ static long qcota_ioctl(struct file *file,
 		if (k_buf == NULL)
 			return -ENOMEM;
 		/* k_buf returned from kmalloc should be cache line aligned */
-		if (__copy_from_user(k_buf, (void __user *)user_src, total)) {
+		if (copy_from_user(k_buf, (void __user *)user_src, total)) {
 			kfree(k_buf);
 
 			return -EFAULT;
@@ -588,17 +592,17 @@ static long qcota_ioctl(struct file *file,
 		pstat->f8_mp_req++;
 		err = submit_req(&areq, podev);
 
-		if (err == 0 && __copy_to_user(user_dst, k_buf, total))
+		if (err == 0 && copy_to_user(user_dst, k_buf, total))
 			err = -EFAULT;
 		kfree(k_buf);
 		break;
 
 	case QCOTA_F8_V_MPKT_REQ:
 		if (!access_ok(VERIFY_WRITE, (void __user *)arg,
-				sizeof(struct qce_f8_varible_multi_pkt_req)))
+				sizeof(struct qce_f8_variable_multi_pkt_req)))
 			return -EFAULT;
-		if (__copy_from_user(&areq.req.f8_v_mp_req, (void __user *)arg,
-				sizeof(struct qce_f8_varible_multi_pkt_req)))
+		if (copy_from_user(&areq.req.f8_v_mp_req, (void __user *)arg,
+				sizeof(struct qce_f8_variable_multi_pkt_req)))
 			return -EFAULT;
 
 		if (areq.req.f8_v_mp_req.num_pkt > MAX_NUM_V_MULTI_PKT)
@@ -621,7 +625,7 @@ static long qcota_ioctl(struct file *file,
 
 		for (i = 0, p = k_buf; i < areq.req.f8_v_mp_req.num_pkt; i++) {
 			user_src =  areq.req.f8_v_mp_req.cipher_iov[i].addr;
-			if (__copy_from_user(p, (void __user *)user_src,
+			if (copy_from_user(p, (void __user *)user_src,
 				areq.req.f8_v_mp_req.cipher_iov[i].size)) {
 				kfree(k_buf);
 				return -EFAULT;
@@ -648,7 +652,7 @@ static long qcota_ioctl(struct file *file,
 
 		for (i = 0, p = k_buf; i < areq.req.f8_v_mp_req.num_pkt; i++) {
 			user_dst =  areq.req.f8_v_mp_req.cipher_iov[i].addr;
-			if (__copy_to_user(user_dst, p,
+			if (copy_to_user(user_dst, p,
 				areq.req.f8_v_mp_req.cipher_iov[i].size)) {
 				kfree(k_buf);
 				return -EFAULT;
@@ -677,10 +681,39 @@ static int qcota_probe(struct platform_device *pdev)
 
 	podev = &qcota_dev;
 	pqce = kzalloc(sizeof(*pqce), GFP_KERNEL);
-	if (!pqce) {
-		pr_err("qcota_probe: Memory allocation FAIL\n");
+	if (!pqce)
 		return -ENOMEM;
+
+	rc = alloc_chrdev_region(&qcota_device_no, 0, 1, QCOTA_DEV);
+	if (rc < 0) {
+		pr_err("alloc_chrdev_region failed %d\n", rc);
+		return rc;
 	}
+
+	driver_class = class_create(THIS_MODULE, QCOTA_DEV);
+	if (IS_ERR(driver_class)) {
+		rc = -ENOMEM;
+		pr_err("class_create failed %d\n", rc);
+		goto exit_unreg_chrdev_region;
+	}
+
+	class_dev = device_create(driver_class, NULL, qcota_device_no, NULL,
+		QCOTA_DEV);
+	if (IS_ERR(class_dev)) {
+		pr_err("class_device_create failed %d\n", rc);
+		rc = -ENOMEM;
+		goto exit_destroy_class;
+	}
+
+	cdev_init(&podev->cdev, &qcota_fops);
+	podev->cdev.owner = THIS_MODULE;
+
+	rc = cdev_add(&podev->cdev, MKDEV(MAJOR(qcota_device_no), 0), 1);
+	if (rc < 0) {
+		pr_err("cdev_add failed %d\n", rc);
+		goto exit_destroy_device;
+	}
+	podev->minor = 0;
 
 	pqce->podev = podev;
 	pqce->active_command = NULL;
@@ -691,7 +724,7 @@ static int qcota_probe(struct platform_device *pdev)
 	if (handle == NULL) {
 		pr_err("%s: device %s, can not open qce\n",
 			__func__, pdev->name);
-		goto err;
+		goto exit_del_cdev;
 	}
 	if (qce_hw_support(handle, &ce_support) < 0 ||
 					ce_support.ota == false) {
@@ -709,7 +742,6 @@ static int qcota_probe(struct platform_device *pdev)
 	mutex_lock(&podev->register_lock);
 	rc = 0;
 	if (podev->registered == false) {
-		rc = misc_register(&podev->miscdevice);
 		if (rc == 0) {
 			pqce->unit = podev->total_units;
 			podev->total_units++;
@@ -736,6 +768,16 @@ err:
 
 	platform_set_drvdata(pdev, NULL);
 	tasklet_kill(&pqce->done_tasklet);
+
+exit_del_cdev:
+	cdev_del(&podev->cdev);
+exit_destroy_device:
+	device_destroy(driver_class, qcota_device_no);
+exit_destroy_class:
+	class_destroy(driver_class);
+exit_unreg_chrdev_region:
+	unregister_chrdev_region(qcota_device_no, 1);
+
 	kfree(pqce);
 	return rc;
 }
@@ -762,8 +804,10 @@ static int qcota_remove(struct platform_device *pdev)
 
 	mutex_lock(&podev->register_lock);
 	if (--podev->total_units == 0) {
-		if (podev->miscdevice.minor != MISC_DYNAMIC_MINOR)
-			misc_deregister(&podev->miscdevice);
+		cdev_del(&podev->cdev);
+		device_destroy(driver_class, qcota_device_no);
+		class_destroy(driver_class);
+		unregister_chrdev_region(qcota_device_no, 1);
 		podev->registered = false;
 	}
 	mutex_unlock(&podev->register_lock);

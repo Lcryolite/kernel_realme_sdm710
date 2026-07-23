@@ -43,12 +43,12 @@
 #include "rndis.h"
 
 int rndis_ul_max_pkt_per_xfer_rcvd;
-module_param(rndis_ul_max_pkt_per_xfer_rcvd, int, S_IRUGO);
+module_param(rndis_ul_max_pkt_per_xfer_rcvd, int, 0444);
 MODULE_PARM_DESC(rndis_ul_max_pkt_per_xfer_rcvd,
 		"Max num of REMOTE_NDIS_PACKET_MSGs received in a single transfer");
 
 int rndis_ul_max_xfer_size_rcvd;
-module_param(rndis_ul_max_xfer_size_rcvd, int, S_IRUGO);
+module_param(rndis_ul_max_xfer_size_rcvd, int, 0444);
 MODULE_PARM_DESC(rndis_ul_max_xfer_size_rcvd,
 		"Max size of bus transfer received");
 
@@ -90,8 +90,7 @@ static const struct file_operations rndis_proc_fops;
 #endif /* CONFIG_USB_GADGET_DEBUG_FILES */
 
 /* supported OIDs */
-static const u32 oid_supported_list[] =
-{
+static const u32 oid_supported_list[] = {
 	/* the general stuff */
 	RNDIS_OID_GEN_SUPPORTED_LIST,
 	RNDIS_OID_GEN_HARDWARE_STATUS,
@@ -484,8 +483,7 @@ static int gen_ndis_query_resp(struct rndis_params *params, u32 OID, u8 *buf,
 		break;
 
 	default:
-		pr_warning("%s: query unknown OID 0x%08X\n",
-			 __func__, OID);
+		pr_warn("%s: query unknown OID 0x%08X\n", __func__, OID);
 	}
 	if (retval < 0)
 		length = 0;
@@ -553,8 +551,8 @@ static int gen_ndis_set_resp(struct rndis_params *params, u32 OID,
 		break;
 
 	default:
-		pr_warning("%s: set unknown OID 0x%08X, size %d\n",
-			 __func__, OID, buf_len);
+		pr_warn("%s: set unknown OID 0x%08X, size %d\n",
+			__func__, OID, buf_len);
 	}
 
 	return retval;
@@ -596,7 +594,6 @@ static int rndis_init_response(struct rndis_params *params,
 	resp->AFListOffset = cpu_to_le32(0);
 	resp->AFListSize = cpu_to_le32(0);
 
-	params->ul_max_xfer_size = le32_to_cpu(resp->MaxTransferSize);
 	params->resp_avail(params->v);
 	return 0;
 }
@@ -692,6 +689,12 @@ static int rndis_reset_response(struct rndis_params *params,
 {
 	rndis_reset_cmplt_type *resp;
 	rndis_resp_t *r;
+	u8 *xbuf;
+	u32 length;
+
+	/* drain the response queue */
+	while ((xbuf = rndis_get_next_response(params, &length)))
+		rndis_free_response(params, xbuf);
 
 	r = rndis_add_response(params, sizeof(rndis_reset_cmplt_type));
 	if (!r)
@@ -875,7 +878,7 @@ int rndis_msg_parser(struct rndis_params *params, u8 *buf)
 		 * In one case those messages seemed to relate to the host
 		 * suspending itself.
 		 */
-		pr_warning("%s: unknown RNDIS message 0x%08X len %d\n",
+		pr_warn("%s: unknown RNDIS message 0x%08X len %d\n",
 			__func__, MsgType, MsgLength);
 		print_hex_dump_bytes(__func__, DUMP_PREFIX_OFFSET,
 				     buf, MsgLength);
@@ -936,7 +939,6 @@ struct rndis_params *rndis_register(void (*resp_avail)(void *v), void *v,
 	}
 #endif
 
-	spin_lock_init(&params->lock);
 	params->confignr = i;
 	params->used = 1;
 	params->state = RNDIS_UNINITIALIZED;
@@ -945,6 +947,7 @@ struct rndis_params *rndis_register(void (*resp_avail)(void *v), void *v,
 	params->flow_ctrl_enable = flow_ctrl_enable;
 	params->v = v;
 	INIT_LIST_HEAD(&params->resp_queue);
+	spin_lock_init(&params->resp_lock);
 	pr_debug("%s: configNr = %d\n", __func__, i);
 
 	return params;
@@ -1089,7 +1092,7 @@ void rndis_add_hdr(struct sk_buff *skb)
 
 	if (!skb)
 		return;
-	header = (void *)skb_push(skb, sizeof(*header));
+	header = skb_push(skb, sizeof(*header));
 	memset(header, 0, sizeof *header);
 	header->MessageType = cpu_to_le32(RNDIS_MSG_PACKET);
 	header->MessageLength = cpu_to_le32(skb->len);
@@ -1101,37 +1104,35 @@ EXPORT_SYMBOL_GPL(rndis_add_hdr);
 void rndis_free_response(struct rndis_params *params, u8 *buf)
 {
 	rndis_resp_t *r, *n;
-	unsigned long flags;
 
-	spin_lock_irqsave(&params->lock, flags);
+	spin_lock(&params->resp_lock);
 	list_for_each_entry_safe(r, n, &params->resp_queue, list) {
 		if (r->buf == buf) {
 			list_del(&r->list);
 			kfree(r);
 		}
 	}
-	spin_unlock_irqrestore(&params->lock, flags);
+	spin_unlock(&params->resp_lock);
 }
 EXPORT_SYMBOL_GPL(rndis_free_response);
 
 u8 *rndis_get_next_response(struct rndis_params *params, u32 *length)
 {
 	rndis_resp_t *r, *n;
-	unsigned long flags;
 
 	if (!length) return NULL;
 
-	spin_lock_irqsave(&params->lock, flags);
+	spin_lock(&params->resp_lock);
 	list_for_each_entry_safe(r, n, &params->resp_queue, list) {
 		if (!r->send) {
 			r->send = 1;
 			*length = r->length;
-			spin_unlock_irqrestore(&params->lock, flags);
+			spin_unlock(&params->resp_lock);
 			return r->buf;
 		}
 	}
-	spin_unlock_irqrestore(&params->lock, flags);
 
+	spin_unlock(&params->resp_lock);
 	return NULL;
 }
 EXPORT_SYMBOL_GPL(rndis_get_next_response);
@@ -1139,7 +1140,6 @@ EXPORT_SYMBOL_GPL(rndis_get_next_response);
 static rndis_resp_t *rndis_add_response(struct rndis_params *params, u32 length)
 {
 	rndis_resp_t *r;
-	unsigned long flags;
 
 	/* NOTE: this gets copied into ether.c USB_BUFSIZ bytes ... */
 	r = kmalloc(sizeof(rndis_resp_t) + length, GFP_ATOMIC);
@@ -1149,9 +1149,9 @@ static rndis_resp_t *rndis_add_response(struct rndis_params *params, u32 length)
 	r->length = length;
 	r->send = 0;
 
-	spin_lock_irqsave(&params->lock, flags);
+	spin_lock(&params->resp_lock);
 	list_add_tail(&r->list, &params->resp_queue);
-	spin_unlock_irqrestore(&params->lock, flags);
+	spin_unlock(&params->resp_lock);
 	return r;
 }
 
@@ -1169,9 +1169,9 @@ int rndis_rm_hdr(struct gether *port,
 		struct sk_buff          *skb2;
 		u32             msg_len, data_offset, data_len;
 
-		if (skb->len < sizeof *hdr) {
+		if (skb->len < sizeof(*hdr)) {
 			pr_err("invalid rndis pkt: skblen:%u hdr_len:%zu",
-					skb->len, sizeof *hdr);
+					skb->len, sizeof(*hdr));
 			dev_kfree_skb_any(skb);
 			return -EINVAL;
 		}
@@ -1184,15 +1184,15 @@ int rndis_rm_hdr(struct gether *port,
 		if (skb->len < msg_len ||
 				((data_offset + data_len + 8) > msg_len)) {
 			pr_err("invalid rndis message: %d/%d/%d/%d, len:%d\n",
-					le32_to_cpu(hdr->MessageType),
-					msg_len, data_offset, data_len, skb->len);
+					le32_to_cpu(hdr->MessageType), msg_len,
+					data_offset, data_len, skb->len);
 			dev_kfree_skb_any(skb);
 			return -EOVERFLOW;
 		}
 		if (le32_to_cpu(hdr->MessageType) != RNDIS_MSG_PACKET) {
 			pr_err("invalid rndis message: %d/%d/%d/%d, len:%d\n",
-					le32_to_cpu(hdr->MessageType),
-					msg_len, data_offset, data_len, skb->len);
+					le32_to_cpu(hdr->MessageType), msg_len,
+					data_offset, data_len, skb->len);
 			dev_kfree_skb_any(skb);
 			return -EINVAL;
 		}
@@ -1214,7 +1214,7 @@ int rndis_rm_hdr(struct gether *port,
 			return -ENOMEM;
 		}
 
-		skb_pull(skb, msg_len - sizeof *hdr);
+		skb_pull(skb, msg_len - sizeof(*hdr));
 		skb_trim(skb2, data_len);
 		skb_queue_tail(list, skb2);
 	}

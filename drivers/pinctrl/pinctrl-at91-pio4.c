@@ -126,7 +126,11 @@ struct atmel_pioctrl {
 	struct irq_domain	*irq_domain;
 	int			*irqs;
 	unsigned		*pm_wakeup_sources;
-	unsigned		*pm_suspend_backup;
+	struct {
+		u32		imr;
+		u32		odsr;
+		u32		cfgr[ATMEL_PIO_NPINS_PER_BANK];
+	} *pm_suspend_backup;
 	struct device		*dev;
 	struct device_node	*node;
 };
@@ -489,15 +493,14 @@ static int atmel_pctl_dt_subnode_to_map(struct pinctrl_dev *pctldev,
 	ret = pinconf_generic_parse_dt_config(np, pctldev, &configs,
 					      &num_configs);
 	if (ret < 0) {
-		dev_err(pctldev->dev, "%s: could not parse node property\n",
-			of_node_full_name(np));
+		dev_err(pctldev->dev, "%pOF: could not parse node property\n",
+			np);
 		return ret;
 	}
 
 	num_pins = pins->length / sizeof(u32);
 	if (!num_pins) {
-		dev_err(pctldev->dev, "no pins found in node %s\n",
-			of_node_full_name(np));
+		dev_err(pctldev->dev, "no pins found in node %pOF\n", np);
 		ret = -EINVAL;
 		goto exit;
 	}
@@ -578,8 +581,8 @@ static int atmel_pctl_dt_node_to_map(struct pinctrl_dev *pctldev,
 
 	if (ret < 0) {
 		pinctrl_utils_free_map(pctldev, *map, *num_maps);
-		dev_err(pctldev->dev, "can't create maps for node %s\n",
-			np_config->full_name);
+		dev_err(pctldev->dev, "can't create maps for node %pOF\n",
+			np_config);
 	}
 
 	return ret;
@@ -828,17 +831,26 @@ static int __maybe_unused atmel_pctrl_suspend(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct atmel_pioctrl *atmel_pioctrl = platform_get_drvdata(pdev);
-	int i;
+	int i, j;
 
 	/*
 	 * For each bank, save IMR to restore it later and disable all GPIO
 	 * interrupts excepting the ones marked as wakeup sources.
 	 */
 	for (i = 0; i < atmel_pioctrl->nbanks; i++) {
-		atmel_pioctrl->pm_suspend_backup[i] =
+		atmel_pioctrl->pm_suspend_backup[i].imr =
 			atmel_gpio_read(atmel_pioctrl, i, ATMEL_PIO_IMR);
 		atmel_gpio_write(atmel_pioctrl, i, ATMEL_PIO_IDR,
 				 ~atmel_pioctrl->pm_wakeup_sources[i]);
+		atmel_pioctrl->pm_suspend_backup[i].odsr =
+			atmel_gpio_read(atmel_pioctrl, i, ATMEL_PIO_ODSR);
+		for (j = 0; j < ATMEL_PIO_NPINS_PER_BANK; j++) {
+			atmel_gpio_write(atmel_pioctrl, i,
+					 ATMEL_PIO_MSKR, BIT(j));
+			atmel_pioctrl->pm_suspend_backup[i].cfgr[j] =
+				atmel_gpio_read(atmel_pioctrl, i,
+						ATMEL_PIO_CFGR);
+		}
 	}
 
 	return 0;
@@ -848,11 +860,20 @@ static int __maybe_unused atmel_pctrl_resume(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct atmel_pioctrl *atmel_pioctrl = platform_get_drvdata(pdev);
-	int i;
+	int i, j;
 
-	for (i = 0; i < atmel_pioctrl->nbanks; i++)
+	for (i = 0; i < atmel_pioctrl->nbanks; i++) {
 		atmel_gpio_write(atmel_pioctrl, i, ATMEL_PIO_IER,
-				 atmel_pioctrl->pm_suspend_backup[i]);
+				 atmel_pioctrl->pm_suspend_backup[i].imr);
+		atmel_gpio_write(atmel_pioctrl, i, ATMEL_PIO_SODR,
+				 atmel_pioctrl->pm_suspend_backup[i].odsr);
+		for (j = 0; j < ATMEL_PIO_NPINS_PER_BANK; j++) {
+			atmel_gpio_write(atmel_pioctrl, i,
+					 ATMEL_PIO_MSKR, BIT(j));
+			atmel_gpio_write(atmel_pioctrl, i, ATMEL_PIO_CFGR,
+					 atmel_pioctrl->pm_suspend_backup[i].cfgr[j]);
+		}
+	}
 
 	return 0;
 }
@@ -877,6 +898,13 @@ static const struct of_device_id atmel_pctrl_of_match[] = {
 		/* sentinel */
 	}
 };
+
+/*
+ * This lock class allows to tell lockdep that parent IRQ and children IRQ do
+ * not share the same class so it does not raise false positive
+ */
+static struct lock_class_key atmel_lock_key;
+static struct lock_class_key atmel_request_key;
 
 static int atmel_pinctrl_probe(struct platform_device *pdev)
 {
@@ -960,8 +988,10 @@ static int atmel_pinctrl_probe(struct platform_device *pdev)
 
 		pin_desc[i].number = i;
 		/* Pin naming convention: P(bank_name)(bank_pin_number). */
-		pin_desc[i].name = kasprintf(GFP_KERNEL, "P%c%d",
-					     bank + 'A', line);
+		pin_desc[i].name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "P%c%d",
+						  bank + 'A', line);
+		if (!pin_desc[i].name)
+			return -ENOMEM;
 
 		group->name = group_names[i] = pin_desc[i].name;
 		group->pin = pin_desc[i].number;
@@ -1014,7 +1044,6 @@ static int atmel_pinctrl_probe(struct platform_device *pdev)
 		dev_err(dev, "can't add the irq domain\n");
 		return -ENODEV;
 	}
-	atmel_pioctrl->irq_domain->name = "atmel gpio";
 
 	for (i = 0; i < atmel_pioctrl->npins; i++) {
 		int irq = irq_create_mapping(atmel_pioctrl->irq_domain, i);
@@ -1022,6 +1051,7 @@ static int atmel_pinctrl_probe(struct platform_device *pdev)
 		irq_set_chip_and_handler(irq, &atmel_gpio_irq_chip,
 					 handle_simple_irq);
 		irq_set_chip_data(irq, atmel_pioctrl);
+		irq_set_lockdep_class(irq, &atmel_lock_key, &atmel_request_key);
 		dev_dbg(dev,
 			"atmel gpio irq domain: hwirq: %d, linux irq: %d\n",
 			i, irq);

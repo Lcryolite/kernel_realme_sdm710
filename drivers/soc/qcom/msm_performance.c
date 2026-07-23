@@ -25,7 +25,14 @@
 #include <linux/module.h>
 #include <linux/input.h>
 #include <linux/kthread.h>
+#include <linux/sched/core_ctl.h>
 
+/*
+ * Sched will provide the data for every 20ms window,
+ * will collect the data for 15 windows(300ms) and then update
+ * sysfs nodes with aggregated data
+ */
+#define POLL_INT 15
 
 /* To handle cpufreq min/max request */
 struct cpu_status {
@@ -42,11 +49,10 @@ struct events {
 static struct events events_group;
 static struct task_struct *events_notify_thread;
 
-/**************************sysfs start********************************/
-/*
- * Userspace sends cpu#:min_freq_value to vote for min_freq_value as the new
- * scaling_min. To withdraw its vote it needs to enter cpu#:0
- */
+static unsigned int aggr_big_nr;
+static unsigned int aggr_top_load;
+
+/*******************************sysfs start************************************/
 static int set_cpu_min_freq(const char *buf, const struct kernel_param *kp)
 {
 	int i, j, ntokens = 0;
@@ -55,7 +61,6 @@ static int set_cpu_min_freq(const char *buf, const struct kernel_param *kp)
 	struct cpu_status *i_cpu_stats;
 	struct cpufreq_policy policy;
 	cpumask_var_t limit_mask;
-	int ret;
 
 	while ((cp = strpbrk(cp + 1, " :")))
 		ntokens++;
@@ -95,11 +100,9 @@ static int set_cpu_min_freq(const char *buf, const struct kernel_param *kp)
 		if (cpufreq_get_policy(&policy, i))
 			continue;
 
-		if (cpu_online(i) && (policy.min != i_cpu_stats->min)) {
-			ret = cpufreq_update_policy(i);
-			if (ret)
-				continue;
-		}
+		if (cpu_online(i) && (policy.min != i_cpu_stats->min))
+			cpufreq_update_policy(i);
+
 		for_each_cpu(j, policy.related_cpus)
 			cpumask_clear_cpu(j, limit_mask);
 	}
@@ -126,10 +129,6 @@ static const struct kernel_param_ops param_ops_cpu_min_freq = {
 };
 module_param_cb(cpu_min_freq, &param_ops_cpu_min_freq, NULL, 0644);
 
-/*
- * Userspace sends cpu#:max_freq_value to vote for max_freq_value as the new
- * scaling_max. To withdraw its vote it needs to enter cpu#:UINT_MAX
- */
 static int set_cpu_max_freq(const char *buf, const struct kernel_param *kp)
 {
 	int i, j, ntokens = 0;
@@ -138,7 +137,6 @@ static int set_cpu_max_freq(const char *buf, const struct kernel_param *kp)
 	struct cpu_status *i_cpu_stats;
 	struct cpufreq_policy policy;
 	cpumask_var_t limit_mask;
-	int ret;
 
 	while ((cp = strpbrk(cp + 1, " :")))
 		ntokens++;
@@ -170,11 +168,9 @@ static int set_cpu_max_freq(const char *buf, const struct kernel_param *kp)
 		if (cpufreq_get_policy(&policy, i))
 			continue;
 
-		if (cpu_online(i) && (policy.max != i_cpu_stats->max)) {
-			ret = cpufreq_update_policy(i);
-			if (ret)
-				continue;
-		}
+		if (cpu_online(i) && (policy.max != i_cpu_stats->max))
+			cpufreq_update_policy(i);
+
 		for_each_cpu(j, policy.related_cpus)
 			cpumask_clear_cpu(j, limit_mask);
 	}
@@ -201,10 +197,6 @@ static const struct kernel_param_ops param_ops_cpu_max_freq = {
 };
 module_param_cb(cpu_max_freq, &param_ops_cpu_max_freq, NULL, 0644);
 
-
-
-
-/* CPU Hotplug */
 static struct kobject *events_kobj;
 
 static ssize_t show_cpu_hotplug(struct kobject *kobj,
@@ -223,8 +215,38 @@ static struct attribute *events_attrs[] = {
 static struct attribute_group events_attr_group = {
 	.attrs = events_attrs,
 };
-/*******************************sysfs ends************************************/
 
+static ssize_t show_big_nr(struct kobject *kobj,
+	struct kobj_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%u\n", aggr_big_nr);
+}
+
+static struct kobj_attribute big_nr_attr =
+__ATTR(aggr_big_nr, 0444, show_big_nr, NULL);
+
+static ssize_t show_top_load(struct kobject *kobj,
+	struct kobj_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%u\n", aggr_top_load);
+}
+
+static struct kobj_attribute top_load_attr =
+__ATTR(aggr_top_load, 0444, show_top_load, NULL);
+
+
+static struct attribute *notify_attrs[] = {
+	&big_nr_attr.attr,
+	&top_load_attr.attr,
+	NULL,
+};
+
+static struct attribute_group notify_attr_group = {
+	.attrs = notify_attrs,
+};
+static struct kobject *notify_kobj;
+
+/*******************************sysfs ends************************************/
 
 static int perf_adjust_notify(struct notifier_block *nb, unsigned long val,
 							void *data)
@@ -301,6 +323,31 @@ static int events_notify_userspace(void *data)
 	return 0;
 }
 
+static int init_notify_group(void)
+{
+	int ret;
+	struct kobject *module_kobj;
+
+	module_kobj = kset_find_obj(module_kset, KBUILD_MODNAME);
+	if (!module_kobj) {
+		pr_err("msm_perf: Couldn't find module kobject\n");
+		return -ENOENT;
+	}
+
+	notify_kobj = kobject_create_and_add("notify", module_kobj);
+	if (!notify_kobj) {
+		pr_err("msm_perf: Failed to add notify_kobj\n");
+		return -ENOMEM;
+	}
+
+	ret = sysfs_create_group(notify_kobj, &notify_attr_group);
+	if (ret) {
+		kobject_put(notify_kobj);
+		pr_err("msm_perf: Failed to create sysfs\n");
+		return ret;
+	}
+	return 0;
+}
 
 static int init_events_group(void)
 {
@@ -336,6 +383,67 @@ static int init_events_group(void)
 	return 0;
 }
 
+static void nr_notify_userspace(struct work_struct *work)
+{
+	sysfs_notify(notify_kobj, NULL, "aggr_top_load");
+	sysfs_notify(notify_kobj, NULL, "aggr_big_nr");
+}
+
+static int msm_perf_core_ctl_notify(struct notifier_block *nb,
+				    unsigned long unused,
+				    void *data)
+{
+	static unsigned int tld, nrb, i;
+	static DECLARE_WORK(sysfs_notify_work, nr_notify_userspace);
+	struct core_ctl_notif_data *d = data;
+
+
+	nrb += d->nr_big;
+	tld += d->coloc_load_pct;
+	i++;
+	if (i == POLL_INT) {
+		aggr_big_nr = ((nrb%POLL_INT) ? 1 : 0) + nrb/POLL_INT;
+		aggr_top_load = tld/POLL_INT;
+		tld = 0;
+		nrb = 0;
+		i = 0;
+		schedule_work(&sysfs_notify_work);
+	}
+	return NOTIFY_OK;
+}
+
+static struct notifier_block msm_perf_nb = {
+	.notifier_call = msm_perf_core_ctl_notify
+};
+
+static bool core_ctl_register;
+static int set_core_ctl_register(const char *buf, const struct kernel_param *kp)
+{
+	int ret;
+	bool old_val = core_ctl_register;
+
+	ret = param_set_bool(buf, kp);
+	if (ret < 0)
+		return ret;
+
+	if (core_ctl_register == old_val)
+		return 0;
+
+	if (core_ctl_register)
+		core_ctl_notifier_register(&msm_perf_nb);
+	else
+		core_ctl_notifier_unregister(&msm_perf_nb);
+
+	return 0;
+}
+
+static const struct kernel_param_ops param_ops_cc_register = {
+	.set = set_core_ctl_register,
+	.get = param_get_bool,
+};
+module_param_cb(core_ctl_register, &param_ops_cc_register,
+		&core_ctl_register, 0644);
+
 static int __init msm_performance_init(void)
 {
 	unsigned int cpu;
@@ -352,6 +460,7 @@ static int __init msm_performance_init(void)
 		NULL);
 
 	init_events_group();
+	init_notify_group();
 
 	return 0;
 }

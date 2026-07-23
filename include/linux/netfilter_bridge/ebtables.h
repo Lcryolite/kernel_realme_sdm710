@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *  ebtables
  *
@@ -97,10 +98,6 @@ struct ebt_table {
 	struct ebt_replace_kernel *table;
 	unsigned int valid_hooks;
 	rwlock_t lock;
-	/* e.g. could be the table explicitly only allows certain
-	 * matches, targets, ... 0 == let it in */
-	int (*check)(const struct ebt_table_info *info,
-	   unsigned int valid_hooks);
 	/* the data used by the kernel */
 	struct ebt_table_info *private;
 	struct module *me;
@@ -108,9 +105,12 @@ struct ebt_table {
 
 #define EBT_ALIGN(s) (((s) + (__alignof__(struct _xt_align)-1)) & \
 		     ~(__alignof__(struct _xt_align)-1))
-extern struct ebt_table *ebt_register_table(struct net *net,
-					    const struct ebt_table *table);
-extern void ebt_unregister_table(struct net *net, struct ebt_table *table);
+extern int ebt_register_table(struct net *net,
+			      const struct ebt_table *table,
+			      const struct nf_hook_ops *ops,
+			      struct ebt_table **res);
+extern void ebt_unregister_table(struct net *net, struct ebt_table *table,
+				 const struct nf_hook_ops *);
 extern unsigned int ebt_do_table(struct sk_buff *skb,
 				 const struct nf_hook_state *state,
 				 struct ebt_table *table);
@@ -120,8 +120,6 @@ extern unsigned int ebt_do_table(struct sk_buff *skb,
 #define BASE_CHAIN (par->hook_mask & (1 << NF_BR_NUMHOOKS))
 /* Clear the bit in the hook mask that tells if the rule is on a base chain */
 #define CLEAR_BASE_CHAIN_BIT (par->hook_mask &= ~(1 << NF_BR_NUMHOOKS))
-/* True if the target is not a standard target */
-#define INVALID_TARGET (info->target < -NUM_STANDARD_TARGETS || info->target >= 0)
 
 static inline bool ebt_invalid_target(int target)
 {

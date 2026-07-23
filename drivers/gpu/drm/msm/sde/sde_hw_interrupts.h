@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2017, 2019 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -56,6 +56,11 @@
  * @SDE_IRQ_TYPE_PROG_LINE:		Programmable Line interrupt
  * @SDE_IRQ_TYPE_AD4_BL_DONE:		AD4 backlight
  * @SDE_IRQ_TYPE_CTL_START:		Control start
+ * @SDE_IRQ_TYPE_INTF_TEAR_RD_PTR:	INTF Tear read pointer
+ * @SDE_IRQ_TYPE_INTF_TEAR_WR_PTR:	INTF Tear write pointer
+ * @SDE_IRQ_TYPE_INTF_TEAR_AUTO_REF:	INTF Tear auto refresh
+ * @SDE_IRQ_TYPE_INTF_TEAR_TEAR_CHECK:	INTF Tear Tear check
+ * @SDE_IRQ_TYPE_INTF_TEAR_TE_CHECK:	INTF Tear TE detection
  * @SDE_IRQ_TYPE_RESERVED:		Reserved for expansion
  */
 enum sde_intr_type {
@@ -86,6 +91,11 @@ enum sde_intr_type {
 	SDE_IRQ_TYPE_PROG_LINE,
 	SDE_IRQ_TYPE_AD4_BL_DONE,
 	SDE_IRQ_TYPE_CTL_START,
+	SDE_IRQ_TYPE_INTF_TEAR_RD_PTR,
+	SDE_IRQ_TYPE_INTF_TEAR_WR_PTR,
+	SDE_IRQ_TYPE_INTF_TEAR_AUTO_REF,
+	SDE_IRQ_TYPE_INTF_TEAR_TEAR_CHECK,
+	SDE_IRQ_TYPE_INTF_TEAR_TE_CHECK,
 	SDE_IRQ_TYPE_RESERVED,
 };
 
@@ -285,6 +295,9 @@ struct sde_hw_intr_ops {
  * @save_irq_status:  array of IRQ status reg storage created during init
  * @irq_idx_tbl_size: total number of irq_idx mapped in the hw_interrupts
  * @irq_lock:         spinlock for accessing IRQ resources
+ * @sde_irq_size:   total number of elements of the sde_irq_tbl
+ * @sde_irq_tbl:	table with the registesrs offsets of the sde interrupts
+ *		supported by the hw
  */
 struct sde_hw_intr {
 	struct sde_hw_blk_reg_map hw;
@@ -292,6 +305,8 @@ struct sde_hw_intr {
 	u32 *cache_irq_mask;
 	u32 *save_irq_status;
 	u32 irq_idx_tbl_size;
+	u32 sde_irq_size;
+	struct sde_intr_reg *sde_irq_tbl;
 	spinlock_t irq_lock;
 };
 

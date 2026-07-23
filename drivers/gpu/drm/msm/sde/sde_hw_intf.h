@@ -17,6 +17,7 @@
 #include "sde_hw_mdss.h"
 #include "sde_hw_util.h"
 #include "sde_hw_blk.h"
+#include "sde_kms.h"
 
 struct sde_hw_intf;
 
@@ -39,6 +40,9 @@ struct intf_timing_params {
 	u32 underflow_clr;
 	u32 hsync_skew;
 	u32 v_front_porch_fixed;
+	bool wide_bus_en;	/* for DP only */
+	bool compression_en;	/* for DP only */
+	u32 extra_dto_cycles;	/* for DP only */
 };
 
 struct intf_prog_fetch {
@@ -53,6 +57,12 @@ struct intf_status {
 	u32 line_count;		/* current line count including blanking */
 };
 
+struct intf_avr_params {
+	u32 default_fps;
+	u32 min_fps;
+	u32 avr_mode; /* 0 - disable, 1 - continuous, 2 - one-shot */
+};
+
 /**
  * struct sde_hw_intf_ops : Interface to the interface Hw driver functions
  *  Assumption is these functions will be called after clocks are enabled
@@ -64,6 +74,8 @@ struct intf_status {
  * @ setup_misr: enables/disables MISR in HW register
  * @ collect_misr: reads and stores MISR data from HW register
  * @ get_line_count: reads current vertical line counter
+ * @bind_pingpong_blk: enable/disable the connection with pingpong which will
+ *                     feed pixels to this interface
  */
 struct sde_hw_intf_ops {
 	void (*setup_timing_gen)(struct sde_hw_intf *intf,
@@ -87,7 +99,90 @@ struct sde_hw_intf_ops {
 
 	u32 (*collect_misr)(struct sde_hw_intf *intf);
 
+	/**
+	 * returns the current scan line count of the display
+	 * video mode panels use get_line_count whereas get_vsync_info
+	 * is used for command mode panels
+	 */
 	u32 (*get_line_count)(struct sde_hw_intf *intf);
+
+	void (*bind_pingpong_blk)(struct sde_hw_intf *intf,
+			bool enable,
+			const enum sde_pingpong pp);
+
+	/**
+	 * enables vysnc generation and sets up init value of
+	 * read pointer and programs the tear check cofiguration
+	 */
+	int (*setup_tearcheck)(struct sde_hw_intf *intf,
+			struct sde_hw_tear_check *cfg);
+
+	/**
+	 * enables tear check block
+	 */
+	int (*enable_tearcheck)(struct sde_hw_intf *intf,
+			bool enable);
+
+	/**
+	 * updates tearcheck configuration
+	 */
+	void (*update_tearcheck)(struct sde_hw_intf *intf,
+			struct sde_hw_tear_check *cfg);
+
+	/**
+	 * read, modify, write to either set or clear listening to external TE
+	 * @Return: 1 if TE was originally connected, 0 if not, or -ERROR
+	 */
+	int (*connect_external_te)(struct sde_hw_intf *intf,
+			bool enable_external_te);
+
+	/**
+	 * provides the programmed and current
+	 * line_count
+	 */
+	int (*get_vsync_info)(struct sde_hw_intf *intf,
+			struct sde_hw_pp_vsync_info  *info);
+
+	/**
+	 * configure and enable the autorefresh config
+	 */
+	int (*setup_autorefresh)(struct sde_hw_intf *intf,
+			struct sde_hw_autorefresh *cfg);
+
+	/**
+	 * retrieve autorefresh config from hardware
+	 */
+	int (*get_autorefresh)(struct sde_hw_intf *intf,
+			struct sde_hw_autorefresh *cfg);
+
+	/**
+	 * poll until write pointer transmission starts
+	 * @Return: 0 on success, -ETIMEDOUT on timeout
+	 */
+	int (*poll_timeout_wr_ptr)(struct sde_hw_intf *intf, u32 timeout_us);
+
+	/**
+	 * Select vsync signal for tear-effect configuration
+	 */
+	void (*vsync_sel)(struct sde_hw_intf *intf, u32 vsync_source);
+
+	/**
+	 * Program the AVR_TOTAL for min fps rate
+	 */
+	int (*avr_setup)(struct sde_hw_intf *intf,
+			const struct intf_timing_params *params,
+			const struct intf_avr_params *avr_params);
+
+	/**
+	 * Signal the trigger on each commit for AVR
+	 */
+	void (*avr_trigger)(struct sde_hw_intf *ctx);
+
+	/**
+	 * Enable AVR and select the mode
+	 */
+	void (*avr_ctrl)(struct sde_hw_intf *intf,
+			const struct intf_avr_params *avr_params);
 };
 
 struct sde_hw_intf {
@@ -98,6 +193,7 @@ struct sde_hw_intf {
 	enum sde_intf idx;
 	const struct sde_intf_cfg *cap;
 	const struct sde_mdss_cfg *mdss;
+	struct split_pipe_cfg cfg;
 
 	/* ops */
 	struct sde_hw_intf_ops ops;

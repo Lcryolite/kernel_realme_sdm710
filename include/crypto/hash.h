@@ -253,6 +253,8 @@ static inline struct crypto_tfm *crypto_ahash_tfm(struct crypto_ahash *tfm)
 /**
  * crypto_free_ahash() - zeroize and free the ahash handle
  * @tfm: cipher handle to be freed
+ *
+ * If @tfm is a NULL or error pointer, this function does nothing.
  */
 static inline void crypto_free_ahash(struct crypto_ahash *tfm)
 {
@@ -328,6 +330,16 @@ static inline unsigned int crypto_ahash_digestsize(struct crypto_ahash *tfm)
 	return crypto_hash_alg_common(tfm)->digestsize;
 }
 
+/**
+ * crypto_ahash_statesize() - obtain size of the ahash state
+ * @tfm: cipher handle
+ *
+ * Return the size of the ahash state. With the crypto_ahash_export()
+ * function, the caller can export the state into a buffer whose size is
+ * defined with this function.
+ *
+ * Return: size of the ahash state
+ */
 static inline unsigned int crypto_ahash_statesize(struct crypto_ahash *tfm)
 {
 	return crypto_hash_alg_common(tfm)->statesize;
@@ -368,11 +380,7 @@ static inline struct crypto_ahash *crypto_ahash_reqtfm(
  * crypto_ahash_reqsize() - obtain size of the request data structure
  * @tfm: cipher handle
  *
- * Return the size of the ahash state size. With the crypto_ahash_export
- * function, the caller can export the state into a buffer whose size is
- * defined with this function.
- *
- * Return: size of the ahash state
+ * Return: size of the request data
  */
 static inline unsigned int crypto_ahash_reqsize(struct crypto_ahash *tfm)
 {
@@ -447,7 +455,7 @@ int crypto_ahash_digest(struct ahash_request *req);
  *
  * This function exports the hash state of the ahash_request handle into the
  * caller-allocated output buffer out which must have sufficient size (e.g. by
- * calling crypto_ahash_reqsize).
+ * calling crypto_ahash_statesize()).
  *
  * Return: 0 if the export was successful; < 0 if an error occurred
  */
@@ -609,7 +617,7 @@ static inline struct ahash_request *ahash_request_cast(
  * the cipher operation completes.
  *
  * The callback function is registered with the &ahash_request handle and
- * must comply with the following template
+ * must comply with the following template::
  *
  *	void callback_function(struct crypto_async_request *req, int error)
  */
@@ -683,6 +691,8 @@ static inline struct crypto_tfm *crypto_shash_tfm(struct crypto_shash *tfm)
 /**
  * crypto_free_shash() - zeroize and free the message digest handle
  * @tfm: cipher handle to be freed
+ *
+ * If @tfm is a NULL or error pointer, this function does nothing.
  */
 static inline void crypto_free_shash(struct crypto_shash *tfm)
 {

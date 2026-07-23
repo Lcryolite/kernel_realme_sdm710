@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _LINUX_HIGHMEM_H
 #define _LINUX_HIGHMEM_H
 
@@ -35,31 +36,7 @@ static inline void invalidate_kernel_vmap_range(void *vaddr, int size)
 
 /* declarations for linux/mm/highmem.c */
 unsigned int nr_free_highpages(void);
-extern atomic_long_t _totalhigh_pages;
-static inline unsigned long totalhigh_pages(void)
-{
-	return (unsigned long)atomic_long_read(&_totalhigh_pages);
-}
-
-static inline void totalhigh_pages_inc(void)
-{
-	atomic_long_inc(&_totalhigh_pages);
-}
-
-static inline void totalhigh_pages_dec(void)
-{
-	atomic_long_dec(&_totalhigh_pages);
-}
-
-static inline void totalhigh_pages_add(long count)
-{
-	atomic_long_add(count, &_totalhigh_pages);
-}
-
-static inline void totalhigh_pages_set(long val)
-{
-	atomic_long_set(&_totalhigh_pages, val);
-}
+extern unsigned long totalhigh_pages;
 
 void kmap_flush_unused(void);
 
@@ -81,7 +58,7 @@ static inline struct page *kmap_to_page(void *addr)
 	return virt_to_page(addr);
 }
 
-static inline unsigned long totalhigh_pages(void) { return 0UL; }
+#define totalhigh_pages 0UL
 
 #ifndef ARCH_HAS_KMAP
 static inline void *kmap(struct page *page)
@@ -223,16 +200,6 @@ alloc_zeroed_user_highpage_movable(struct vm_area_struct *vma,
 						vaddr);
 #endif
 }
-
-#ifdef CONFIG_CMA
-static inline struct page *
-alloc_zeroed_user_highpage_movable_cma(struct vm_area_struct *vma,
-						unsigned long vaddr)
-{
-	return __alloc_zeroed_user_highpage(__GFP_MOVABLE|__GFP_CMA, vma,
-						vaddr);
-}
-#endif
 
 static inline void clear_highpage(struct page *page)
 {

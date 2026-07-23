@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2018, 2020 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -30,7 +30,7 @@
  * @dir - The direction for the map.
  * @meta - Backpointer to the meta this guy belongs to.
  * @ref - for reference counting this mapping
- * @map_attrs - dma mapping attributes
+ * @attrs - dma mapping attributes
  * @buf_start_addr - address of start of buffer
  *
  * Represents a mapping of one dma_buf buffer to a particular device
@@ -46,7 +46,7 @@ struct msm_iommu_map {
 	enum dma_data_direction dir;
 	struct msm_iommu_meta *meta;
 	struct kref ref;
-	unsigned long map_attrs;
+	unsigned long attrs;
 	dma_addr_t buf_start_addr;
 };
 
@@ -220,25 +220,43 @@ static inline int __msm_dma_map_sg(struct device *dev, struct scatterlist *sg,
 		}
 		iommu_map->nents = nents;
 		iommu_map->dev = dev;
+		iommu_map->dir = dir;
+		iommu_map->attrs = attrs;
+		iommu_map->buf_start_addr = sg_phys(sg);
 
 		kref_init(&iommu_map->ref);
 		if (late_unmap)
 			kref_get(&iommu_map->ref);
 		iommu_map->meta = iommu_meta;
-		iommu_map->dir = dir;
-		iommu_map->map_attrs = attrs;
-		iommu_map->buf_start_addr = sg_phys(sg);
 		msm_iommu_add(iommu_meta, iommu_map);
 
 	} else {
 		if (nents == iommu_map->nents &&
 		    dir == iommu_map->dir &&
-		    attrs == iommu_map->map_attrs &&
+		    (attrs & ~DMA_ATTR_SKIP_CPU_SYNC) ==
+		    (iommu_map->attrs & ~DMA_ATTR_SKIP_CPU_SYNC) &&
 		    sg_phys(sg) == iommu_map->buf_start_addr) {
-			sg->dma_address = iommu_map->sgl->dma_address;
-			sg->dma_length = iommu_map->sgl->dma_length;
+			struct scatterlist *sg_tmp = sg;
+			struct scatterlist *map_sg;
+			int i;
+
+			for_each_sg(iommu_map->sgl, map_sg, nents, i) {
+				sg_dma_address(sg_tmp) = sg_dma_address(map_sg);
+				sg_dma_len(sg_tmp) = sg_dma_len(map_sg);
+				if (sg_dma_len(map_sg) == 0)
+					break;
+
+				sg_tmp = sg_next(sg_tmp);
+				if (sg_tmp == NULL)
+					break;
+			}
 
 			kref_get(&iommu_map->ref);
+
+			if ((attrs & DMA_ATTR_SKIP_CPU_SYNC) == 0)
+				dma_sync_sg_for_device(dev, iommu_map->sgl,
+					iommu_map->nents, iommu_map->dir);
+
 			if (is_device_dma_coherent(dev))
 				/*
 				 * Ensure all outstanding changes for coherent
@@ -257,7 +275,7 @@ static inline int __msm_dma_map_sg(struct device *dev, struct scatterlist *sg,
 				"req map attrs:%lu, original map attrs:%lu\n"
 				"req buffer start address differs:%d\n",
 				dir, iommu_map->dir, nents,
-				iommu_map->nents, attrs, iommu_map->map_attrs,
+				iommu_map->nents, attrs, iommu_map->attrs,
 				start_diff);
 			ret = -EINVAL;
 		}
@@ -342,13 +360,18 @@ static void msm_iommu_map_release(struct kref *kref)
 	table.sgl = map->sgl;
 	list_del(&map->lnode);
 
-	dma_unmap_sg(map->dev, map->sgl, map->nents, map->dir);
+	/* Skip an additional cache maintenance on the dma unmap path */
+	if (!(map->attrs & DMA_ATTR_SKIP_CPU_SYNC))
+		map->attrs |= DMA_ATTR_SKIP_CPU_SYNC;
+	dma_unmap_sg_attrs(map->dev, map->sgl, map->nents, map->dir,
+			map->attrs);
 	sg_free_table(&table);
 	kfree(map);
 }
 
-void msm_dma_unmap_sg(struct device *dev, struct scatterlist *sgl, int nents,
-		      enum dma_data_direction dir, struct dma_buf *dma_buf)
+void msm_dma_unmap_sg_attrs(struct device *dev, struct scatterlist *sgl,
+			    int nents, enum dma_data_direction dir,
+			    struct dma_buf *dma_buf, unsigned long attrs)
 {
 	struct msm_iommu_map *iommu_map;
 	struct msm_iommu_meta *meta;
@@ -377,6 +400,10 @@ void msm_dma_unmap_sg(struct device *dev, struct scatterlist *sgl, int nents,
 		WARN(1, "%s: (%pK) dir:%d differs from original dir:%d\n",
 		     __func__, dma_buf, dir, iommu_map->dir);
 
+	if (attrs && ((attrs & DMA_ATTR_SKIP_CPU_SYNC) == 0))
+		dma_sync_sg_for_cpu(dev, iommu_map->sgl, iommu_map->nents, dir);
+
+	iommu_map->attrs = attrs;
 	kref_put(&iommu_map->ref, msm_iommu_map_release);
 	mutex_unlock(&meta->lock);
 
@@ -385,7 +412,7 @@ void msm_dma_unmap_sg(struct device *dev, struct scatterlist *sgl, int nents,
 out:
 	return;
 }
-EXPORT_SYMBOL(msm_dma_unmap_sg);
+EXPORT_SYMBOL(msm_dma_unmap_sg_attrs);
 
 int msm_dma_unmap_all_for_dev(struct device *dev)
 {

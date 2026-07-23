@@ -1,4 +1,4 @@
- /* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -99,9 +99,11 @@ struct qmi_uaudio_stream_req_msg_v01 {
 	uint32_t bit_rate;
 	uint8_t xfer_buff_size_valid;
 	uint32_t xfer_buff_size;
+	uint8_t service_interval_valid;
+	uint32_t service_interval;
 };
-#define QMI_UAUDIO_STREAM_REQ_MSG_V01_MAX_MSG_LEN 39
-extern struct elem_info qmi_uaudio_stream_req_msg_v01_ei[];
+#define QMI_UAUDIO_STREAM_REQ_MSG_V01_MAX_MSG_LEN 46
+extern struct qmi_elem_info qmi_uaudio_stream_req_msg_v01_ei[];
 
 struct qmi_uaudio_stream_resp_msg_v01 {
 	struct qmi_response_type_v01 resp;
@@ -135,7 +137,7 @@ struct qmi_uaudio_stream_resp_msg_v01 {
 	uint8_t controller_num;
 };
 #define QMI_UAUDIO_STREAM_RESP_MSG_V01_MAX_MSG_LEN 202
-extern struct elem_info qmi_uaudio_stream_resp_msg_v01_ei[];
+extern struct qmi_elem_info qmi_uaudio_stream_resp_msg_v01_ei[];
 
 struct qmi_uaudio_stream_ind_msg_v01 {
 	enum usb_audio_device_indication_enum_v01 dev_event;
@@ -162,6 +164,6 @@ struct qmi_uaudio_stream_ind_msg_v01 {
 	uint8_t controller_num;
 };
 #define QMI_UAUDIO_STREAM_IND_MSG_V01_MAX_MSG_LEN 181
-extern struct elem_info qmi_uaudio_stream_ind_msg_v01_ei[];
+extern struct qmi_elem_info qmi_uaudio_stream_ind_msg_v01_ei[];
 
 #endif

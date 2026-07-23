@@ -1,7 +1,7 @@
 /*
  * linux/arch/arm64/crypto/aes-modes.S - chaining mode wrappers for AES
  *
- * Copyright (C) 2013 Linaro Ltd <ard.biesheuvel@linaro.org>
+ * Copyright (C) 2013 - 2017 Linaro Ltd <ard.biesheuvel@linaro.org>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -297,19 +297,17 @@ AES_ENTRY(aes_ctr_encrypt)
 	eor		v1.16b, v1.16b, v3.16b
 	st1		{v0.16b-v1.16b}, [x0], #32
 #else
-	add		w7, w6, #1
+	ldr		q8, .Laddends /* addends 1,2,3[,0] */
+	dup		v7.4s, w8
 	mov		v0.16b, v4.16b
-	add		w8, w6, #2
+	add		v7.4s, v7.4s, v8.4s
 	mov		v1.16b, v4.16b
-	add		w9, w6, #3
+	rev32		v8.16b, v7.16b
 	mov		v2.16b, v4.16b
-	rev		w7, w7
 	mov		v3.16b, v4.16b
-	rev		w8, w8
-	mov		v1.s[3], w7
-	rev		w9, w9
-	mov		v2.s[3], w8
-	mov		v3.s[3], w9
+	mov		v1.s[3], v8.s[0]
+	mov		v2.s[3], v8.s[1]
+	mov		v3.s[3], v8.s[2]
 	ld1		{v5.16b-v7.16b}, [x1], #48	/* get 3 input blocks */
 	do_encrypt_block4x
 	eor		v0.16b, v5.16b, v0.16b
@@ -339,7 +337,7 @@ AES_ENTRY(aes_ctr_encrypt)
 
 .Lctrcarrydone:
 	subs		w4, w4, #1
-	bmi		.Lctrhalfblock		/* blocks < 0 means 1/2 block */
+	bmi		.Lctrtailblock		/* blocks <0 means tail block */
 	ld1		{v3.16b}, [x1], #16
 	eor		v3.16b, v0.16b, v3.16b
 	st1		{v3.16b}, [x0], #16
@@ -350,10 +348,8 @@ AES_ENTRY(aes_ctr_encrypt)
 	FRAME_POP
 	ret
 
-.Lctrhalfblock:
-	ld1		{v3.8b}, [x1]
-	eor		v3.8b, v0.8b, v3.8b
-	st1		{v3.8b}, [x0]
+.Lctrtailblock:
+	st1		{v0.16b}, [x0]
 	FRAME_POP
 	ret
 
@@ -364,6 +360,12 @@ AES_ENTRY(aes_ctr_encrypt)
 	rev		x7, x7
 	ins		v4.d[0], x7
 	b		.Lctrcarrydone
+
+.Laddends:
+	.word	0x00000001
+	.word	0x00000002
+	.word	0x00000003
+	.word	0x00000000
 AES_ENDPROC(aes_ctr_encrypt)
 	.ltorg
 
@@ -529,3 +531,30 @@ AES_ENTRY(aes_xts_decrypt)
 	FRAME_POP
 	ret
 AES_ENDPROC(aes_xts_decrypt)
+
+	/*
+	 * aes_mac_update(u8 const in[], u32 const rk[], int rounds,
+	 *		  int blocks, u8 dg[], int enc_before, int enc_after)
+	 */
+AES_ENTRY(aes_mac_update)
+	ld1		{v0.16b}, [x4]			/* get dg */
+	enc_prepare	w2, x1, x7
+	cbnz		w5, .Lmacenc
+
+.Lmacloop:
+	cbz		w3, .Lmacout
+	ld1		{v1.16b}, [x0], #16		/* get next pt block */
+	eor		v0.16b, v0.16b, v1.16b		/* ..and xor with dg */
+
+	subs		w3, w3, #1
+	csinv		x5, x6, xzr, eq
+	cbz		w5, .Lmacout
+
+.Lmacenc:
+	encrypt_block	v0, w2, x1, x7, w8
+	b		.Lmacloop
+
+.Lmacout:
+	st1		{v0.16b}, [x4]			/* return dg */
+	ret
+AES_ENDPROC(aes_mac_update)

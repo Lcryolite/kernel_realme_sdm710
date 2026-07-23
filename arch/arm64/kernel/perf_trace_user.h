@@ -66,16 +66,16 @@ TRACE_EVENT(perf_trace_user,
 		__entry->ctr4 = l1_cnts[4];
 		__entry->ctr5 = l1_cnts[5];
 		__assign_str(user_string, string);
-		),
+	),
 
-		TP_printk("CCNTR: %u, CTR0: %u, CTR1: %u, CTR2: %u, CTR3: %u, CTR4: %u, CTR5: %u, MSG=%s",
-				__entry->cctr,
-				__entry->ctr0, __entry->ctr1,
-				__entry->ctr2, __entry->ctr3,
-				__entry->ctr4, __entry->ctr5,
-				__get_str(user_string)
-			)
-	);
+	TP_printk("CCNTR: %u, CTR0: %u, CTR1: %u, CTR2: %u, CTR3: %u, CTR4: %u, CTR5: %u, MSG=%s",
+			__entry->cctr,
+			__entry->ctr0, __entry->ctr1,
+			__entry->ctr2, __entry->ctr3,
+			__entry->ctr4, __entry->ctr5,
+			__get_str(user_string)
+		)
+);
 
 #endif
 #undef TRACE_INCLUDE_PATH

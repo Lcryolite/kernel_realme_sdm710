@@ -13,6 +13,8 @@
 #include <linux/init.h>
 #include <linux/bootmem.h>
 #include <linux/mman.h>
+#include <linux/sched/signal.h>
+#include <linux/sched/task.h>
 #include <linux/export.h>
 #include <linux/nodemask.h>
 #include <linux/initrd.h>
@@ -27,6 +29,7 @@
 #include <asm/cp15.h>
 #include <asm/mach-types.h>
 #include <asm/memblock.h>
+#include <asm/memory.h>
 #include <asm/prom.h>
 #include <asm/sections.h>
 #include <asm/setup.h>
@@ -196,7 +199,8 @@ int pfn_valid(unsigned long pfn)
 
 	if (__phys_to_pfn(addr) != pfn)
 		return 0;
-	return memblock_is_map_memory(addr);
+
+	return memblock_is_map_memory(__pfn_to_phys(pfn));
 }
 EXPORT_SYMBOL(pfn_valid);
 #endif
@@ -231,41 +235,59 @@ phys_addr_t __init arm_memblock_steal(phys_addr_t size, phys_addr_t align)
 	return phys;
 }
 
-void __init arm_memblock_init(const struct machine_desc *mdesc)
+static void __init arm_initrd_init(void)
 {
-	/* Register the kernel text, kernel data and initrd with memblock. */
-#ifdef CONFIG_XIP_KERNEL
-	memblock_reserve(__pa(_sdata), _end - _sdata);
-#else
-	memblock_reserve(__pa(_stext), _end - _stext);
-#endif
 #ifdef CONFIG_BLK_DEV_INITRD
+	phys_addr_t start;
+	unsigned long size;
+
 	/* FDT scan will populate initrd_start */
 	if (initrd_start && !phys_initrd_size) {
 		phys_initrd_start = __virt_to_phys(initrd_start);
 		phys_initrd_size = initrd_end - initrd_start;
 	}
-	initrd_start = initrd_end = 0;
-	if (phys_initrd_size &&
-	    !memblock_is_region_memory(phys_initrd_start, phys_initrd_size)) {
-		pr_err("INITRD: 0x%08llx+0x%08lx is not a memory region - disabling initrd\n",
-		       (u64)phys_initrd_start, phys_initrd_size);
-		phys_initrd_start = phys_initrd_size = 0;
-	}
-	if (phys_initrd_size &&
-	    memblock_is_region_reserved(phys_initrd_start, phys_initrd_size)) {
-		pr_err("INITRD: 0x%08llx+0x%08lx overlaps in-use memory region - disabling initrd\n",
-		       (u64)phys_initrd_start, phys_initrd_size);
-		phys_initrd_start = phys_initrd_size = 0;
-	}
-	if (phys_initrd_size) {
-		memblock_reserve(phys_initrd_start, phys_initrd_size);
 
-		/* Now convert initrd to virtual addresses */
-		initrd_start = __phys_to_virt(phys_initrd_start);
-		initrd_end = initrd_start + phys_initrd_size;
+	initrd_start = initrd_end = 0;
+
+	if (!phys_initrd_size)
+		return;
+
+	/*
+	 * Round the memory region to page boundaries as per free_initrd_mem()
+	 * This allows us to detect whether the pages overlapping the initrd
+	 * are in use, but more importantly, reserves the entire set of pages
+	 * as we don't want these pages allocated for other purposes.
+	 */
+	start = round_down(phys_initrd_start, PAGE_SIZE);
+	size = phys_initrd_size + (phys_initrd_start - start);
+	size = round_up(size, PAGE_SIZE);
+
+	if (!memblock_is_region_memory(start, size)) {
+		pr_err("INITRD: 0x%08llx+0x%08lx is not a memory region - disabling initrd\n",
+		       (u64)start, size);
+		return;
 	}
+
+	if (memblock_is_region_reserved(start, size)) {
+		pr_err("INITRD: 0x%08llx+0x%08lx overlaps in-use memory region - disabling initrd\n",
+		       (u64)start, size);
+		return;
+	}
+
+	memblock_reserve(start, size);
+
+	/* Now convert initrd to virtual addresses */
+	initrd_start = __phys_to_virt(phys_initrd_start);
+	initrd_end = initrd_start + phys_initrd_size;
 #endif
+}
+
+void __init arm_memblock_init(const struct machine_desc *mdesc)
+{
+	/* Register the kernel text, kernel data and initrd with memblock. */
+	memblock_reserve(__pa(KERNEL_START), KERNEL_END - KERNEL_START);
+
+	arm_initrd_init();
 
 	arm_mm_memblock_reserve();
 
@@ -334,7 +356,7 @@ static inline void poison_init_mem(void *s, size_t count)
 		*p++ = 0xe7fddef0;
 }
 
-static inline void
+static inline void __init
 free_memmap(unsigned long start_pfn, unsigned long end_pfn)
 {
 	struct page *start_pg, *end_pg;
@@ -517,6 +539,8 @@ static void print_vmalloc_lowmem_info(void)
 		"	   lowmem  : 0x%08lx - 0x%08lx   (%4ld MB)\n",
 		MLM((unsigned long)__va(start_phys),
 		(unsigned long)__va(end_phys)));
+
+		prev_reg = reg;
 	}
 }
 #endif
@@ -567,31 +591,28 @@ void __init mem_init(void)
 #ifdef CONFIG_ENABLE_VMALLOC_SAVING
 	print_vmalloc_lowmem_info();
 #else
-	printk(KERN_NOTICE
+	pr_notice(
 		   "    vmalloc : 0x%08lx - 0x%08lx   (%4ld MB)\n"
 		   "    lowmem  : 0x%08lx - 0x%08lx   (%4ld MB)\n",
 			MLM(VMALLOC_START, VMALLOC_END),
 			MLM(PAGE_OFFSET, (unsigned long)high_memory));
 #endif
-	printk(KERN_NOTICE
-#ifdef CONFIG_HIGHMEM
-		   "    pkmap   : 0x%08lx - 0x%08lx   (%4ld MB)\n"
+#if IS_ENABLED(CONFIG_HIGHMEM)
+	pr_notice(
+		   "    pkmap   : 0x%08lx - 0x%08lx   (%4ld MB)\n",
+		   MLM(PKMAP_BASE, (PKMAP_BASE) + (LAST_PKMAP) *
+							(PAGE_SIZE)));
 #endif
-#ifdef CONFIG_MODULES
-		   "    modules : 0x%08lx - 0x%08lx   (%4ld MB)\n"
+#if IS_ENABLED(CONFIG_MODULES)
+	pr_notice(
+		   "    modules : 0x%08lx - 0x%08lx   (%4ld MB)\n",
+		   MLM(MODULES_VADDR, MODULES_END));
 #endif
-		   "      .text : 0x%p" " - 0x%p" "   (%4d kB)\n"
-		   "      .init : 0x%p" " - 0x%p" "   (%4d kB)\n"
-		   "      .data : 0x%p" " - 0x%p" "   (%4d kB)\n"
-		   "       .bss : 0x%p" " - 0x%p" "   (%4d kB)\n",
-#ifdef CONFIG_HIGHMEM
-			MLM(PKMAP_BASE, (PKMAP_BASE) + (LAST_PKMAP) *
-				(PAGE_SIZE)),
-#endif
-#ifdef CONFIG_MODULES
-			MLM(MODULES_VADDR, MODULES_END),
-#endif
-
+	pr_notice(
+		   "      .text : 0x%pK - 0x%pK    (%4d kB)\n"
+		   "      .init : 0x%pK - 0x%pK    (%4d kB)\n"
+		   "      .data : 0x%pK - 0x%pK    (%4d kB)\n"
+		   "       .bss : 0x%pK - 0x%pK    (%4d kB)\n",
 			MLK_ROUNDUP(_text, _etext),
 			MLK_ROUNDUP(__init_begin, __init_end),
 			MLK_ROUNDUP(_sdata, _edata),
@@ -602,7 +623,9 @@ void __init mem_init(void)
 	 * be detected at build time already.
 	 */
 #ifdef CONFIG_MMU
+#ifndef CONFIG_MODULES_USE_VMALLOC
 	BUILD_BUG_ON(TASK_SIZE				> MODULES_VADDR);
+#endif
 	BUG_ON(TASK_SIZE 				> MODULES_VADDR);
 #endif
 
@@ -622,7 +645,7 @@ void __init mem_init(void)
 	}
 }
 
-#ifdef CONFIG_DEBUG_RODATA
+#ifdef CONFIG_STRICT_KERNEL_RWX
 #undef MLK
 #undef MLM
 #undef MLK_ROUNDUP
@@ -786,21 +809,25 @@ void set_section_perms(struct section_perm *perms, int n, bool set,
 						addr), addr);
 			if (pmd_bad(*pmd))
 				section_update(addr, perms[i].mask,
-					       set ? perms[i].prot : perms[i].clear,
-					       mm);
+					set ? perms[i].prot : perms[i].clear,
+					mm);
 			else
 				pte_update(addr, perms[i].ptemask,
-					       set ? perms[i].pteprot : perms[i].pteclear,
-					       mm);
+				     set ? perms[i].pteprot : perms[i].pteclear,
+				     mm);
 		}
 	}
 }
 
+/**
+ * update_sections_early intended to be called only through stop_machine
+ * framework and executed by only one CPU while all other CPUs will spin and
+ * wait, so no locking is required in this function.
+ */
 static void update_sections_early(struct section_perm perms[], int n)
 {
 	struct task_struct *t, *s;
 
-	read_lock(&tasklist_lock);
 	for_each_process(t) {
 		if (t->flags & PF_KTHREAD)
 			continue;
@@ -808,23 +835,22 @@ static void update_sections_early(struct section_perm perms[], int n)
 			if (s->mm)
 				set_section_perms(perms, n, true, s->mm);
 	}
-	read_unlock(&tasklist_lock);
 	set_section_perms(perms, n, true, current->active_mm);
 	set_section_perms(perms, n, true, &init_mm);
 }
 
-int __fix_kernmem_perms(void *unused)
+static int __fix_kernmem_perms(void *unused)
 {
 	update_sections_early(nx_perms, ARRAY_SIZE(nx_perms));
 	return 0;
 }
 
-void fix_kernmem_perms(void)
+static void fix_kernmem_perms(void)
 {
 	stop_machine(__fix_kernmem_perms, NULL, NULL);
 }
 
-int __mark_rodata_ro(void *unused)
+static int __mark_rodata_ro(void *unused)
 {
 	update_sections_early(ro_perms, ARRAY_SIZE(ro_perms));
 	return 0;
@@ -858,7 +884,7 @@ void set_kernel_text_ro(void)
 
 #else
 static inline void fix_kernmem_perms(void) { }
-#endif /* CONFIG_DEBUG_RODATA */
+#endif /* CONFIG_STRICT_KERNEL_RWX */
 
 void free_tcmmem(void)
 {

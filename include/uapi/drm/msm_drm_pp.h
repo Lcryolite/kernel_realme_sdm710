@@ -233,6 +233,9 @@ struct drm_msm_pgc_lut {
  * @c2: color2 component lut
  * @strength: dither strength, considered valid when IGC_DITHER_ENABLE
  *            is set in flags. Strength value based on source bit width.
+ * @c0_last: color0 lut_last component
+ * @c1_last: color1 lut_last component
+ * @c2_last: color2 lut_last component
  */
 struct drm_msm_igc_lut {
 	__u64 flags;
@@ -240,7 +243,11 @@ struct drm_msm_igc_lut {
 	__u32 c1[IGC_TBL_LEN];
 	__u32 c2[IGC_TBL_LEN];
 	__u32 strength;
+	__u32 c0_last;
+	__u32 c1_last;
+	__u32 c2_last;
 };
+#define LAST_LUT 2
 
 #define HIST_V_SIZE 256
 /**
@@ -436,4 +443,35 @@ struct drm_msm_pa_dither {
 	__u32 matrix[DITHER_MATRIX_SZ];
 };
 
+/**
+ * struct drm_msm_ad4_roi_cfg - ad4 roi params config set
+ * by user-space client.
+ * @h_x - hotizontal direction start
+ * @h_y - hotizontal direction end
+ * @v_x - vertical direction start
+ * @v_y - vertical direction end
+ * @factor_in - the alpha value for inside roi region
+ * @factor_out - the alpha value for outside roi region
+ */
+#define DRM_MSM_AD4_ROI
+struct drm_msm_ad4_roi_cfg {
+	__u32 h_x;
+	__u32 h_y;
+	__u32 v_x;
+	__u32 v_y;
+	__u32 factor_in;
+	__u32 factor_out;
+};
+
+/**
+ * struct drm_msm_ad4_manual_str_cfg - ad4 manual strength config set
+ * by user-space client.
+ * @in_str - strength for inside roi region
+ * @out_str - strength for outside roi region
+ */
+#define DRM_MSM_AD4_MANUAL_STRENGTH
+struct drm_msm_ad4_manual_str_cfg {
+	__u32 in_str;
+	__u32 out_str;
+};
 #endif /* _MSM_DRM_PP_H_ */

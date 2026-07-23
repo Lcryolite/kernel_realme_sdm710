@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -181,9 +181,15 @@
 #define TZ_DBG_ETM_FEAT_ID	(0x8)
 #define TZ_DBG_ETM_VER		(0x400000)
 #define HW_SOC_ID_M8953		(293)
+#define GET_FEAT_VERSION_CMD	3
 
+/* spread out etm register write */
 #define etm_writel(etm, val, off)	\
-		   writel_relaxed_no_log(val, etm->base + off)
+do {							\
+	writel_relaxed_no_log(val, etm->base + off);	\
+	udelay(20);					\
+} while (0)
+
 #define etm_writel_log(etm, val, off)	\
 		   __raw_writel(val, etm->base + off)
 
@@ -239,6 +245,7 @@ struct etm_ctx {
 
 static struct etm_ctx *etm[NR_CPUS];
 static int cnt;
+static bool hibernation_freeze;
 
 static struct clk *clock[NR_CPUS];
 
@@ -309,6 +316,12 @@ static inline void etm_mm_save_state(struct etm_ctx *etmdata)
 			pr_err_ratelimited("programmers model is not stable\n"
 					   );
 
+		etmdata->state[i++] = etm_readl(etmdata, TRCPRGCTLR);
+		if (!(etmdata->state[0] & BIT(0))) {
+			atomic_notifier_call_chain(&etm_save_notifier_list,
+							0, NULL);
+			break;
+		}
 		/* main control and configuration registers */
 		etmdata->state[i++] = etm_readl(etmdata, TRCPROCSELR);
 		etmdata->state[i++] = etm_readl(etmdata, TRCCONFIGR);
@@ -345,7 +358,7 @@ static inline void etm_mm_save_state(struct etm_ctx *etmdata)
 						       TRCCNTVRn(j));
 		}
 		/* resource selection registers */
-		for (j = 0; j < etmdata->nr_resource * 2; j++)
+		for (j = 0; j < etmdata->nr_resource; j++)
 			etmdata->state[i++] = etm_readl(etmdata, TRCRSCTLRn(j));
 		/* comparator registers */
 		for (j = 0; j < etmdata->nr_addr_cmp * 2; j++) {
@@ -374,8 +387,6 @@ static inline void etm_mm_save_state(struct etm_ctx *etmdata)
 		}
 		/* claim tag registers */
 		etmdata->state[i++] = etm_readl(etmdata, TRCCLAIMCLR);
-		/* program ctrl register */
-		etmdata->state[i++] = etm_readl(etmdata, TRCPRGCTLR);
 
 		/* ensure trace unit is idle to be powered down */
 		for (count = TIMEOUT_US; (BVAL(etm_readl(etmdata, TRCSTATR), 0)
@@ -413,6 +424,10 @@ static inline void etm_mm_restore_state(struct etm_ctx *etmdata)
 			etm_os_lock(etmdata);
 		}
 
+		if (!(etmdata->state[0] & BIT(0))) {
+			etm_os_unlock(etmdata);
+			break;
+		}
 		/* main control and configuration registers */
 		etm_writel(etmdata, etmdata->state[i++], TRCPROCSELR);
 		etm_writel(etmdata, etmdata->state[i++], TRCCONFIGR);
@@ -448,7 +463,7 @@ static inline void etm_mm_restore_state(struct etm_ctx *etmdata)
 			etm_writel(etmdata, etmdata->state[i++], TRCCNTVRn(j));
 		}
 		/* resource selection registers */
-		for (j = 0; j < etmdata->nr_resource * 2; j++)
+		for (j = 0; j < etmdata->nr_resource; j++)
 			etm_writel(etmdata, etmdata->state[i++], TRCRSCTLRn(j));
 		/* comparator registers */
 		for (j = 0; j < etmdata->nr_addr_cmp * 2; j++) {
@@ -478,7 +493,7 @@ static inline void etm_mm_restore_state(struct etm_ctx *etmdata)
 		/* claim tag registers */
 		etm_writel(etmdata, etmdata->state[i++], TRCCLAIMSET);
 		/* program ctrl register */
-		etm_writel(etmdata, etmdata->state[i++], TRCPRGCTLR);
+		etm_writel(etmdata, etmdata->state[0], TRCPRGCTLR);
 
 		etm_os_unlock(etmdata);
 		break;
@@ -932,7 +947,7 @@ static inline void etm_si_save_state(struct etm_ctx *etmdata)
 		for (j = 0; j < etmdata->nr_cntr; j++)
 			i = etm_read_crxr(etmdata->state, i, j);
 		/* resource selection registers */
-		for (j = 0; j < etmdata->nr_resource * 2; j++)
+		for (j = 0; j < etmdata->nr_resource; j++)
 			i = etm_read_rsxr(etmdata->state, i, j + 2);
 		/* comparator registers */
 		for (j = 0; j < etmdata->nr_addr_cmp * 2; j++)
@@ -1387,7 +1402,7 @@ static inline void etm_si_restore_state(struct etm_ctx *etmdata)
 		for (j = 0; j < etmdata->nr_cntr; j++)
 			i = etm_write_crxr(etmdata->state, i, j);
 		/* resource selection registers */
-		for (j = 0; j < etmdata->nr_resource * 2; j++)
+		for (j = 0; j < etmdata->nr_resource; j++)
 			i = etm_write_rsxr(etmdata->state, i, j + 2);
 		/* comparator registers */
 		for (j = 0; j < etmdata->nr_addr_cmp * 2; j++)
@@ -1423,7 +1438,8 @@ void msm_jtag_etm_save_state(void)
 
 	cpu = raw_smp_processor_id();
 
-	if (!etm[cpu] || etm[cpu]->save_restore_disabled)
+	if (!etm[cpu] || etm[cpu]->save_restore_disabled
+				|| hibernation_freeze)
 		return;
 
 	if (etm[cpu]->save_restore_enabled) {
@@ -1441,7 +1457,8 @@ void msm_jtag_etm_restore_state(void)
 
 	cpu = raw_smp_processor_id();
 
-	if (!etm[cpu] || etm[cpu]->save_restore_disabled)
+	if (!etm[cpu] || etm[cpu]->save_restore_disabled
+				|| hibernation_freeze)
 		return;
 
 	/*
@@ -1480,36 +1497,12 @@ static void etm_os_lock_init(struct etm_ctx *etmdata)
 		etmdata->os_lock_present = false;
 }
 
-static bool coresight_authstatus_enabled(void __iomem *addr)
-{
-	int ret;
-	unsigned int auth_val;
-
-	if (!addr)
-		return false;
-
-	auth_val = readl_relaxed(addr + TRCAUTHSTATUS);
-
-	if ((BMVAL(auth_val, 0, 1) == 0x2) ||
-	    (BMVAL(auth_val, 2, 3) == 0x2) ||
-	    (BMVAL(auth_val, 4, 5) == 0x2) ||
-	    (BMVAL(auth_val, 6, 7) == 0x2))
-		ret = false;
-	else
-		ret = true;
-
-	return ret;
-}
-
 static void etm_init_arch_data(void *info)
 {
 	uint32_t val;
 	struct etm_ctx  *etmdata = info;
 
 	ETM_UNLOCK(etmdata);
-
-	if (!coresight_authstatus_enabled(etmdata->base))
-		goto out;
 
 	etm_os_lock_init(etmdata);
 
@@ -1520,7 +1513,7 @@ static void etm_init_arch_data(void *info)
 	val = etm_readl(etmdata, TRCIDR4);
 	etmdata->nr_addr_cmp = BMVAL(val, 0, 3);
 	etmdata->nr_data_cmp = BMVAL(val, 4, 7);
-	etmdata->nr_resource = BMVAL(val, 16, 19) + 1;
+	etmdata->nr_resource = BMVAL(val, 16, 19);
 	etmdata->nr_ss_cmp = BMVAL(val, 20, 23);
 	etmdata->nr_ctxid_cmp = BMVAL(val, 24, 27);
 	etmdata->nr_vmid_cmp = BMVAL(val, 28, 31);
@@ -1529,7 +1522,6 @@ static void etm_init_arch_data(void *info)
 	etmdata->nr_seq_state = BMVAL(val, 25, 27);
 	etmdata->nr_cntr = BMVAL(val, 28, 30);
 
-out:
 	ETM_LOCK(etmdata);
 }
 
@@ -1550,6 +1542,9 @@ static int jtag_mm_etm_starting(unsigned int cpu)
 
 static int jtag_mm_etm_online(unsigned int cpu)
 {
+	struct scm_desc desc = {0};
+	int ret;
+
 	if (!etm[cpu])
 		return 0;
 
@@ -1559,11 +1554,16 @@ static int jtag_mm_etm_online(unsigned int cpu)
 		return 0;
 	}
 	if (etm_arch_supported(etm[cpu]->arch)) {
-		if (scm_get_feat_version(TZ_DBG_ETM_FEAT_ID) <
-		    TZ_DBG_ETM_VER)
-			etm[cpu]->save_restore_enabled = true;
-		else
-			pr_info("etm save-restore supported by TZ\n");
+		desc.args[0] = TZ_DBG_ETM_FEAT_ID;
+		desc.arginfo = SCM_ARGS(1);
+		ret = scm_call2(SCM_SIP_FNID(SCM_SVC_INFO,
+				GET_FEAT_VERSION_CMD), &desc);
+		if (!ret) {
+			if (desc.ret[0] < TZ_DBG_ETM_VER)
+				etm[cpu]->save_restore_enabled = true;
+			else
+				pr_info("etm save-restore supported by TZ\n");
+		}
 	} else
 		pr_info("etm arch %u not supported\n", etm[cpu]->arch);
 	etm[cpu]->enable = true;
@@ -1592,6 +1592,7 @@ static int jtag_mm_etm_probe(struct platform_device *pdev, uint32_t cpu)
 	struct etm_ctx *etmdata;
 	struct resource *res;
 	struct device *dev = &pdev->dev;
+	struct scm_desc desc = {0};
 	int ret;
 
 	/* Allocate memory per cpu */
@@ -1649,11 +1650,16 @@ static int jtag_mm_etm_probe(struct platform_device *pdev, uint32_t cpu)
 	mutex_lock(&etmdata->mutex);
 	if (etmdata->init && !etmdata->enable) {
 		if (etm_arch_supported(etmdata->arch)) {
-			if (scm_get_feat_version(TZ_DBG_ETM_FEAT_ID) <
-			    TZ_DBG_ETM_VER)
-				etmdata->save_restore_enabled = true;
-			else
-				pr_info("etm save-restore supported by TZ\n");
+			desc.args[0] = TZ_DBG_ETM_FEAT_ID;
+			desc.arginfo = SCM_ARGS(1);
+			ret = scm_call2(SCM_SIP_FNID(SCM_SVC_INFO,
+					GET_FEAT_VERSION_CMD), &desc);
+			if (!ret) {
+				if (desc.ret[0] < TZ_DBG_ETM_VER)
+					etmdata->save_restore_enabled = true;
+				else
+					pr_info("etm save-restore supported by TZ\n");
+			}
 		} else
 			pr_info("etm arch %u not supported\n", etmdata->arch);
 		etmdata->enable = true;
@@ -1720,6 +1726,54 @@ static int jtag_mm_remove(struct platform_device *pdev)
 	return 0;
 }
 
+static void msm_jtag_etm_save_state_hib(void *unused_info)
+{
+	msm_jtag_etm_save_state();
+}
+
+static void msm_jtag_etm_restore_state_hib(void *unused_info)
+{
+	msm_jtag_etm_restore_state();
+}
+
+static int jtag_mm_freeze(struct device *dev)
+{
+	int cpu;
+
+	if (hibernation_freeze)
+		return 0;
+	get_online_cpus();
+	on_each_cpu(msm_jtag_etm_save_state_hib,
+				NULL, true);
+	for_each_online_cpu(cpu)
+		clk_disable_unprepare(clock[cpu]);
+	put_online_cpus();
+	hibernation_freeze = true;
+	return 0;
+}
+
+static int jtag_mm_restore(struct device *dev)
+{
+	int cpu;
+
+	if (!hibernation_freeze)
+		return 0;
+	get_online_cpus();
+	for_each_online_cpu(cpu)
+		clk_prepare_enable(clock[cpu]);
+	on_each_cpu(msm_jtag_etm_restore_state_hib,
+					NULL, true);
+	put_online_cpus();
+	hibernation_freeze = false;
+	return 0;
+}
+
+static const struct dev_pm_ops jtag_mm_pm_ops = {
+	.freeze = jtag_mm_freeze,
+	.restore = jtag_mm_restore,
+	.thaw = jtag_mm_restore,
+};
+
 static const struct of_device_id msm_qdss_mm_match[] = {
 	{ .compatible = "qcom,jtagv8-mm"},
 	{}
@@ -1732,6 +1786,7 @@ static struct platform_driver jtag_mm_driver = {
 		.name   = "msm-jtagv8-mm",
 		.owner	= THIS_MODULE,
 		.of_match_table	= msm_qdss_mm_match,
+		.pm = &jtag_mm_pm_ops,
 		},
 };
 

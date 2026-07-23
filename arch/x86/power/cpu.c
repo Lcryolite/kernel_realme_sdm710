@@ -94,7 +94,7 @@ static void __save_processor_state(struct saved_context *ctxt)
 	 * 'pmode_gdt' in wakeup_start.
 	 */
 	ctxt->gdt_desc.size = GDT_SIZE - 1;
-	ctxt->gdt_desc.address = (unsigned long)get_cpu_gdt_table(smp_processor_id());
+	ctxt->gdt_desc.address = (unsigned long)get_cpu_gdt_rw(smp_processor_id());
 
 	store_tr(ctxt->tr);
 
@@ -124,7 +124,7 @@ static void __save_processor_state(struct saved_context *ctxt)
 	 */
 	ctxt->cr0 = read_cr0();
 	ctxt->cr2 = read_cr2();
-	ctxt->cr3 = read_cr3();
+	ctxt->cr3 = __read_cr3();
 	ctxt->cr4 = __read_cr4();
 #ifdef CONFIG_X86_64
 	ctxt->cr8 = read_cr8();
@@ -155,17 +155,19 @@ static void do_fpu_end(void)
 static void fix_processor_context(void)
 {
 	int cpu = smp_processor_id();
-	struct tss_struct *t = &per_cpu(cpu_tss, cpu);
 #ifdef CONFIG_X86_64
-	struct desc_struct *desc = get_cpu_gdt_table(cpu);
+	struct desc_struct *desc = get_cpu_gdt_rw(cpu);
 	tss_desc tss;
 #endif
-	set_tss_desc(cpu, t);	/*
-				 * This just modifies memory; should not be
-				 * necessary. But... This is necessary, because
-				 * 386 hardware has concept of busy TSS or some
-				 * similar stupidity.
-				 */
+
+	/*
+	 * We need to reload TR, which requires that we change the
+	 * GDT entry to indicate "available" first.
+	 *
+	 * XXX: This could probably all be replaced by a call to
+	 * force_reload_TR().
+	 */
+	set_tss_desc(cpu, &get_cpu_entry_area(cpu)->tss.x86_tss);
 
 #ifdef CONFIG_X86_64
 	memcpy(&tss, &desc[GDT_ENTRY_TSS], sizeof(tss_desc));
@@ -179,8 +181,12 @@ static void fix_processor_context(void)
 #endif
 	load_TR_desc();				/* This does ltr */
 	load_mm_ldt(current->active_mm);	/* This does lldt */
+	initialize_tlbstate_and_flush();
 
 	fpu__resume_cpu();
+
+	/* The processor is back on the direct GDT, load back the fixmap */
+	load_fixmap_gdt(cpu);
 }
 
 /**
@@ -259,6 +265,7 @@ static void notrace __restore_processor_state(struct saved_context *ctxt)
 #endif
 
 	do_fpu_end();
+	tsc_verify_tsc_adjust(true);
 	x86_platform.restore_sched_clock_state();
 	mtrr_bp_restore();
 	perf_restore_debug_store();
@@ -459,7 +466,7 @@ static int msr_initialize_bdw(const struct dmi_system_id *d)
 	return msr_build_context(bdw_msr_id, ARRAY_SIZE(bdw_msr_id));
 }
 
-static struct dmi_system_id msr_save_dmi_table[] = {
+static const struct dmi_system_id msr_save_dmi_table[] = {
 	{
 	 .callback = msr_initialize_bdw,
 	 .ident = "BROADWELL BDX_EP",

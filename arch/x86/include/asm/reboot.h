@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_X86_REBOOT_H
 #define _ASM_X86_REBOOT_H
 
@@ -23,6 +24,8 @@ void __noreturn machine_real_restart(unsigned int type);
 /* These must match dispatch in arch/x86/realmore/rm/reboot.S */
 #define MRR_BIOS	0
 #define MRR_APM		1
+
+void cpu_emergency_disable_virtualization(void);
 
 typedef void (*nmi_shootdown_cb)(int, struct pt_regs*);
 void nmi_shootdown_cpus(nmi_shootdown_cb callback);

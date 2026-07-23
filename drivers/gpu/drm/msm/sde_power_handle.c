@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -56,15 +56,12 @@ static void sde_power_event_trigger_locked(struct sde_power_handle *phandle,
 	}
 }
 
-static int sde_power_rsc_update(struct sde_power_handle *phandle, bool enable)
+static inline void sde_power_rsc_client_init(struct sde_power_handle *phandle)
 {
-	u32 rsc_state;
-	int ret = 0;
-
-	/* creates the rsc client on the first enable */
+	/* creates the rsc client */
 	if (!phandle->rsc_client_init) {
 		phandle->rsc_client = sde_rsc_client_create(SDE_RSC_INDEX,
-				"sde_power_handle", false);
+				"sde_power_handle", SDE_RSC_CLK_CLIENT, 0);
 		if (IS_ERR_OR_NULL(phandle->rsc_client)) {
 			pr_debug("sde rsc client create failed :%ld\n",
 						PTR_ERR(phandle->rsc_client));
@@ -72,6 +69,12 @@ static int sde_power_rsc_update(struct sde_power_handle *phandle, bool enable)
 		}
 		phandle->rsc_client_init = true;
 	}
+}
+
+static int sde_power_rsc_update(struct sde_power_handle *phandle, bool enable)
+{
+	u32 rsc_state;
+	int ret = 0;
 
 	rsc_state = enable ? SDE_RSC_CLK_STATE : SDE_RSC_IDLE_STATE;
 
@@ -639,9 +642,13 @@ static int sde_power_reg_bus_update(u32 reg_bus_hdl, u32 usecase_ndx)
 {
 	int rc = 0;
 
-	if (reg_bus_hdl)
+	if (reg_bus_hdl) {
+		SDE_ATRACE_BEGIN("msm_bus_scale_req");
 		rc = msm_bus_scale_client_update_request(reg_bus_hdl,
 								usecase_ndx);
+		SDE_ATRACE_END("msm_bus_scale_req");
+	}
+
 	if (rc)
 		pr_err("failed to set reg bus vote rc=%d\n", rc);
 
@@ -758,6 +765,12 @@ int sde_power_resource_init(struct platform_device *pdev,
 		}
 	}
 
+	if (of_find_property(pdev->dev.of_node, "qcom,dss-cx-ipeak", NULL))
+		phandle->dss_cx_ipeak = cx_ipeak_register(pdev->dev.of_node,
+						"qcom,dss-cx-ipeak");
+	else
+		pr_debug("cx ipeak client parse failed\n");
+
 	INIT_LIST_HEAD(&phandle->power_client_clist);
 	INIT_LIST_HEAD(&phandle->event_list);
 
@@ -821,6 +834,9 @@ void sde_power_resource_deinit(struct platform_device *pdev,
 		list_del(&curr_event->list);
 	}
 	mutex_unlock(&phandle->phandle_lock);
+
+	if (phandle->dss_cx_ipeak)
+		cx_ipeak_unregister(phandle->dss_cx_ipeak);
 
 	for (i = 0; i < SDE_POWER_HANDLE_DBUS_ID_MAX; i++)
 		sde_power_data_bus_unregister(&phandle->data_bus_handle[i]);
@@ -897,7 +913,7 @@ static inline bool _resource_changed(u32 current_usecase_ndx,
 	WARN_ON((current_usecase_ndx >= VOTE_INDEX_MAX)
 		|| (max_usecase_ndx >= VOTE_INDEX_MAX));
 
-	if (((current_usecase_ndx >= VOTE_INDEX_LOW) && /*current enabled */
+	if (((current_usecase_ndx >= VOTE_INDEX_LOW) && /* enabled */
 		(max_usecase_ndx == VOTE_INDEX_DISABLE)) || /* max disabled */
 		((current_usecase_ndx == VOTE_INDEX_DISABLE) && /* disabled */
 		(max_usecase_ndx >= VOTE_INDEX_LOW))) /* max enabled */
@@ -960,6 +976,11 @@ int sde_power_resource_enable(struct sde_power_handle *phandle,
 	if (!changed)
 		goto end;
 
+	SDE_ATRACE_BEGIN("sde_power_resource_enable");
+
+	/* RSC client init */
+	sde_power_rsc_client_init(phandle);
+
 	if (enable) {
 		sde_power_event_trigger_locked(phandle,
 				SDE_POWER_EVENT_PRE_ENABLE);
@@ -973,21 +994,11 @@ int sde_power_resource_enable(struct sde_power_handle *phandle,
 				goto data_bus_hdl_err;
 			}
 		}
-		/*
-		 * - When the target is RSCC enabled, regulator should
-		 *   be enabled by the s/w only for the first time during
-		 *   bootup. After that, RSCC hardware takes care of enabling/
-		 *   disabling it.
-		 * - When the target is not RSCC enabled, regulator should
-		 *   be totally handled by the software.
-		 */
-		if (!phandle->rsc_client) {
-			rc = msm_dss_enable_vreg(mp->vreg_config, mp->num_vreg,
-									enable);
-			if (rc) {
-				pr_err("failed to enable vregs rc=%d\n", rc);
-				goto vreg_err;
-			}
+		rc = msm_dss_enable_vreg(mp->vreg_config, mp->num_vreg,
+				enable);
+		if (rc) {
+			pr_err("failed to enable vregs rc=%d\n", rc);
+			goto vreg_err;
 		}
 
 		rc = sde_power_scale_reg_bus(phandle, pclient,
@@ -997,13 +1008,13 @@ int sde_power_resource_enable(struct sde_power_handle *phandle,
 			goto reg_bus_hdl_err;
 		}
 
+		SDE_EVT32_VERBOSE(enable, SDE_EVTLOG_FUNC_CASE1);
 		rc = sde_power_rsc_update(phandle, true);
 		if (rc) {
 			pr_err("failed to update rsc\n");
 			goto rsc_err;
 		}
 
-		SDE_EVT32_VERBOSE(enable, SDE_EVTLOG_FUNC_CASE1);
 		rc = msm_dss_enable_clk(mp->clk_config, mp->num_clk, enable);
 		if (rc) {
 			pr_err("clock enable failed rc:%d\n", rc);
@@ -1018,16 +1029,15 @@ int sde_power_resource_enable(struct sde_power_handle *phandle,
 				SDE_POWER_EVENT_PRE_DISABLE);
 
 		SDE_EVT32_VERBOSE(enable, SDE_EVTLOG_FUNC_CASE2);
-		msm_dss_enable_clk(mp->clk_config, mp->num_clk, enable);
-
 		sde_power_rsc_update(phandle, false);
+
+		msm_dss_enable_clk(mp->clk_config, mp->num_clk, enable);
 
 		sde_power_scale_reg_bus(phandle, pclient,
 				max_usecase_ndx, true);
 
-		if (!phandle->rsc_client)
-			msm_dss_enable_vreg(mp->vreg_config, mp->num_vreg,
-									enable);
+		msm_dss_enable_vreg(mp->vreg_config, mp->num_vreg, enable);
+
 		for (i = 0 ; i < SDE_POWER_HANDLE_DBUS_ID_MAX; i++)
 			sde_power_data_bus_update(&phandle->data_bus_handle[i],
 					enable);
@@ -1036,10 +1046,9 @@ int sde_power_resource_enable(struct sde_power_handle *phandle,
 				SDE_POWER_EVENT_POST_DISABLE);
 	}
 
-end:
 	SDE_EVT32_VERBOSE(enable, SDE_EVTLOG_FUNC_EXIT);
+	SDE_ATRACE_END("sde_power_resource_enable");
 	mutex_unlock(&phandle->phandle_lock);
-
 	return rc;
 
 clk_err:
@@ -1047,13 +1056,15 @@ clk_err:
 rsc_err:
 	sde_power_scale_reg_bus(phandle, pclient, max_usecase_ndx, true);
 reg_bus_hdl_err:
-	if (!phandle->rsc_client)
-		msm_dss_enable_vreg(mp->vreg_config, mp->num_vreg, 0);
+	msm_dss_enable_vreg(mp->vreg_config, mp->num_vreg, 0);
 vreg_err:
 	for (i = 0 ; i < SDE_POWER_HANDLE_DBUS_ID_MAX; i++)
 		sde_power_data_bus_update(&phandle->data_bus_handle[i], 0);
 data_bus_hdl_err:
 	phandle->current_usecase_ndx = prev_usecase_ndx;
+	SDE_ATRACE_END("sde_power_resource_enable");
+
+end:
 	mutex_unlock(&phandle->phandle_lock);
 	return rc;
 }
@@ -1068,11 +1079,47 @@ int sde_power_resource_is_enabled(struct sde_power_handle *phandle)
 	return phandle->current_usecase_ndx != VOTE_INDEX_DISABLE;
 }
 
+int sde_cx_ipeak_vote(struct sde_power_handle *phandle, struct dss_clk *clock,
+		u64 requested_clk_rate, u64 prev_clk_rate, bool enable_vote)
+{
+	int ret = 0;
+	u64 curr_core_clk_rate, max_core_clk_rate, prev_core_clk_rate;
+
+	if (!phandle->dss_cx_ipeak) {
+		pr_debug("%pS->%s: Invalid input\n",
+				__builtin_return_address(0), __func__);
+		return -EOPNOTSUPP;
+	}
+
+	if (strcmp("core_clk", clock->clk_name)) {
+		pr_debug("Not a core clk , cx_ipeak vote not needed\n");
+		return -EOPNOTSUPP;
+	}
+
+	curr_core_clk_rate = clock->rate;
+	max_core_clk_rate = clock->max_rate;
+	prev_core_clk_rate = prev_clk_rate;
+
+	if (enable_vote && requested_clk_rate == max_core_clk_rate &&
+				curr_core_clk_rate != requested_clk_rate)
+		ret = cx_ipeak_update(phandle->dss_cx_ipeak, true);
+	else if (!enable_vote && requested_clk_rate != max_core_clk_rate &&
+				prev_core_clk_rate == max_core_clk_rate)
+		ret = cx_ipeak_update(phandle->dss_cx_ipeak, false);
+
+	if (ret)
+		SDE_EVT32(ret, enable_vote, requested_clk_rate,
+					curr_core_clk_rate, prev_core_clk_rate);
+
+	return ret;
+}
+
 int sde_power_clk_set_rate(struct sde_power_handle *phandle, char *clock_name,
 	u64 rate)
 {
 	int i, rc = -EINVAL;
 	struct dss_module_power *mp;
+	u64 prev_clk_rate, requested_clk_rate;
 
 	if (!phandle) {
 		pr_err("invalid input power handle\n");
@@ -1086,8 +1133,15 @@ int sde_power_clk_set_rate(struct sde_power_handle *phandle, char *clock_name,
 					(rate > mp->clk_config[i].max_rate))
 				rate = mp->clk_config[i].max_rate;
 
+			prev_clk_rate = mp->clk_config[i].rate;
+			requested_clk_rate = rate;
+			sde_cx_ipeak_vote(phandle, &mp->clk_config[i],
+				requested_clk_rate, prev_clk_rate, true);
 			mp->clk_config[i].rate = rate;
-			rc = msm_dss_clk_set_rate(mp->clk_config, mp->num_clk);
+			rc = msm_dss_single_clk_set_rate(&mp->clk_config[i]);
+			if (!rc)
+				sde_cx_ipeak_vote(phandle, &mp->clk_config[i],
+				   requested_clk_rate, prev_clk_rate, false);
 			break;
 		}
 	}
@@ -1161,6 +1215,30 @@ struct clk *sde_power_clk_get_clk(struct sde_power_handle *phandle,
 	}
 
 	return clk;
+}
+
+int sde_power_clk_set_flags(struct sde_power_handle *phandle,
+		char *clock_name, unsigned long flags)
+{
+	struct clk *clk;
+
+	if (!phandle) {
+		pr_err("invalid input power handle\n");
+		return -EINVAL;
+	}
+
+	if (!clock_name) {
+		pr_err("invalid input clock name\n");
+		return -EINVAL;
+	}
+
+	clk = sde_power_clk_get_clk(phandle, clock_name);
+	if (!clk) {
+		pr_err("get_clk failed for clk: %s\n", clock_name);
+		return -EINVAL;
+	}
+
+	return clk_set_flags(clk, flags);
 }
 
 struct sde_power_event *sde_power_handle_register_event(

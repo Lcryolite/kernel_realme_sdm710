@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /******************************************************************************
  * Xen selfballoon driver (and optional frontswap self-shrinking driver)
  *
@@ -151,8 +152,8 @@ static unsigned long frontswap_inertia_counter;
 static void frontswap_selfshrink(void)
 {
 	static unsigned long cur_frontswap_pages;
-	static unsigned long last_frontswap_pages;
-	static unsigned long tgt_frontswap_pages;
+	unsigned long last_frontswap_pages;
+	unsigned long tgt_frontswap_pages;
 
 	last_frontswap_pages = cur_frontswap_pages;
 	cur_frontswap_pages = frontswap_curr_pages();
@@ -188,7 +189,7 @@ static void selfballoon_process(struct work_struct *work)
 	bool reset_timer = false;
 
 	if (xen_selfballooning_enabled) {
-		cur_pages = totalram_pages();
+		cur_pages = totalram_pages;
 		tgt_pages = cur_pages; /* default is no change */
 		goal_pages = vm_memory_committed() +
 				totalreserve_pages +
@@ -226,7 +227,7 @@ static void selfballoon_process(struct work_struct *work)
 		if (tgt_pages < floor_pages)
 			tgt_pages = floor_pages;
 		balloon_set_new_target(tgt_pages +
-			balloon_stats.current_pages - totalram_pages());
+			balloon_stats.current_pages - totalram_pages);
 		reset_timer = true;
 	}
 #ifdef CONFIG_FRONTSWAP
@@ -568,7 +569,7 @@ int xen_selfballoon_init(bool use_selfballooning, bool use_frontswap_selfshrink)
 	 * much more reliably and response faster in some cases.
 	 */
 	if (!selfballoon_reserved_mb) {
-		reserve_pages = totalram_pages() / 10;
+		reserve_pages = totalram_pages / 10;
 		selfballoon_reserved_mb = PAGES2MB(reserve_pages);
 	}
 	schedule_delayed_work(&selfballoon_worker, selfballoon_interval * HZ);

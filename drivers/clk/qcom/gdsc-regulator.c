@@ -11,14 +11,14 @@
  * GNU General Public License for more details.
  */
 
-#define pr_fmt(fmt) "gdsc: %s: " fmt, __func__
-
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/io.h>
 #include <linux/delay.h>
 #include <linux/err.h>
 #include <linux/of.h>
+#include <linux/mailbox_client.h>
+#include <linux/msm-bus.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/driver.h>
 #include <linux/regulator/machine.h>
@@ -29,6 +29,7 @@
 #include <linux/reset.h>
 #include <linux/mfd/syscon.h>
 #include <linux/clk/qcom.h>
+#include <linux/mailbox/qmp.h>
 
 #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
 
@@ -36,17 +37,9 @@
 #define PWR_ON_MASK		BIT(31)
 #define CLK_DIS_WAIT_MASK	(0xF << 12)
 #define CLK_DIS_WAIT_SHIFT	(12)
-#define EN_FEW_WAIT_MASK	(0xF << 16)
-#define EN_FEW_WAIT_SHIFT	(16)
-#define EN_REST_WAIT_MASK	(0xF << 20)
-#define EN_REST_WAIT_SHIFT	(20)
 #define SW_OVERRIDE_MASK	BIT(2)
 #define HW_CONTROL_MASK		BIT(1)
 #define SW_COLLAPSE_MASK	BIT(0)
-
-/* CFG_GDSCR */
-#define GDSC_POWER_UP_COMPLETE		BIT(16)
-#define GDSC_POWER_DOWN_COMPLETE	BIT(15)
 
 /* Domain Address */
 #define GMEM_CLAMP_IO_MASK	BIT(0)
@@ -57,13 +50,11 @@
 
 /* Register Offset */
 #define REG_OFFSET		0x0
-#define CFG_GDSCR_OFFSET	0x4
 
 /* Timeout Delay */
 #define TIMEOUT_US		100
 
-/* TOGGLE SW COLLAPSE */
-#define TOGGLE_SW_COLLAPSE_IN_DISABLE	BIT(0)
+#define MBOX_TOUT_MS		100
 
 struct gdsc {
 	struct regulator_dev	*rdev;
@@ -76,6 +67,10 @@ struct gdsc {
 	struct clk		**clocks;
 	struct regulator	*parent_regulator;
 	struct reset_control	**reset_clocks;
+	struct msm_bus_scale_pdata *bus_pdata;
+	struct mbox_client	mbox_client;
+	struct mbox_chan	*mbox;
+	u32			bus_handle;
 	bool			toggle_mem;
 	bool			toggle_periph;
 	bool			toggle_logic;
@@ -83,15 +78,16 @@ struct gdsc {
 	bool			root_en;
 	bool			force_root_en;
 	bool			no_status_check_on_disable;
+	bool			skip_disable;
+	bool			bypass_skip_disable;
 	bool			is_gdsc_enabled;
 	bool			allow_clear;
 	bool			reset_aon;
-	bool			poll_cfg_gdscr;
+	bool			is_bus_enabled;
 	int			clock_count;
 	int			reset_count;
 	int			root_clk_idx;
 	u32			gds_timeout;
-	u32			flags;
 	bool			skip_disable_before_enable;
 };
 
@@ -100,7 +96,13 @@ enum gdscr_status {
 	DISABLED,
 };
 
-static DEFINE_MUTEX(gdsc_seq_lock);
+static inline u32 gdsc_mb(struct gdsc *gds)
+{
+	u32 reg;
+
+	regmap_read(gds->regmap, REG_OFFSET, &reg);
+	return reg;
+}
 
 void gdsc_allow_clear_retention(struct regulator *regulator)
 {
@@ -140,33 +142,8 @@ static int poll_gdsc_status(struct gdsc *sc, enum gdscr_status status)
 		 * bit in the GDSCR to be set or reset after the GDSC state
 		 * changes. Hence, keep on checking for a reasonable number
 		 * of times until the bit is set with the least possible delay
-		 * between succeessive tries.
+		 * between successive tries.
 		 */
-		udelay(1);
-	}
-
-	return -ETIMEDOUT;
-}
-
-static int poll_cfg_gdsc_status(struct gdsc *sc, enum gdscr_status status)
-{
-	struct regmap *regmap = sc->regmap;
-	int count = sc->gds_timeout;
-	u32 val;
-
-	for (; count > 0; count--) {
-		regmap_read(regmap, CFG_GDSCR_OFFSET, &val);
-
-		switch (status) {
-		case ENABLED:
-			if (val & GDSC_POWER_UP_COMPLETE)
-				return 0;
-			break;
-		case DISABLED:
-			if (val & GDSC_POWER_DOWN_COMPLETE)
-				return 0;
-			break;
-		}
 		udelay(1);
 	}
 
@@ -177,12 +154,54 @@ static int gdsc_is_enabled(struct regulator_dev *rdev)
 {
 	struct gdsc *sc = rdev_get_drvdata(rdev);
 	uint32_t regval;
+	int ret;
+	bool is_enabled = false;
+
+	/*
+	 * Return the logical GDSC enable state given that it will only be
+	 * physically disabled by AOP during system sleep.
+	 */
+	if (sc->skip_disable)
+		return sc->is_gdsc_enabled;
 
 	if (!sc->toggle_logic)
 		return !sc->resets_asserted;
 
 	if (sc->skip_disable_before_enable)
 		return false;
+
+	if (sc->parent_regulator) {
+		/*
+		 * The parent regulator for the GDSC is required to be on to
+		 * make any register accesses to the GDSC base. Return false
+		 * if the parent supply is disabled.
+		 */
+		if (regulator_is_enabled(sc->parent_regulator) <= 0)
+			return false;
+
+		/*
+		 * Place an explicit vote on the parent rail to cover cases when
+		 * it might be disabled between this point and reading the GDSC
+		 * registers.
+		 */
+		if (regulator_set_voltage(sc->parent_regulator,
+					RPMH_REGULATOR_LEVEL_LOW_SVS, INT_MAX))
+			return false;
+
+		if (regulator_enable(sc->parent_regulator)) {
+			regulator_set_voltage(sc->parent_regulator, 0, INT_MAX);
+			return false;
+		}
+	}
+
+	if (sc->bus_handle && !sc->is_bus_enabled) {
+		ret = msm_bus_scale_client_update_request(sc->bus_handle, 1);
+		if (ret) {
+			dev_err(&rdev->dev, "bus scaling failed, ret=%d\n",
+				ret);
+			goto end;
+		}
+	}
 
 	regmap_read(sc->regmap, REG_OFFSET, &regval);
 
@@ -193,16 +212,54 @@ static int gdsc_is_enabled(struct regulator_dev *rdev)
 		 * determine if HLOS has voted for it.
 		 */
 		if (!(regval & SW_COLLAPSE_MASK))
-			return true;
+			is_enabled = true;
 	}
 
-	return false;
+
+	if (sc->bus_handle && !sc->is_bus_enabled)
+		msm_bus_scale_client_update_request(sc->bus_handle, 0);
+end:
+	if (sc->parent_regulator) {
+		regulator_disable(sc->parent_regulator);
+		regulator_set_voltage(sc->parent_regulator, 0, INT_MAX);
+	}
+
+	return is_enabled;
+}
+
+#define MAX_LEN 96
+
+static int gdsc_qmp_enable(struct gdsc *sc)
+{
+	char buf[MAX_LEN] = "{class: clock, res: gpu_noc_wa}";
+	struct qmp_pkt pkt;
+	uint32_t regval;
+	int ret;
+
+	regmap_read(sc->regmap, REG_OFFSET, &regval);
+	if (!(regval & SW_COLLAPSE_MASK)) {
+		/*
+		 * Do not enable via a QMP request if the GDSC is already
+		 * enabled by software.
+		 */
+		return 0;
+	}
+
+	pkt.size = MAX_LEN;
+	pkt.data = buf;
+
+	ret = mbox_send_message(sc->mbox, &pkt);
+	if (ret < 0)
+		dev_err(&sc->rdev->dev, "qmp message send failed, ret=%d\n",
+			ret);
+
+	return ret;
 }
 
 static int gdsc_enable(struct regulator_dev *rdev)
 {
 	struct gdsc *sc = rdev_get_drvdata(rdev);
-	uint32_t regval, cfg_regval, hw_ctrl_regval = 0x0;
+	uint32_t regval, hw_ctrl_regval = 0x0;
 	int i, ret = 0;
 
 	if (sc->skip_disable_before_enable)
@@ -211,15 +268,19 @@ static int gdsc_enable(struct regulator_dev *rdev)
 	if (sc->parent_regulator) {
 		ret = regulator_set_voltage(sc->parent_regulator,
 				RPMH_REGULATOR_LEVEL_LOW_SVS, INT_MAX);
-		if (ret) {
-			dev_warn(&rdev->dev,
-				"Unable to set the voltage on parent for %s\n",
-				sc->rdesc.name);
+		if (ret)
 			return ret;
-		}
 	}
 
-	mutex_lock(&gdsc_seq_lock);
+	if (sc->bus_handle) {
+		ret = msm_bus_scale_client_update_request(sc->bus_handle, 1);
+		if (ret) {
+			dev_err(&rdev->dev, "bus scaling failed, ret=%d\n",
+				ret);
+			goto end;
+		}
+		sc->is_bus_enabled = true;
+	}
 
 	if (sc->root_en || sc->force_root_en)
 		clk_prepare_enable(sc->clocks[sc->root_clk_idx]);
@@ -228,10 +289,8 @@ static int gdsc_enable(struct regulator_dev *rdev)
 	if (regval & HW_CONTROL_MASK) {
 		dev_warn(&rdev->dev, "Invalid enable while %s is under HW control\n",
 				sc->rdesc.name);
-		mutex_unlock(&gdsc_seq_lock);
-		if (sc->parent_regulator)
-			regulator_set_voltage(sc->parent_regulator, 0, INT_MAX);
-		return -EBUSY;
+		ret = -EBUSY;
+		goto end;
 	}
 
 	if (sc->toggle_logic) {
@@ -243,13 +302,13 @@ static int gdsc_enable(struct regulator_dev *rdev)
 			 * BLK_ARES should be kept asserted for 1us before
 			 * being de-asserted.
 			 */
-			wmb();
+			gdsc_mb(sc);
 			udelay(1);
 
 			regval &= ~BCR_BLK_ARES_BIT;
 			regmap_write(sc->sw_reset, REG_OFFSET, regval);
 			/* Make sure de-assert goes through before continuing */
-			wmb();
+			gdsc_mb(sc);
 		}
 
 		if (sc->domain_addr) {
@@ -263,7 +322,7 @@ static int gdsc_enable(struct regulator_dev *rdev)
 				 * Keep reset asserted for at-least 1us before
 				 * continuing.
 				 */
-				wmb();
+				gdsc_mb(sc);
 				udelay(1);
 
 				regval &= ~GMEM_RESET_MASK;
@@ -273,7 +332,7 @@ static int gdsc_enable(struct regulator_dev *rdev)
 				 * Make sure GMEM_RESET is de-asserted before
 				 * continuing.
 				 */
-				wmb();
+				gdsc_mb(sc);
 			}
 
 			regmap_read(sc->domain_addr, REG_OFFSET, &regval);
@@ -283,21 +342,24 @@ static int gdsc_enable(struct regulator_dev *rdev)
 			/*
 			 * Make sure CLAMP_IO is de-asserted before continuing.
 			 */
-			wmb();
+			gdsc_mb(sc);
 		}
 
-		regmap_read(sc->regmap, REG_OFFSET, &regval);
-		regval &= ~SW_COLLAPSE_MASK;
-		regmap_write(sc->regmap, REG_OFFSET, regval);
+		if (sc->mbox) {
+			ret = gdsc_qmp_enable(sc);
+			if (ret < 0)
+				goto end;
+		} else {
+			regmap_read(sc->regmap, REG_OFFSET, &regval);
+			regval &= ~SW_COLLAPSE_MASK;
+			regmap_write(sc->regmap, REG_OFFSET, regval);
+		}
 
 		/* Wait for 8 XO cycles before polling the status bit. */
-		mb();
+		gdsc_mb(sc);
 		udelay(1);
 
-		if (sc->poll_cfg_gdscr)
-			ret = poll_cfg_gdsc_status(sc, ENABLED);
-		else
-			ret = poll_gdsc_status(sc, ENABLED);
+		ret = poll_gdsc_status(sc, ENABLED);
 		if (ret) {
 			regmap_read(sc->regmap, REG_OFFSET, &regval);
 
@@ -317,14 +379,7 @@ static int gdsc_enable(struct regulator_dev *rdev)
 					dev_err(&rdev->dev, "%s final state (after additional %d us timeout): 0x%x, GDS_HW_CTRL: 0x%x\n",
 						sc->rdesc.name, sc->gds_timeout,
 						regval, hw_ctrl_regval);
-
-					mutex_unlock(&gdsc_seq_lock);
-
-					if (sc->parent_regulator)
-						regulator_set_voltage(
-							sc->parent_regulator,
-							 0, INT_MAX);
-					return ret;
+					goto end;
 				}
 			} else {
 				dev_err(&rdev->dev, "%s enable timed out: 0x%x\n",
@@ -332,28 +387,11 @@ static int gdsc_enable(struct regulator_dev *rdev)
 					regval);
 				udelay(sc->gds_timeout);
 
-				if (sc->poll_cfg_gdscr) {
-					regmap_read(sc->regmap, REG_OFFSET,
-							&regval);
-					regmap_read(sc->regmap,
-						CFG_GDSCR_OFFSET, &cfg_regval);
-					dev_err(&rdev->dev, "%s final state: gdscr - 0x%x, cfg_gdscr - 0x%x (%d us after timeout)\n",
-						sc->rdesc.name, regval,
-						cfg_regval, sc->gds_timeout);
-				} else {
-					regmap_read(sc->regmap, REG_OFFSET,
-							&regval);
-					dev_err(&rdev->dev, "%s final state: 0x%x (%d us after timeout)\n",
-						sc->rdesc.name, regval,
-						sc->gds_timeout);
-				}
-				mutex_unlock(&gdsc_seq_lock);
-
-				if (sc->parent_regulator)
-					regulator_set_voltage(
-						sc->parent_regulator,
-						0, INT_MAX);
-				return ret;
+				regmap_read(sc->regmap, REG_OFFSET, &regval);
+				dev_err(&rdev->dev, "%s final state: 0x%x (%d us after timeout)\n",
+					sc->rdesc.name, regval,
+					sc->gds_timeout);
+				goto end;
 			}
 		}
 	} else {
@@ -386,8 +424,16 @@ static int gdsc_enable(struct regulator_dev *rdev)
 		clk_disable_unprepare(sc->clocks[sc->root_clk_idx]);
 
 	sc->is_gdsc_enabled = true;
+end:
+	if (ret && sc->bus_handle) {
+		msm_bus_scale_client_update_request(sc->bus_handle, 0);
+		sc->is_bus_enabled = false;
+	}
 
-	mutex_unlock(&gdsc_seq_lock);
+	sc->skip_disable_before_enable = false;
+
+	if (ret && sc->parent_regulator)
+		regulator_set_voltage(sc->parent_regulator, 0, INT_MAX);
 
 	return ret;
 }
@@ -397,8 +443,6 @@ static int gdsc_disable(struct regulator_dev *rdev)
 	struct gdsc *sc = rdev_get_drvdata(rdev);
 	uint32_t regval;
 	int i, ret = 0;
-
-	mutex_lock(&gdsc_seq_lock);
 
 	if (sc->force_root_en)
 		clk_prepare_enable(sc->clocks[sc->root_clk_idx]);
@@ -415,20 +459,18 @@ static int gdsc_disable(struct regulator_dev *rdev)
 	/* Delay to account for staggered memory powerdown. */
 	udelay(1);
 
-	if (sc->toggle_logic) {
+	if (sc->skip_disable && !sc->bypass_skip_disable) {
+		/*
+		 * Don't change the GDSCR register state on disable.  AOP will
+		 * handle this during system sleep.
+		 */
+	} else if (sc->toggle_logic) {
 		regmap_read(sc->regmap, REG_OFFSET, &regval);
 		regval |= SW_COLLAPSE_MASK;
 		regmap_write(sc->regmap, REG_OFFSET, regval);
 
-		if (sc->flags & TOGGLE_SW_COLLAPSE_IN_DISABLE) {
-			regval &= ~SW_COLLAPSE_MASK;
-			regmap_write(sc->regmap, REG_OFFSET, regval);
-			regval |= SW_COLLAPSE_MASK;
-			regmap_write(sc->regmap, REG_OFFSET, regval);
-		}
-
 		/* Wait for 8 XO cycles before polling the status bit. */
-		mb();
+		gdsc_mb(sc);
 		udelay(1);
 
 		if (sc->no_status_check_on_disable) {
@@ -439,10 +481,7 @@ static int gdsc_disable(struct regulator_dev *rdev)
 			 */
 			udelay(TIMEOUT_US);
 		} else {
-			if (sc->poll_cfg_gdscr)
-				ret = poll_cfg_gdsc_status(sc, DISABLED);
-			else
-				ret = poll_gdsc_status(sc, DISABLED);
+			ret = poll_gdsc_status(sc, DISABLED);
 			if (ret)
 				dev_err(&rdev->dev, "%s disable timed out: 0x%x\n",
 					sc->rdesc.name, regval);
@@ -467,12 +506,18 @@ static int gdsc_disable(struct regulator_dev *rdev)
 	if ((sc->is_gdsc_enabled && sc->root_en) || sc->force_root_en)
 		clk_disable_unprepare(sc->clocks[sc->root_clk_idx]);
 
-	sc->is_gdsc_enabled = false;
-
-	mutex_unlock(&gdsc_seq_lock);
+	if (sc->bus_handle) {
+		ret = msm_bus_scale_client_update_request(sc->bus_handle, 0);
+		if (ret)
+			dev_err(&rdev->dev, "bus scaling failed, ret=%d\n",
+				ret);
+		sc->is_bus_enabled = false;
+	}
 
 	if (sc->parent_regulator)
 		regulator_set_voltage(sc->parent_regulator, 0, INT_MAX);
+
+	sc->is_gdsc_enabled = false;
 
 	return ret;
 }
@@ -481,10 +526,50 @@ static unsigned int gdsc_get_mode(struct regulator_dev *rdev)
 {
 	struct gdsc *sc = rdev_get_drvdata(rdev);
 	uint32_t regval;
+	int ret;
 
-	mutex_lock(&gdsc_seq_lock);
+	if (sc->skip_disable) {
+		if (sc->bypass_skip_disable)
+			return REGULATOR_MODE_IDLE;
+		return REGULATOR_MODE_NORMAL;
+	}
+
+	if (sc->parent_regulator) {
+		ret = regulator_set_voltage(sc->parent_regulator,
+					RPMH_REGULATOR_LEVEL_LOW_SVS, INT_MAX);
+		if (ret)
+			return ret;
+
+		ret = regulator_enable(sc->parent_regulator);
+		if (ret) {
+			regulator_set_voltage(sc->parent_regulator, 0, INT_MAX);
+			return ret;
+		}
+	}
+
+	if (sc->bus_handle && !sc->is_bus_enabled) {
+		ret = msm_bus_scale_client_update_request(sc->bus_handle, 1);
+		if (ret) {
+			dev_err(&rdev->dev, "bus scaling failed, ret=%d\n",
+				ret);
+			if (sc->parent_regulator) {
+				regulator_disable(sc->parent_regulator);
+				regulator_set_voltage(sc->parent_regulator, 0,
+							INT_MAX);
+			}
+			return ret;
+		}
+	}
+
 	regmap_read(sc->regmap, REG_OFFSET, &regval);
-	mutex_unlock(&gdsc_seq_lock);
+
+	if (sc->bus_handle && !sc->is_bus_enabled)
+		msm_bus_scale_client_update_request(sc->bus_handle, 0);
+
+	if (sc->parent_regulator) {
+		regulator_disable(sc->parent_regulator);
+		regulator_set_voltage(sc->parent_regulator, 0, INT_MAX);
+	}
 
 	if (regval & HW_CONTROL_MASK)
 		return REGULATOR_MODE_FAST;
@@ -498,7 +583,48 @@ static int gdsc_set_mode(struct regulator_dev *rdev, unsigned int mode)
 	uint32_t regval;
 	int ret = 0;
 
-	mutex_lock(&gdsc_seq_lock);
+	if (sc->skip_disable) {
+		switch (mode) {
+		case REGULATOR_MODE_IDLE:
+			sc->bypass_skip_disable = true;
+			break;
+		case REGULATOR_MODE_NORMAL:
+			sc->bypass_skip_disable = false;
+			break;
+		default:
+			ret = -EINVAL;
+			break;
+		}
+
+		return ret;
+	}
+
+	if (sc->parent_regulator) {
+		ret = regulator_set_voltage(sc->parent_regulator,
+				RPMH_REGULATOR_LEVEL_LOW_SVS, INT_MAX);
+		if (ret)
+			return ret;
+
+		ret = regulator_enable(sc->parent_regulator);
+		if (ret) {
+			regulator_set_voltage(sc->parent_regulator, 0, INT_MAX);
+			return ret;
+		}
+	}
+
+	if (sc->bus_handle && !sc->is_bus_enabled) {
+		ret = msm_bus_scale_client_update_request(sc->bus_handle, 1);
+		if (ret) {
+			dev_err(&rdev->dev, "bus scaling failed, ret=%d\n",
+				ret);
+			if (sc->parent_regulator) {
+				regulator_disable(sc->parent_regulator);
+				regulator_set_voltage(sc->parent_regulator, 0,
+							INT_MAX);
+			}
+			return ret;
+		}
+	}
 
 	regmap_read(sc->regmap, REG_OFFSET, &regval);
 
@@ -516,7 +642,7 @@ static int gdsc_set_mode(struct regulator_dev *rdev, unsigned int mode)
 		 * power cycle.  We wait 1us before returning to ensure
 		 * FW can't immediately poll the status bit.
 		 */
-		mb();
+		gdsc_mb(sc);
 		udelay(1);
 		break;
 	case REGULATOR_MODE_NORMAL:
@@ -526,27 +652,24 @@ static int gdsc_set_mode(struct regulator_dev *rdev, unsigned int mode)
 		/*
 		 * There may be a race with internal HW trigger signal,
 		 * that will result in GDSC going through a power down and
-		 * up cycle.  If we poll too early, status bit will
-		 * indicate 'on' before the GDSC can finish the power cycle.
-		 * Account for this case by waiting 1us before polling.
+		 * up cycle. Account for this case by waiting 1us before
+		 * proceeding.
 		 */
-		mb();
+		gdsc_mb(sc);
 		udelay(1);
-
-		if (sc->poll_cfg_gdscr)
-			ret = poll_cfg_gdsc_status(sc, ENABLED);
-		else
-			ret = poll_gdsc_status(sc, ENABLED);
-		if (ret)
-			dev_err(&rdev->dev, "%s set_mode timed out: 0x%x\n",
-				sc->rdesc.name, regval);
 		break;
 	default:
 		ret = -EINVAL;
 		break;
 	}
 
-	mutex_unlock(&gdsc_seq_lock);
+	if (sc->bus_handle && !sc->is_bus_enabled)
+		msm_bus_scale_client_update_request(sc->bus_handle, 0);
+
+	if (sc->parent_regulator) {
+		regulator_disable(sc->parent_regulator);
+		regulator_set_voltage(sc->parent_regulator, 0, INT_MAX);
+	}
 
 	return ret;
 }
@@ -574,8 +697,7 @@ static int gdsc_probe(struct platform_device *pdev)
 	struct resource *res;
 	struct gdsc *sc;
 	uint32_t regval, clk_dis_wait_val = 0;
-	uint32_t en_few_wait_val, en_rest_wait_val;
-	bool retain_mem, retain_periph, support_hw_trigger, prop_val;
+	bool retain_mem, retain_periph, support_hw_trigger;
 	int i, ret;
 	u32 timeout;
 
@@ -634,9 +756,6 @@ static int gdsc_probe(struct platform_device *pdev)
 			return -ENODEV;
 	}
 
-	sc->poll_cfg_gdscr = of_property_read_bool(pdev->dev.of_node,
-						"qcom,poll-cfg-gdscr");
-
 	sc->gds_timeout = TIMEOUT_US;
 
 	ret = of_property_read_u32(pdev->dev.of_node, "qcom,gds-timeout",
@@ -665,11 +784,6 @@ static int gdsc_probe(struct platform_device *pdev)
 
 	sc->force_root_en = of_property_read_bool(pdev->dev.of_node,
 						"qcom,force-enable-root-clk");
-
-	prop_val = of_property_read_bool(pdev->dev.of_node,
-						"qcom,toggle-sw-collapse-in-disable");
-	if (prop_val)
-		sc->flags |= TOGGLE_SW_COLLAPSE_IN_DISABLE;
 
 	if (of_find_property(pdev->dev.of_node, "vdd_parent-supply", NULL)) {
 		sc->parent_regulator = devm_regulator_get(&pdev->dev,
@@ -712,6 +826,53 @@ static int gdsc_probe(struct platform_device *pdev)
 	sc->reset_aon = of_property_read_bool(pdev->dev.of_node,
 							"qcom,reset-aon-logic");
 
+	if (of_find_property(pdev->dev.of_node, "qcom,msm-bus,name", NULL)) {
+		sc->bus_pdata = msm_bus_cl_get_pdata(pdev);
+		if (!sc->bus_pdata) {
+			dev_err(&pdev->dev, "Failed to get bus config data\n");
+			return -EINVAL;
+		}
+
+		sc->bus_handle = msm_bus_scale_register_client(sc->bus_pdata);
+		if (!sc->bus_handle) {
+			dev_err(&pdev->dev, "Failed to register bus client\n");
+			/*
+			 * msm_bus_scale_register_client() returns 0 for all
+			 * errors including when called before the bus driver
+			 * probes.  Therefore, return -EPROBE_DEFER here so that
+			 * probing can be retried and this case handled.
+			 */
+			return -EPROBE_DEFER;
+		}
+
+		ret = msm_bus_scale_client_update_request(sc->bus_handle, 1);
+		if (ret) {
+			dev_err(&pdev->dev, "bus scaling failed, ret=%d\n",
+				ret);
+			goto err;
+		}
+		sc->is_bus_enabled = true;
+	}
+
+	if (of_find_property(pdev->dev.of_node, "mboxes", NULL)) {
+		sc->mbox_client.dev = &pdev->dev;
+		sc->mbox_client.tx_block = true;
+		sc->mbox_client.tx_tout = MBOX_TOUT_MS;
+		sc->mbox_client.knows_txdone = false;
+
+		sc->mbox = mbox_request_channel(&sc->mbox_client, 0);
+		if (IS_ERR(sc->mbox)) {
+			ret = PTR_ERR(sc->mbox);
+			if (ret == -EAGAIN)
+				ret = -EPROBE_DEFER;
+			if (ret != -EPROBE_DEFER)
+				dev_err(&pdev->dev, "mailbox channel request failed, ret=%d\n",
+					ret);
+			sc->mbox = NULL;
+			goto err;
+		}
+	}
+
 	sc->rdesc.id = atomic_inc_return(&gdsc_count);
 	sc->rdesc.ops = &gdsc_ops;
 	sc->rdesc.type = REGULATOR_VOLTAGE;
@@ -734,27 +895,13 @@ static int gdsc_probe(struct platform_device *pdev)
 		regval |= clk_dis_wait_val;
 	}
 
-	if (!of_property_read_u32(pdev->dev.of_node, "qcom,en-few-wait-val",
-				  &en_few_wait_val)) {
-		en_few_wait_val <<= EN_FEW_WAIT_SHIFT;
-
-		regval &= ~(EN_FEW_WAIT_MASK);
-		regval |= en_few_wait_val;
-	}
-
-	if (!of_property_read_u32(pdev->dev.of_node, "qcom,en-rest-wait-val",
-				  &en_rest_wait_val)) {
-		en_rest_wait_val <<= EN_REST_WAIT_SHIFT;
-
-		regval &= ~(EN_REST_WAIT_MASK);
-		regval |= en_rest_wait_val;
-	}
-
 	regmap_write(sc->regmap, REG_OFFSET, regval);
 
 	sc->no_status_check_on_disable =
 			of_property_read_bool(pdev->dev.of_node,
 					"qcom,no-status-check-on-disable");
+	sc->skip_disable = of_property_read_bool(pdev->dev.of_node,
+					"qcom,skip-disable");
 	retain_mem = of_property_read_bool(pdev->dev.of_node,
 					    "qcom,retain-mem");
 	sc->toggle_mem = !retain_mem;
@@ -771,6 +918,17 @@ static int gdsc_probe(struct platform_device *pdev)
 				REGULATOR_MODE_NORMAL | REGULATOR_MODE_FAST;
 	}
 
+	if (sc->skip_disable) {
+		/*
+		 * If the disable skipping feature is allowed, then use mode
+		 * control to enable and disable the feature at runtime instead
+		 * of using it to enable and disable hardware triggering.
+		 */
+		init_data->constraints.valid_ops_mask |= REGULATOR_CHANGE_MODE;
+		init_data->constraints.valid_modes_mask =
+				REGULATOR_MODE_NORMAL | REGULATOR_MODE_IDLE;
+	}
+
 	if (!sc->toggle_logic) {
 		sc->reset_count = of_property_count_strings(pdev->dev.of_node,
 					    "reset-names");
@@ -778,14 +936,17 @@ static int gdsc_probe(struct platform_device *pdev)
 			sc->reset_count = 0;
 		} else if (sc->reset_count < 0) {
 			dev_err(&pdev->dev, "Failed to get reset clock names\n");
-			return -EINVAL;
+			ret = -EINVAL;
+			goto err;
 		}
 
 		sc->reset_clocks = devm_kzalloc(&pdev->dev,
 			sizeof(struct reset_control *) * sc->reset_count,
 							GFP_KERNEL);
-		if (!sc->reset_clocks)
-			return -ENOMEM;
+		if (!sc->reset_clocks) {
+			ret = -ENOMEM;
+			goto err;
+		}
 
 		for (i = 0; i < sc->reset_count; i++) {
 			const char *reset_name;
@@ -800,21 +961,31 @@ static int gdsc_probe(struct platform_device *pdev)
 				if (rc != -EPROBE_DEFER)
 					dev_err(&pdev->dev, "Failed to get %s\n",
 							reset_name);
-				return rc;
+				ret = rc;
+				goto err;
 			}
 		}
 
 		regval &= ~SW_COLLAPSE_MASK;
 		regmap_write(sc->regmap, REG_OFFSET, regval);
 
-		if (sc->poll_cfg_gdscr)
-			ret = poll_cfg_gdsc_status(sc, ENABLED);
-		else
-			ret = poll_gdsc_status(sc, ENABLED);
+		ret = poll_gdsc_status(sc, ENABLED);
 		if (ret) {
 			dev_err(&pdev->dev, "%s enable timed out: 0x%x\n",
 				sc->rdesc.name, regval);
-			return ret;
+			goto err;
+		}
+	}
+
+	if (sc->bus_handle) {
+		regmap_read(sc->regmap, REG_OFFSET, &regval);
+		if (!(regval & PWR_ON_MASK) || (regval & SW_COLLAPSE_MASK)) {
+			/*
+			 * Software is not enabling the GDSC so remove the
+			 * bus vote.
+			 */
+			msm_bus_scale_client_update_request(sc->bus_handle, 0);
+			sc->is_bus_enabled = false;
 		}
 	}
 
@@ -847,10 +1018,23 @@ static int gdsc_probe(struct platform_device *pdev)
 	if (IS_ERR(sc->rdev)) {
 		dev_err(&pdev->dev, "regulator_register(\"%s\") failed.\n",
 			sc->rdesc.name);
-		return PTR_ERR(sc->rdev);
+		ret = PTR_ERR(sc->rdev);
+		goto err;
 	}
 
 	return 0;
+
+err:
+	if (sc->mbox)
+		mbox_free_channel(sc->mbox);
+
+	if (sc->bus_handle) {
+		if (sc->is_bus_enabled)
+			msm_bus_scale_client_update_request(sc->bus_handle, 0);
+		msm_bus_scale_unregister_client(sc->bus_handle);
+	}
+
+	return ret;
 }
 
 static int gdsc_remove(struct platform_device *pdev)
@@ -858,6 +1042,15 @@ static int gdsc_remove(struct platform_device *pdev)
 	struct gdsc *sc = platform_get_drvdata(pdev);
 
 	regulator_unregister(sc->rdev);
+
+	if (sc->mbox)
+		mbox_free_channel(sc->mbox);
+
+	if (sc->bus_handle) {
+		if (sc->is_bus_enabled)
+			msm_bus_scale_client_update_request(sc->bus_handle, 0);
+		msm_bus_scale_unregister_client(sc->bus_handle);
+	}
 
 	return 0;
 }

@@ -141,18 +141,14 @@ struct zpa2326_private {
 	struct regulator               *vdd;
 };
 
-#define zpa2326_err(_idev, _format, _arg...) \
-	dev_err(_idev->dev.parent, _format, ##_arg)
+#define zpa2326_err(idev, fmt, ...)					\
+	dev_err(idev->dev.parent, fmt "\n", ##__VA_ARGS__)
 
-#define zpa2326_warn(_idev, _format, _arg...) \
-	dev_warn(_idev->dev.parent, _format, ##_arg)
+#define zpa2326_warn(idev, fmt, ...)					\
+	dev_warn(idev->dev.parent, fmt "\n", ##__VA_ARGS__)
 
-#ifdef DEBUG
-#define zpa2326_dbg(_idev, _format, _arg...) \
-	dev_dbg(_idev->dev.parent, _format, ##_arg)
-#else
-#define zpa2326_dbg(_idev, _format, _arg...)
-#endif
+#define zpa2326_dbg(idev, fmt, ...)					\
+	dev_dbg(idev->dev.parent, fmt "\n", ##__VA_ARGS__)
 
 bool zpa2326_isreg_writeable(struct device *dev, unsigned int reg)
 {
@@ -757,7 +753,7 @@ static void zpa2326_suspend(struct iio_dev *indio_dev)
  */
 static irqreturn_t zpa2326_handle_irq(int irq, void *data)
 {
-	struct iio_dev *indio_dev = (struct iio_dev *)data;
+	struct iio_dev *indio_dev = data;
 
 	if (iio_buffer_enabled(indio_dev)) {
 		/* Timestamping needed for buffered sampling only. */
@@ -796,7 +792,7 @@ static irqreturn_t zpa2326_handle_irq(int irq, void *data)
  */
 static irqreturn_t zpa2326_handle_threaded_irq(int irq, void *data)
 {
-	struct iio_dev         *indio_dev = (struct iio_dev *)data;
+	struct iio_dev         *indio_dev = data;
 	struct zpa2326_private *priv = iio_priv(indio_dev);
 	unsigned int            val;
 	bool                    cont;

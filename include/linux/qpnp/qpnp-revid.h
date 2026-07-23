@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -162,9 +162,6 @@
 
 #define PM8950_V2P0_REV4	0x02
 
-/* PM8953 */
-#define PM8953_SUBTYPE		0x16
-
 /* PMI8950 */
 #define PMI8950_SUBTYPE		0x11
 
@@ -184,13 +181,27 @@
 #define PM660L_SUBTYPE	0x1A
 #define PM660_SUBTYPE	0x1B
 
+/* PM8150 */
+#define PM8150_SUBTYPE		0x1E
+#define PM8150L_SUBTYPE		0x1F
+#define PM8150B_SUBTYPE		0x20
+#define PM8150A_SUBTYPE		0x27
+
+/* PM6150 SUBTYPE */
+#define PM6150_SUBTYPE		0x28
+#define PM6150L_SUBTYPE		0x1F
+
+/* PME9205 SUBTYPE */
+#define PME9205_SUBTYPE		0x24
+
+/* PM6125 SUBTYPE */
+#define PM6125_SUBTYPE		0x2D
+
 /* PMI632 */
 #define PMI632_SUBTYPE	0x25
 
-/* PM855 */
-#define PM855_SUBTYPE		0x1E
-#define PM855L_SUBTYPE		0x1F
-#define PM855B_SUBTYPE		0x20
+/* PM8008 SUBTYPE */
+#define PM8008_SUBTYPE	0x2C
 
 /* PMI8998 REV_ID */
 #define PMI8998_V1P0_REV1	0x00
@@ -236,6 +247,77 @@
 #define PMI632_V1P0_REV3	0x00
 #define PMI632_V1P0_REV4	0x01
 
+/* PM8150B_REV_ID */
+#define PM8150B_V1P0_REV1	0x00
+#define PM8150B_V1P0_REV2	0x00
+#define PM8150B_V1P0_REV3	0x00
+#define PM8150B_V1P0_REV4	0x01
+
+#define PM8150B_V2P0_REV1	0x00
+#define PM8150B_V2P0_REV2	0x00
+#define PM8150B_V2P0_REV3	0x00
+#define PM8150B_V2P0_REV4	0x02
+
+/* PM8150L_REV_ID */
+#define PM8150L_V1P0_REV1	0x00
+#define PM8150L_V1P0_REV2	0x00
+#define PM8150L_V1P0_REV3	0x00
+#define PM8150L_V1P0_REV4	0x01
+
+#define PM8150L_V2P0_REV1	0x00
+#define PM8150L_V2P0_REV2	0x00
+#define PM8150L_V2P0_REV3	0x00
+#define PM8150L_V2P0_REV4	0x02
+
+#define PM8150L_V3P0_REV1	0x00
+#define PM8150L_V3P0_REV2	0x00
+#define PM8150L_V3P0_REV3	0x00
+#define PM8150L_V3P0_REV4	0x03
+
+/* PM8150A_REV_ID */
+#define PM8150A_V1P0_REV1	0x00
+#define PM8150A_V1P0_REV2	0x00
+#define PM8150A_V1P0_REV3	0x00
+#define PM8150A_V1P0_REV4	0x01
+
+#define PM8150A_V2P0_REV1	0x00
+#define PM8150A_V2P0_REV2	0x00
+#define PM8150A_V2P0_REV3	0x00
+#define PM8150A_V2P0_REV4	0x02
+
+/* PME9205_REV_ID */
+#define PME9205_V1P0_REV1	0x00
+#define PME9205_V1P0_REV2	0x00
+#define PME9205_V1P0_REV3	0x00
+#define PME9205_V1P0_REV4	0x01
+
+#define PME9205_V2P0_REV1	0x00
+#define PME9205_V2P0_REV2	0x00
+#define PME9205_V2P0_REV3	0x00
+#define PME9205_V2P0_REV4	0x02
+
+/* PM6150_REV_ID */
+#define PM6150_V1P0_REV1	0x00
+#define PM6150_V1P0_REV2	0x00
+#define PM6150_V1P0_REV3	0x00
+#define PM6150_V1P0_REV4	0x01
+
+#define PM6150_V1P1_REV1	0x00
+#define PM6150_V1P1_REV2	0x00
+#define PM6150_V1P1_REV3	0x01
+#define PM6150_V1P1_REV4	0x01
+
+#define PM6150_V2P0_REV1	0x00
+#define PM6150_V2P0_REV2	0x00
+#define PM6150_V2P0_REV3	0x00
+#define PM6150_V2P0_REV4	0x02
+
+/* PM6125_REV_ID */
+#define PM6125_V1P0_REV1	0x00
+#define PM6125_V1P0_REV2	0x00
+#define PM6125_V1P0_REV3	0x00
+#define PM6125_V1P0_REV4	0x01
+
 /* PMI8998 FAB_ID */
 #define PMI8998_FAB_ID_SMIC	0x11
 #define PMI8998_FAB_ID_GF	0x30
@@ -253,6 +335,9 @@
 
 /* PMI8937 */
 #define PMI8937_SUBTYPE		0x37
+
+/* SMB1390 */
+#define SMB1390_SUBTYPE		0x23
 
 /* SMB1381 */
 #define SMB1381_SUBTYPE		0x17

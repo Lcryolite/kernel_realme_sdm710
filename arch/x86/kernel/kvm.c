@@ -37,16 +37,17 @@
 #include <linux/debugfs.h>
 #include <linux/nmi.h>
 #include <linux/swait.h>
+#include <linux/syscore_ops.h>
 #include <asm/timer.h>
 #include <asm/cpu.h>
 #include <asm/traps.h>
 #include <asm/desc.h>
 #include <asm/tlbflush.h>
-#include <asm/idle.h>
 #include <asm/apic.h>
 #include <asm/apicdef.h>
 #include <asm/hypervisor.h>
 #include <asm/kvm_guest.h>
+#include <asm/reboot.h>
 
 static int kvmapf = 1;
 
@@ -118,7 +119,11 @@ static struct kvm_task_sleep_node *_find_apf_task(struct kvm_task_sleep_head *b,
 	return NULL;
 }
 
-void kvm_async_pf_task_wait(u32 token)
+/*
+ * @interrupt_kernel: Is this called from a routine which interrupts the kernel
+ * 		      (other than user space)?
+ */
+void kvm_async_pf_task_wait(u32 token, int interrupt_kernel)
 {
 	u32 key = hash_32(token, KVM_TASK_SLEEP_HASHBITS);
 	struct kvm_task_sleep_head *b = &async_pf_sleepers[key];
@@ -141,8 +146,10 @@ void kvm_async_pf_task_wait(u32 token)
 
 	n.token = token;
 	n.cpu = smp_processor_id();
-	n.halted = is_idle_task(current) || preempt_count() > 1 ||
-		   rcu_preempt_depth();
+	n.halted = is_idle_task(current) ||
+		   (IS_ENABLED(CONFIG_PREEMPT_COUNT)
+		    ? preempt_count() > 1 || rcu_preempt_depth()
+		    : interrupt_kernel);
 	init_swait_queue_head(&n.wq);
 	hlist_add_head(&n.link, &b->list);
 	raw_spin_unlock(&b->lock);
@@ -182,7 +189,7 @@ static void apf_task_wake_one(struct kvm_task_sleep_node *n)
 	hlist_del_init(&n->link);
 	if (n->halted)
 		smp_send_reschedule(n->cpu);
-	else if (swait_active(&n->wq))
+	else if (swq_has_sleeper(&n->wq))
 		swake_up(&n->wq);
 }
 
@@ -265,18 +272,16 @@ do_async_page_fault(struct pt_regs *regs, unsigned long error_code)
 
 	switch (kvm_read_and_reset_pf_reason()) {
 	default:
-		trace_do_page_fault(regs, error_code);
+		do_page_fault(regs, error_code);
 		break;
 	case KVM_PV_REASON_PAGE_NOT_PRESENT:
 		/* page is swapped out by the host. */
 		prev_state = exception_enter();
-		exit_idle();
-		kvm_async_pf_task_wait((u32)read_cr2());
+		kvm_async_pf_task_wait((u32)read_cr2(), !user_mode(regs));
 		exception_exit(prev_state);
 		break;
 	case KVM_PV_REASON_PAGE_READY:
 		rcu_irq_enter();
-		exit_idle();
 		kvm_async_pf_task_wake((u32)read_cr2());
 		rcu_irq_exit();
 		break;
@@ -311,7 +316,7 @@ static void kvm_register_steal_time(void)
 
 static DEFINE_PER_CPU(unsigned long, kvm_apic_eoi) = KVM_PV_EOI_DISABLED;
 
-static void kvm_guest_apic_eoi_write(u32 reg, u32 val)
+static notrace void kvm_guest_apic_eoi_write(u32 reg, u32 val)
 {
 	/**
 	 * This relies on __test_and_clear_bit to modify the memory
@@ -322,7 +327,7 @@ static void kvm_guest_apic_eoi_write(u32 reg, u32 val)
 	 */
 	if (__test_and_clear_bit(KVM_PV_EOI_BIT, this_cpu_ptr(&kvm_apic_eoi)))
 		return;
-	apic_write(APIC_EOI, APIC_EOI_ACK);
+	apic->native_eoi_write(APIC_EOI, APIC_EOI_ACK);
 }
 
 static void kvm_guest_cpu_init(void)
@@ -336,7 +341,12 @@ static void kvm_guest_cpu_init(void)
 #ifdef CONFIG_PREEMPT
 		pa |= KVM_ASYNC_PF_SEND_ALWAYS;
 #endif
-		wrmsrl(MSR_KVM_ASYNC_PF_EN, pa | KVM_ASYNC_PF_ENABLED);
+		pa |= KVM_ASYNC_PF_ENABLED;
+
+		if (kvm_para_has_feature(KVM_FEATURE_ASYNC_PF_VMEXIT))
+			pa |= KVM_ASYNC_PF_DELIVERY_AS_PF_VMEXIT;
+
+		wrmsrl(MSR_KVM_ASYNC_PF_EN, pa);
 		__this_cpu_write(apf_reason.enabled, 1);
 		printk(KERN_INFO"KVM setup async PF for cpu %d\n",
 		       smp_processor_id());
@@ -366,6 +376,14 @@ static void kvm_pv_disable_apf(void)
 
 	printk(KERN_INFO"Unregister pv shared memory for cpu %d\n",
 	       smp_processor_id());
+}
+
+static void kvm_disable_steal_time(void)
+{
+	if (!has_steal_clock)
+		return;
+
+	wrmsr(MSR_KVM_STEAL_TIME, 0, 0);
 }
 
 static void kvm_pv_guest_cpu_reboot(void *unused)
@@ -402,20 +420,33 @@ static u64 kvm_steal_clock(int cpu)
 	src = &per_cpu(steal_time, cpu);
 	do {
 		version = src->version;
-		rmb();
+		virt_rmb();
 		steal = src->steal;
-		rmb();
+		virt_rmb();
 	} while ((version & 1) || (version != src->version));
 
 	return steal;
 }
 
-void kvm_disable_steal_time(void)
+static void kvm_guest_cpu_offline(bool shutdown)
 {
-	if (!has_steal_clock)
-		return;
+	kvm_disable_steal_time();
+	if (kvm_para_has_feature(KVM_FEATURE_PV_EOI))
+		wrmsrl(MSR_KVM_PV_EOI_EN, 0);
+	kvm_pv_disable_apf();
+	if (!shutdown)
+		apf_task_wake_all();
+	kvmclock_disable();
+}
 
-	wrmsr(MSR_KVM_STEAL_TIME, 0, 0);
+static int kvm_cpu_online(unsigned int cpu)
+{
+	unsigned long flags;
+
+	local_irq_save(flags);
+	kvm_guest_cpu_init();
+	local_irq_restore(flags);
+	return 0;
 }
 
 #ifdef CONFIG_SMP
@@ -426,36 +457,53 @@ static void __init kvm_smp_prepare_boot_cpu(void)
 	kvm_spinlock_init();
 }
 
-static void kvm_guest_cpu_offline(void)
-{
-	kvm_disable_steal_time();
-	if (kvm_para_has_feature(KVM_FEATURE_PV_EOI))
-		wrmsrl(MSR_KVM_PV_EOI_EN, 0);
-	kvm_pv_disable_apf();
-	apf_task_wake_all();
-}
-
-static int kvm_cpu_online(unsigned int cpu)
-{
-	local_irq_disable();
-	kvm_guest_cpu_init();
-	local_irq_enable();
-	return 0;
-}
-
 static int kvm_cpu_down_prepare(unsigned int cpu)
 {
-	local_irq_disable();
-	kvm_guest_cpu_offline();
-	local_irq_enable();
+	unsigned long flags;
+
+	local_irq_save(flags);
+	kvm_guest_cpu_offline(false);
+	local_irq_restore(flags);
 	return 0;
 }
+
 #endif
+
+static int kvm_suspend(void)
+{
+	kvm_guest_cpu_offline(false);
+
+	return 0;
+}
+
+static void kvm_resume(void)
+{
+	kvm_cpu_online(raw_smp_processor_id());
+}
+
+static struct syscore_ops kvm_syscore_ops = {
+	.suspend	= kvm_suspend,
+	.resume		= kvm_resume,
+};
 
 static void __init kvm_apf_trap_init(void)
 {
-	set_intr_gate(14, async_page_fault);
+	update_intr_gate(X86_TRAP_PF, async_page_fault);
 }
+
+/*
+ * After a PV feature is registered, the host will keep writing to the
+ * registered memory location. If the guest happens to shutdown, this memory
+ * won't be valid. In cases like kexec, in which you install a new kernel, this
+ * means a random memory location will be kept being written.
+ */
+#ifdef CONFIG_KEXEC_CORE
+static void kvm_crash_shutdown(struct pt_regs *regs)
+{
+	kvm_guest_cpu_offline(true);
+	native_machine_crash_shutdown(regs);
+}
+#endif
 
 void __init kvm_guest_init(void)
 {
@@ -490,6 +538,12 @@ void __init kvm_guest_init(void)
 #else
 	kvm_guest_cpu_init();
 #endif
+
+#ifdef CONFIG_KEXEC_CORE
+	machine_ops.crash_shutdown = kvm_crash_shutdown;
+#endif
+
+	register_syscore_ops(&kvm_syscore_ops);
 
 	/*
 	 * Hard lockup detection is enabled by default. Disable it, as guests
@@ -536,12 +590,12 @@ static uint32_t __init kvm_detect(void)
 	return kvm_cpuid_base();
 }
 
-const struct hypervisor_x86 x86_hyper_kvm __refconst = {
+const __initconst struct hypervisor_x86 x86_hyper_kvm = {
 	.name			= "KVM",
 	.detect			= kvm_detect,
-	.x2apic_available	= kvm_para_available,
+	.type			= X86_HYPER_KVM,
+	.init.x2apic_available	= kvm_para_available,
 };
-EXPORT_SYMBOL_GPL(x86_hyper_kvm);
 
 static __init int activate_jump_labels(void)
 {
@@ -595,6 +649,39 @@ out:
 	local_irq_restore(flags);
 }
 
+#ifdef CONFIG_X86_32
+__visible bool __kvm_vcpu_is_preempted(long cpu)
+{
+	struct kvm_steal_time *src = &per_cpu(steal_time, cpu);
+
+	return !!src->preempted;
+}
+PV_CALLEE_SAVE_REGS_THUNK(__kvm_vcpu_is_preempted);
+
+#else
+
+#include <asm/asm-offsets.h>
+
+extern bool __raw_callee_save___kvm_vcpu_is_preempted(long);
+
+/*
+ * Hand-optimize version for x86-64 to avoid 8 64-bit register saving and
+ * restoring to/from the stack.
+ */
+asm(
+".pushsection .text;"
+".global __raw_callee_save___kvm_vcpu_is_preempted;"
+".type __raw_callee_save___kvm_vcpu_is_preempted, @function;"
+"__raw_callee_save___kvm_vcpu_is_preempted:"
+"movq	__per_cpu_offset(,%rdi,8), %rax;"
+"cmpb	$0, " __stringify(KVM_STEAL_TIME_preempted) "+steal_time(%rax);"
+"setne	%al;"
+"ret;"
+".size __raw_callee_save___kvm_vcpu_is_preempted, .-__raw_callee_save___kvm_vcpu_is_preempted;"
+".popsection");
+
+#endif
+
 /*
  * Setup pv_lock_ops to exploit KVM_FEATURE_PV_UNHALT if present.
  */
@@ -611,20 +698,11 @@ void __init kvm_spinlock_init(void)
 	pv_lock_ops.queued_spin_unlock = PV_CALLEE_SAVE(__pv_queued_spin_unlock);
 	pv_lock_ops.wait = kvm_wait;
 	pv_lock_ops.kick = kvm_kick_cpu;
+
+	if (kvm_para_has_feature(KVM_FEATURE_STEAL_TIME)) {
+		pv_lock_ops.vcpu_is_preempted =
+			PV_CALLEE_SAVE(__kvm_vcpu_is_preempted);
+	}
 }
-
-static __init int kvm_spinlock_init_jump(void)
-{
-	if (!kvm_para_available())
-		return 0;
-	if (!kvm_para_has_feature(KVM_FEATURE_PV_UNHALT))
-		return 0;
-
-	static_key_slow_inc(&paravirt_ticketlocks_enabled);
-	printk(KERN_INFO "KVM setup paravirtual spinlock\n");
-
-	return 0;
-}
-early_initcall(kvm_spinlock_init_jump);
 
 #endif	/* CONFIG_PARAVIRT_SPINLOCKS */

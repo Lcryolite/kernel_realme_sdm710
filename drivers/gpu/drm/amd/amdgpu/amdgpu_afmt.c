@@ -74,9 +74,9 @@ static void amdgpu_afmt_calc_cts(uint32_t clock, int *CTS, int *N, int freq)
 
 	/* Check that we are in spec (not always possible) */
 	if (n < (128*freq/1500))
-		printk(KERN_WARNING "Calculated ACR N value is too small. You may experience audio problems.\n");
+		pr_warn("Calculated ACR N value is too small. You may experience audio problems.\n");
 	if (n > (128*freq/300))
-		printk(KERN_WARNING "Calculated ACR N value is too large. You may experience audio problems.\n");
+		pr_warn("Calculated ACR N value is too large. You may experience audio problems.\n");
 
 	*N = n;
 	*CTS = cts;
@@ -100,6 +100,7 @@ struct amdgpu_afmt_acr amdgpu_afmt_acr(uint32_t clock)
 	amdgpu_afmt_calc_cts(clock, &res.cts_32khz, &res.n_32khz, 32000);
 	amdgpu_afmt_calc_cts(clock, &res.cts_44_1khz, &res.n_44_1khz, 44100);
 	amdgpu_afmt_calc_cts(clock, &res.cts_48khz, &res.n_48khz, 48000);
+	res.clock = clock;
 
 	return res;
 }

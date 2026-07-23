@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <stdio.h>
 #include <stddef.h>
 #include <signal.h>
@@ -5,7 +6,7 @@
 #include <sys/mman.h>
 #include <sys/user.h>
 #define __FRAME_OFFSETS
-#include <asm/ptrace.h>
+#include <linux/ptrace.h>
 #include <asm/types.h>
 
 #ifdef __i386__

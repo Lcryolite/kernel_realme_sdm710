@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2018 Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2019 Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -95,7 +95,7 @@ static int ufs_qcom_dbg_testbus_cfg_show(struct seq_file *file, void *data)
 {
 	struct ufs_qcom_host *host = (struct ufs_qcom_host *)file->private;
 
-	seq_printf(file , "Current configuration: major=%d, minor=%d\n\n",
+	seq_printf(file, "Current configuration: major=%d, minor=%d\n\n",
 			host->testbus.select_major, host->testbus.select_minor);
 
 	/* Print usage */
@@ -367,7 +367,7 @@ void ufs_qcom_dbg_add_debugfs(struct ufs_hba *hba, struct dentry *root)
 	}
 
 	host->debugfs_files.pm_qos =
-		debugfs_create_file("pm_qos", S_IRUSR,
+		debugfs_create_file("pm_qos", 0400,
 				host->debugfs_files.debugfs_root, host,
 				&ufs_qcom_dbg_pm_qos_desc);
 		if (!host->debugfs_files.dbg_regs) {

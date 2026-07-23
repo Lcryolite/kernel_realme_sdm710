@@ -127,7 +127,27 @@
 #define DC_READY_VOTER		"DC_READY_VOTER"
 
 #define PT_RESTART_VOTER	"PT_RESTART_VOTER"
-#define REG_WRITE_VOTER		"REG_WRITE_VOTER"
+
+#define CLASS_ATTR_IDX_RO(_name, _func)  \
+static ssize_t _name##_show(struct class *c, struct class_attribute *attr, \
+			char *ubuf) \
+{ \
+	return _func##_show(c, attr, ubuf); \
+}; \
+static CLASS_ATTR_RO(_name)
+
+#define CLASS_ATTR_IDX_RW(_name, _func)  \
+static ssize_t _name##_show(struct class *c, struct class_attribute *attr, \
+			char *ubuf) \
+{ \
+	return _func##_show(c, attr, ubuf); \
+}; \
+static ssize_t _name##_store(struct class *c, struct class_attribute *attr, \
+			const char *ubuf, size_t count) \
+{ \
+	return _func##_store(c, attr, ubuf, count); \
+}; \
+static CLASS_ATTR_RW(_name)
 
 struct qnovo_dt_props {
 	bool			external_rsense;
@@ -146,7 +166,6 @@ struct qnovo {
 	struct votable		*not_ok_to_qnovo_votable;
 	struct votable		*chg_ready_votable;
 	struct votable		*awake_votable;
-	struct votable		*auto_esr_votable;
 	struct class		qnovo_class;
 	struct pmic_revid_data	*pmic_rev_id;
 	u32			wa_flags;
@@ -342,7 +361,15 @@ static int qnovo_disable_cb(struct votable *votable, void *data, int disable,
 		return -EINVAL;
 	}
 
-	vote(chip->auto_esr_votable, QNOVO_OVERALL_VOTER, disable, 0);
+	/*
+	 * fg must be available for enable FG_AVAILABLE_VOTER
+	 * won't enable it otherwise
+	 */
+
+	if (is_fg_available(chip))
+		power_supply_set_property(chip->bms_psy,
+				POWER_SUPPLY_PROP_CHARGE_QNOVO_ENABLE,
+				&pval);
 
 	vote(chip->pt_dis_votable, QNOVO_OVERALL_VOTER, disable, 0);
 	rc = qnovo_batt_psy_update(chip, disable);
@@ -412,27 +439,6 @@ static int awake_cb(struct votable *votable, void *data, int awake,
 		pm_relax(chip->dev);
 
 	return 0;
-}
-
-static int auto_esr_cb(struct votable *votable, void *data, int auto_esr,
-					const char *client)
-{
-	struct qnovo *chip = data;
-	union power_supply_propval pval = {0};
-
-	pval.intval = !auto_esr;
-	if (is_fg_available(chip))
-		power_supply_set_property(chip->bms_psy,
-				POWER_SUPPLY_PROP_CHARGE_QNOVO_ENABLE,
-				&pval);
-
-	return 0;
-}
-
-static void pe_ctrl2_write_cb(struct qnovo *chip, u8 *val)
-{
-	if (get_effective_result(chip->disable_votable) == 0)
-		vote(chip->auto_esr_votable, REG_WRITE_VOTER, (*val == 0), 0);
 }
 
 static int qnovo_parse_dt(struct qnovo *chip)
@@ -512,7 +518,6 @@ struct param_info {
 	int	reg_to_unit_offset;
 	int	min_val;
 	int	max_val;
-	void	(*callback)(struct qnovo *chip, u8 *val);
 	char	*units_str;
 };
 
@@ -539,7 +544,6 @@ static struct param_info params[] = {
 		.name			= "PE_CTRL2_REG",
 		.start_addr		= QNOVO_PE_CTRL2,
 		.num_regs		= 1,
-		.callback		= pe_ctrl2_write_cb,
 		.units_str		= "",
 	},
 	[PTRAIN_STS_REG] = {
@@ -767,7 +771,7 @@ static struct param_info params[] = {
 	},
 };
 
-static struct class_attribute qnovo_attributes[];
+static struct attribute *qnovo_class_attrs[];
 
 static ssize_t version_show(struct class *c, struct class_attribute *attr,
 			char *buf)
@@ -775,6 +779,7 @@ static ssize_t version_show(struct class *c, struct class_attribute *attr,
 	return snprintf(buf, PAGE_SIZE, "%d.%d\n",
 			DRV_MAJOR_VERSION, DRV_MINOR_VERSION);
 }
+static CLASS_ATTR_RO(version);
 
 static ssize_t ok_to_qnovo_show(struct class *c, struct class_attribute *attr,
 			char *buf)
@@ -784,6 +789,7 @@ static ssize_t ok_to_qnovo_show(struct class *c, struct class_attribute *attr,
 
 	return snprintf(buf, PAGE_SIZE, "%d\n", !val);
 }
+static CLASS_ATTR_RO(ok_to_qnovo);
 
 static ssize_t qnovo_enable_show(struct class *c, struct class_attribute *attr,
 			char *ubuf)
@@ -807,6 +813,7 @@ static ssize_t qnovo_enable_store(struct class *c, struct class_attribute *attr,
 
 	return count;
 }
+static CLASS_ATTR_RW(qnovo_enable);
 
 static ssize_t pt_enable_show(struct class *c, struct class_attribute *attr,
 			char *ubuf)
@@ -831,12 +838,14 @@ static ssize_t pt_enable_store(struct class *c, struct class_attribute *attr,
 
 	return count;
 }
+static CLASS_ATTR_RW(pt_enable);
+
 
 static ssize_t val_show(struct class *c, struct class_attribute *attr,
 			char *ubuf)
 {
 	struct qnovo *chip = container_of(c, struct qnovo, qnovo_class);
-	int i = attr - qnovo_attributes;
+	int i = &attr->attr - *qnovo_class_attrs;
 	int val = 0;
 
 	if (i == FV_REQUEST)
@@ -852,7 +861,7 @@ static ssize_t val_store(struct class *c, struct class_attribute *attr,
 			const char *ubuf, size_t count)
 {
 	struct qnovo *chip = container_of(c, struct qnovo, qnovo_class);
-	int i = attr - qnovo_attributes;
+	int i = &attr->attr - *qnovo_class_attrs;
 	unsigned long val;
 
 	if (kstrtoul(ubuf, 0, &val))
@@ -873,7 +882,7 @@ static ssize_t val_store(struct class *c, struct class_attribute *attr,
 static ssize_t reg_show(struct class *c, struct class_attribute *attr,
 			char *ubuf)
 {
-	int i = attr - qnovo_attributes;
+	int i = &attr->attr - *qnovo_class_attrs;
 	struct qnovo *chip = container_of(c, struct qnovo, qnovo_class);
 	u8 buf[2] = {0, 0};
 	u16 regval;
@@ -892,7 +901,7 @@ static ssize_t reg_show(struct class *c, struct class_attribute *attr,
 static ssize_t reg_store(struct class *c, struct class_attribute *attr,
 			const char *ubuf, size_t count)
 {
-	int i = attr - qnovo_attributes;
+	int i = &attr->attr - *qnovo_class_attrs;
 	struct qnovo *chip = container_of(c, struct qnovo, qnovo_class);
 	u8 buf[2] = {0, 0};
 	unsigned long val;
@@ -909,17 +918,13 @@ static ssize_t reg_store(struct class *c, struct class_attribute *attr,
 		pr_err("Couldn't write %s rc = %d\n", params[i].name, rc);
 		return -EINVAL;
 	}
-
-	if (params[i].callback)
-		params[i].callback(chip, buf);
-
 	return count;
 }
 
 static ssize_t time_show(struct class *c, struct class_attribute *attr,
 		char *ubuf)
 {
-	int i = attr - qnovo_attributes;
+	int i = &attr->attr - *qnovo_class_attrs;
 	struct qnovo *chip = container_of(c, struct qnovo, qnovo_class);
 	u8 buf[2] = {0, 0};
 	u16 regval;
@@ -943,7 +948,7 @@ static ssize_t time_show(struct class *c, struct class_attribute *attr,
 static ssize_t time_store(struct class *c, struct class_attribute *attr,
 		       const char *ubuf, size_t count)
 {
-	int i = attr - qnovo_attributes;
+	int i = &attr->attr - *qnovo_class_attrs;
 	struct qnovo *chip = container_of(c, struct qnovo, qnovo_class);
 	u8 buf[2] = {0, 0};
 	u16 regval;
@@ -978,7 +983,7 @@ static ssize_t time_store(struct class *c, struct class_attribute *attr,
 static ssize_t current_show(struct class *c, struct class_attribute *attr,
 				char *ubuf)
 {
-	int i = attr - qnovo_attributes;
+	int i = &attr->attr - *qnovo_class_attrs;
 	struct qnovo *chip = container_of(c, struct qnovo, qnovo_class);
 	u8 buf[2] = {0, 0};
 	int rc;
@@ -1017,7 +1022,7 @@ static ssize_t current_show(struct class *c, struct class_attribute *attr,
 static ssize_t voltage_show(struct class *c, struct class_attribute *attr,
 				char *ubuf)
 {
-	int i = attr - qnovo_attributes;
+	int i = &attr->attr - *qnovo_class_attrs;
 	struct qnovo *chip = container_of(c, struct qnovo, qnovo_class);
 	u8 buf[2] = {0, 0};
 	int rc;
@@ -1047,7 +1052,7 @@ static ssize_t voltage_show(struct class *c, struct class_attribute *attr,
 static ssize_t voltage_store(struct class *c, struct class_attribute *attr,
 		       const char *ubuf, size_t count)
 {
-	int i = attr - qnovo_attributes;
+	int i = &attr->attr - *qnovo_class_attrs;
 	struct qnovo *chip = container_of(c, struct qnovo, qnovo_class);
 	u8 buf[2] = {0, 0};
 	int rc;
@@ -1089,7 +1094,7 @@ static ssize_t voltage_store(struct class *c, struct class_attribute *attr,
 static ssize_t coulomb_show(struct class *c, struct class_attribute *attr,
 				char *ubuf)
 {
-	int i = attr - qnovo_attributes;
+	int i = &attr->attr - *qnovo_class_attrs;
 	struct qnovo *chip = container_of(c, struct qnovo, qnovo_class);
 	u8 buf[2] = {0, 0};
 	int rc;
@@ -1118,7 +1123,7 @@ static ssize_t coulomb_show(struct class *c, struct class_attribute *attr,
 static ssize_t coulomb_store(struct class *c, struct class_attribute *attr,
 		       const char *ubuf, size_t count)
 {
-	int i = attr - qnovo_attributes;
+	int i = &attr->attr - *qnovo_class_attrs;
 	struct qnovo *chip = container_of(c, struct qnovo, qnovo_class);
 	u8 buf[2] = {0, 0};
 	int rc;
@@ -1162,7 +1167,7 @@ static ssize_t coulomb_store(struct class *c, struct class_attribute *attr,
 static ssize_t batt_prop_show(struct class *c, struct class_attribute *attr,
 				char *ubuf)
 {
-	int i = attr - qnovo_attributes;
+	int i = &attr->attr - *qnovo_class_attrs;
 	struct qnovo *chip = container_of(c, struct qnovo, qnovo_class);
 	int rc = -EINVAL;
 	int prop = params[i].start_addr;
@@ -1181,75 +1186,77 @@ static ssize_t batt_prop_show(struct class *c, struct class_attribute *attr,
 	return snprintf(ubuf, PAGE_SIZE, "%d\n", pval.intval);
 }
 
-static struct class_attribute qnovo_attributes[] = {
-	[VER]			= __ATTR_RO(version),
-	[OK_TO_QNOVO]		= __ATTR_RO(ok_to_qnovo),
-	[QNOVO_ENABLE]		= __ATTR_RW(qnovo_enable),
-	[PT_ENABLE]		= __ATTR_RW(pt_enable),
-	[FV_REQUEST]		= __ATTR(fv_uV_request, 0644,
-					val_show, val_store),
-	[FCC_REQUEST]		= __ATTR(fcc_uA_request, 0644,
-					val_show, val_store),
-	[PE_CTRL_REG]		= __ATTR(PE_CTRL_REG, 0644,
-					reg_show, reg_store),
-	[PE_CTRL2_REG]		= __ATTR(PE_CTRL2_REG, 0644,
-					reg_show, reg_store),
-	[PTRAIN_STS_REG]	= __ATTR(PTRAIN_STS_REG, 0444,
-					reg_show, NULL),
-	[INT_RT_STS_REG]	= __ATTR(INT_RT_STS_REG, 0444,
-					reg_show, NULL),
-	[ERR_STS2_REG]		= __ATTR(ERR_STS2_REG, 0444,
-					reg_show, NULL),
-	[PREST1]		= __ATTR(PREST1_mS, 0644,
-					time_show, time_store),
-	[PPULS1]		= __ATTR(PPULS1_uC, 0644,
-					coulomb_show, coulomb_store),
-	[NREST1]		= __ATTR(NREST1_mS, 0644,
-					time_show, time_store),
-	[NPULS1]		= __ATTR(NPULS1_mS, 0644,
-					time_show, time_store),
-	[PPCNT]			= __ATTR(PPCNT, 0644,
-					time_show, time_store),
-	[VLIM1]			= __ATTR(VLIM1_uV, 0644,
-					voltage_show, voltage_store),
-	[PVOLT1]		= __ATTR(PVOLT1_uV, 0444,
-					voltage_show, NULL),
-	[PCUR1]			= __ATTR(PCUR1_uA, 0444,
-					current_show, NULL),
-	[PTTIME]		= __ATTR(PTTIME_S, 0444,
-					time_show, NULL),
-	[PREST2]		= __ATTR(PREST2_mS, 0644,
-					time_show, time_store),
-	[PPULS2]		= __ATTR(PPULS2_uC, 0644,
-					coulomb_show, coulomb_store),
-	[NREST2]		= __ATTR(NREST2_mS, 0644,
-					time_show, time_store),
-	[NPULS2]		= __ATTR(NPULS2_mS, 0644,
-					time_show, time_store),
-	[VLIM2]			= __ATTR(VLIM2_uV, 0644,
-					voltage_show, voltage_store),
-	[PVOLT2]		= __ATTR(PVOLT2_uV, 0444,
-					voltage_show, NULL),
-	[RVOLT2]		= __ATTR(RVOLT2_uV, 0444,
-					voltage_show, NULL),
-	[PCUR2]			= __ATTR(PCUR2_uA, 0444,
-					current_show, NULL),
-	[SCNT]			= __ATTR(SCNT, 0644,
-					time_show, time_store),
-	[VMAX]			= __ATTR(VMAX_uV, 0444,
-					voltage_show, NULL),
-	[SNUM]			= __ATTR(SNUM, 0444,
-					time_show, NULL),
-	[VBATT]			= __ATTR(VBATT_uV, 0444,
-					batt_prop_show, NULL),
-	[IBATT]			= __ATTR(IBATT_uA, 0444,
-					batt_prop_show, NULL),
-	[BATTTEMP]		= __ATTR(BATTTEMP_deciDegC, 0444,
-					batt_prop_show, NULL),
-	[BATTSOC]		= __ATTR(BATTSOC, 0444,
-					batt_prop_show, NULL),
-	__ATTR_NULL,
+CLASS_ATTR_IDX_RW(fv_uV_request, val);
+CLASS_ATTR_IDX_RW(fcc_uA_request, val);
+CLASS_ATTR_IDX_RW(PE_CTRL_REG, reg);
+CLASS_ATTR_IDX_RW(PE_CTRL2_REG, reg);
+CLASS_ATTR_IDX_RO(PTRAIN_STS_REG, reg);
+CLASS_ATTR_IDX_RO(INT_RT_STS_REG, reg);
+CLASS_ATTR_IDX_RO(ERR_STS2_REG, reg);
+CLASS_ATTR_IDX_RW(PREST1_mS, time);
+CLASS_ATTR_IDX_RW(PPULS1_uC, coulomb);
+CLASS_ATTR_IDX_RW(NREST1_mS, time);
+CLASS_ATTR_IDX_RW(NPULS1_mS, time);
+CLASS_ATTR_IDX_RW(PPCNT, time);
+CLASS_ATTR_IDX_RW(VLIM1_uV, voltage);
+CLASS_ATTR_IDX_RO(PVOLT1_uV, voltage);
+CLASS_ATTR_IDX_RO(PCUR1_uA, current);
+CLASS_ATTR_IDX_RO(PTTIME_S, time);
+CLASS_ATTR_IDX_RW(PREST2_mS, time);
+CLASS_ATTR_IDX_RW(PPULS2_uC, coulomb);
+CLASS_ATTR_IDX_RW(NREST2_mS, time);
+CLASS_ATTR_IDX_RW(NPULS2_mS, time);
+CLASS_ATTR_IDX_RW(VLIM2_uV, voltage);
+CLASS_ATTR_IDX_RO(PVOLT2_uV, voltage);
+CLASS_ATTR_IDX_RO(RVOLT2_uV, voltage);
+CLASS_ATTR_IDX_RO(PCUR2_uA, current);
+CLASS_ATTR_IDX_RW(SCNT, time);
+CLASS_ATTR_IDX_RO(VMAX_uV, voltage);
+CLASS_ATTR_IDX_RO(SNUM, time);
+CLASS_ATTR_IDX_RO(VBATT_uV, batt_prop);
+CLASS_ATTR_IDX_RO(IBATT_uA, batt_prop);
+CLASS_ATTR_IDX_RO(BATTTEMP_deciDegC, batt_prop);
+CLASS_ATTR_IDX_RO(BATTSOC, batt_prop);
+
+static struct attribute *qnovo_class_attrs[] = {
+	[VER]			= &class_attr_version.attr,
+	[OK_TO_QNOVO]		= &class_attr_ok_to_qnovo.attr,
+	[QNOVO_ENABLE]		= &class_attr_qnovo_enable.attr,
+	[PT_ENABLE]		= &class_attr_pt_enable.attr,
+	[FV_REQUEST]		= &class_attr_fv_uV_request.attr,
+	[FCC_REQUEST]		= &class_attr_fcc_uA_request.attr,
+	[PE_CTRL_REG]		= &class_attr_PE_CTRL_REG.attr,
+	[PE_CTRL2_REG]		= &class_attr_PE_CTRL2_REG.attr,
+	[PTRAIN_STS_REG]	= &class_attr_PTRAIN_STS_REG.attr,
+	[INT_RT_STS_REG]	= &class_attr_INT_RT_STS_REG.attr,
+	[ERR_STS2_REG]		= &class_attr_ERR_STS2_REG.attr,
+	[PREST1]		= &class_attr_PREST1_mS.attr,
+	[PPULS1]		= &class_attr_PPULS1_uC.attr,
+	[NREST1]		= &class_attr_NREST1_mS.attr,
+	[NPULS1]		= &class_attr_NPULS1_mS.attr,
+	[PPCNT]			= &class_attr_PPCNT.attr,
+	[VLIM1]			= &class_attr_VLIM1_uV.attr,
+	[PVOLT1]		= &class_attr_PVOLT1_uV.attr,
+	[PCUR1]			= &class_attr_PCUR1_uA.attr,
+	[PTTIME]		= &class_attr_PTTIME_S.attr,
+	[PREST2]		= &class_attr_PREST2_mS.attr,
+	[PPULS2]		= &class_attr_PPULS2_uC.attr,
+	[NREST2]		= &class_attr_NREST2_mS.attr,
+	[NPULS2]		= &class_attr_NPULS2_mS.attr,
+	[VLIM2]			= &class_attr_VLIM2_uV.attr,
+	[PVOLT2]		= &class_attr_PVOLT2_uV.attr,
+	[RVOLT2]		= &class_attr_RVOLT2_uV.attr,
+	[PCUR2]			= &class_attr_PCUR2_uA.attr,
+	[SCNT]			= &class_attr_SCNT.attr,
+	[VMAX]			= &class_attr_VMAX_uV.attr,
+	[SNUM]			= &class_attr_SNUM.attr,
+	[VBATT]			= &class_attr_VBATT_uV.attr,
+	[IBATT]			= &class_attr_IBATT_uA.attr,
+	[BATTTEMP]		= &class_attr_BATTTEMP_deciDegC.attr,
+	[BATTSOC]		= &class_attr_BATTSOC.attr,
+	NULL,
 };
+ATTRIBUTE_GROUPS(qnovo_class);
 
 static int qnovo_update_status(struct qnovo *chip)
 {
@@ -1485,8 +1492,6 @@ static int qnovo_hw_init(struct qnovo *chip)
 	vote(chip->pt_dis_votable, QNOVO_OVERALL_VOTER, true, 0);
 	vote(chip->pt_dis_votable, ESR_VOTER, false, 0);
 
-	vote(chip->auto_esr_votable, QNOVO_OVERALL_VOTER, true, 0);
-
 	val = 0;
 	rc = qnovo_write(chip, QNOVO_STRM_CTRL, &val, 1);
 	if (rc < 0) {
@@ -1679,13 +1684,6 @@ static int qnovo_probe(struct platform_device *pdev)
 		goto destroy_chg_ready_votable;
 	}
 
-	chip->auto_esr_votable = create_votable("AUTO_ESR", VOTE_SET_ANY,
-					auto_esr_cb, chip);
-	if (IS_ERR(chip->auto_esr_votable)) {
-		rc = PTR_ERR(chip->auto_esr_votable);
-		goto destroy_auto_esr_votable;
-	}
-
 	INIT_WORK(&chip->status_change_work, status_change_work);
 	INIT_DELAYED_WORK(&chip->dc_debounce_work, dc_debounce_work);
 	INIT_DELAYED_WORK(&chip->usb_debounce_work, usb_debounce_work);
@@ -1716,7 +1714,7 @@ static int qnovo_probe(struct platform_device *pdev)
 	}
 	chip->qnovo_class.name = "qnovo",
 	chip->qnovo_class.owner = THIS_MODULE,
-	chip->qnovo_class.class_attrs = qnovo_attributes;
+	chip->qnovo_class.class_groups = qnovo_class_groups;
 
 	rc = class_register(&chip->qnovo_class);
 	if (rc < 0) {
@@ -1730,8 +1728,6 @@ static int qnovo_probe(struct platform_device *pdev)
 
 unreg_notifier:
 	power_supply_unreg_notifier(&chip->nb);
-destroy_auto_esr_votable:
-	destroy_votable(chip->auto_esr_votable);
 destroy_awake_votable:
 	destroy_votable(chip->awake_votable);
 destroy_chg_ready_votable:

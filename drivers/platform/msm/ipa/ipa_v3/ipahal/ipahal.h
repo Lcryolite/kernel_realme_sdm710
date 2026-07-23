@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2020, 2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -13,7 +13,7 @@
 #ifndef _IPAHAL_H_
 #define _IPAHAL_H_
 
-#include <linux/msm_ipa.h>
+#include "../ipa_defs.h"
 #include "../../ipa_common_i.h"
 
 /*
@@ -444,6 +444,8 @@ enum ipahal_pkt_status_exception {
 	 */
 	IPAHAL_PKT_STATUS_EXCEPTION_NAT,
 	IPAHAL_PKT_STATUS_EXCEPTION_IPV6CT,
+	IPAHAL_PKT_STATUS_EXCEPTION_UCP,
+	IPAHAL_PKT_STATUS_EXCEPTION_CSUM,
 	IPAHAL_PKT_STATUS_EXCEPTION_MAX,
 };
 
@@ -535,6 +537,7 @@ enum ipahal_pkt_status_nat_type {
  *  the global flt tbl? (if not, then the per endp tables)
  * @flt_ret_hdr: Retain header in filter rule flag: Does matching flt rule
  *  specifies to retain header?
+ *  Starting IPA4.5, this will be true only if packet has L2 header.
  * @flt_miss: Filtering miss flag: Was their a filtering rule miss?
  *   In case of miss, all flt info to be ignored
  * @rt_local: Route table location flag: Does matching rt rule belongs to
@@ -635,8 +638,8 @@ void ipahal_cp_hdr_to_hw_buff(void *base, u32 offset, u8 *hdr, u32 hdr_len);
  * @hdr_base_addr: base address in table
  * @offset_entry: offset from hdr_base_addr in table
  * @l2tp_params: l2tp parameters
-  * @is_64: Indicates whether header base address/dma base address is 64 bit.
  * @generic_params: generic proc_ctx params
+ * @is_64: Indicates whether header base address/dma base address is 64 bit.
  */
 int ipahal_cp_proc_ctx_to_hw_buff(enum ipa_hdr_proc_type type,
 		void *base, u32 offset, u32 hdr_len,
@@ -644,8 +647,8 @@ int ipahal_cp_proc_ctx_to_hw_buff(enum ipa_hdr_proc_type type,
 		u64 hdr_base_addr,
 		struct ipa_hdr_offset_entry *offset_entry,
 		struct ipa_l2tp_hdr_proc_ctx_params *l2tp_params,
-		bool is_64,
-		struct ipa_eth_II_to_eth_II_ex_procparams *generic_params);
+		struct ipa_eth_II_to_eth_II_ex_procparams *generic_params,
+		bool is_64);
 
 /*
  * ipahal_get_proc_ctx_needed_len() - calculates the needed length for addition
@@ -654,16 +657,6 @@ int ipahal_cp_proc_ctx_to_hw_buff(enum ipa_hdr_proc_type type,
  *	IPA_HDR_PROC_ETHII_TO_ETHII etc.)
  */
 int ipahal_get_proc_ctx_needed_len(enum ipa_hdr_proc_type type);
-
-/*
- * Get IPA Data Processing Star image memory size at IPA SRAM
- */
-u32 ipahal_get_dps_img_mem_size(void);
-
-/*
- * Get IPA Header Processing Star image memory size at IPA SRAM
- */
-u32 ipahal_get_hps_img_mem_size(void);
 
 int ipahal_init(enum ipa_hw_type ipa_hw_type, void __iomem *base,
 	struct device *ipa_pdev);

@@ -149,6 +149,7 @@ static enum resp_states check_psn(struct rxe_qp *qp,
 				  struct rxe_pkt_info *pkt)
 {
 	int diff = psn_compare(pkt->psn, qp->resp.psn);
+	struct rxe_dev *rxe = to_rdev(qp->ibqp.device);
 
 	switch (qp_type(qp)) {
 	case IB_QPT_RC:
@@ -157,9 +158,11 @@ static enum resp_states check_psn(struct rxe_qp *qp,
 				return RESPST_CLEANUP;
 
 			qp->resp.sent_psn_nak = 1;
+			rxe_counter_inc(rxe, RXE_CNT_OUT_OF_SEQ_REQ);
 			return RESPST_ERR_PSN_OUT_OF_SEQ;
 
 		} else if (diff < 0) {
+			rxe_counter_inc(rxe, RXE_CNT_DUP_REQ);
 			return RESPST_DUPLICATE_REQUEST;
 		}
 
@@ -307,7 +310,7 @@ static enum resp_states check_op_valid(struct rxe_qp *qp,
 		break;
 
 	default:
-		WARN_ON(1);
+		WARN_ON_ONCE(1);
 		break;
 	}
 
@@ -445,6 +448,13 @@ static enum resp_states check_rkey(struct rxe_qp *qp,
 		return RESPST_EXECUTE;
 	}
 
+	/* A zero-byte op is not required to set an addr or rkey. */
+	if ((pkt->mask & (RXE_READ_MASK | RXE_WRITE_OR_SEND)) &&
+	    (pkt->mask & RXE_RETH_MASK) &&
+	    reth_len(pkt) == 0) {
+		return RESPST_EXECUTE;
+	}
+
 	va	= qp->resp.va;
 	rkey	= qp->resp.rkey;
 	resid	= qp->resp.resid;
@@ -487,7 +497,7 @@ static enum resp_states check_rkey(struct rxe_qp *qp,
 		}
 	}
 
-	WARN_ON(qp->resp.mr);
+	WARN_ON_ONCE(qp->resp.mr);
 
 	qp->resp.mr = mem;
 	return RESPST_EXECUTE;
@@ -674,14 +684,20 @@ static enum resp_states read_reply(struct rxe_qp *qp,
 		rxe_advance_resp_resource(qp);
 
 		res->type		= RXE_READ_MASK;
+		res->replay		= 0;
 
 		res->read.va		= qp->resp.va;
 		res->read.va_org	= qp->resp.va;
 
 		res->first_psn		= req_pkt->psn;
-		res->last_psn		= req_pkt->psn +
-					  (reth_len(req_pkt) + mtu - 1) /
-					  mtu - 1;
+
+		if (reth_len(req_pkt)) {
+			res->last_psn	= (req_pkt->psn +
+					   (reth_len(req_pkt) + mtu - 1) /
+					   mtu - 1) & BTH_PSN_MASK;
+		} else {
+			res->last_psn	= res->first_psn;
+		}
 		res->cur_psn		= req_pkt->psn;
 
 		res->read.resid		= qp->resp.resid;
@@ -722,13 +738,19 @@ static enum resp_states read_reply(struct rxe_qp *qp,
 	if (err)
 		pr_err("Failed copying memory\n");
 
+	if (bth_pad(&ack_pkt)) {
+		struct rxe_dev *rxe = to_rdev(qp->ibqp.device);
+		u8 *pad = payload_addr(&ack_pkt) + payload;
+
+		memset(pad, 0, bth_pad(&ack_pkt));
+		icrc = rxe_crc32(rxe, icrc, pad, bth_pad(&ack_pkt));
+	}
 	p = payload_addr(&ack_pkt) + payload + bth_pad(&ack_pkt);
 	*p = ~icrc;
 
 	err = rxe_xmit_packet(rxe, qp, &ack_pkt, skb);
 	if (err) {
 		pr_err("Failed sending RDMA reply.\n");
-		kfree_skb(skb);
 		return RESPST_ERR_RNR;
 	}
 
@@ -740,8 +762,10 @@ static enum resp_states read_reply(struct rxe_qp *qp,
 		state = RESPST_DONE;
 	} else {
 		qp->resp.res = NULL;
-		qp->resp.opcode = -1;
-		qp->resp.psn = res->cur_psn;
+		if (!res->replay)
+			qp->resp.opcode = -1;
+		if (psn_compare(res->cur_psn, qp->resp.psn) >= 0)
+			qp->resp.psn = res->cur_psn;
 		state = RESPST_CLEANUP;
 	}
 
@@ -794,12 +818,14 @@ static enum resp_states execute(struct rxe_qp *qp, struct rxe_pkt_info *pkt)
 		err = process_atomic(qp, pkt);
 		if (err)
 			return err;
-	} else
+	} else {
 		/* Unreachable */
-		WARN_ON(1);
+		WARN_ON_ONCE(1);
+	}
 
 	/* next expected psn, read handles this separately */
 	qp->resp.psn = (pkt->psn + 1) & BTH_PSN_MASK;
+	qp->resp.ack_psn = qp->resp.psn;
 
 	qp->resp.opcode = pkt->opcode;
 	qp->resp.status = IB_WC_SUCCESS;
@@ -946,10 +972,8 @@ static int send_ack(struct rxe_qp *qp, struct rxe_pkt_info *pkt,
 	}
 
 	err = rxe_xmit_packet(rxe, qp, &ack_pkt, skb);
-	if (err) {
+	if (err)
 		pr_err_ratelimited("Failed sending ack\n");
-		kfree_skb(skb);
-	}
 
 err1:
 	return err;
@@ -1046,7 +1070,7 @@ static struct resp_res *find_resource(struct rxe_qp *qp, u32 psn)
 {
 	int i;
 
-	for (i = 0; i < qp->attr.max_rd_atomic; i++) {
+	for (i = 0; i < qp->attr.max_dest_rd_atomic; i++) {
 		struct resp_res *res = &qp->resp.resources[i];
 
 		if (res->type == 0)
@@ -1065,12 +1089,13 @@ static enum resp_states duplicate_request(struct rxe_qp *qp,
 					  struct rxe_pkt_info *pkt)
 {
 	enum resp_states rc;
+	u32 prev_psn = (qp->resp.ack_psn - 1) & BTH_PSN_MASK;
 
 	if (pkt->mask & RXE_SEND_MASK ||
 	    pkt->mask & RXE_WRITE_MASK) {
 		/* SEND. Ack again and cleanup. C9-105. */
 		if (bth_ack(pkt))
-			send_ack(qp, pkt, AETH_ACK_UNLIMITED, qp->resp.psn - 1);
+			send_ack(qp, pkt, AETH_ACK_UNLIMITED, prev_psn);
 		rc = RESPST_CLEANUP;
 		goto out;
 	} else if (pkt->mask & RXE_READ_MASK) {
@@ -1107,6 +1132,7 @@ static enum resp_states duplicate_request(struct rxe_qp *qp,
 			res->state = (pkt->psn == res->first_psn) ?
 					rdatm_res_state_new :
 					rdatm_res_state_replay;
+			res->replay = 1;
 
 			/* Reset the resource, except length. */
 			res->read.va_org = iova;
@@ -1140,7 +1166,7 @@ static enum resp_states duplicate_request(struct rxe_qp *qp,
 					     pkt, skb_copy);
 			if (rc) {
 				pr_err("Failed resending result. This flow is not handled - skb ignored\n");
-				kfree_skb(skb_copy);
+				rxe_drop_ref(qp);
 				rc = RESPST_CLEANUP;
 				goto out;
 			}
@@ -1199,12 +1225,31 @@ static enum resp_states do_class_d1e_error(struct rxe_qp *qp)
 	}
 }
 
+static void rxe_drain_req_pkts(struct rxe_qp *qp, bool notify)
+{
+	struct sk_buff *skb;
+
+	while ((skb = skb_dequeue(&qp->req_pkts))) {
+		rxe_drop_ref(qp);
+		kfree_skb(skb);
+	}
+
+	if (notify)
+		return;
+
+	while (!qp->srq && qp->rq.queue && queue_head(qp->rq.queue))
+		advance_consumer(qp->rq.queue);
+}
+
 int rxe_responder(void *arg)
 {
 	struct rxe_qp *qp = (struct rxe_qp *)arg;
+	struct rxe_dev *rxe = to_rdev(qp->ibqp.device);
 	enum resp_states state;
 	struct rxe_pkt_info *pkt = NULL;
 	int ret = 0;
+
+	rxe_add_ref(qp);
 
 	qp->resp.aeth_syndrome = AETH_ACK_UNLIMITED;
 
@@ -1288,6 +1333,7 @@ int rxe_responder(void *arg)
 			break;
 		case RESPST_ERR_RNR:
 			if (qp_type(qp) == IB_QPT_RC) {
+				rxe_counter_inc(rxe, RXE_CNT_SND_RNR);
 				/* RC - class B */
 				send_ack(qp, pkt, AETH_RNR_NAK |
 					 (~AETH_TYPE_MASK &
@@ -1364,21 +1410,10 @@ int rxe_responder(void *arg)
 
 			goto exit;
 
-		case RESPST_RESET: {
-			struct sk_buff *skb;
-
-			while ((skb = skb_dequeue(&qp->req_pkts))) {
-				rxe_drop_ref(qp);
-				kfree_skb(skb);
-			}
-
-			while (!qp->srq && qp->rq.queue &&
-			       queue_head(qp->rq.queue))
-				advance_consumer(qp->rq.queue);
-
+		case RESPST_RESET:
+			rxe_drain_req_pkts(qp, false);
 			qp->resp.wqe = NULL;
 			goto exit;
-		}
 
 		case RESPST_ERROR:
 			qp->resp.goto_error = 0;
@@ -1387,12 +1422,13 @@ int rxe_responder(void *arg)
 			goto exit;
 
 		default:
-			WARN_ON(1);
+			WARN_ON_ONCE(1);
 		}
 	}
 
 exit:
 	ret = -EAGAIN;
 done:
+	rxe_drop_ref(qp);
 	return ret;
 }

@@ -1,4 +1,4 @@
-/* Copyright (c) 2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -24,12 +24,12 @@
 #define MODULE_NAME "LLCC AMON deadlock detector"
 static bool qcom_llcc_amon_panic = IS_ENABLED(
 			CONFIG_QCOM_LLCC_AMON_PANIC) ? true:false;
-module_param(qcom_llcc_amon_panic, bool, S_IRUGO | S_IWUSR);
+module_param(qcom_llcc_amon_panic, bool, 0644);
 MODULE_PARM_DESC(qcom_llcc_amon_panic,
 		"Enables deadlock detection by AMON");
 
 static int amon_interrupt_mode;
-module_param(amon_interrupt_mode, int, S_IRUGO | S_IWUSR);
+module_param(amon_interrupt_mode, int, 0644);
 MODULE_PARM_DESC(amon_interrupt_mode,
 		"Controls whether to use interrupt or poll mode");
 
@@ -244,9 +244,9 @@ static ssize_t amon_deadlock_mode_show(struct device *dev,
 }
 
 
-static DEVICE_ATTR(amon_fg_count, S_IRUGO | S_IWUSR,
+static DEVICE_ATTR(amon_fg_count, 0644,
 				amon_fg_count_show, amon_fg_count_store);
-static DEVICE_ATTR(amon_deadlock_mode, S_IRUGO | S_IWUSR,
+static DEVICE_ATTR(amon_deadlock_mode, 0644,
 			amon_deadlock_mode_show, amon_deadlock_mode_store);
 
 static const struct device_attribute *llcc_amon_attrs[] = {

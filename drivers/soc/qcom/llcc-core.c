@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2017, 2019 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -18,56 +18,6 @@
 #include <linux/platform_device.h>
 #include <linux/mfd/syscon.h>
 #include <linux/regmap.h>
-
-/* Config registers offsets*/
-#define DRP_ECC_ERROR_CFG	0x00040000
-
-/* TRP, DRP interrupt register offsets */
-#define CMN_INTERRUPT_0_ENABLE		0x0003001C
-#define CMN_INTERRUPT_2_ENABLE		0x0003003C
-#define TRP_INTERRUPT_0_ENABLE		0x00020488
-#define DRP_INTERRUPT_ENABLE		0x0004100C
-
-#define SB_ERROR_THRESHOLD	0x1
-#define SB_ERROR_THRESHOLD_SHIFT	24
-#define SB_DB_TRP_INTERRUPT_ENABLE	0x3
-#define TRP0_INTERRUPT_ENABLE	0x1
-#define DRP0_INTERRUPT_ENABLE	BIT(6)
-#define SB_DB_DRP_INTERRUPT_ENABLE	0x3
-
-#ifdef CONFIG_EDAC_QCOM_LLCC
-#define ENABLE_ECC_INTR 1
-#else
-#define ENABLE_ECC_INTR 0
-#endif
-
-static int enable_ecc_intr = ENABLE_ECC_INTR;
-module_param(enable_ecc_intr, int, 0444);
-
-static void qcom_llcc_core_setup(struct regmap *llcc_regmap, uint32_t b_off)
-{
-	u32 sb_err_threshold;
-
-	/* Enable TRP in instance 2 of common interrupt enable register */
-	regmap_update_bits(llcc_regmap, b_off + CMN_INTERRUPT_2_ENABLE,
-			   TRP0_INTERRUPT_ENABLE, TRP0_INTERRUPT_ENABLE);
-
-	/* Enable ECC interrupts on Tag Ram */
-	regmap_update_bits(llcc_regmap, b_off + TRP_INTERRUPT_0_ENABLE,
-		SB_DB_TRP_INTERRUPT_ENABLE, SB_DB_TRP_INTERRUPT_ENABLE);
-
-	/* Enable SB error for Data RAM */
-	sb_err_threshold = (SB_ERROR_THRESHOLD << SB_ERROR_THRESHOLD_SHIFT);
-	regmap_write(llcc_regmap, b_off + DRP_ECC_ERROR_CFG, sb_err_threshold);
-
-	/* Enable DRP in instance 2 of common interrupt enable register */
-	regmap_update_bits(llcc_regmap, b_off + CMN_INTERRUPT_2_ENABLE,
-			   DRP0_INTERRUPT_ENABLE, DRP0_INTERRUPT_ENABLE);
-
-	/* Enable ECC interrupts on Data Ram */
-	regmap_write(llcc_regmap, b_off + DRP_INTERRUPT_ENABLE,
-		     SB_DB_DRP_INTERRUPT_ENABLE);
-}
 
 static int qcom_llcc_core_probe(struct platform_device *pdev)
 {
@@ -89,9 +39,6 @@ static int qcom_llcc_core_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "Unable to read broadcast-off\n");
 		return -EINVAL;
 	}
-
-	if (enable_ecc_intr)
-		qcom_llcc_core_setup(llcc_regmap, b_off);
 
 	return 0;
 }
@@ -128,5 +75,5 @@ static void __exit qcom_llcc_core_exit(void)
 }
 module_exit(qcom_llcc_core_exit);
 
-MODULE_DESCRIPTION("QCOM LLCC Core Driver");
+MODULE_DESCRIPTION("Qualcomm Technologies Inc LLCC Core Driver");
 MODULE_LICENSE("GPL v2");

@@ -109,20 +109,7 @@ EXPORT_SYMBOL_GPL(adf_reset_sbr);
 
 void adf_reset_flr(struct adf_accel_dev *accel_dev)
 {
-	struct pci_dev *pdev = accel_to_pci_dev(accel_dev);
-	u16 control = 0;
-	int pos = 0;
-
-	dev_info(&GET_DEV(accel_dev), "Function level reset\n");
-	pos = pci_pcie_cap(pdev);
-	if (!pos) {
-		dev_err(&GET_DEV(accel_dev), "Restart device failed\n");
-		return;
-	}
-	pci_read_config_word(pdev, pos + PCI_EXP_DEVCTL, &control);
-	control |= PCI_EXP_DEVCTL_BCR_FLR;
-	pci_write_config_word(pdev, pos + PCI_EXP_DEVCTL, control);
-	msleep(100);
+	pcie_flr(accel_to_pci_dev(accel_dev));
 }
 EXPORT_SYMBOL_GPL(adf_reset_flr);
 
@@ -152,7 +139,8 @@ static void adf_device_reset_worker(struct work_struct *work)
 	if (adf_dev_init(accel_dev) || adf_dev_start(accel_dev)) {
 		/* The device hanged and we can't restart it so stop here */
 		dev_err(&GET_DEV(accel_dev), "Restart device failed\n");
-		kfree(reset_data);
+		if (reset_data->mode == ADF_DEV_RESET_ASYNC)
+			kfree(reset_data);
 		WARN(1, "QAT: device restart failed. Device is unusable\n");
 		return;
 	}
@@ -160,10 +148,10 @@ static void adf_device_reset_worker(struct work_struct *work)
 	clear_bit(ADF_STATUS_RESTARTING, &accel_dev->status);
 
 	/* The dev is back alive. Notify the caller if in sync mode */
-	if (reset_data->mode == ADF_DEV_RESET_SYNC)
-		complete(&reset_data->compl);
-	else
+	if (reset_data->mode == ADF_DEV_RESET_ASYNC)
 		kfree(reset_data);
+	else
+		complete(&reset_data->compl);
 }
 
 static int adf_dev_aer_schedule_reset(struct adf_accel_dev *accel_dev,
@@ -195,6 +183,7 @@ static int adf_dev_aer_schedule_reset(struct adf_accel_dev *accel_dev,
 		if (!timeout) {
 			dev_err(&GET_DEV(accel_dev),
 				"Reset device timeout expired\n");
+			cancel_work_sync(&reset_data->reset_work);
 			ret = -EFAULT;
 		}
 		kfree(reset_data);
@@ -221,7 +210,7 @@ static pci_ers_result_t adf_slot_reset(struct pci_dev *pdev)
 static void adf_resume(struct pci_dev *pdev)
 {
 	dev_info(&pdev->dev, "Acceleration driver reset completed\n");
-	dev_info(&pdev->dev, "Device is up and runnig\n");
+	dev_info(&pdev->dev, "Device is up and running\n");
 }
 
 static const struct pci_error_handlers adf_err_handler = {

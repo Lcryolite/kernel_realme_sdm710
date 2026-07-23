@@ -14,10 +14,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU Lesser General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
- *
  */
 
 #ifndef _DVB_DEMUX_H_
@@ -354,31 +350,6 @@ static inline int dvb_dmx_is_video_feed(struct dvb_demux_feed *feed)
 		(feed->pes_type == DMX_PES_VIDEO1) ||
 		(feed->pes_type == DMX_PES_VIDEO2) ||
 		(feed->pes_type == DMX_PES_VIDEO3))
-		return 1;
-
-	return 0;
-}
-
-/**
- * dvb_dmx_is_audio_feed - Returns whether the PES feed
- * is audio one.
- *
- * @feed: The feed to be checked.
- *
- * Return     1 if feed is audio feed, 0 otherwise.
- */
-static inline int dvb_dmx_is_audio_feed(struct dvb_demux_feed *feed)
-{
-	if (feed->type != DMX_TYPE_TS)
-		return 0;
-
-	if (feed->ts_type & (~TS_DECODER))
-		return 0;
-
-	if ((feed->pes_type == DMX_PES_AUDIO0) ||
-		(feed->pes_type == DMX_PES_AUDIO1) ||
-		(feed->pes_type == DMX_PES_AUDIO2) ||
-		(feed->pes_type == DMX_PES_AUDIO3))
 		return 1;
 
 	return 0;

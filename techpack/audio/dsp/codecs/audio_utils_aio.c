@@ -1,6 +1,6 @@
 /* Copyright (C) 2008 Google, Inc.
  * Copyright (C) 2008 HTC Corporation
- * Copyright (c) 2009-2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2009-2019, The Linux Foundation. All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -420,7 +420,7 @@ void audio_aio_reset_ion_region(struct q6audio_aio *audio)
 	list_for_each_safe(ptr, next, &audio->ion_region_queue) {
 		region = list_entry(ptr, struct audio_aio_ion_region, list);
 		list_del(&region->list);
-		msm_audio_ion_free_legacy(audio->client, region->handle);
+		msm_audio_ion_free(region->dma_buf);
 		kfree(region);
 	}
 }
@@ -614,7 +614,6 @@ int audio_aio_release(struct inode *inode, struct file *file)
 	audio_aio_disable(audio);
 	audio_aio_unmap_ion_region(audio);
 	audio_aio_reset_ion_region(audio);
-	msm_audio_ion_client_destroy(audio->client);
 	audio->event_abort = 1;
 	wake_up(&audio->event_wait);
 	audio_aio_reset_event_queue(audio);
@@ -960,11 +959,11 @@ static int audio_aio_ion_check(struct q6audio_aio *audio,
 static int audio_aio_ion_add(struct q6audio_aio *audio,
 				struct msm_audio_ion_info *info)
 {
-	ion_phys_addr_t paddr = 0;
+	dma_addr_t paddr = 0;
 	size_t len = 0;
 	struct audio_aio_ion_region *region;
 	int rc = -EINVAL;
-	struct ion_handle *handle = NULL;
+	struct dma_buf *dma_buf = NULL;
 	unsigned long ionflag;
 	void *kvaddr = NULL;
 
@@ -976,8 +975,7 @@ static int audio_aio_ion_add(struct q6audio_aio *audio,
 		goto end;
 	}
 
-	rc = msm_audio_ion_import_legacy("Audio_Dec_Client", audio->client,
-				&handle, info->fd, &ionflag,
+	rc = msm_audio_ion_import(&dma_buf, info->fd, &ionflag,
 				0, &paddr, &len, &kvaddr);
 	if (rc) {
 		pr_err("%s: msm audio ion alloc failed\n", __func__);
@@ -990,7 +988,7 @@ static int audio_aio_ion_add(struct q6audio_aio *audio,
 		goto ion_error;
 	}
 
-	region->handle = handle;
+	region->dma_buf = dma_buf;
 	region->vaddr = info->vaddr;
 	region->fd = info->fd;
 	region->paddr = paddr;
@@ -1012,7 +1010,7 @@ static int audio_aio_ion_add(struct q6audio_aio *audio,
 mmap_error:
 	list_del(&region->list);
 ion_error:
-	msm_audio_ion_free_legacy(audio->client, handle);
+	msm_audio_ion_free(dma_buf);
 import_error:
 	kfree(region);
 end:
@@ -1049,8 +1047,7 @@ static int audio_aio_ion_remove(struct q6audio_aio *audio,
 					__func__, audio);
 
 			list_del(&region->list);
-			msm_audio_ion_free_legacy(audio->client,
-						 region->handle);
+			msm_audio_ion_free(region->dma_buf);
 			kfree(region);
 			rc = 0;
 			break;
@@ -1107,7 +1104,7 @@ static int audio_aio_async_write(struct q6audio_aio *audio,
 	buf_node->token = ac->session;
 	rc = q6asm_async_write(ac, &param);
 	if (rc < 0)
-		pr_err("%s[%pK]:failed\n", __func__, audio);
+		pr_err_ratelimited("%s[%pK]:failed\n", __func__, audio);
 	return rc;
 }
 
@@ -1159,8 +1156,8 @@ static int audio_aio_async_read(struct q6audio_aio *audio,
 	/* Write command will populate session_id as token */
 	buf_node->token = ac->session;
 	rc = q6asm_async_read(ac, &param);
-	if (rc < 0)
-		pr_err("%s[%pK]:failed\n", __func__, audio);
+	if (rc < 0 && rc != -ENETRESET)
+		pr_err_ratelimited("%s[%pK]:failed\n", __func__, audio);
 	return rc;
 }
 
@@ -1184,7 +1181,13 @@ static int audio_aio_buf_add_shared(struct q6audio_aio *audio, u32 dir,
 			kfree(buf_node);
 			return -EINVAL;
 		}
-		extract_meta_out_info(audio, buf_node, 1);
+		ret = extract_meta_out_info(audio, buf_node, 1);
+		if (ret) {
+			pr_debug("%s: extract meta failed with %d\n",
+				  __func__, ret);
+			kfree(buf_node);
+			return ret;
+		}
 		/* Not a EOS buffer */
 		if (!(buf_node->meta_info.meta_in.nflags & AUDIO_DEC_EOS_SET)) {
 			spin_lock_irqsave(&audio->dsp_lock, flags);
@@ -1341,7 +1344,7 @@ int audio_aio_open(struct q6audio_aio *audio, struct file *file)
 		audio->drv_ops.in_flush = audio_aio_async_in_flush;
 		q6asm_set_io_mode(audio->ac, ASYNC_IO_MODE);
 	} else {
-		pr_err("%s[%pK]:SIO interface not supported\n",
+		pr_err_ratelimited("%s[%pK]:SIO interface not supported\n",
 			__func__, audio);
 		rc = -EACCES;
 		goto fail;
@@ -1378,22 +1381,12 @@ int audio_aio_open(struct q6audio_aio *audio, struct file *file)
 			goto cleanup;
 		}
 	}
-	audio->client = msm_audio_ion_client_create("Audio_Dec_Client");
-	if (IS_ERR_OR_NULL(audio->client)) {
-		pr_err("Unable to create ION client\n");
-		rc = -ENOMEM;
-		goto cleanup;
-	}
-	pr_debug("Ion client create in audio_aio_open %pK", audio->client);
 
 	rc = register_volume_listener(audio);
 	if (rc < 0)
-		goto ion_cleanup;
+		goto cleanup;
 
 	return 0;
-ion_cleanup:
-	msm_audio_ion_client_destroy(audio->client);
-	audio->client = NULL;
 cleanup:
 	list_for_each_safe(ptr, next, &audio->free_event_queue) {
 		e_node = list_first_entry(&audio->free_event_queue,
@@ -1564,7 +1557,7 @@ static long audio_aio_shared_ioctl(struct file *file, unsigned int cmd,
 		break;
 	}
 	default:
-		pr_err("%s: Unknown ioctl cmd = %d", __func__, cmd);
+		pr_err_ratelimited("%s: Unknown ioctl cmd = %d", __func__, cmd);
 		rc =  -EINVAL;
 	}
 	return rc;
@@ -1696,7 +1689,7 @@ static long audio_aio_ioctl(struct file *file, unsigned int cmd,
 	case AUDIO_SET_CONFIG: {
 		struct msm_audio_config config;
 
-		pr_err("%s[%pK]:AUDIO_SET_CONFIG\n", __func__, audio);
+		pr_debug("%s[%pK]:AUDIO_SET_CONFIG\n", __func__, audio);
 		mutex_lock(&audio->lock);
 		if (copy_from_user(&config, (void *)arg, sizeof(config))) {
 			pr_err(
@@ -2023,7 +2016,7 @@ static long audio_aio_compat_ioctl(struct file *file, unsigned int cmd,
 			mutex_unlock(&audio->lock);
 			break;
 		}
-		pr_err("%s[%pK]:AUDIO_SET_CONFIG\n", __func__, audio);
+		pr_debug("%s[%pK]:AUDIO_SET_CONFIG\n", __func__, audio);
 		if (copy_from_user(&config_32, (void *)arg,
 					sizeof(config_32))) {
 			pr_err("%s: copy_from_user for AUDIO_SET_CONFIG_32 failed\n",

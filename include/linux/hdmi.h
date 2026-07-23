@@ -35,7 +35,7 @@ enum hdmi_infoframe_type {
 };
 
 #define HDMI_IEEE_OUI 0x000c03
-#define HDMI_IEEE_OUI_HF	0xc45dd8
+#define HDMI_FORUM_IEEE_OUI 0xc45dd8
 #define HDMI_INFOFRAME_HEADER_SIZE  4
 #define HDMI_AVI_INFOFRAME_SIZE    13
 #define HDMI_SPD_INFOFRAME_SIZE    25
@@ -179,6 +179,7 @@ enum hdmi_spd_sdi {
 	HDMI_SPD_SDI_SACD,
 	HDMI_SPD_SDI_HDDVD,
 	HDMI_SPD_SDI_PMP,
+	HDMI_SPD_SDI_MAX = 0xff,
 };
 
 struct hdmi_spd_infoframe {
@@ -252,6 +253,9 @@ enum hdmi_audio_coding_type_ext {
 	HDMI_AUDIO_CODING_TYPE_EXT_DRA,
 	HDMI_AUDIO_CODING_TYPE_EXT_MPEG4_HE_AAC_SURROUND,
 	HDMI_AUDIO_CODING_TYPE_EXT_MPEG4_AAC_LC_SURROUND = 10,
+
+	/* Maximum reserved value */
+	HDMI_AUDIO_CODING_TYPE_EXT_MAX = 0x1f,
 };
 
 struct hdmi_audio_infoframe {

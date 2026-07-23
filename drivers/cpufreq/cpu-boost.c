@@ -79,7 +79,7 @@ static int set_input_boost_freq(const char *buf, const struct kernel_param *kp)
 			return -EINVAL;
 
 		per_cpu(sync_info, cpu).input_boost_freq = val;
-		cp = strchr(cp, ' ');
+		cp = strnchr(cp, PAGE_SIZE - (cp - buf), ' ');
 		cp++;
 	}
 
@@ -182,7 +182,7 @@ static void do_input_boost_rem(struct work_struct *work)
 	if (sched_boost_active) {
 		ret = sched_set_boost(0);
 		if (ret)
-			pr_err("cpu-boost: HMP boost disable failed\n");
+			pr_err("cpu-boost: sched boost disable failed\n");
 		sched_boost_active = false;
 	}
 }
@@ -212,7 +212,7 @@ static void do_input_boost(struct work_struct *work)
 	if (sched_boost_on_input > 0) {
 		ret = sched_set_boost(sched_boost_on_input);
 		if (ret)
-			pr_err("cpu-boost: HMP boost enable failed\n");
+			pr_err("cpu-boost: sched boost enable failed\n");
 		else
 			sched_boost_active = true;
 	}

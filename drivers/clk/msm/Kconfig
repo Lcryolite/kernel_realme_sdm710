@@ -3,6 +3,7 @@ config COMMON_CLK_MSM
 	depends on OF
 	depends on ARCH_QCOM
 	select RATIONAL
+	select ARCH_HAS_RESET_CONTROLLER
 	help
 	  This support clock controller used by MSM devices which support
 	  global, mmss and gpu clock controller.
@@ -15,6 +16,3 @@ config MSM_CLK_CONTROLLER_V2
 	---help---
 	   Generate clock data structures from definitions found in
 	   device tree.
-
-source "drivers/clk/msm/mdss/Kconfig"
-

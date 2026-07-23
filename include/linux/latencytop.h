@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * latencytop.h: Infrastructure for displaying latency
  *
@@ -37,8 +38,8 @@ account_scheduler_latency(struct task_struct *task, int usecs, int inter)
 
 void clear_all_latency_tracing(struct task_struct *p);
 
-extern int sysctl_latencytop(struct ctl_table *table, int write,
-			void __user *buffer, size_t *lenp, loff_t *ppos);
+int sysctl_latencytop(struct ctl_table *table, int write, void *buffer,
+		size_t *lenp, loff_t *ppos);
 
 #else
 

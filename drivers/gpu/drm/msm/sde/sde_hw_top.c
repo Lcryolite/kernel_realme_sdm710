@@ -17,6 +17,7 @@
 #include "sde_kms.h"
 
 #define SSPP_SPARE                        0x28
+#define UBWC_DEC_HW_VERSION               0x058
 #define UBWC_STATIC                       0x144
 
 #define FLD_SPLIT_DISPLAY_CMD             BIT(1)
@@ -59,6 +60,10 @@
 	((uint32_t)((MS_TICKS_IN_SEC * XO_CLK_RATE)/(MDP_TICK_COUNT * fps)))
 
 #define DCE_SEL                           0x450
+
+#define ROT_SID_RD			  0x20
+#define ROT_SID_WR			  0x24
+#define ROT_SID_ID_VAL			  0x1c
 
 static void sde_hw_setup_split_pipe(struct sde_hw_mdp *mdp,
 		struct split_pipe_cfg *cfg)
@@ -111,7 +116,7 @@ static u32 sde_hw_get_split_flush(struct sde_hw_mdp *mdp)
 	struct sde_hw_blk_reg_map *c;
 
 	if (!mdp)
-	return 0;
+		return 0;
 
 	c = &mdp->hw;
 
@@ -127,12 +132,18 @@ static void sde_hw_setup_pp_split(struct sde_hw_mdp *mdp,
 	if (!mdp || !cfg)
 		return;
 
-	if (cfg->en && cfg->pp_split_slave != INTF_MAX) {
-		ppb_config |= (cfg->pp_split_slave - INTF_0 + 1) << 20;
+	if (cfg->split_link_en) {
 		ppb_config |= BIT(16); /* split enable */
 		ppb_control = BIT(5); /* horz split*/
+	} else if (cfg->en && cfg->pp_split_slave != INTF_MAX) {
+		ppb_config |= (cfg->pp_split_slave - INTF_0 + 1) << 20;
+		ppb_config |= BIT(16); /* split enable */
+		/* overlap pixel width */
+		ppb_config |= ((cfg->overlap_pixel_width & 0x1F) << 24);
+		ppb_control = BIT(5); /* horz split*/
 	}
-	if (cfg->pp_split_index) {
+
+	if (cfg->pp_split_index && !cfg->split_link_en) {
 		SDE_REG_WRITE(&mdp->hw, PPB0_CONFIG, 0x0);
 		SDE_REG_WRITE(&mdp->hw, PPB0_CNTL, 0x0);
 		SDE_REG_WRITE(&mdp->hw, PPB1_CONFIG, ppb_config);
@@ -145,29 +156,9 @@ static void sde_hw_setup_pp_split(struct sde_hw_mdp *mdp,
 	}
 }
 
-static void sde_hw_setup_cdm_output(struct sde_hw_mdp *mdp,
-		struct cdm_output_cfg *cfg)
-{
-	struct sde_hw_blk_reg_map *c;
-	u32 out_ctl = 0;
-
-	if (!mdp || !cfg)
-		return;
-
-	c = &mdp->hw;
-
-	if (cfg->wb_en)
-		out_ctl |= BIT(24);
-	else if (cfg->intf_en)
-		out_ctl |= BIT(28);
-
-	SDE_REG_WRITE(c, MDP_OUT_CTL_0, out_ctl);
-}
-
 static bool sde_hw_setup_clk_force_ctrl(struct sde_hw_mdp *mdp,
 		enum sde_clk_ctrl_type clk_ctrl, bool enable)
 {
-	struct sde_clk_ctrl_reg *ctrl_reg;
 	struct sde_hw_blk_reg_map *c;
 	u32 reg_off, bit_off;
 	u32 reg_val, new_val;
@@ -181,12 +172,8 @@ static bool sde_hw_setup_clk_force_ctrl(struct sde_hw_mdp *mdp,
 	if (clk_ctrl <= SDE_CLK_CTRL_NONE || clk_ctrl >= SDE_CLK_CTRL_MAX)
 		return false;
 
-	ctrl_reg = (struct sde_clk_ctrl_reg *)&mdp->caps->clk_ctrls[clk_ctrl];
-	if (cmpxchg(&ctrl_reg->val, !enable, enable) == enable)
-		return enable;
-
-	reg_off = ctrl_reg->reg_off;
-	bit_off = ctrl_reg->bit_off;
+	reg_off = mdp->caps->clk_ctrls[clk_ctrl].reg_off;
+	bit_off = mdp->caps->clk_ctrls[clk_ctrl].bit_off;
 
 	reg_val = SDE_REG_READ(c, reg_off);
 
@@ -237,27 +224,16 @@ static void sde_hw_get_danger_status(struct sde_hw_mdp *mdp,
 	status->wb[WB_3] = 0;
 }
 
-static void sde_hw_setup_vsync_source(struct sde_hw_mdp *mdp,
+static void _update_vsync_source(struct sde_hw_mdp *mdp,
 		struct sde_vsync_source_cfg *cfg)
 {
 	struct sde_hw_blk_reg_map *c;
-	u32 reg, wd_load_value, wd_ctl, wd_ctl2, i;
-	static const u32 pp_offset[PINGPONG_MAX] = {0xC, 0x8, 0x4, 0x13, 0x18};
+	u32 reg, wd_load_value, wd_ctl, wd_ctl2;
 
-	if (!mdp || !cfg || (cfg->pp_count > ARRAY_SIZE(cfg->ppnumber)))
+	if (!mdp || !cfg)
 		return;
 
 	c = &mdp->hw;
-	reg = SDE_REG_READ(c, MDP_VSYNC_SEL);
-	for (i = 0; i < cfg->pp_count; i++) {
-		int pp_idx = cfg->ppnumber[i] - PINGPONG_0;
-		if (pp_idx >= ARRAY_SIZE(pp_offset))
-			continue;
-
-		reg &= ~(0xf << pp_offset[pp_idx]);
-		reg |= (cfg->vsync_source & 0xf) << pp_offset[pp_idx];
-	}
-	SDE_REG_WRITE(c, MDP_VSYNC_SEL, reg);
 
 	if (cfg->vsync_source >= SDE_VSYNC_SOURCE_WD_TIMER_4 &&
 			cfg->vsync_source <= SDE_VSYNC_SOURCE_WD_TIMER_0) {
@@ -308,6 +284,39 @@ static void sde_hw_setup_vsync_source(struct sde_hw_mdp *mdp,
 	}
 }
 
+static void sde_hw_setup_vsync_source(struct sde_hw_mdp *mdp,
+		struct sde_vsync_source_cfg *cfg)
+{
+	struct sde_hw_blk_reg_map *c;
+	u32 reg, i;
+	static const u32 pp_offset[PINGPONG_MAX] = {0xC, 0x8, 0x4, 0x13, 0x18};
+
+	if (!mdp || !cfg || (cfg->pp_count > ARRAY_SIZE(cfg->ppnumber)))
+		return;
+
+	c = &mdp->hw;
+	reg = SDE_REG_READ(c, MDP_VSYNC_SEL);
+	for (i = 0; i < cfg->pp_count; i++) {
+		int pp_idx = cfg->ppnumber[i] - PINGPONG_0;
+
+		if (pp_idx >= ARRAY_SIZE(pp_offset))
+			continue;
+
+		reg &= ~(0xf << pp_offset[pp_idx]);
+		reg |= (cfg->vsync_source & 0xf) << pp_offset[pp_idx];
+	}
+	SDE_REG_WRITE(c, MDP_VSYNC_SEL, reg);
+
+	_update_vsync_source(mdp, cfg);
+}
+
+static void sde_hw_setup_vsync_source_v1(struct sde_hw_mdp *mdp,
+		struct sde_vsync_source_cfg *cfg)
+{
+	_update_vsync_source(mdp, cfg);
+}
+
+
 static void sde_hw_get_safe_status(struct sde_hw_mdp *mdp,
 		struct sde_danger_safe_status *status)
 {
@@ -356,17 +365,46 @@ static void sde_hw_setup_dce(struct sde_hw_mdp *mdp, u32 dce_sel)
 void sde_hw_reset_ubwc(struct sde_hw_mdp *mdp, struct sde_mdss_cfg *m)
 {
 	struct sde_hw_blk_reg_map c;
+	u32 ubwc_version;
 
 	if (!mdp || !m)
-		return;
-
-	if (!IS_UBWC_20_SUPPORTED(m->ubwc_version))
 		return;
 
 	/* force blk offset to zero to access beginning of register region */
 	c = mdp->hw;
 	c.blk_off = 0x0;
-	SDE_REG_WRITE(&c, UBWC_STATIC, m->mdp[0].ubwc_static);
+	ubwc_version = SDE_REG_READ(&c, UBWC_DEC_HW_VERSION);
+
+	if (IS_UBWC_20_SUPPORTED(ubwc_version)) {
+		SDE_REG_WRITE(&c, UBWC_STATIC, m->mdp[0].ubwc_static);
+	} else if (IS_UBWC_30_SUPPORTED(ubwc_version)) {
+		u32 reg = m->mdp[0].ubwc_static |
+			(m->mdp[0].ubwc_swizzle & 0x1) |
+			((m->mdp[0].highest_bank_bit & 0x3) << 4) |
+			((m->macrotile_mode & 0x1) << 12);
+
+		if (IS_UBWC_30_SUPPORTED(m->ubwc_version))
+			reg |= BIT(10);
+		if (IS_UBWC_10_SUPPORTED(m->ubwc_version))
+			reg |= BIT(8);
+
+		SDE_REG_WRITE(&c, UBWC_STATIC, reg);
+	} else {
+		SDE_ERROR("Unsupported UBWC version 0x%08x\n", ubwc_version);
+	}
+}
+
+static void sde_hw_intf_dp_select(struct sde_hw_mdp *mdp,
+		struct sde_mdss_cfg *m)
+{
+	struct sde_hw_blk_reg_map *c;
+
+	if (!mdp)
+		return;
+
+	c = &mdp->hw;
+
+	SDE_REG_WRITE(c, DP_PHY_INTF_SEL, 0x41);
 }
 
 static void sde_hw_intf_audio_select(struct sde_hw_mdp *mdp)
@@ -379,6 +417,47 @@ static void sde_hw_intf_audio_select(struct sde_hw_mdp *mdp)
 	c = &mdp->hw;
 
 	SDE_REG_WRITE(c, HDMI_DP_CORE_SELECT, 0x1);
+}
+
+static void sde_hw_mdp_events(struct sde_hw_mdp *mdp, bool enable)
+{
+	struct sde_hw_blk_reg_map *c;
+
+	if (!mdp)
+		return;
+
+	c = &mdp->hw;
+
+	SDE_REG_WRITE(c, HW_EVENTS_CTL, enable);
+}
+
+struct sde_hw_sid *sde_hw_sid_init(void __iomem *addr,
+	u32 sid_len, const struct sde_mdss_cfg *m)
+{
+	struct sde_hw_sid *c;
+
+	if (!addr) {
+		SDE_DEBUG("Invalid addr\n");
+		return NULL;
+	}
+
+	c = kzalloc(sizeof(*c), GFP_KERNEL);
+	if (!c)
+		return ERR_PTR(-ENOMEM);
+
+	c->hw.base_off = addr;
+	c->hw.blk_off = 0;
+	c->hw.length = sid_len;
+	c->hw.hwversion = m->hwversion;
+	c->hw.log_mask = SDE_DBG_MASK_SID;
+
+	return c;
+}
+
+void sde_hw_sid_rotator_set(struct sde_hw_sid *sid)
+{
+	SDE_REG_WRITE(&sid->hw, ROT_SID_RD, ROT_SID_ID_VAL);
+	SDE_REG_WRITE(&sid->hw, ROT_SID_WR, ROT_SID_ID_VAL);
 }
 
 static void sde_hw_program_cwb_ppb_ctrl(struct sde_hw_mdp *mdp,
@@ -398,7 +477,6 @@ static void _setup_mdp_ops(struct sde_hw_mdp_ops *ops,
 {
 	ops->setup_split_pipe = sde_hw_setup_split_pipe;
 	ops->setup_pp_split = sde_hw_setup_pp_split;
-	ops->setup_cdm_output = sde_hw_setup_cdm_output;
 	ops->setup_clk_force_ctrl = sde_hw_setup_clk_force_ctrl;
 	ops->get_danger_status = sde_hw_get_danger_status;
 	ops->setup_vsync_source = sde_hw_setup_vsync_source;
@@ -407,7 +485,14 @@ static void _setup_mdp_ops(struct sde_hw_mdp_ops *ops,
 	ops->get_split_flush_status = sde_hw_get_split_flush;
 	ops->setup_dce = sde_hw_setup_dce;
 	ops->reset_ubwc = sde_hw_reset_ubwc;
+	ops->intf_dp_select = sde_hw_intf_dp_select;
 	ops->intf_audio_select = sde_hw_intf_audio_select;
+	ops->set_mdp_hw_events = sde_hw_mdp_events;
+	if (cap & BIT(SDE_MDP_VSYNC_SEL))
+		ops->setup_vsync_source = sde_hw_setup_vsync_source;
+	else
+		ops->setup_vsync_source = sde_hw_setup_vsync_source_v1;
+
 }
 
 static const struct sde_mdp_cfg *_top_offset(enum sde_mdp mdp,
@@ -472,6 +557,11 @@ struct sde_hw_mdp *sde_hw_mdptop_init(enum sde_mdp idx,
 		SDE_ERROR("failed to init hw blk %d\n", rc);
 		goto blk_init_error;
 	}
+
+	sde_dbg_reg_register_dump_range(SDE_DBG_NAME, cfg->name,
+			mdp->hw.blk_off, mdp->hw.blk_off + mdp->hw.length,
+			mdp->hw.xin_id);
+	sde_dbg_set_sde_top_offset(mdp->hw.blk_off);
 
 	return mdp;
 

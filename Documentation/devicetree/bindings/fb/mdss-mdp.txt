@@ -126,13 +126,13 @@ Required properties
 				interface.
 - qcom,mdss-dspp-off: 		Array of offset addresses for the available dspp
 				blocks. These offsets are calculated from
-				regsiter "mdp_phys" defined in reg property.
+				register "mdp_phys" defined in reg property.
 				The number of dspp blocks should match the
 				number of mixers driving data to interface
 				defined in property: qcom,mdss-mixer-intf-off
 - qcom,mdss-pingpong-off:	Array of offset addresses for the available
 				pingpong blocks. These offsets are calculated
-				from regsiter "mdp_phys" defined in reg property.
+				from register "mdp_phys" defined in reg property.
 				The number of pingpong blocks should match the
 				number of mixers driving data to interface
 				defined in property: qcom,mdss-mixer-intf-off

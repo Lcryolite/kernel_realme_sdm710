@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -15,11 +15,20 @@
 #include <linux/mailbox_client.h>
 #include <linux/mailbox/qmp.h>
 #include "minidump_private.h"
+#include <linux/ipc_logging.h>
 
 struct device;
 struct module;
 struct pil_priv;
 
+extern void *pil_ipc_log;
+
+#define pil_ipc(__msg, ...) \
+do { \
+	if (pil_ipc_log) \
+		ipc_log_string(pil_ipc_log, \
+			"[%s]: "__msg, __func__,  ##__VA_ARGS__); \
+} while (0)
 /**
  * struct pil_desc - PIL descriptor
  * @name: string used for pil_get()
@@ -41,8 +50,6 @@ struct pil_priv;
  * @modem_ssr: true if modem is restarting, false if booting for first time.
  * @clear_fw_region: Clear fw region on failure in loading.
  * @subsys_vmid: memprot id for the subsystem.
- * @sequential_load: Load the firmware blobs sequentially if set. Else, load
- * them in parallel.
  */
 struct pil_desc {
 	const char *name;
@@ -62,14 +69,19 @@ struct pil_desc {
 	bool shutdown_fail;
 	bool modem_ssr;
 	bool clear_fw_region;
+	bool sequential_loading;
 	u32 subsys_vmid;
 	bool signal_aop;
 	struct mbox_client cl;
 	struct mbox_chan *mbox;
+#ifdef CONFIG_QCOM_MINIDUMP
 	struct md_ss_toc *minidump_ss;
-	struct md_ss_toc *minidump_pdr;
+	struct md_ss_toc **aux_minidump;
 	int minidump_id;
-	bool sequential_load;
+	int *aux_minidump_ids;
+	int num_aux_minidump_ids;
+	bool minidump_as_elf32;
+#endif
 };
 
 /**
@@ -98,7 +110,7 @@ struct pil_image_info {
  */
 struct pil_reset_ops {
 	int (*init_image)(struct pil_desc *pil, const u8 *metadata,
-			  size_t size, phys_addr_t mdata_phys, void *region);
+			  size_t size);
 	int (*mem_setup)(struct pil_desc *pil, phys_addr_t addr, size_t size);
 	int (*verify_blob)(struct pil_desc *pil, phys_addr_t phy_addr,
 			   size_t size);

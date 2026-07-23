@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2017, The Linux Foundation. All rights reserved.
- * Copyright (c) 2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016,2018 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -27,6 +26,7 @@ wil_ftm_txrx_offset_sysfs_show(struct device *dev,
 			       char *buf)
 {
 	struct wil6210_priv *wil = dev_get_drvdata(dev);
+	struct wil6210_vif *vif = ndev_to_vif(wil->main_ndev);
 	struct {
 		struct wmi_cmd_hdr wmi;
 		struct wmi_tof_get_tx_rx_offset_event evt;
@@ -38,7 +38,7 @@ wil_ftm_txrx_offset_sysfs_show(struct device *dev,
 		return -EOPNOTSUPP;
 
 	memset(&reply, 0, sizeof(reply));
-	rc = wmi_call(wil, WMI_TOF_GET_TX_RX_OFFSET_CMDID, NULL, 0,
+	rc = wmi_call(wil, WMI_TOF_GET_TX_RX_OFFSET_CMDID, vif->mid, NULL, 0,
 		      WMI_TOF_GET_TX_RX_OFFSET_EVENTID,
 		      &reply, sizeof(reply), 100);
 	if (rc < 0)
@@ -60,6 +60,7 @@ wil_ftm_txrx_offset_sysfs_store(struct device *dev,
 				const char *buf, size_t count)
 {
 	struct wil6210_priv *wil = dev_get_drvdata(dev);
+	struct wil6210_vif *vif = ndev_to_vif(wil->main_ndev);
 	struct wmi_tof_set_tx_rx_offset_cmd cmd;
 	struct {
 		struct wmi_cmd_hdr wmi;
@@ -78,8 +79,8 @@ wil_ftm_txrx_offset_sysfs_store(struct device *dev,
 	cmd.tx_offset = cpu_to_le32(tx_offset);
 	cmd.rx_offset = cpu_to_le32(rx_offset);
 	memset(&reply, 0, sizeof(reply));
-	rc = wmi_call(wil, WMI_TOF_SET_TX_RX_OFFSET_CMDID, &cmd, sizeof(cmd),
-		      WMI_TOF_SET_TX_RX_OFFSET_EVENTID,
+	rc = wmi_call(wil, WMI_TOF_SET_TX_RX_OFFSET_CMDID, vif->mid,
+		      &cmd, sizeof(cmd), WMI_TOF_SET_TX_RX_OFFSET_EVENTID,
 		      &reply, sizeof(reply), 100);
 	if (rc < 0)
 		return rc;
@@ -94,6 +95,52 @@ wil_ftm_txrx_offset_sysfs_store(struct device *dev,
 static DEVICE_ATTR(ftm_txrx_offset, 0644,
 		   wil_ftm_txrx_offset_sysfs_show,
 		   wil_ftm_txrx_offset_sysfs_store);
+
+static ssize_t
+wil_board_file_sysfs_show(struct device *dev,
+			  struct device_attribute *attr,
+			  char *buf)
+{
+	struct wil6210_priv *wil = dev_get_drvdata(dev);
+
+	wil_get_board_file(wil, buf, PAGE_SIZE);
+	strlcat(buf, "\n", PAGE_SIZE);
+	return strlen(buf);
+}
+
+static ssize_t
+wil_board_file_sysfs_store(struct device *dev,
+			   struct device_attribute *attr,
+			   const char *buf, size_t count)
+{
+	struct wil6210_priv *wil = dev_get_drvdata(dev);
+	size_t len;
+
+	mutex_lock(&wil->mutex);
+
+	kfree(wil->board_file);
+	wil->board_file = NULL;
+
+	len = count;
+	if (buf[count - 1] == '\n')
+		len--;
+	len = strnlen(buf, len);
+	if (len > 0) {
+		wil->board_file = kmalloc(len + 1, GFP_KERNEL);
+		if (!wil->board_file) {
+			mutex_unlock(&wil->mutex);
+			return -ENOMEM;
+		}
+		strlcpy(wil->board_file, buf, len + 1);
+	}
+	mutex_unlock(&wil->mutex);
+
+	return count;
+}
+
+static DEVICE_ATTR(board_file, 0644,
+		   wil_board_file_sysfs_show,
+		   wil_board_file_sysfs_store);
 
 static ssize_t
 wil_tt_sysfs_show(struct device *dev, struct device_attribute *attr, char *buf)
@@ -270,61 +317,6 @@ static DEVICE_ATTR(fst_link_loss, 0644,
 		   wil_fst_link_loss_sysfs_store);
 
 static ssize_t
-wil_vr_profile_show(struct device *dev, struct device_attribute *attr,
-		    char *buf)
-{
-	struct wil6210_priv *wil = dev_get_drvdata(dev);
-	ssize_t len;
-
-	len = snprintf(buf, PAGE_SIZE, "%s\n",
-		       wil_get_vr_profile_name(wil->vr_profile));
-
-	return len;
-}
-
-static ssize_t
-wil_vr_profile_store(struct device *dev, struct device_attribute *attr,
-		     const char *buf, size_t count)
-{
-	struct wil6210_priv *wil = dev_get_drvdata(dev);
-	u8 profile;
-	int rc = 0;
-
-	if (kstrtou8(buf, 0, &profile))
-		return -EINVAL;
-
-	if (test_bit(wil_status_fwready, wil->status)) {
-		wil_err(wil, "Cannot set VR while interface is up\n");
-		return -EIO;
-	}
-
-	if (profile == wil->vr_profile) {
-		wil_info(wil, "Ignore same VR profile %s\n",
-			 wil_get_vr_profile_name(wil->vr_profile));
-		return count;
-	}
-
-	wil_info(wil, "Sysfs: set VR profile to %s\n",
-		 wil_get_vr_profile_name(profile));
-
-	/* Enabling of VR mode is done from wil_reset after FW is ready.
-	 * Disabling is done from here.
-	 */
-	if (profile == WMI_VR_PROFILE_DISABLED) {
-		rc = wil_vr_update_profile(wil, profile);
-		if (rc)
-			return rc;
-	}
-	wil->vr_profile = profile;
-
-	return count;
-}
-
-static DEVICE_ATTR(vr_profile, 0644,
-		   wil_vr_profile_show,
-		   wil_vr_profile_store);
-
-static ssize_t
 wil_snr_thresh_sysfs_show(struct device *dev, struct device_attribute *attr,
 			  char *buf)
 {
@@ -364,10 +356,10 @@ static DEVICE_ATTR(snr_thresh, 0644,
 
 static struct attribute *wil6210_sysfs_entries[] = {
 	&dev_attr_ftm_txrx_offset.attr,
+	&dev_attr_board_file.attr,
 	&dev_attr_thermal_throttling.attr,
 	&dev_attr_fst_link_loss.attr,
 	&dev_attr_snr_thresh.attr,
-	&dev_attr_vr_profile.attr,
 	NULL
 };
 

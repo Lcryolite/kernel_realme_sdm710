@@ -163,7 +163,7 @@ static int sel_netif_sid_slow(struct net *ns, int ifindex, u32 *sid)
 		ret = -ENOMEM;
 		goto out;
 	}
-	ret = security_netif_sid(dev->name, &new->nsec.sid);
+	ret = security_netif_sid(&selinux_state, dev->name, &new->nsec.sid);
 	if (ret != 0)
 		goto out;
 	new->nsec.ns = ns;
@@ -277,7 +277,7 @@ static __init int sel_netif_init(void)
 {
 	int i;
 
-	if (!selinux_enabled)
+	if (!selinux_enabled_boot)
 		return 0;
 
 	for (i = 0; i < SEL_NETIF_HASH_SIZE; i++)

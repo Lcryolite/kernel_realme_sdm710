@@ -16,6 +16,7 @@
 #include "sde_hw_catalog.h"
 #include "sde_hw_mdss.h"
 #include "sde_hw_util.h"
+#include "sde_reg_dma.h"
 #include "sde_hw_blk.h"
 #include "sde_formats.h"
 #include "sde_color_processing.h"
@@ -31,13 +32,15 @@ struct sde_hw_pipe;
 #define SDE_SSPP_SOURCE_ROTATED_90 0x8
 #define SDE_SSPP_ROT_90  0x10
 #define SDE_SSPP_SOLID_FILL 0x20
+#define SDE_SSPP_RIGHT	 0x40
 
 /**
  * Define all scaler feature bits in catalog
  */
 #define SDE_SSPP_SCALER ((1UL << SDE_SSPP_SCALER_RGB) | \
 	(1UL << SDE_SSPP_SCALER_QSEED2) | \
-	(1UL << SDE_SSPP_SCALER_QSEED3))
+	(1UL << SDE_SSPP_SCALER_QSEED3) | \
+	(1UL << SDE_SSPP_SCALER_QSEED3LITE))
 
 /**
  * Component indices
@@ -55,6 +58,7 @@ enum {
  * SDE_SSPP_RECT_SOLO - multirect disabled
  * SDE_SSPP_RECT_0 - rect0 of a multirect pipe
  * SDE_SSPP_RECT_1 - rect1 of a multirect pipe
+ * SDE_SSPP_RECT_MAX - max enum of multirect pipe
  *
  * Note: HW supports multirect with either RECT0 or
  * RECT1. Considering no benefit of such configs over
@@ -65,6 +69,7 @@ enum sde_sspp_multirect_index {
 	SDE_SSPP_RECT_SOLO = 0,
 	SDE_SSPP_RECT_0,
 	SDE_SSPP_RECT_1,
+	SDE_SSPP_RECT_MAX,
 };
 
 enum sde_sspp_multirect_mode {
@@ -104,13 +109,6 @@ struct sde_hw_sharp_cfg {
 	u32 edge_thr;
 	u32 smooth_thr;
 	u32 noise_thr;
-};
-
-
-enum sde_sspp_layout_index {
-	SDE_SSPP_NONE = 0,
-	SDE_SSPP_LEFT,
-	SDE_SSPP_RIGHT,
 };
 
 struct sde_hw_pixel_ext {
@@ -292,6 +290,22 @@ struct sde_hw_pipe_sbuf_status {
 };
 
 /**
+ * struct sde_hw_pipe_line_insertion_cfg - line insertion config
+ * @enable: line insertion is enabled
+ * @dummy_lines: dummy lines before active lines
+ * @first_active_lines: number of active lines before first dummy lines
+ * @active_lines: active lines
+ * @dst_h: total active lines plus dummy lines
+ */
+struct sde_hw_pipe_line_insertion_cfg {
+	bool enable;
+	u32 dummy_lines;
+	u32 first_active_lines;
+	u32 active_lines;
+	u32 dst_h;
+};
+
+/**
  * struct sde_hw_sspp_ops - interface to the SSPP Hw driver functions
  * Caller must call the init function to get the pipe context for each pipe
  * Assumption is these functions will be called after clocks are enabled
@@ -348,8 +362,14 @@ struct sde_hw_sspp_ops {
 			struct sde_hw_pipe_cfg *cfg,
 			enum sde_sspp_multirect_index index);
 
+	/* get_sourceaddress - get pipe current source addresses of a plane
+	 * @ctx: Pointer to pipe context
+	 * @is_virtual: If true get address programmed for R1 in multirect
+	 */
+	u32 (*get_sourceaddress)(struct sde_hw_pipe *ctx, bool is_virtual);
+
 	/**
-	 * setup_csc - setup color space coversion
+	 * setup_csc - setup color space conversion
 	 * @ctx: Pointer to pipe context
 	 * @data: Pointer to config structure
 	 */
@@ -423,10 +443,36 @@ struct sde_hw_sspp_ops {
 			enum sde_memcolor_type type, void *cfg);
 
 	/**
-	 * setup_igc - setup inverse gamma correction
+	 * setup_vig_gamut - setup 3D LUT Gamut in VIG pipes
 	 * @ctx: Pointer to pipe context
+	 * @cfg: Pointer to vig gamut data
 	 */
-	void (*setup_igc)(struct sde_hw_pipe *ctx);
+	void (*setup_vig_gamut)(struct sde_hw_pipe *ctx, void *cfg);
+
+	/**
+	 * setup_vig_igc - setup 1D LUT IGC in VIG pipes
+	 * @ctx: Pointer to pipe context
+	 * @cfg: Pointer to vig igc data
+	 */
+	void (*setup_vig_igc)(struct sde_hw_pipe *ctx, void *cfg);
+
+	/**
+	 * setup_dma_igc - setup 1D LUT IGC in DMA pipes
+	 * @ctx: Pointer to pipe context
+	 * @cfg: Pointer to dma igc data
+	 * @idx: multirect index
+	 */
+	void (*setup_dma_igc)(struct sde_hw_pipe *ctx, void *cfg,
+				enum sde_sspp_multirect_index idx);
+
+	/**
+	 * setup_dma_gc - setup 1D LUT GC in DMA pipes
+	 * @ctx: Pointer to pipe context
+	 * @cfg: Pointer to dma gc data
+	 * @idx: multirect index
+	 */
+	void (*setup_dma_gc)(struct sde_hw_pipe *ctx, void *cfg,
+				enum sde_sspp_multirect_index idx);
 
 	/**
 	 * setup_danger_safe_lut - setup danger safe LUTs
@@ -474,6 +520,16 @@ struct sde_hw_sspp_ops {
 		struct sde_hw_pipe_cfg *pipe_cfg,
 		struct sde_hw_pixel_ext *pe_cfg,
 		void *scaler_cfg);
+
+	/**
+	 * setup_scaler_lut - setup scaler lut
+	 * @buf: Defines structure for reg dma ops on the reg dma buffer.
+	 * @scaler3_cfg: QSEEDv3 configuration
+	 * @offset: Scaler Offset
+	 */
+	void (*setup_scaler_lut)(struct sde_reg_dma_setup_ops_cfg *buf,
+			struct sde_hw_scaler3_cfg *scaler3_cfg,
+			u32 offset);
 
 	/**
 	 * get_scaler_ver - get scaler h/w version
@@ -526,6 +582,54 @@ struct sde_hw_sspp_ops {
 	void (*setup_secure_address)(struct sde_hw_pipe *ctx,
 			enum sde_sspp_multirect_index index,
 		bool enable);
+
+	/**
+	 * set_src_split_order - setup source split order priority
+	 * @ctx: Pointer to pipe context
+	 * @index: rectangle index in multirect
+	 * @enable: enable src split order
+	 */
+	void (*set_src_split_order)(struct sde_hw_pipe *ctx,
+			enum sde_sspp_multirect_index index, bool enable);
+
+	/**
+	 * setup_inverse_pma - enable/disable alpha unmultiply unit (PMA)
+	 * @ctx: Pointer to pipe context
+	 * @index: Rectangle index in multirect
+	 * @enable: PMA enable/disable settings
+	 */
+	void (*setup_inverse_pma)(struct sde_hw_pipe *ctx,
+			enum sde_sspp_multirect_index index, u32 enable);
+
+	/**
+	 * setup_dgm_csc - setup DGM color space conversion block and update lut
+	 * @ctx: Pointer to pipe context
+	 * @index: Rectangle index in multirect
+	 * @data: Pointer to config structure
+	 */
+	void (*setup_dgm_csc)(struct sde_hw_pipe *ctx,
+		enum sde_sspp_multirect_index index, struct sde_csc_cfg *data);
+
+	/**
+	 * clear_ubwc_error - clear the ubwc error-code registers
+	 * @ctx: Pointer to pipe context
+	 */
+	void (*clear_ubwc_error)(struct sde_hw_pipe *ctx);
+
+	/**
+	 * get_ubwc_error - get the ubwc error-code
+	 * @ctx: Pointer to pipe context
+	 */
+	u32 (*get_ubwc_error)(struct sde_hw_pipe *ctx);
+
+	/**
+	 * setup_line_insertion - setup line insertion
+	 * @ctx: Pointer to pipe context
+	 * @cfg: Pointer to line insertion configuration
+	 */
+	void (*setup_line_insertion)(struct sde_hw_pipe *ctx,
+		enum sde_sspp_multirect_index index,
+		struct sde_hw_pipe_line_insertion_cfg *cfg);
 };
 
 /**
@@ -546,10 +650,11 @@ struct sde_hw_pipe {
 
 	/* Pipe */
 	enum sde_sspp idx;
-	const struct sde_sspp_cfg *cap;
+	struct sde_sspp_cfg *cap;
 
 	/* Ops */
 	struct sde_hw_sspp_ops ops;
+	struct sde_hw_ctl *ctl;
 };
 
 /**

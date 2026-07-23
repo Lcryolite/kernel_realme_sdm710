@@ -161,7 +161,7 @@ int bgcom_set_spi_state(enum bgcom_spi_state state)
 {
 	struct bg_spi_priv *bg_spi = container_of(bg_com_drv,
 						struct bg_spi_priv, lhandle);
-	struct device spi_dev = bg_spi->spi->master->dev;
+	const struct device spi_dev = bg_spi->spi->master->dev;
 	ktime_t time_start, delta;
 	s64 time_elapsed;
 
@@ -177,7 +177,7 @@ int bgcom_set_spi_state(enum bgcom_spi_state state)
 		while (!pm_runtime_status_suspended(spi_dev.parent)) {
 			delta = ktime_sub(ktime_get(), time_start);
 			time_elapsed = ktime_to_ms(delta);
-			BUG_ON(time_elapsed > 5 * MSEC_PER_SEC);
+			WARN_ON(time_elapsed > 5 * MSEC_PER_SEC);
 			msleep(100);
 		}
 	}
@@ -277,7 +277,9 @@ static int bgcom_transfer(void *handle, uint8_t *tx_buf,
 		tx_xfer->rx_buf = rx_buf;
 
 	tx_xfer->len = txn_len;
+	pm_runtime_get_sync(bg_spi->spi->controller->dev.parent);
 	ret = spi_sync(spi, &bg_spi->msg1);
+	pm_runtime_put_sync_suspend(bg_spi->spi->controller->dev.parent);
 	mutex_unlock(&bg_spi->xfer_mutex);
 
 	if (ret)
@@ -1015,6 +1017,9 @@ static int bg_spi_probe(struct spi_device *spi)
 
 	bg_spi = devm_kzalloc(&spi->dev, sizeof(*bg_spi),
 				   GFP_KERNEL | GFP_ATOMIC);
+
+	pr_info("%s started\n", __func__);
+
 	if (!bg_spi)
 		return -ENOMEM;
 	bg_spi->spi = spi;
@@ -1050,6 +1055,7 @@ static int bg_spi_probe(struct spi_device *spi)
 
 	atomic_set(&bg_is_spi_active, 1);
 	dma_set_coherent_mask(&spi->dev, DMA_BIT_MASK(64));
+	pr_info("%s success\n", __func__);
 	pr_info("Bgcom Probed successfully\n");
 	return ret;
 

@@ -50,7 +50,7 @@ struct sock *__inet6_lookup_established(struct net *net,
 					const __be16 sport,
 					const struct in6_addr *daddr,
 					const u16 hnum, const int dif,
- 					const int sdif);
+					const int sdif);
 
 struct sock *inet6_lookup_listener(struct net *net,
 				   struct inet_hashinfo *hashinfo,
@@ -59,7 +59,7 @@ struct sock *inet6_lookup_listener(struct net *net,
 				   const __be16 sport,
 				   const struct in6_addr *daddr,
 				   const unsigned short hnum,
- 				   const int dif, const int sdif);
+				   const int dif, const int sdif);
 
 static inline struct sock *__inet6_lookup(struct net *net,
 					  struct inet_hashinfo *hashinfo,
@@ -72,8 +72,8 @@ static inline struct sock *__inet6_lookup(struct net *net,
 					  bool *refcounted)
 {
 	struct sock *sk = __inet6_lookup_established(net, hashinfo, saddr,
-						sport, daddr, hnum,
- 						     dif, sdif);
+						     sport, daddr, hnum,
+						     dif, sdif);
 	*refcounted = true;
 	if (sk)
 		return sk;
@@ -89,9 +89,8 @@ static inline struct sock *__inet6_lookup_skb(struct inet_hashinfo *hashinfo,
 					      int iif, int sdif,
 					      bool *refcounted)
 {
-	struct sock *sk = skb_steal_sock(skb);
+	struct sock *sk = skb_steal_sock(skb, refcounted);
 
-	*refcounted = true;
 	if (sk)
 		return sk;
 
@@ -117,7 +116,7 @@ int inet6_hash(struct sock *sk);
 	 ipv6_addr_equal(&(__sk)->sk_v6_rcv_saddr, (__daddr))	&&	\
 	 (!(__sk)->sk_bound_dev_if	||				\
 	   ((__sk)->sk_bound_dev_if == (__dif))	||			\
- 	   ((__sk)->sk_bound_dev_if == (__sdif)))		&&	\
+	   ((__sk)->sk_bound_dev_if == (__sdif)))		&&	\
 	 net_eq(sock_net(__sk), (__net)))
 
 #endif /* _INET6_HASHTABLES_H */

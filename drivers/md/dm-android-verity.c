@@ -137,9 +137,9 @@ static int read_block_dev(struct bio_read *payload, struct block_device *bdev,
 		return -ENOMEM;
 	}
 
-	bio->bi_bdev = bdev;
+	bio_set_dev(bio, bdev);
 	bio->bi_iter.bi_sector = offset;
-	bio_set_op_attrs(bio, REQ_OP_READ, READ_SYNC);
+	bio_set_op_attrs(bio, REQ_OP_READ, 0);
 
 	payload->page_io = kzalloc(sizeof(struct page *) *
 		payload->number_of_pages, GFP_KERNEL);
@@ -505,11 +505,7 @@ static void handle_error(void)
 	int mode = verity_mode();
 	if (mode == DM_VERITY_MODE_RESTART) {
 		DMERR("triggering restart");
-#ifdef OPLUS_BUG_STABILITY
-		panic("dm-verity device corrupted");
-#else
 		kernel_restart("dm-verity device corrupted");
-#endif /* OPLUS_BUG_STABILITY */
 	} else {
 		DMERR("Mounting verity root failed");
 	}
@@ -622,9 +618,11 @@ static int add_as_linear_device(struct dm_target *ti, char *dev)
 	android_verity_target.dtr = dm_linear_dtr,
 	android_verity_target.map = dm_linear_map,
 	android_verity_target.status = dm_linear_status,
+	android_verity_target.end_io = dm_linear_end_io,
 	android_verity_target.prepare_ioctl = dm_linear_prepare_ioctl,
 	android_verity_target.iterate_devices = dm_linear_iterate_devices,
-        android_verity_target.direct_access = dm_linear_direct_access,
+        android_verity_target.direct_access = dm_linear_dax_direct_access,
+        android_verity_target.dax_copy_from_iter = dm_linear_dax_copy_from_iter,
 	android_verity_target.io_hints = NULL;
 
 	set_disk_ro(dm_disk(dm_table_get_md(ti->table)), 0);

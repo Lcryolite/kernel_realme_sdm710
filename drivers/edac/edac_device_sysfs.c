@@ -1,7 +1,7 @@
 /*
  * file for managing the edac_device subsystem of devices for EDAC
  *
- * (C) 2007 SoftwareBitMaker 
+ * (C) 2007 SoftwareBitMaker
  *
  * This file may be distributed under the terms of the
  * GNU General Public License.
@@ -15,7 +15,7 @@
 #include <linux/slab.h>
 #include <linux/edac.h>
 
-#include "edac_core.h"
+#include "edac_device.h"
 #include "edac_module.h"
 
 #define EDAC_DEVICE_SYMLINK	"device"
@@ -178,7 +178,7 @@ CTL_INFO_ATTR(log_ue, S_IRUGO | S_IWUSR,
 	edac_device_ctl_log_ue_show, edac_device_ctl_log_ue_store);
 CTL_INFO_ATTR(log_ce, S_IRUGO | S_IWUSR,
 	edac_device_ctl_log_ce_show, edac_device_ctl_log_ce_store);
-CTL_INFO_ATTR(panic_on_ce, S_IRUGO | S_IWUSR,
+CTL_INFO_ATTR(panic_on_ce, 0644,
 	edac_device_ctl_panic_on_ce_show,
 	edac_device_ctl_panic_on_ce_store);
 CTL_INFO_ATTR(panic_on_ue, S_IRUGO | S_IWUSR,

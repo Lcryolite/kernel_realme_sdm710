@@ -1,4 +1,4 @@
-/* Copyright (c) 2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -11,7 +11,7 @@
  */
 
 &mdss_mdp {
-	dsi_hx8399c_truly_vid: qcom,mdss_dsi_hx8399c_truly_video{
+	dsi_hx8399c_truly_vid: qcom,mdss_dsi_hx8399_truly_fhd_video {
 		qcom,mdss-dsi-panel-name =
 			"hx8399c video mode dsi truly panel";
 		qcom,mdss-dsi-panel-type = "dsi_video_mode";
@@ -129,3 +129,4 @@
 		qcom,mdss-dsi-reset-sequence = <1 10>, <0 10>, <1 10>;
 	};
 };
+

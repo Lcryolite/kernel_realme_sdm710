@@ -303,7 +303,9 @@ out:
 /**
  * ima_file_mmap - based on policy, collect/store measurement.
  * @file: pointer to the file to be measured (May be NULL)
- * @prot: contains the protection that will be applied by the kernel.
+ * @reqprot: protection requested by the application
+ * @prot: protection that will be applied by the kernel
+ * @flags: operational flags
  *
  * Measure files being mmapped executable based on the ima_must_measure()
  * policy decision.
@@ -311,7 +313,8 @@ out:
  * On success return 0.  On integrity appraisal error, assuming the file
  * is in policy and IMA-appraisal is in enforcing mode, return -EACCES.
  */
-int ima_file_mmap(struct file *file, unsigned long prot)
+int ima_file_mmap(struct file *file, unsigned long reqprot,
+		  unsigned long prot, unsigned long flags)
 {
 	if (file && (prot & PROT_EXEC))
 		return process_measurement(file, NULL, 0, MAY_EXEC,
@@ -341,7 +344,7 @@ int ima_bprm_check(struct linux_binprm *bprm)
 /**
  * ima_path_check - based on policy, collect/store measurement.
  * @file: pointer to the file to be measured
- * @mask: contains MAY_READ, MAY_WRITE or MAY_EXECUTE
+ * @mask: contains MAY_READ, MAY_WRITE, MAY_EXEC or MAY_APPEND
  *
  * Measure files based on the ima_must_measure() policy decision.
  *
@@ -351,8 +354,8 @@ int ima_bprm_check(struct linux_binprm *bprm)
 int ima_file_check(struct file *file, int mask, int opened)
 {
 	return process_measurement(file, NULL, 0,
-				   mask & (MAY_READ | MAY_WRITE | MAY_EXEC),
-				   FILE_CHECK, opened);
+				   mask & (MAY_READ | MAY_WRITE | MAY_EXEC |
+					   MAY_APPEND), FILE_CHECK, opened);
 }
 EXPORT_SYMBOL_GPL(ima_file_check);
 
@@ -453,6 +456,7 @@ static int __init init_ima(void)
 {
 	int error;
 
+	ima_init_template_list();
 	hash_setup(CONFIG_IMA_DEFAULT_HASH);
 	error = ima_init();
 

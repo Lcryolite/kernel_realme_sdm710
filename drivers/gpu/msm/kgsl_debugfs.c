@@ -1,4 +1,4 @@
-/* Copyright (c) 2002,2008-2017,2020-2021, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2002, 2008-2017, 2019-2021, The Linux Foundation. All rights reserved.
  * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -168,7 +168,7 @@ static int print_mem_entry(void *data, void *ptr)
 		kgsl_get_egl_counts(entry, &egl_surface_count,
 						&egl_image_count);
 
-	seq_printf(s, "%pK %d %16llu %5d %9s %10s %16s %5d %16d %6d %6d",
+	seq_printf(s, "%pK %pK %16llu %5d %9s %10s %16s %5d %16d %6d %6d",
 			(uint64_t *)(uintptr_t) m->gpuaddr,
 			/*
 			 * Show zero for the useraddr - we can't reliably track

@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -70,12 +70,12 @@ static int lmh_debug_read(uint32_t **buf)
 			LMH_DEBUG_READ_BUF_SIZE), &desc_arg);
 	size = desc_arg.ret[0];
 	if (ret) {
-		pr_err("Error in SCM v%d get debug buffer size call. err:%d\n",
-				(is_scm_armv8()) ? 8 : 7, ret);
+		pr_err("Error in SCM get debug buffer size call. err:%d\n",
+				ret);
 		goto get_dbg_exit;
 	}
 	if (!size) {
-		pr_err("No Debug data to read.\n");
+		pr_err("No Debug data to read\n");
 		ret = -ENODEV;
 		goto get_dbg_exit;
 	}
@@ -290,7 +290,7 @@ dfs_read_exit:
 }
 
 static int lmh_get_recurssive_data(struct scm_desc *desc_arg, uint32_t cmd_idx,
-		uint32_t *payload, uint32_t *size, uint32_t *dest_buf)
+		uint32_t *payload, uint32_t *size, uint32_t **dest_buf)
 {
 	int idx = 0, ret = 0;
 	uint32_t next = 0;
@@ -312,20 +312,20 @@ static int lmh_get_recurssive_data(struct scm_desc *desc_arg, uint32_t cmd_idx,
 			return ret;
 		}
 		if (!*size) {
-			pr_err("No LMH device supported.\n");
+			pr_err("No LMH device supported\n");
 			return -ENODEV;
 		}
-		if (!dest_buf) {
-			dest_buf = devm_kcalloc(lmh_data->dev, *size,
-				sizeof(*dest_buf), GFP_KERNEL);
-			if (!dest_buf)
+		if (!*dest_buf) {
+			*dest_buf = devm_kcalloc(lmh_data->dev, *size,
+				sizeof(**dest_buf), GFP_KERNEL);
+			if (!*dest_buf)
 				return -ENOMEM;
 		}
 
 		for (idx = next;
 			idx < min((next + LMH_SCM_PAYLOAD_SIZE), *size);
 			idx++)
-			dest_buf[idx] = payload[idx - next];
+			(*dest_buf)[idx] = payload[idx - next];
 		next += LMH_SCM_PAYLOAD_SIZE;
 	} while (next < *size);
 
@@ -370,7 +370,7 @@ static int lmh_debug_get_types(bool is_read, uint32_t **buf)
 	desc_arg.args[2] = (is_read) ?
 			LMH_DEBUG_READ_TYPE : LMH_DEBUG_CONFIG_TYPE;
 	desc_arg.arginfo = SCM_ARGS(4, SCM_RW, SCM_VAL, SCM_VAL, SCM_VAL);
-	ret = lmh_get_recurssive_data(&desc_arg, 3, payload, &size, dest_buf);
+	ret = lmh_get_recurssive_data(&desc_arg, 3, payload, &size, &dest_buf);
 	if (ret)
 		goto get_type_exit;
 	pr_debug("Total %s types:%d\n", (is_read) ? "read" : "config", size);
@@ -487,7 +487,7 @@ static int lmh_debug_init(void)
 	int ret = 0;
 
 	if (lmh_check_tz_debug_cmds()) {
-		pr_debug("Debug commands not available.\n");
+		pr_debug("Debug commands not available\n");
 		return -ENODEV;
 	}
 
@@ -502,7 +502,7 @@ static int lmh_debug_init(void)
 					lmh_data->debugfs_parent, NULL,
 					&lmh_dbgfs_read_fops);
 	if (IS_ERR(lmh_data->debug_read)) {
-		pr_err("Error creating" LMH_DBGFS_READ "entry.\n");
+		pr_err("Error creating" LMH_DBGFS_READ "entry\n");
 		ret = PTR_ERR(lmh_data->debug_read);
 		goto dbg_reg_exit;
 	}

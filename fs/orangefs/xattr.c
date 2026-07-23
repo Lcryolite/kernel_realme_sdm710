@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * (C) 2001 Clemson University and The University of Chicago
  *
@@ -239,7 +240,7 @@ int orangefs_inode_setxattr(struct inode *inode, const char *name,
 	internal_flag = convert_to_internal_xattr_flags(flags);
 
 	/* This is equivalent to a removexattr */
-	if (size == 0 && value == NULL) {
+	if (size == 0 && !value) {
 		gossip_debug(GOSSIP_XATTR_DEBUG,
 			     "removing xattr (%s)\n",
 			     name);
@@ -311,7 +312,7 @@ ssize_t orangefs_listxattr(struct dentry *dentry, char *buffer, size_t size)
 	int i = 0;
 	int returned_count = 0;
 
-	if (size > 0 && buffer == NULL) {
+	if (size > 0 && !buffer) {
 		gossip_err("%s: bogus NULL pointers\n", __func__);
 		return -EINVAL;
 	}
@@ -442,7 +443,7 @@ static int orangefs_xattr_get_default(const struct xattr_handler *handler,
 
 }
 
-static struct xattr_handler orangefs_xattr_default_handler = {
+static const struct xattr_handler orangefs_xattr_default_handler = {
 	.prefix = "",  /* match any name => handlers called with full name */
 	.get = orangefs_xattr_get_default,
 	.set = orangefs_xattr_set_default,

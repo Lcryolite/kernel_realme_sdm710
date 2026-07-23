@@ -30,7 +30,6 @@
 #include <linux/err.h>
 #include <linux/export.h>
 #include <linux/string.h>
-#include <linux/thermal.h>
 #include <linux/list.h>
 
 #define CREATE_TRACE_POINTS
@@ -39,6 +38,7 @@
 #include "thermal_core.h"
 
 /***   Private data structures to represent thermal device tree data ***/
+
 /**
  * struct __thermal_bind_param - a match between trip and cooling device
  * @cooling_device: a pointer to identify the referred cooling device
@@ -217,13 +217,15 @@ static int of_thermal_set_trips(struct thermal_zone_device *tz,
 		return -EINVAL;
 
 	mutex_lock(&data->senps->lock);
+	if (data->mode == THERMAL_DEVICE_DISABLED)
+		goto set_trips_exit;
 	of_thermal_aggregate_trip_types(tz, GENMASK(THERMAL_TRIP_CRITICAL, 0),
 					&low, &high);
 	data->senps->trip_low = low;
 	data->senps->trip_high = high;
 	ret = data->senps->ops->set_trips(data->senps->sensor_data,
 					  low, high);
-
+set_trips_exit:
 	mutex_unlock(&data->senps->lock);
 	return ret;
 }
@@ -521,6 +523,26 @@ static bool of_thermal_is_wakeable(struct thermal_zone_device *tz)
 	return data->is_wakeable;
 }
 
+static int of_thermal_set_polling_delay(struct thermal_zone_device *tz,
+				    int delay)
+{
+	struct __thermal_zone *data = tz->devdata;
+
+	data->polling_delay = delay;
+
+	return 0;
+}
+
+static int of_thermal_set_passive_delay(struct thermal_zone_device *tz,
+				    int delay)
+{
+	struct __thermal_zone *data = tz->devdata;
+
+	data->passive_delay = delay;
+
+	return 0;
+}
+
 static int of_thermal_aggregate_trip_types(struct thermal_zone_device *tz,
 		unsigned int trip_type_mask, int *low, int *high)
 {
@@ -633,6 +655,7 @@ static void handle_thermal_trip(struct thermal_zone_device *tz,
 	struct thermal_zone_device *zone;
 	struct __thermal_zone *data = tz->devdata;
 	struct list_head *head;
+	bool notify = false;
 
 	head = &data->senps->first_tz;
 	list_for_each_entry(data, head, list) {
@@ -645,10 +668,19 @@ static void handle_thermal_trip(struct thermal_zone_device *tz,
 		} else {
 			if (!of_thermal_is_trips_triggered(zone, trip_temp))
 				continue;
+			notify = true;
 			thermal_zone_device_update_temp(zone,
 				THERMAL_EVENT_UNSPECIFIED, trip_temp);
 		}
 	}
+
+	/*
+	 * It is better to notify at least one thermal zone if trip is violated
+	 * for none.
+	 */
+	if (temp_valid && !notify)
+		thermal_zone_device_update_temp(tz, THERMAL_EVENT_UNSPECIFIED,
+				trip_temp);
 }
 
 /*
@@ -690,6 +722,8 @@ static struct thermal_zone_device_ops of_thermal_ops = {
 	.unbind = of_thermal_unbind,
 
 	.is_wakeable = of_thermal_is_wakeable,
+	.set_polling_delay = of_thermal_set_polling_delay,
+	.set_passive_delay = of_thermal_set_passive_delay,
 };
 
 static struct thermal_zone_of_device_ops of_virt_ops = {
@@ -761,6 +795,9 @@ thermal_zone_of_add_sensor(struct device_node *zone,
  * TODO:
  * 01 - This function must enqueue the new sensor instead of using
  * it as the only source of temperature values.
+ *
+ * 02 - There must be a way to match the sensor with all thermal zones
+ * that refer to it.
  *
  * Return: On success returns a valid struct thermal_zone_device,
  * otherwise, it returns a corresponding ERR_PTR(). Incase there are multiple

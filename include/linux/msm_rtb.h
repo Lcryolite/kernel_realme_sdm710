@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2014, 2016 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -55,15 +55,19 @@ int uncached_logk(enum logk_event_type log_type, void *data);
 				nop(); \
 			} while (0)
 
-#define BRANCH_TO_NEXT_ISTR  asm volatile("b .+4\n" : : : "memory")
+#define BRANCH_TO_NEXT_ISTR \
+	do { \
+		asm volatile("b .+4\n" : : : "memory"); \
+	} while (0)
+
 /*
  * both the mb and the isb are needed to ensure enough waypoints for
  * etb tracing
  */
 #define LOG_BARRIER	do { \
 				mb(); \
-				isb();\
-			 } while (0)
+				isb(); \
+			} while (0)
 #else
 
 static inline int uncached_logk_pc(enum logk_event_type log_type,

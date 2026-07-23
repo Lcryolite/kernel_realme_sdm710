@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014, 2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2014, 2018-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -25,7 +25,9 @@
 #include <linux/mutex.h>
 #include <linux/interrupt.h>
 #include <linux/devfreq.h>
+#include <linux/slab.h>
 #include <linux/of.h>
+#include <linux/of_fdt.h>
 #include <trace/events/power.h>
 #include <linux/msm-bus.h>
 #include <linux/msm-bus-board.h>
@@ -78,33 +80,15 @@ static int set_bw(struct device *dev, int new_ib, int new_ab)
 	return ret;
 }
 
-static void find_freq(struct devfreq_dev_profile *p, unsigned long *freq,
-			u32 flags)
-{
-	int i;
-	unsigned long atmost, atleast, f;
-
-	atmost = p->freq_table[0];
-	atleast = p->freq_table[p->max_state-1];
-	for (i = 0; i < p->max_state; i++) {
-		f = p->freq_table[i];
-		if (f <= *freq)
-			atmost = max(f, atmost);
-		if (f >= *freq)
-			atleast = min(f, atleast);
-	}
-
-	if (flags & DEVFREQ_FLAG_LEAST_UPPER_BOUND)
-		*freq = atmost;
-	else
-		*freq = atleast;
-}
-
 static int devbw_target(struct device *dev, unsigned long *freq, u32 flags)
 {
 	struct dev_data *d = dev_get_drvdata(dev);
+	struct dev_pm_opp *opp;
 
-	find_freq(&d->dp, freq, flags);
+	opp = devfreq_recommended_opp(dev, freq, flags);
+	if (!IS_ERR(opp))
+		dev_pm_opp_put(opp);
+
 	return set_bw(dev, *freq, d->gov_ab);
 }
 
@@ -117,15 +101,72 @@ static int devbw_get_dev_status(struct device *dev,
 	return 0;
 }
 
+#define PROP_OPERATING_POINTS_V2 "operating-points-v2"
+
+static int add_opp_prop_from_child(struct device *dev,
+				struct device_node *of_child)
+{
+	struct property *prop;
+	int len = 0, ret = 0;
+	void *value;
+	const void *p_val;
+
+	p_val = of_get_property(of_child, PROP_OPERATING_POINTS_V2, &len);
+	if (!p_val)
+		return -ENODEV;
+	value = devm_kzalloc(dev, len, GFP_KERNEL);
+	if (!value)
+		return -ENOMEM;
+	memcpy(value, p_val, len);
+	prop = devm_kzalloc(dev, sizeof(*prop), GFP_KERNEL);
+	if (!prop) {
+		devm_kfree(dev, value);
+		return -ENOMEM;
+	}
+	prop->name = "operating-points-v2";
+	prop->value = value;
+	prop->length = len;
+	ret = of_add_property(dev->of_node, prop);
+	if (ret) {
+		devm_kfree(dev, value);
+		devm_kfree(dev, prop);
+		dev_err(dev, "failed to add property: %d\n", ret);
+	}
+
+	return ret;
+}
+
+static int parse_child_nodes_for_opp(struct device *dev)
+{
+	struct device_node *of_child;
+	int ddr_type_of = -1;
+	int ddr_type = of_fdt_get_ddrtype();
+	int ret = -EINVAL;
+
+	for_each_child_of_node(dev->of_node, of_child) {
+		ret = of_property_read_u32(of_child, "qcom,ddr-type",
+						&ddr_type_of);
+		if (!ret && (ddr_type == ddr_type_of)) {
+			dev_dbg(dev, "ddr-type = %d, is matching DT entry\n",
+						ddr_type_of);
+			ret = add_opp_prop_from_child(dev, of_child);
+			if (ret)
+				return ret;
+			return dev_pm_opp_of_add_table(dev);
+		}
+		ret = -ENODEV;
+	}
+	return ret;
+}
+
 #define PROP_PORTS "qcom,src-dst-ports"
-#define PROP_TBL "qcom,bw-tbl"
 #define PROP_ACTIVE "qcom,active-only"
 
 int devfreq_add_devbw(struct device *dev)
 {
 	struct dev_data *d;
 	struct devfreq_dev_profile *p;
-	u32 *data, ports[MAX_PATHS * 2];
+	u32 ports[MAX_PATHS * 2];
 	const char *gov_name;
 	int ret, len, i, num_paths;
 
@@ -173,28 +214,13 @@ int devfreq_add_devbw(struct device *dev)
 	p->polling_ms = 50;
 	p->target = devbw_target;
 	p->get_dev_status = devbw_get_dev_status;
+	if (of_get_child_count(dev->of_node))
+		ret = parse_child_nodes_for_opp(dev);
+	else
+		ret = dev_pm_opp_of_add_table(dev);
 
-	if (of_find_property(dev->of_node, PROP_TBL, &len)) {
-		len /= sizeof(*data);
-		data = devm_kzalloc(dev, len * sizeof(*data), GFP_KERNEL);
-		if (!data)
-			return -ENOMEM;
-
-		p->freq_table = devm_kzalloc(dev,
-					     len * sizeof(*p->freq_table),
-					     GFP_KERNEL);
-		if (!p->freq_table)
-			return -ENOMEM;
-
-		ret = of_property_read_u32_array(dev->of_node, PROP_TBL,
-						 data, len);
-		if (ret)
-			return ret;
-
-		for (i = 0; i < len; i++)
-			p->freq_table[i] = data[i];
-		p->max_state = len;
-	}
+	if (ret)
+		dev_err(dev, "Couldn't parse OPP table:%d\n", ret);
 
 	d->bus_client = msm_bus_scale_register_client(&d->bw_data);
 	if (!d->bus_client) {

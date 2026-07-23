@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2017 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2017, 2020 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -25,10 +25,14 @@
 #include <linux/mmc/card.h>
 #include <linux/pm_runtime.h>
 #include <linux/workqueue.h>
+#include <linux/fault-inject.h>
+#include <linux/random.h>
 
 #include "cmdq_hci.h"
+#include "cmdq_hci-crypto.h"
 #include "sdhci.h"
 #include "sdhci-msm.h"
+#include "../core/queue.h"
 
 #define DCMD_SLOT 31
 #define NUM_SLOTS 32
@@ -111,9 +115,11 @@ static void setup_trans_desc(struct cmdq_host *cq_host, u8 tag)
 
 	if (cq_host->dma64) {
 		__le64 *data_addr = (__le64 __force *)(link_temp + 4);
+
 		data_addr[0] = cpu_to_le64(trans_temp);
 	} else {
 		__le32 *data_addr = (__le32 __force *)(link_temp + 4);
+
 		data_addr[0] = cpu_to_le32(trans_temp);
 	}
 }
@@ -273,6 +279,8 @@ static void cmdq_dumpregs(struct cmdq_host *cq_host)
 	       cmdq_readl(cq_host, CQ_VENDOR_CFG + offset));
 	pr_err(DRV_NAME ": ===========================================\n");
 
+	cmdq_crypto_debug(cq_host);
+
 	cmdq_dump_task_history(cq_host);
 	if (cq_host->ops->dump_vendor_regs)
 		cq_host->ops->dump_vendor_regs(mmc);
@@ -372,7 +380,6 @@ static int cmdq_enable(struct mmc_host *mmc)
 {
 	int err = 0;
 	u32 cqcfg;
-	u32 cqcap = 0;
 	bool dcmd_enable;
 	struct cmdq_host *cq_host = mmc_cmdq_private(mmc);
 
@@ -401,18 +408,10 @@ static int cmdq_enable(struct mmc_host *mmc)
 	cqcfg = ((cq_host->caps & CMDQ_TASK_DESC_SZ_128 ? CQ_TASK_DESC_SZ : 0) |
 			(dcmd_enable ? CQ_DCMD : 0));
 
-	cqcap = cmdq_readl(cq_host, CQCAP);
-	if (cqcap & CQCAP_CS) {
-		/*
-		 * In case host controller supports cryptographic operations
-		 * then, it uses 128bit task descriptor. Upper 64 bits of task
-		 * descriptor would be used to pass crypto specific informaton.
-		 */
-		cq_host->caps |= CMDQ_CAP_CRYPTO_SUPPORT |
-				 CMDQ_TASK_DESC_SZ_128;
+	if (cmdq_host_is_crypto_supported(cq_host)) {
+		cmdq_crypto_enable(cq_host);
 		cqcfg |= CQ_ICE_ENABLE;
-		/*
-		 * For SDHC v5.0 onwards, ICE 3.0 specific registers are added
+		/* For SDHC v5.0 onwards, ICE 3.0 specific registers are added
 		 * in CQ register space, due to which few CQ registers are
 		 * shifted. Set offset_changed boolean to use updated address.
 		 */
@@ -488,6 +487,9 @@ static void cmdq_disable_nosync(struct mmc_host *mmc, bool soft)
 {
 	struct cmdq_host *cq_host = (struct cmdq_host *)mmc_cmdq_private(mmc);
 
+	if (cmdq_host_is_crypto_supported(cq_host))
+		cmdq_crypto_disable(cq_host);
+
 	if (soft) {
 		cmdq_writel(cq_host, cmdq_readl(
 				    cq_host, CQCFG) & ~(CQ_ENABLE),
@@ -527,6 +529,8 @@ static void cmdq_reset(struct mmc_host *mmc, bool soft)
 
 	cmdq_disable(mmc, true);
 
+	cmdq_crypto_reset(cq_host);
+
 	if (cq_host->ops->reset) {
 		ret = cq_host->ops->reset(mmc);
 		if (ret) {
@@ -554,6 +558,29 @@ static void cmdq_reset(struct mmc_host *mmc, bool soft)
 	cmdq_runtime_pm_put(cq_host);
 	cq_host->enabled = true;
 	mmc_host_clr_cq_disable(mmc);
+}
+
+static inline void cmdq_prep_crypto_desc(struct cmdq_host *cq_host,
+					  u64 *task_desc, u64 ice_ctx)
+{
+	u64 *ice_desc = NULL;
+
+	if (cq_host->caps & CMDQ_CAP_CRYPTO_SUPPORT) {
+		/*
+		 * Get the address of ice context for the given task descriptor.
+		 * ice context is present in the upper 64bits of task descriptor
+		 * ice_conext_base_address = task_desc + 8-bytes
+		 */
+		ice_desc = (u64 *)((u8 *)task_desc +
+				   CQ_TASK_DESC_ICE_PARAM_OFFSET);
+		memset(ice_desc, 0, CQ_TASK_DESC_ICE_PARAMS_SIZE);
+
+		/*
+		 *  Assign upper 64bits data of task descritor with ice context
+		 */
+		if (ice_ctx)
+			*ice_desc = ice_ctx;
+	}
 }
 
 static void cmdq_prep_task_desc(struct mmc_request *mrq,
@@ -684,7 +711,7 @@ static void cmdq_log_task_desc_history(struct cmdq_host *cq_host, u64 task,
 
 	cq_host->thist[cq_host->thist_idx].is_dcmd = is_dcmd;
 	memcpy(&cq_host->thist[cq_host->thist_idx++].task,
-		&task, sizeof(task));
+		&task, cq_host->task_desc_len);
 }
 
 static void cmdq_prep_dcmd_desc(struct mmc_host *mmc,
@@ -734,30 +761,6 @@ static void cmdq_prep_dcmd_desc(struct mmc_host *mmc,
 		upper_32_bits(*task_desc));
 }
 
-static inline
-void cmdq_prep_crypto_desc(struct cmdq_host *cq_host, u64 *task_desc,
-			u64 ice_ctx)
-{
-	u64 *ice_desc = NULL;
-
-	if (cq_host->caps & CMDQ_CAP_CRYPTO_SUPPORT) {
-		/*
-		 * Get the address of ice context for the given task descriptor.
-		 * ice context is present in the upper 64bits of task descriptor
-		 * ice_conext_base_address = task_desc + 8-bytes
-		 */
-		ice_desc = (__le64 *)((u8 *)task_desc +
-						CQ_TASK_DESC_TASK_PARAMS_SIZE);
-		memset(ice_desc, 0, CQ_TASK_DESC_ICE_PARAMS_SIZE);
-
-		/*
-		 *  Assign upper 64bits data of task descritor with ice context
-		 */
-		if (ice_ctx)
-			*ice_desc = cpu_to_le64(ice_ctx);
-	}
-}
-
 static void cmdq_pm_qos_vote(struct sdhci_host *host, struct mmc_request *mrq)
 {
 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
@@ -800,14 +803,12 @@ static int cmdq_request(struct mmc_host *mmc, struct mmc_request *mrq)
 		goto ring_doorbell;
 	}
 
-	if (cq_host->ops->crypto_cfg) {
-		err = cq_host->ops->crypto_cfg(mmc, mrq, tag, &ice_ctx);
-		if (err) {
-			mmc->err_stats[MMC_ERR_ICE_CFG]++;
-			pr_err("%s: failed to configure crypto: err %d tag %d\n",
-					mmc_hostname(mmc), err, tag);
-			goto ice_err;
-		}
+	err = cmdq_crypto_get_ctx(cq_host, mrq, &ice_ctx);
+	if (err) {
+		mmc->err_stats[MMC_ERR_ICE_CFG]++;
+		pr_err("%s: failed to retrieve crypto ctx for tag %d\n",
+			mmc_hostname(mmc), tag);
+		goto ice_err;
 	}
 
 	task_desc = (__le64 __force *)get_desc(cq_host, tag);
@@ -824,7 +825,7 @@ static int cmdq_request(struct mmc_host *mmc, struct mmc_request *mrq)
 	if (err) {
 		pr_err("%s: %s: failed to setup tx desc: %d\n",
 		       mmc_hostname(mmc), __func__, err);
-		goto desc_err;
+		goto out;
 	}
 
 	cq_host->mrq_slot[tag] = mrq;
@@ -846,49 +847,12 @@ ring_doorbell:
 
 	return err;
 
-desc_err:
-	if (cq_host->ops->crypto_cfg_end) {
-		err = cq_host->ops->crypto_cfg_end(mmc, mrq);
-		if (err) {
-			pr_err("%s: failed to end ice config: err %d tag %d\n",
-					mmc_hostname(mmc), err, tag);
-		}
-	}
-	if (!(cq_host->caps & CMDQ_CAP_CRYPTO_SUPPORT) &&
-			cq_host->ops->crypto_cfg_reset)
-		cq_host->ops->crypto_cfg_reset(mmc, tag);
 ice_err:
 	if (err)
 		cmdq_runtime_pm_put(cq_host);
+
 out:
 	return err;
-}
-
-static int cmdq_get_first_valid_tag(struct cmdq_host *cq_host)
-{
-	u32 dbr_set = 0, tag = 0;
-
-	dbr_set = cmdq_readl(cq_host, CQTDBR);
-	if (!dbr_set) {
-		pr_err("%s: spurious/force error interrupt\n",
-				mmc_hostname(cq_host->mmc));
-		cmdq_halt_poll(cq_host->mmc, false);
-		mmc_host_clr_halt(cq_host->mmc);
-		return -EINVAL;
-	}
-
-	tag = ffs(dbr_set) - 1;
-	pr_err("%s: error tag selected: tag = %d\n",
-		mmc_hostname(cq_host->mmc), tag);
-	return tag;
-}
-
-static bool cmdq_is_valid_tag(struct mmc_host *mmc, unsigned int tag)
-{
-	struct mmc_cmdq_context_info *ctx_info = &mmc->cmdq_ctx;
-
-	return
-	(!!(ctx_info->data_active_reqs & (1 << tag)) || tag == DCMD_SLOT);
 }
 
 static void cmdq_finish_data(struct mmc_host *mmc, unsigned int tag)
@@ -896,13 +860,14 @@ static void cmdq_finish_data(struct mmc_host *mmc, unsigned int tag)
 	struct mmc_request *mrq;
 	struct cmdq_host *cq_host = (struct cmdq_host *)mmc_cmdq_private(mmc);
 	int offset = 0;
-	int err = 0;
 
 	if (cq_host->offset_changed)
 		offset = CQ_V5_VENDOR_CFG;
 	mrq = get_req_by_tag(cq_host, tag);
 	if (tag == cq_host->dcmd_slot)
 		mrq->cmd->resp[0] = cmdq_readl(cq_host, CQCRDCT);
+
+	cmdq_complete_crypto_desc(cq_host, mrq, NULL);
 
 	if (mrq->cmdq_req->cmdq_req_flags & DCMD)
 		cmdq_writel(cq_host,
@@ -911,22 +876,46 @@ static void cmdq_finish_data(struct mmc_host *mmc, unsigned int tag)
 
 	cmdq_runtime_pm_put(cq_host);
 
-	if (!(mrq->cmdq_req->cmdq_req_flags & DCMD)) {
-		if (cq_host->ops->crypto_cfg_end) {
-			err = cq_host->ops->crypto_cfg_end(mmc, mrq);
-			if (err) {
-				pr_err("%s: failed to end ice config: err %d tag %d\n",
-						mmc_hostname(mmc), err, tag);
-			}
-		}
-	}
-	if (!(cq_host->caps & CMDQ_CAP_CRYPTO_SUPPORT) &&
-			cq_host->ops->crypto_cfg_reset)
-		cq_host->ops->crypto_cfg_reset(mmc, tag);
 	mrq->done(mrq);
 }
 
-irqreturn_t cmdq_irq(struct mmc_host *mmc, int err, bool is_cmd_err)
+#ifdef CONFIG_FAIL_MMC_REQUEST
+static int cmdq_should_inject_err(struct mmc_host *mmc, int *err,
+				  unsigned int *dbr_set, unsigned int *status)
+{
+	struct cmdq_host *cq_host = (struct cmdq_host *)mmc_cmdq_private(mmc);
+	static const int errors[] = {
+		-ETIMEDOUT,
+		-EILSEQ,
+		-EIO,
+	};
+
+	*dbr_set = cmdq_readl(cq_host, CQTDBR);
+	if (*dbr_set && should_fail(&mmc->fail_mmc_request,
+				(prandom_u32() % 1024) * 512)) {
+		pr_err("%s *** Before inducing force err, status (%d) error(%d) dbr(0x%x), active_reqs(0x%lx), data_active_reqs(0x%lx)\n",
+			__func__, *status, *err, *dbr_set,
+			mmc->cmdq_ctx.active_reqs,
+			mmc->cmdq_ctx.data_active_reqs);
+		*err = errors[prandom_u32() % ARRAY_SIZE(errors)];
+		*status = 0;
+		pr_err("%s *** After inducing force err, status (%d) error(%d) dbr(0x%x), active_reqs(0x%lx), data_active_reqs(0x%lx)\n",
+			__func__, *status, *err, *dbr_set,
+			mmc->cmdq_ctx.active_reqs,
+			mmc->cmdq_ctx.data_active_reqs);
+		return true;
+	}
+	return false;
+}
+#else
+static int cmdq_should_inject_err(struct mmc_host *mmc, int *err,
+				  unsigned int *dbr_set, unsigned int *status)
+{
+	return false;
+}
+#endif
+
+irqreturn_t cmdq_irq(struct mmc_host *mmc, int err)
 {
 	u32 status;
 	unsigned long tag = 0, comp_status;
@@ -937,8 +926,11 @@ irqreturn_t cmdq_irq(struct mmc_host *mmc, int err, bool is_cmd_err)
 	u32 dbr_set = 0;
 	u32 dev_pend_set = 0;
 	int stat_err = 0;
+	bool err_inject = false;
 
 	status = cmdq_readl(cq_host, CQIS);
+
+	err_inject = cmdq_should_inject_err(mmc, &err, &dbr_set, &status);
 
 	if (!status && !err)
 		return IRQ_NONE;
@@ -951,9 +943,8 @@ irqreturn_t cmdq_irq(struct mmc_host *mmc, int err, bool is_cmd_err)
 		err_info = cmdq_readl(cq_host, CQTERRI);
 		pr_err("%s: err: %d status: 0x%08x task-err-info (0x%08lx)\n",
 		       mmc_hostname(mmc), err, status, err_info);
-		/* Dump the registers before clearing Interrupt */
-		cmdq_dumpregs(cq_host);
 
+		cmdq_dumpregs(cq_host);
 		/*
 		 * Need to halt CQE in case of error in interrupt context itself
 		 * otherwise CQE may proceed with sending CMD to device even if
@@ -965,7 +956,6 @@ irqreturn_t cmdq_irq(struct mmc_host *mmc, int err, bool is_cmd_err)
 		if (ret)
 			pr_err("%s: %s: halt failed ret=%d\n",
 					mmc_hostname(mmc), __func__, ret);
-
 		/*
 		 * Clear the CQIS after halting incase of error. This is done
 		 * because if CQIS is cleared before halting, the CQ will
@@ -975,7 +965,6 @@ irqreturn_t cmdq_irq(struct mmc_host *mmc, int err, bool is_cmd_err)
 		 * of error
 		 */
 		cmdq_writel(cq_host, status, CQIS);
-
 
 		if (!err_info) {
 			/*
@@ -988,41 +977,36 @@ irqreturn_t cmdq_irq(struct mmc_host *mmc, int err, bool is_cmd_err)
 			 *   have caused such error, so check for any first
 			 *   bit set in doorbell and proceed with an error.
 			 */
-			tag = cmdq_get_first_valid_tag(cq_host);
-			if (tag == -EINVAL)
-				goto hac;
+			if (!dbr_set)
+				dbr_set = cmdq_readl(cq_host, CQTDBR);
+			if (!dbr_set) {
+				pr_err("%s: spurious/force error interrupt\n",
+						mmc_hostname(mmc));
+				cmdq_halt_poll(mmc, false);
+				mmc_host_clr_halt(mmc);
+				return IRQ_HANDLED;
+			}
 
+			tag = ffs(dbr_set) - 1;
+			pr_err("%s: error tag selected: tag = %lu\n",
+					mmc_hostname(mmc), tag);
 			mrq = get_req_by_tag(cq_host, tag);
 			if (mrq->data)
 				mrq->data->error = err;
 			else
 				mrq->cmd->error = err;
 			/*
-			 * Get ADMA descriptor memory in case of ADMA
+			 * Get ADMA descriptor memory in case of real ADMA
 			 * error for debug.
 			 */
-			if (err == -EIO)
+			if (err == -EIO && !err_inject)
 				cmdq_dump_adma_mem(cq_host);
 			goto skip_cqterri;
 		}
 
-		if (is_cmd_err && (err_info & CQ_RMEFV)) {
+		if (err_info & CQ_RMEFV) {
 			tag = GET_CMD_ERR_TAG(err_info);
 			pr_err("%s: CMD err tag: %lu\n", __func__, tag);
-
-			/*
-			 * In some cases CQTERRI is not providing reliable tag
-			 * info. If the tag is not valid, complete the request
-			 * with any valid tag so that all tags will get
-			 * requeued.
-			 */
-			if (!cmdq_is_valid_tag(mmc, tag)) {
-				pr_err("%s: CMD err tag is invalid: %lu\n",
-						__func__, tag);
-				tag = cmdq_get_first_valid_tag(cq_host);
-				if (tag == -EINVAL)
-					goto hac;
-			}
 
 			mrq = get_req_by_tag(cq_host, tag);
 			/* CMD44/45/46/47 will not have a valid cmd */
@@ -1033,26 +1017,8 @@ irqreturn_t cmdq_irq(struct mmc_host *mmc, int err, bool is_cmd_err)
 		} else {
 			tag = GET_DAT_ERR_TAG(err_info);
 			pr_err("%s: Dat err  tag: %lu\n", __func__, tag);
-
-			/*
-			 * In some cases CQTERRI is not providing reliable tag
-			 * info. If the tag is not valid, complete the request
-			 * with any valid tag so that all tags will get
-			 * requeued.
-			 */
-			if (!cmdq_is_valid_tag(mmc, tag)) {
-				pr_err("%s: CMD err tag is invalid: %lu\n",
-						__func__, tag);
-				tag = cmdq_get_first_valid_tag(cq_host);
-				if (tag == -EINVAL)
-					goto hac;
-			}
 			mrq = get_req_by_tag(cq_host, tag);
-
-			if (mrq->data)
-				mrq->data->error = err;
-			else
-				mrq->cmd->error = err;
+			mrq->data->error = err;
 		}
 
 skip_cqterri:
@@ -1153,6 +1119,9 @@ skip_cqterri:
 				}
 			}
 		}
+
+		if (err_inject && err == -ETIMEDOUT)
+			goto hac;
 		cmdq_finish_data(mmc, tag);
 		goto hac;
 	} else {
@@ -1179,13 +1148,13 @@ skip_cqterri:
 		for_each_set_bit(tag, &comp_status, cq_host->num_slots) {
 			mrq = get_req_by_tag(cq_host, tag);
 			if (!((mrq->cmd && mrq->cmd->error) ||
-					mrq->cmdq_req->resp_err ||
-					(mrq->data && mrq->data->error))) {
+				mrq->cmdq_req->resp_err ||
+				(mrq->data && mrq->data->error))) {
 				/* complete the corresponding mrq */
 				pr_debug("%s: completing tag -> %lu\n",
 					 mmc_hostname(mmc), tag);
 				MMC_TRACE(mmc, "%s: completing tag -> %lu\n",
-					__func__, tag);
+						__func__, tag);
 				cmdq_finish_data(mmc, tag);
 			}
 		}
@@ -1343,6 +1312,7 @@ static void cmdq_post_req(struct mmc_host *mmc, int tag, int err)
 static void cmdq_dumpstate(struct mmc_host *mmc)
 {
 	struct cmdq_host *cq_host = (struct cmdq_host *)mmc_cmdq_private(mmc);
+
 	cmdq_runtime_pm_get(cq_host);
 	cmdq_dumpregs(cq_host);
 	cmdq_runtime_pm_put(cq_host);
@@ -1366,6 +1336,20 @@ static int cmdq_late_init(struct mmc_host *mmc)
 	return 0;
 }
 
+static void cqhci_crypto_update_queue(struct mmc_host *mmc,
+					struct request_queue *queue)
+{
+	struct cmdq_host *cq_host = (struct cmdq_host *)mmc_cmdq_private(mmc);
+
+	if (cq_host->caps & CMDQ_CAP_CRYPTO_SUPPORT) {
+		if (queue)
+			cmdq_crypto_setup_rq_keyslot_manager(cq_host, queue);
+		else
+			pr_err("%s can not register keyslot manager\n",
+				__func__);
+	}
+}
+
 static const struct mmc_cmdq_host_ops cmdq_host_ops = {
 	.init = cmdq_late_init,
 	.enable = cmdq_enable,
@@ -1375,6 +1359,7 @@ static const struct mmc_cmdq_host_ops cmdq_host_ops = {
 	.halt = cmdq_halt,
 	.reset	= cmdq_reset,
 	.dumpstate = cmdq_dumpstate,
+	.cqe_crypto_update_queue = cqhci_crypto_update_queue,
 };
 
 struct cmdq_host *cmdq_pltfm_init(struct platform_device *pdev)
@@ -1391,10 +1376,9 @@ struct cmdq_host *cmdq_pltfm_init(struct platform_device *pdev)
 	}
 
 	cq_host = kzalloc(sizeof(*cq_host), GFP_KERNEL);
-	if (!cq_host) {
-		dev_err(&pdev->dev, "failed to allocate memory for CMDQ\n");
+	if (!cq_host)
 		return ERR_PTR(-ENOMEM);
-	}
+
 	cq_host->mmio = devm_ioremap(&pdev->dev,
 				     cmdq_memres->start,
 				     resource_size(cmdq_memres));
@@ -1425,10 +1409,14 @@ int cmdq_init(struct cmdq_host *cq_host, struct mmc_host *mmc,
 	mmc->num_cq_slots = NUM_SLOTS;
 	mmc->dcmd_cq_slot = DCMD_SLOT;
 
-	cq_host->mrq_slot = kzalloc(sizeof(cq_host->mrq_slot) *
-				    cq_host->num_slots, GFP_KERNEL);
+	cq_host->mrq_slot = kcalloc(cq_host->num_slots,
+				sizeof(cq_host->mrq_slot), GFP_KERNEL);
 	if (!cq_host->mrq_slot)
 		return -ENOMEM;
+
+	err = cmdq_host_init_crypto(cq_host);
+	if (err)
+		pr_err("%s: CMDQ Crypto init failed err %d\n", err);
 
 	init_completion(&cq_host->halt_comp);
 	return err;

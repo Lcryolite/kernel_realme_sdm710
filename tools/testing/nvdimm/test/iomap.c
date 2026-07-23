@@ -1,14 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright(c) 2013-2015 Intel Corporation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of version 2 of the GNU General Public License as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
  */
 #include <linux/memremap.h>
 #include <linux/rculist.h>
@@ -370,7 +362,7 @@ acpi_status __wrap_acpi_evaluate_object(acpi_handle handle, acpi_string path,
 }
 EXPORT_SYMBOL(__wrap_acpi_evaluate_object);
 
-union acpi_object * __wrap_acpi_evaluate_dsm(acpi_handle handle, const u8 *uuid,
+union acpi_object * __wrap_acpi_evaluate_dsm(acpi_handle handle, const guid_t *guid,
 		u64 rev, u64 func, union acpi_object *argv4)
 {
 	union acpi_object *obj = ERR_PTR(-ENXIO);
@@ -379,11 +371,11 @@ union acpi_object * __wrap_acpi_evaluate_dsm(acpi_handle handle, const u8 *uuid,
 	rcu_read_lock();
 	ops = list_first_or_null_rcu(&iomap_head, typeof(*ops), list);
 	if (ops)
-		obj = ops->evaluate_dsm(handle, uuid, rev, func, argv4);
+		obj = ops->evaluate_dsm(handle, guid, rev, func, argv4);
 	rcu_read_unlock();
 
 	if (IS_ERR(obj))
-		return acpi_evaluate_dsm(handle, uuid, rev, func, argv4);
+		return acpi_evaluate_dsm(handle, guid, rev, func, argv4);
 	return obj;
 }
 EXPORT_SYMBOL(__wrap_acpi_evaluate_dsm);

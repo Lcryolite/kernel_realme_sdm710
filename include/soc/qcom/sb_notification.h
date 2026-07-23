@@ -16,7 +16,7 @@
 #define _SB_NOTIFICATION_H
 
 /* Indicates a system wake up event */
-#define EVT_WAKE_UP 0x01
+#define EVENT_REQUEST_WAKE_UP 0x01
 
 #ifdef CONFIG_QTI_NOTIFY_SIDEBAND
 /**
@@ -38,6 +38,7 @@ int sb_unregister_evt_listener(struct notifier_block *nb);
  * @nb: pointer to the notifier block for the callback events
  */
 int sb_notifier_call_chain(unsigned long val, void *v);
+
 #else
 static inline int sb_register_evt_listener(struct notifier_block *nb)
 {

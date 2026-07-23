@@ -52,7 +52,7 @@ struct acpi_data_node_attr {
 
 static ssize_t data_node_show_path(struct acpi_data_node *dn, char *buf)
 {
-	return acpi_object_path(dn->handle, buf);
+	return dn->handle ? acpi_object_path(dn->handle, buf) : 0;
 }
 
 DATA_NODE_ATTR(path);
@@ -105,10 +105,10 @@ static void acpi_expose_nondev_subnodes(struct kobject *kobj,
 		init_completion(&dn->kobj_done);
 		ret = kobject_init_and_add(&dn->kobj, &acpi_data_node_ktype,
 					   kobj, "%s", dn->name);
-		if (ret)
-			acpi_handle_err(dn->handle, "Failed to expose (%d)\n", ret);
-		else
+		if (!ret)
 			acpi_expose_nondev_subnodes(&dn->kobj, &dn->data);
+		else if (dn->handle)
+			acpi_handle_err(dn->handle, "Failed to expose (%d)\n", ret);
 	}
 }
 
@@ -164,8 +164,8 @@ static int create_pnp_modalias(struct acpi_device *acpi_dev, char *modalias,
 		return 0;
 
 	len = snprintf(modalias, size, "acpi:");
-	if (len <= 0)
-		return len;
+	if (len >= size)
+		return -ENOMEM;
 
 	size -= len;
 
@@ -218,8 +218,10 @@ static int create_of_modalias(struct acpi_device *acpi_dev, char *modalias,
 	len = snprintf(modalias, size, "of:N%sT", (char *)buf.pointer);
 	ACPI_FREE(buf.pointer);
 
-	if (len <= 0)
-		return len;
+	if (len >= size)
+		return -ENOMEM;
+
+	size -= len;
 
 	of_compatible = acpi_dev->data.of_compatible;
 	if (of_compatible->type == ACPI_TYPE_PACKAGE) {
@@ -537,8 +539,9 @@ int acpi_device_setup_files(struct acpi_device *dev)
 	 * If device has _STR, 'description' file is created
 	 */
 	if (acpi_has_method(dev->handle, "_STR")) {
-		status = acpi_evaluate_object(dev->handle, "_STR",
-					NULL, &buffer);
+		status = acpi_evaluate_object_typed(dev->handle, "_STR",
+						    NULL, &buffer,
+						    ACPI_TYPE_BUFFER);
 		if (ACPI_FAILURE(status))
 			buffer.pointer = NULL;
 		dev->pnp.str_obj = buffer.pointer;

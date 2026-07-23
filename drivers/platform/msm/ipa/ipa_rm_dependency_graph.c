@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -37,12 +37,8 @@ int  ipa_rm_dep_graph_create(struct ipa_rm_dep_graph **dep_graph)
 	int result = 0;
 
 	*dep_graph = kzalloc(sizeof(**dep_graph), GFP_KERNEL);
-	if (!*dep_graph) {
-		IPA_RM_ERR("no mem\n");
+	if (!*dep_graph)
 		result = -ENOMEM;
-		goto bail;
-	}
-bail:
 	return result;
 }
 

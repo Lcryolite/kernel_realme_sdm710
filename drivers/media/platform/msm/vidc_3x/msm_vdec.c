@@ -1,4 +1,5 @@
-/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+/*
+ * Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -8,7 +9,6 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
  */
 
 #include <linux/slab.h>
@@ -251,14 +251,14 @@ static struct msm_vidc_ctrl msm_vdec_ctrls[] = {
 		.name = "Extradata Type",
 		.type = V4L2_CTRL_TYPE_MENU,
 		.minimum = V4L2_MPEG_VIDC_EXTRADATA_NONE,
-		.maximum = V4L2_MPEG_VIDC_EXTRADATA_VPX_COLORSPACE,
+		.maximum = V4L2_MPEG_VIDC_EXTRADATA_YUV_STATS,
 		.default_value = V4L2_MPEG_VIDC_EXTRADATA_NONE,
 		.menu_skip_mask = ~(
 			(1 << V4L2_MPEG_VIDC_EXTRADATA_NONE) |
 			(1 << V4L2_MPEG_VIDC_EXTRADATA_MB_QUANTIZATION) |
 			(1 << V4L2_MPEG_VIDC_EXTRADATA_INTERLACE_VIDEO) |
 			(1 << V4L2_MPEG_VIDC_EXTRADATA_VC1_FRAMEDISP) |
-			(1 << V4L2_MPEG_VIDC_EXTRADATA_VC1_SEQDISP) |
+			(1ULL << V4L2_MPEG_VIDC_EXTRADATA_VC1_SEQDISP) |
 			(1 << V4L2_MPEG_VIDC_EXTRADATA_TIMESTAMP) |
 			(1 << V4L2_MPEG_VIDC_EXTRADATA_S3D_FRAME_PACKING) |
 			(1 << V4L2_MPEG_VIDC_EXTRADATA_FRAME_RATE) |
@@ -280,7 +280,8 @@ static struct msm_vidc_ctrl msm_vdec_ctrls[] = {
 			(1 <<
 			V4L2_MPEG_VIDC_EXTRADATA_CONTENT_LIGHT_LEVEL_SEI) |
 			(1 << V4L2_MPEG_VIDC_EXTRADATA_VUI_DISPLAY) |
-			(1 << V4L2_MPEG_VIDC_EXTRADATA_VPX_COLORSPACE)
+			(1 << V4L2_MPEG_VIDC_EXTRADATA_VPX_COLORSPACE) |
+			(1ULL << V4L2_MPEG_VIDC_EXTRADATA_YUV_STATS)
 			),
 		.qmenu = mpeg_video_vidc_extradata,
 	},
@@ -1147,8 +1148,8 @@ int msm_vdec_g_fmt(struct msm_vidc_inst *inst, struct v4l2_format *f)
 			if (!plane_sizes[i]) {
 				f->fmt.pix_mp.plane_fmt[i].sizeimage =
 					get_frame_size(inst, fmt, f->type, i);
-				plane_sizes[i] = f->fmt.pix_mp.plane_fmt[i].
-					sizeimage;
+				plane_sizes[i] =
+					f->fmt.pix_mp.plane_fmt[i].sizeimage;
 			} else
 				f->fmt.pix_mp.plane_fmt[i].sizeimage =
 					plane_sizes[i];
@@ -2022,23 +2023,28 @@ static int try_get_ctrl(struct msm_vidc_inst *inst, struct v4l2_ctrl *ctrl)
 		ctrl->val = inst->capability.secure_output2_threshold.max;
 		break;
 	case V4L2_CID_MPEG_VIDEO_H264_ENTROPY_MODE:
-		rc = msm_comm_try_get_prop(inst,
-				HAL_CONFIG_VDEC_ENTROPY, &hprop);
-		if (rc) {
-			dprintk(VIDC_ERR, "%s: Failed getting entropy type: %d",
+		if (inst->fmts[OUTPUT_PORT].fourcc == V4L2_PIX_FMT_H264) {
+			rc = msm_comm_try_get_prop(inst,
+					HAL_CONFIG_VDEC_ENTROPY, &hprop);
+			if (rc) {
+				dprintk(VIDC_ERR,
+					"%s: Failed getting entropy type: %d",
 					__func__, rc);
-			break;
-		}
-		switch (hprop.h264_entropy) {
-		case HAL_H264_ENTROPY_CAVLC:
-			ctrl->val = V4L2_MPEG_VIDEO_H264_ENTROPY_MODE_CAVLC;
-			break;
-		case HAL_H264_ENTROPY_CABAC:
-			ctrl->val = V4L2_MPEG_VIDEO_H264_ENTROPY_MODE_CABAC;
-			break;
-		case HAL_UNUSED_ENTROPY:
-			rc = -ENOTSUPP;
-			break;
+				break;
+			}
+			switch (hprop.h264_entropy) {
+			case HAL_H264_ENTROPY_CAVLC:
+				ctrl->val =
+				 V4L2_MPEG_VIDEO_H264_ENTROPY_MODE_CAVLC;
+				break;
+			case HAL_H264_ENTROPY_CABAC:
+				ctrl->val =
+				 V4L2_MPEG_VIDEO_H264_ENTROPY_MODE_CABAC;
+				break;
+			case HAL_UNUSED_ENTROPY:
+				rc = -ENOTSUPP;
+				break;
+			}
 		}
 		break;
 	default:

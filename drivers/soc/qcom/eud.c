@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -20,18 +20,16 @@
 #include <linux/delay.h>
 #include <linux/sysfs.h>
 #include <linux/io.h>
+#include <linux/of.h>
 #include <linux/bitops.h>
 #include <linux/tty.h>
 #include <linux/tty_flip.h>
 #include <linux/serial_core.h>
 #include <linux/serial.h>
+#include <linux/clk.h>
 #include <linux/workqueue.h>
 #include <linux/power_supply.h>
-#include <linux/clk.h>
-#include <linux/of.h>
-#include <linux/regulator/consumer.h>
-#include <linux/regulator/driver.h>
-#include <linux/regulator/machine.h>
+#include <soc/qcom/scm.h>
 
 #define EUD_ENABLE_CMD 1
 #define EUD_DISABLE_CMD 0
@@ -42,6 +40,7 @@
 #define EUD_REG_COM_RX_ID	0x000C
 #define EUD_REG_COM_RX_LEN	0x0010
 #define EUD_REG_COM_RX_DAT	0x0014
+#define EUD_REG_EUD_EN2		0x0000
 #define EUD_REG_INT1_EN_MASK	0x0024
 #define EUD_REG_INT_STATUS_1	0x0044
 #define EUD_REG_CTL_OUT_1	0x0074
@@ -76,11 +75,10 @@ struct eud_chip {
 	struct uart_port		port;
 	struct work_struct		eud_work;
 	struct power_supply		*batt_psy;
-	struct clk			*cfg_ahb_clk;
-
-	/* regulator and notifier chain for it */
-	struct regulator		*vdda33;
-	struct notifier_block		vdda33_nb;
+	bool				secure_eud_en;
+	bool				need_phy_clk_vote;
+	phys_addr_t			eud_mode_mgr2_phys_base;
+	struct clk			*eud_ahb2phy_clk;
 };
 
 static const unsigned int eud_extcon_cable[] = {
@@ -94,6 +92,7 @@ static const unsigned int eud_extcon_cable[] = {
  * EUD is disabled by default.
  */
 static int enable;
+static bool eud_ready;
 static struct platform_device *eud_private;
 
 static void enable_eud(struct platform_device *pdev)
@@ -129,8 +128,16 @@ static void enable_eud(struct platform_device *pdev)
 		/* write into CSR to enable EUD */
 		writel_relaxed(BIT(0), priv->eud_reg_base + EUD_REG_CSR_EUD_EN);
 		/* Enable vbus, chgr & safe mode warning interrupts */
-		writel_relaxed(EUD_INT_VBUS | EUD_INT_CHGR,
+		writel_relaxed(EUD_INT_VBUS | EUD_INT_CHGR | EUD_INT_SAFE_MODE,
 				priv->eud_reg_base + EUD_REG_INT1_EN_MASK);
+		/* Enable secure eud if supported */
+		if (priv->secure_eud_en) {
+			ret = scm_io_write(priv->eud_mode_mgr2_phys_base +
+					   EUD_REG_EUD_EN2, EUD_ENABLE_CMD);
+			if (ret)
+				dev_err(&pdev->dev,
+				"scm_io_write failed with rc:%d\n", ret);
+		}
 
 		/* Ensure Register Writes Complete */
 		wmb();
@@ -152,9 +159,19 @@ static void enable_eud(struct platform_device *pdev)
 static void disable_eud(struct platform_device *pdev)
 {
 	struct eud_chip *priv = platform_get_drvdata(pdev);
+	int ret;
 
 	/* write into CSR to disable EUD */
 	writel_relaxed(0, priv->eud_reg_base + EUD_REG_CSR_EUD_EN);
+	/* Disable secure eud if supported */
+	if (priv->secure_eud_en) {
+		ret = scm_io_write(priv->eud_mode_mgr2_phys_base +
+				   EUD_REG_EUD_EN2, EUD_DISABLE_CMD);
+		if (ret)
+			dev_err(&pdev->dev,
+			"scm_io_write failed with rc:%d\n", ret);
+	}
+
 	dev_dbg(&pdev->dev, "%s: EUD Disabled!\n", __func__);
 }
 
@@ -168,6 +185,10 @@ static int param_eud_set(const char *val, const struct kernel_param *kp)
 	if (enable != EUD_ENABLE_CMD && enable != EUD_DISABLE_CMD)
 		return -EINVAL;
 
+	*((uint *)kp->arg) = enable;
+	if (!eud_ready)
+		return 0;
+
 	if (enable == EUD_ENABLE_CMD) {
 		pr_debug("%s: Enbling EUD\n", __func__);
 		enable_eud(eud_private);
@@ -176,7 +197,6 @@ static int param_eud_set(const char *val, const struct kernel_param *kp)
 		disable_eud(eud_private);
 	}
 
-	*((uint *)kp->arg) = enable;
 	return 0;
 }
 
@@ -458,11 +478,7 @@ static irqreturn_t handle_eud_irq(int irq, void *data)
 {
 	struct eud_chip *chip = data;
 	u32 reg;
-	u32 int_mask_en1;
-
-	clk_prepare_enable(chip->cfg_ahb_clk);
-
-	int_mask_en1 = readl_relaxed(chip->eud_reg_base +
+	u32 int_mask_en1 = readl_relaxed(chip->eud_reg_base +
 					EUD_REG_INT1_EN_MASK);
 
 	/* read status register and find out which interrupt triggered */
@@ -486,46 +502,35 @@ static irqreturn_t handle_eud_irq(int irq, void *data)
 		pet_eud(chip);
 	} else {
 		dev_dbg(chip->dev, "Unknown/spurious EUD Interrupt!\n");
-		clk_disable_unprepare(chip->cfg_ahb_clk);
 		return IRQ_NONE;
 	}
 
-	clk_disable_unprepare(chip->cfg_ahb_clk);
 	return IRQ_HANDLED;
 }
 
-static int vdda33_notifier_block_cb(struct notifier_block *nb,
-	unsigned long event, void *ptr)
+static int msm_eud_suspend(struct device *dev)
 {
-	struct eud_chip *chip = container_of(nb, struct eud_chip, vdda33_nb);
-	int attach_det  = 0;
+	struct eud_chip *chip = (struct eud_chip *)dev_get_drvdata(dev);
 
-	switch (event) {
-	case REGULATOR_EVENT_ENABLE:
-		attach_det = 1;
-		/* fall throuhg */
-	case REGULATOR_EVENT_DISABLE:
-		clk_prepare_enable(chip->cfg_ahb_clk);
+	if (chip->need_phy_clk_vote && chip->eud_ahb2phy_clk)
+		clk_disable_unprepare(chip->eud_ahb2phy_clk);
 
-		/* eud does not retain interrupt mask when ldo24
-		 * is turned off. Set the interrupt mask when
-		 * ldo24 is turned on
-		 */
-		if (attach_det)
-			writel_relaxed(EUD_INT_VBUS | EUD_INT_CHGR,
-				chip->eud_reg_base + EUD_REG_INT1_EN_MASK);
-		writel_relaxed(attach_det,
-			chip->eud_reg_base + EUD_REG_SW_ATTACH_DET);
-		clk_disable_unprepare(chip->cfg_ahb_clk);
+	return 0;
+}
 
-		dev_dbg(chip->dev, "%s(): %s\n", __func__,
-			attach_det ? "enable" : "disable");
-		break;
-	default:
-		break;
+static int msm_eud_resume(struct device *dev)
+{
+	struct eud_chip *chip = (struct eud_chip *)dev_get_drvdata(dev);
+	int ret = 0;
+
+	if (chip->need_phy_clk_vote && chip->eud_ahb2phy_clk) {
+		ret = clk_prepare_enable(chip->eud_ahb2phy_clk);
+		if (ret)
+			dev_err(chip->dev, "%s failed to vote ahb2phy clk %d\n",
+					__func__, ret);
 	}
 
-	return NOTIFY_OK;
+	return 0;
 }
 
 static int msm_eud_probe(struct platform_device *pdev)
@@ -534,7 +539,6 @@ static int msm_eud_probe(struct platform_device *pdev)
 	struct uart_port *port;
 	struct resource *res;
 	int ret;
-	int pet;
 
 	chip = devm_kzalloc(&pdev->dev, sizeof(*chip), GFP_KERNEL);
 	if (!chip) {
@@ -543,7 +547,6 @@ static int msm_eud_probe(struct platform_device *pdev)
 	}
 
 	platform_set_drvdata(pdev, chip);
-	chip->dev = &pdev->dev;
 
 	chip->extcon = devm_extcon_dev_allocate(&pdev->dev, eud_extcon_cable);
 	if (IS_ERR(chip->extcon)) {
@@ -569,28 +572,44 @@ static int msm_eud_probe(struct platform_device *pdev)
 	if (IS_ERR(chip->eud_reg_base))
 		return PTR_ERR(chip->eud_reg_base);
 
-	if (of_property_match_string(pdev->dev.of_node,
-				"clock-names", "cfg_ahb_clk") >= 0) {
-		chip->cfg_ahb_clk = devm_clk_get(&pdev->dev, "cfg_ahb_clk");
-		if (IS_ERR(chip->cfg_ahb_clk)) {
-			ret = PTR_ERR(chip->cfg_ahb_clk);
-			if (ret != -EPROBE_DEFER)
-				dev_err(chip->dev,
-				"clk get failed for cfg_ahb_clk ret %d\n",
-				ret);
-			return ret;
-		}
-	}
-
 	chip->eud_irq = platform_get_irq_byname(pdev, "eud_irq");
 
-	ret = devm_request_threaded_irq(&pdev->dev, chip->eud_irq,
-					NULL, handle_eud_irq,
-					IRQF_TRIGGER_HIGH | IRQF_ONESHOT,
-					"eud_irq", chip);
+	chip->secure_eud_en = of_property_read_bool(pdev->dev.of_node,
+			      "qcom,secure-eud-en");
+	if (chip->secure_eud_en) {
+		res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
+						   "eud_mode_mgr2");
+		if (!res) {
+			dev_err(chip->dev,
+			"%s: failed to get resource eud_mode_mgr2\n",
+			__func__);
+			ret = -ENOMEM;
+			return ret;
+		}
+
+		chip->eud_mode_mgr2_phys_base = res->start;
+	}
+
+	chip->need_phy_clk_vote = of_property_read_bool(pdev->dev.of_node,
+			      "qcom,eud-clock-vote-req");
+	if (chip->need_phy_clk_vote) {
+		chip->eud_ahb2phy_clk = devm_clk_get(&pdev->dev,
+						     "eud_ahb2phy_clk");
+		if (IS_ERR(chip->eud_ahb2phy_clk)) {
+			ret = PTR_ERR(chip->eud_ahb2phy_clk);
+			return ret;
+		}
+
+		ret = clk_prepare_enable(chip->eud_ahb2phy_clk);
+		if (ret)
+			return ret;
+	}
+
+	ret = devm_request_irq(&pdev->dev, chip->eud_irq, handle_eud_irq,
+				IRQF_TRIGGER_HIGH, "eud_irq", chip);
 	if (ret) {
 		dev_err(chip->dev, "request failed for eud irq\n");
-		return ret;
+		goto error;
 	}
 
 	device_init_wakeup(&pdev->dev, true);
@@ -612,34 +631,23 @@ static int msm_eud_probe(struct platform_device *pdev)
 	ret = uart_add_one_port(&eud_uart_driver, port);
 	if (!ret) {
 		dev_err(chip->dev, "failed to add uart port!\n");
-		return ret;
+		goto error;
 	}
 
 	eud_private = pdev;
-
-	chip->vdda33 = devm_regulator_get(&pdev->dev, "vdda33");
-	if (IS_ERR(chip->vdda33)) {
-		dev_err(chip->dev, "%s: failed to get eud 3p1 regulator\n",
-					__func__);
-		return PTR_ERR(chip->vdda33);
-	}
-	chip->vdda33_nb.notifier_call = vdda33_notifier_block_cb;
-	regulator_register_notifier(chip->vdda33, &chip->vdda33_nb);
-
-	clk_prepare_enable(chip->cfg_ahb_clk);
-
-	pet = regulator_is_enabled(chip->vdda33) ? 1 : 0;
-	writel_relaxed(pet, chip->eud_reg_base + EUD_REG_SW_ATTACH_DET);
-
-	dev_dbg(chip->dev, "%s:%s pet\n", __func__, pet ? "Attach" : "Detach");
-
-	clk_disable_unprepare(chip->cfg_ahb_clk);
+	eud_ready = true;
 
 	/* Enable EUD */
 	if (enable)
 		enable_eud(pdev);
 
 	return 0;
+
+error:
+	if (chip->need_phy_clk_vote && chip->eud_ahb2phy_clk)
+		clk_disable_unprepare(chip->eud_ahb2phy_clk);
+
+	return ret;
 }
 
 static int msm_eud_remove(struct platform_device *pdev)
@@ -647,10 +655,10 @@ static int msm_eud_remove(struct platform_device *pdev)
 	struct eud_chip *chip = platform_get_drvdata(pdev);
 	struct uart_port *port = &chip->port;
 
-	regulator_unregister_notifier(chip->vdda33, &chip->vdda33_nb);
-
 	uart_remove_one_port(&eud_uart_driver, port);
 	device_init_wakeup(chip->dev, false);
+	if (chip->need_phy_clk_vote)
+		clk_disable_unprepare(chip->eud_ahb2phy_clk);
 
 	return 0;
 }
@@ -661,12 +669,18 @@ static const struct of_device_id msm_eud_dt_match[] = {
 };
 MODULE_DEVICE_TABLE(of, msm_eud_dt_match);
 
+static const struct dev_pm_ops msm_eud_dev_pm_ops = {
+	.suspend_noirq = msm_eud_suspend,
+	.resume_noirq = msm_eud_resume,
+};
+
 static struct platform_driver msm_eud_driver = {
 	.probe		= msm_eud_probe,
 	.remove		= msm_eud_remove,
 	.driver		= {
 		.name		= "msm-eud",
 		.owner		= THIS_MODULE,
+		.pm = &msm_eud_dev_pm_ops,
 		.of_match_table = msm_eud_dt_match,
 	},
 };

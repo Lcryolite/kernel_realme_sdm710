@@ -1,4 +1,4 @@
-/* Copyright (c) 2017-2018, 2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -13,12 +13,14 @@
 #ifndef __KGSL_GMU_H
 #define __KGSL_GMU_H
 
+#include <linux/mailbox_client.h>
+#include "kgsl_gmu_core.h"
+#include <linux/firmware.h>
 #include "kgsl_hfi.h"
 
-#define FW_VER_MAJOR(ver)		(((ver)>>28) & 0xFF)
-#define FW_VER_MINOR(ver)		(((ver)>>16) & 0xFFF)
-#define FW_VERSION(major, minor)	\
-		(((major) << 28) | (((minor) & 0xFFF) << 16))
+#define MAX_GMUFW_SIZE	0x8000	/* in bytes */
+
+#define BWMEM_SIZE	(12 + (4 * NUM_BW_LEVELS))	/*in bytes*/
 
 #define GMU_INT_WDOG_BITE		BIT(0)
 #define GMU_INT_RSCC_COMP		BIT(1)
@@ -27,14 +29,8 @@
 #define GMU_INT_HOST_AHB_BUS_ERR	BIT(5)
 #define GMU_AO_INT_MASK		\
 		(GMU_INT_WDOG_BITE |	\
-		GMU_INT_HOST_AHB_BUS_ERR |	\
-		GMU_INT_FENCE_ERR)
-
-#define MAX_GMUFW_SIZE	0x2000	/* in bytes */
-#define FENCE_RANGE_MASK	((0x1 << 31) | ((0xA << 2) << 18) | (0x8A0))
-
-#define FENCE_STATUS_WRITEDROPPED0_MASK 0x1
-#define FENCE_STATUS_WRITEDROPPED1_MASK 0x2
+		GMU_INT_FENCE_ERR |	\
+		GMU_INT_HOST_AHB_BUS_ERR)
 
 /* Bitmask for GPU low power mode enabling and hysterisis*/
 #define SPTP_ENABLE_MASK (BIT(2) | BIT(0))
@@ -57,59 +53,32 @@
 				CX_VOTE_ENABLE		| \
 				GFX_VOTE_ENABLE)
 
-/* Bitmask for GPU idle status check */
-#define GPUBUSYIGNAHB		BIT(23)
-#define CXGXCPUBUSYIGNAHB	BIT(30)
-
-/* GMU timeouts */
-#define GMU_IDLE_TIMEOUT        100 /* ms */
-
 /* Constants for GMU OOBs */
 #define OOB_BOOT_OPTION         0
 #define OOB_SLUMBER_OPTION      1
 
-/* Bitmasks for GMU OOBs */
-#define OOB_BOOT_SLUMBER_SET_MASK	BIT(22)
-#define OOB_BOOT_SLUMBER_CHECK_MASK	BIT(30)
-#define OOB_BOOT_SLUMBER_CLEAR_MASK	BIT(30)
-#define OOB_DCVS_SET_MASK		BIT(23)
-#define OOB_DCVS_CHECK_MASK		BIT(31)
-#define OOB_DCVS_CLEAR_MASK		BIT(31)
-#define OOB_GPU_SET_MASK		BIT(16)
-#define OOB_GPU_CHECK_MASK		BIT(24)
-#define OOB_GPU_CLEAR_MASK		BIT(24)
-#define OOB_PERFCNTR_SET_MASK		BIT(17)
-#define OOB_PERFCNTR_CHECK_MASK		BIT(25)
-#define OOB_PERFCNTR_CLEAR_MASK		BIT(25)
-#define OOB_PREEMPTION_SET_MASK		BIT(18)
-#define OOB_PREEMPTION_CHECK_MASK	BIT(26)
-#define OOB_PREEMPTION_CLEAR_MASK	BIT(26)
+/* Gmu FW block header format */
+struct gmu_block_header {
+	uint32_t addr;
+	uint32_t size;
+	uint32_t type;
+	uint32_t value;
+};
 
-/*
- * Wait time before trying to write the register again.
- * Hopefully the GMU has finished waking up during this delay.
- * This delay must be less than the IFPC main hysteresis or
- * the GMU will start shutting down before we try again.
- */
-#define GMU_WAKEUP_DELAY_US 10
+/* For GMU Logs*/
+#define LOGMEM_SIZE  SZ_4K
 
-/* Max amount of tries to wake up the GMU. The short retry
- * limit is half of the long retry limit. After the short
- * number of retries, we print an informational message to say
- * exiting IFPC is taking longer than expected. We continue
- * to retry after this until the long retry limit.
- */
-#define GMU_SHORT_WAKEUP_RETRY_LIMIT 100
-#define GMU_LONG_WAKEUP_RETRY_LIMIT 200
+extern struct gmu_dev_ops adreno_a6xx_gmudev;
+#define KGSL_GMU_DEVICE(_a)  ((struct gmu_device *)((_a)->gmu_core.ptr))
 
-/* Bits for the flags field in the gmu structure */
-enum gmu_flags {
-	GMU_BOOT_INIT_DONE = 0,
-	GMU_CLK_ON = 1,
-	GMU_HFI_ON = 2,
-	GMU_FAULT = 3,
-	GMU_DCVS_REPLAY = 4,
-	GMU_RSCC_SLEEP_SEQ_DONE = 5,
+enum gmu_mem_type {
+	GMU_ITCM = 0,
+	GMU_ICACHE,
+	GMU_DTCM,
+	GMU_DCACHE,
+	GMU_NONCACHED_KERNEL,
+	GMU_NONCACHED_USER,
+	GMU_MEM_TYPE_MAX,
 };
 
 /**
@@ -118,14 +87,14 @@ enum gmu_flags {
  * @gmuaddr: GPU virtual address
  * @physaddr: Physical address of the memory object
  * @size: Size of the memory object
- * @attr: memory attributes for this memory
+ * @mem_type: memory type for this memory
  */
 struct gmu_memdesc {
 	void *hostptr;
 	uint64_t gmuaddr;
 	phys_addr_t physaddr;
 	uint64_t size;
-	uint32_t attr;
+	enum gmu_mem_type mem_type;
 };
 
 struct gmu_bw_votes {
@@ -136,22 +105,10 @@ struct gmu_bw_votes {
 };
 
 struct rpmh_votes_t {
-	struct arc_vote_desc gx_votes[MAX_GX_LEVELS];
-	struct arc_vote_desc cx_votes[MAX_CX_LEVELS];
+	uint32_t gx_votes[MAX_GX_LEVELS];
+	uint32_t cx_votes[MAX_CX_LEVELS];
 	struct gmu_bw_votes ddr_votes;
 	struct gmu_bw_votes cnoc_votes;
-};
-
-#define MAX_GMU_CLKS 7
-#define DEFAULT_GMU_FREQ_IDX 1
-
-/*
- * These are the different ways the GMU can boot. GMU_WARM_BOOT is waking up
- * from slumber. GMU_COLD_BOOT is booting for the first time.
- */
-enum gmu_boot {
-	GMU_WARM_BOOT = 0,
-	GMU_COLD_BOOT = 1,
 };
 
 enum gmu_load_mode {
@@ -162,39 +119,25 @@ enum gmu_load_mode {
 	INVALID_LOAD
 };
 
-enum gmu_pwrctrl_mode {
-	GMU_FW_START,
-	GMU_FW_STOP,
-	GMU_SUSPEND,
-	GMU_DCVS_NOHFI,
-	GMU_NOTIFY_SLUMBER,
-	INVALID_POWER_CTRL
-};
-
-enum gpu_idle_level {
-	GPU_HW_ACTIVE = 0x0,
-	GPU_HW_SPTP_PC = 0x2,
-	GPU_HW_IFPC = 0x3,
-	GPU_HW_NAP = 0x4,
-	GPU_HW_MIN_VOLT = 0x5,
-	GPU_HW_MIN_DDR = 0x6,
-	GPU_HW_SLUMBER = 0xF
+struct kgsl_mailbox {
+	bool enabled;
+	struct mbox_client *client;
+	struct mbox_chan *channel;
 };
 
 /**
  * struct gmu_device - GMU device structure
  * @ver: GMU FW version, read from GMU
  * @reg_phys: GMU CSR physical address
- * @reg_virt: GMU CSR virtual address
  * @reg_len: GMU CSR range
- * @gmu2gpu_offset: address difference between GMU register set
- *	and GPU register set, the offset will be used when accessing
- *	gmu registers using offset defined in GPU register space.
- * @pdc_reg_virt: starting kernel virtual address for RPMh PDC registers
  * @gmu_interrupt_num: GMU interrupt number
- * @fw_image: descriptor of GMU memory that has GMU image in it
+ * @fw_image: GMU FW image
  * @hfi_mem: pointer to HFI shared memory
+ * @icache_mem: pointer to GMU icache memory
+ * @dcache_mem: pointer to GMU dcache memory
+ * @persist_mem: pointer to GMU persistent memory
  * @dump_mem: pointer to GMU debug dump memory
+ * @gmu_log: gmu event log memory
  * @hfi: HFI controller
  * @lm_config: GPU LM configuration data
  * @lm_dcvs_level: Minimal DCVS level that enable LM. LM disable in
@@ -212,29 +155,31 @@ enum gpu_idle_level {
  * @gx_gdsc: GX headswitch that controls power of GPU subsystem
  * @clks: GPU subsystem clocks required for GMU functionality
  * @load_mode: GMU FW load/boot mode
- * @flags: GMU power control flags
  * @wakeup_pwrlevel: GPU wake up power/DCVS level in case different
  *		than default power level
  * @pcl: GPU BW scaling client
  * @ccl: CNOC BW scaling client
  * @idle_level: Minimal GPU idle power level
  * @fault_count: GMU fault count
- * @unrecovered: Indicates whether GMU recovery failed or not
+ * @mailbox: Messages to AOP for ACD enable/disable go through this
+ * @pdc_cfg_base: Base address of PDC cfg registers
+ * @pdc_seq_base: Base address of PDC seq registers
  */
 struct gmu_device {
 	unsigned int ver;
 	struct platform_device *pdev;
 	unsigned long reg_phys;
-	void __iomem *reg_virt;
 	unsigned int reg_len;
-	unsigned int gmu2gpu_offset;
-	void __iomem *pdc_reg_virt;
 	unsigned int gmu_interrupt_num;
-	struct gmu_memdesc fw_image;
+	const struct firmware *fw_image;
 	struct gmu_memdesc *hfi_mem;
+	struct gmu_memdesc *icache_mem;
+	struct gmu_memdesc *dcache_mem;
+	struct gmu_memdesc *persist_mem;
 	struct gmu_memdesc *dump_mem;
+	struct gmu_memdesc *gmu_log;
 	struct kgsl_hfi hfi;
-	struct limits_config lm_config;
+	unsigned int lm_config;
 	unsigned int lm_dcvs_level;
 	unsigned int bcl_config;
 	unsigned int gmu_freqs[MAX_CX_LEVELS];
@@ -248,23 +193,18 @@ struct gmu_device {
 	struct regulator *gx_gdsc;
 	struct clk *clks[MAX_GMU_CLKS];
 	enum gmu_load_mode load_mode;
-	unsigned long flags;
 	unsigned int wakeup_pwrlevel;
 	unsigned int pcl;
 	unsigned int ccl;
 	unsigned int idle_level;
 	unsigned int fault_count;
-	bool unrecovered;
+	struct kgsl_mailbox mailbox;
+	void __iomem *pdc_cfg_base;
+	void __iomem *pdc_seq_base;
 };
 
-void gmu_snapshot(struct kgsl_device *device);
-bool kgsl_gmu_isenabled(struct kgsl_device *device);
-int gmu_probe(struct kgsl_device *device);
-void gmu_remove(struct kgsl_device *device);
-int allocate_gmu_image(struct gmu_device *gmu, unsigned int size);
-int gmu_start(struct kgsl_device *device);
-void gmu_stop(struct kgsl_device *device);
-int gmu_suspend(struct kgsl_device *device);
-int gmu_dcvs_set(struct gmu_device *gmu, unsigned int gpu_pwrlevel,
-		unsigned int bus_level);
+struct gmu_memdesc *gmu_get_memdesc(unsigned int addr, unsigned int size);
+unsigned int gmu_get_memtype_base(struct gmu_device *gmu,
+		enum gmu_mem_type type);
+
 #endif /* __KGSL_GMU_H */

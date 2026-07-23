@@ -156,4 +156,3 @@ or
 		"INIT_RATE", "NO_SET_RATE", "NO_SET_RATE";
 
 	};
-

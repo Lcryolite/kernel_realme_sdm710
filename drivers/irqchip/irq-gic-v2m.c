@@ -280,7 +280,7 @@ static int gicv2m_allocate_domains(struct irq_domain *parent)
 		return -ENOMEM;
 	}
 
-	inner_domain->bus_token = DOMAIN_BUS_NEXUS;
+	irq_domain_update_bus_token(inner_domain, DOMAIN_BUS_NEXUS);
 	inner_domain->parent = parent;
 	pci_domain = pci_msi_create_irq_domain(v2m->fwnode,
 					       &gicv2m_msi_domain_info,
@@ -383,7 +383,7 @@ err_free_v2m:
 	return ret;
 }
 
-static const struct of_device_id gicv2m_device_id[] = {
+static struct of_device_id gicv2m_device_id[] = {
 	{	.compatible	= "arm,gic-v2m-frame",	},
 	{},
 };

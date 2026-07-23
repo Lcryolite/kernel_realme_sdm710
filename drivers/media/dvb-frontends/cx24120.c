@@ -267,7 +267,7 @@ out:
 	return ret;
 }
 
-static struct dvb_frontend_ops cx24120_ops;
+static const struct dvb_frontend_ops cx24120_ops;
 
 struct dvb_frontend *cx24120_attach(const struct cx24120_config *config,
 				    struct i2c_adapter *i2c)
@@ -313,7 +313,7 @@ error:
 	kfree(state);
 	return NULL;
 }
-EXPORT_SYMBOL(cx24120_attach);
+EXPORT_SYMBOL_GPL(cx24120_attach);
 
 static int cx24120_test_rom(struct cx24120_state *state)
 {
@@ -980,7 +980,9 @@ static void cx24120_set_clock_ratios(struct dvb_frontend *fe)
 	cmd.arg[8] = (clock_ratios_table[idx].rate >> 8) & 0xff;
 	cmd.arg[9] = (clock_ratios_table[idx].rate >> 0) & 0xff;
 
-	cx24120_message_send(state, &cmd);
+	ret = cx24120_message_send(state, &cmd);
+	if (ret != 0)
+		return;
 
 	/* Calculate ber window rates for stat work */
 	cx24120_calculate_ber_window(state, clock_ratios_table[idx].rate);
@@ -1154,8 +1156,7 @@ static int cx24120_set_frontend(struct dvb_frontend *fe)
 		dev_dbg(&state->i2c->dev,
 			"delivery system(%d) not supported\n",
 			c->delivery_system);
-		ret = -EINVAL;
-		break;
+		return -EINVAL;
 	}
 
 	state->dnxt.delsys = c->delivery_system;
@@ -1552,7 +1553,7 @@ static int cx24120_read_ucblocks(struct dvb_frontend *fe, u32 *ucblocks)
 	return 0;
 }
 
-static struct dvb_frontend_ops cx24120_ops = {
+static const struct dvb_frontend_ops cx24120_ops = {
 	.delsys = { SYS_DVBS, SYS_DVBS2 },
 	.info = {
 		.name = "Conexant CX24120/CX24118",

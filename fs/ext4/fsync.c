@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *  linux/fs/ext4/fsync.c
  *
@@ -32,15 +33,6 @@
 #include "ext4_jbd2.h"
 
 #include <trace/events/ext4.h>
-
-#ifdef CONFIG_OPLUS_FEATURE_EXT4_FSYNC
-bool ext4_fsync_nobarrier = true;
-bool ext4_fsync_protect = false;
-#endif
-
-#ifdef VENDOR_EDIT
-extern unsigned int ext4_fsync_enable_status;
-#endif
 
 /*
  * If we're not journaling and this is a just-created file, we have to
@@ -107,11 +99,14 @@ int ext4_sync_file(struct file *file, loff_t start, loff_t end, int datasync)
 	tid_t commit_tid;
 	bool needs_barrier = false;
 
+	if (unlikely(ext4_forced_shutdown(EXT4_SB(inode->i_sb))))
+		return -EIO;
+
 	J_ASSERT(ext4_journal_current_handle() == NULL);
 
 	trace_ext4_sync_file_enter(file, datasync);
 
-	if (inode->i_sb->s_flags & MS_RDONLY) {
+	if (sb_rdonly(inode->i_sb)) {
 		/* Make sure that we read updated s_mount_flags value */
 		smp_rmb();
 		if (EXT4_SB(inode->i_sb)->s_mount_flags & EXT4_MF_FS_ABORTED)
@@ -128,7 +123,7 @@ int ext4_sync_file(struct file *file, loff_t start, loff_t end, int datasync)
 		goto out;
 	}
 
-	ret = filemap_write_and_wait_range(inode->i_mapping, start, end);
+	ret = file_write_and_wait_range(file, start, end);
 	if (ret)
 		return ret;
 	/*
@@ -151,15 +146,6 @@ int ext4_sync_file(struct file *file, loff_t start, loff_t end, int datasync)
 	}
 
 	commit_tid = datasync ? ei->i_datasync_tid : ei->i_sync_tid;
-#ifdef CONFIG_OPLUS_FEATURE_EXT4_FSYNC
-	if ((!ext4_fsync_nobarrier || ext4_fsync_protect)
-	    && (journal->j_flags & JBD2_BARRIER) &&
-	    !jbd2_trans_will_send_data_barrier(journal, commit_tid))
-#else
-	if (journal->j_flags & JBD2_BARRIER &&
-	    !jbd2_trans_will_send_data_barrier(journal, commit_tid))
-#endif
-
 	if (journal->j_flags & JBD2_BARRIER &&
 	    !jbd2_trans_will_send_data_barrier(journal, commit_tid))
 		needs_barrier = true;
@@ -171,9 +157,9 @@ int ext4_sync_file(struct file *file, loff_t start, loff_t end, int datasync)
 			ret = err;
 	}
 out:
+	err = file_check_and_advance_wb_err(file);
+	if (ret == 0)
+		ret = err;
 	trace_ext4_sync_file_exit(inode, ret);
-#if defined(VENDOR_EDIT) && defined(CONFIG_EXT4_ASYNC_DISCARD_SUPPORT)
-	ext4_update_time(EXT4_SB(inode->i_sb));
-#endif
 	return ret;
 }

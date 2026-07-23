@@ -1349,7 +1349,8 @@ int sps_connect(struct sps_pipe *h, struct sps_connect *connect)
 	}
 
 	mutex_lock(&bam->lock);
-	SPS_DBG2(bam, "sps:sps_connect: bam %pa src 0x%pK dest 0x%pK mode %s",
+	SPS_DBG2(bam, "sps:%s: bam %pa src 0x%pK dest 0x%pK mode %s",
+			__func__,
 			BAM_ID(bam),
 			(void *)connect->source,
 			(void *)connect->destination,
@@ -1416,7 +1417,8 @@ int sps_disconnect(struct sps_pipe *h)
 	}
 
 	SPS_DBG2(bam,
-		"sps:sps_disconnect: bam %pa src 0x%pK dest 0x%pK mode %s",
+		"sps:%s: bam %pa src 0x%pK dest 0x%pK mode %s",
+		__func__,
 		BAM_ID(bam),
 		(void *)pipe->connect.source,
 		(void *)pipe->connect.destination,
@@ -2822,10 +2824,10 @@ static int get_device_tree_data(struct platform_device *pdev)
 }
 
 static const struct of_device_id msm_sps_match[] = {
-	{	.compatible = "qcom,msm_sps",
+	{	.compatible = "qcom,msm-sps",
 		.data = &bam_types[SPS_BAM_NDP]
 	},
-	{	.compatible = "qcom,msm_sps_4k",
+	{	.compatible = "qcom,msm-sps-4k",
 		.data = &bam_types[SPS_BAM_NDP_4K]
 	},
 	{}

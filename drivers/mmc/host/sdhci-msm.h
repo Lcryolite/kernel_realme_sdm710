@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -157,8 +157,6 @@ struct sdhci_msm_pltfm_data {
 	bool sdr104_wa;
 	u32 ice_clk_max;
 	u32 ice_clk_min;
-	u32 ddr_config;
-	bool rclk_wa;
 	u32 *bus_clk_table;
 	unsigned char bus_clk_cnt;
 };
@@ -171,12 +169,6 @@ struct sdhci_msm_bus_vote {
 	bool is_max_bw_needed;
 	struct delayed_work vote_work;
 	struct device_attribute max_bus_bw;
-};
-
-struct sdhci_msm_ice_data {
-	struct qcom_ice_variant_ops *vops;
-	struct platform_device *pdev;
-	int state;
 };
 
 struct sdhci_msm_regs_restore {
@@ -223,8 +215,6 @@ struct sdhci_msm_debug_data {
 struct sdhci_msm_host {
 	struct platform_device	*pdev;
 	void __iomem *core_mem;    /* MSM SDCC mapped address */
-	void __iomem *cryptoio;    /* ICE HCI mapped address */
-	bool ice_hci_support;
 	int	pwr_irq;	/* power irq */
 	struct clk	 *clk;     /* main SD/MMC bus clock */
 	struct clk	 *pclk;    /* SDHC peripheral bus clock */
@@ -246,7 +236,7 @@ struct sdhci_msm_host {
 	u32 clk_rate; /* Keeps track of current clock rate that is set */
 	bool tuning_done;
 	bool calibration_done;
-	u8 saved_tuning_phase;
+	int saved_tuning_phase;
 	bool en_auto_cmd21;
 	struct device_attribute auto_cmd21_attr;
 	bool is_sdiowakeup_enabled;
@@ -258,7 +248,6 @@ struct sdhci_msm_host {
 	bool enhanced_strobe;
 	bool rclk_delay_fix;
 	u32 caps_0;
-	struct sdhci_msm_ice_data ice;
 	u32 ice_clk_rate;
 	struct sdhci_msm_pm_qos_group *pm_qos;
 	int pm_qos_prev_cpu;
@@ -272,9 +261,9 @@ struct sdhci_msm_host {
 	bool core_3_0v_support;
 	bool pltfm_init_done;
 	struct sdhci_msm_regs_restore regs_restore;
+	bool use_7nm_dll;
 	int soc_min_rev;
 	struct workqueue_struct *pm_qos_wq;
-	bool need_dll_user_ctl;
 	struct sdhci_msm_dll_hsr *dll_hsr;
 };
 

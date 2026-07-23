@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -18,10 +18,6 @@
 #include "sde_hw_pingpong.h"
 #include "sde_dbg.h"
 #include "sde_kms.h"
-#ifdef VENDOR_EDIT
-#include <linux/dsi_oppo_support.h>
-#endif /*VENDOR_EDIT*/
-
 
 #define PP_TEAR_CHECK_EN                0x000
 #define PP_SYNC_CONFIG_VSYNC            0x004
@@ -49,6 +45,103 @@ static u32 dither_depth_map[DITHER_DEPTH_MAP_INDEX] = {
 	0, 0, 0, 0, 0, 1, 2, 3, 3
 };
 
+#define MERGE_3D_MODE 0x004
+#define MERGE_3D_MUX  0x000
+
+static struct sde_merge_3d_cfg *_merge_3d_offset(enum sde_merge_3d idx,
+		struct sde_mdss_cfg *m,
+		void __iomem *addr,
+		struct sde_hw_blk_reg_map *b)
+{
+	int i;
+
+	for (i = 0; i < m->merge_3d_count; i++) {
+		if (idx == m->merge_3d[i].id) {
+			b->base_off = addr;
+			b->blk_off = m->merge_3d[i].base;
+			b->length = m->merge_3d[i].len;
+			b->hwversion = m->hwversion;
+			b->log_mask = SDE_DBG_MASK_PINGPONG;
+			return &m->merge_3d[i];
+		}
+	}
+
+	return ERR_PTR(-EINVAL);
+}
+
+static void _sde_hw_merge_3d_setup_blend_mode(struct sde_hw_merge_3d *ctx,
+			enum sde_3d_blend_mode cfg)
+{
+	struct sde_hw_blk_reg_map *c;
+	u32 mode = 0;
+
+	if (!ctx)
+		return;
+
+	c = &ctx->hw;
+	if (cfg) {
+		mode = BIT(0);
+		mode |= (cfg - 0x1) << 1;
+	}
+
+	SDE_REG_WRITE(c, MERGE_3D_MODE, mode);
+}
+
+static void sde_hw_merge_3d_reset_blend_mode(struct sde_hw_merge_3d *ctx)
+{
+	struct sde_hw_blk_reg_map *c;
+
+	if (!ctx)
+		return;
+
+	c = &ctx->hw;
+	SDE_REG_WRITE(c, MERGE_3D_MODE, 0x0);
+	SDE_REG_WRITE(c, MERGE_3D_MUX, 0x0);
+}
+
+static void _setup_merge_3d_ops(struct sde_hw_merge_3d_ops *ops,
+	const struct sde_merge_3d_cfg *hw_cap)
+{
+	ops->setup_blend_mode = _sde_hw_merge_3d_setup_blend_mode;
+	ops->reset_blend_mode = sde_hw_merge_3d_reset_blend_mode;
+}
+
+static struct sde_hw_merge_3d *_sde_pp_merge_3d_init(enum sde_merge_3d idx,
+		void __iomem *addr,
+		struct sde_mdss_cfg *m)
+{
+	struct sde_hw_merge_3d *c;
+	struct sde_merge_3d_cfg *cfg;
+	static u32 merge3d_init_mask;
+
+	if (idx < MERGE_3D_0)
+		return NULL;
+
+	c = kzalloc(sizeof(*c), GFP_KERNEL);
+	if (!c)
+		return ERR_PTR(-ENOMEM);
+
+	cfg = _merge_3d_offset(idx, m, addr, &c->hw);
+	if (IS_ERR_OR_NULL(cfg)) {
+		pr_err("invalid merge_3d cfg%d\n", idx);
+		kfree(c);
+		return ERR_PTR(-EINVAL);
+	}
+
+	c->idx = idx;
+	c->caps = cfg;
+	_setup_merge_3d_ops(&c->ops, c->caps);
+
+	if (!(merge3d_init_mask & BIT(idx))) {
+		sde_dbg_reg_register_dump_range(SDE_DBG_NAME, cfg->name,
+				c->hw.blk_off, c->hw.blk_off + c->hw.length,
+				c->hw.xin_id);
+		merge3d_init_mask |= BIT(idx);
+	}
+
+	return c;
+}
+
 static struct sde_pingpong_cfg *_pingpong_offset(enum sde_pingpong pp,
 		struct sde_mdss_cfg *m,
 		void __iomem *addr,
@@ -70,7 +163,6 @@ static struct sde_pingpong_cfg *_pingpong_offset(enum sde_pingpong pp,
 	return ERR_PTR(-EINVAL);
 }
 
-#ifndef VENDOR_EDIT
 static int sde_hw_pp_setup_te_config(struct sde_hw_pingpong *pp,
 		struct sde_hw_tear_check *te)
 {
@@ -100,48 +192,22 @@ static int sde_hw_pp_setup_te_config(struct sde_hw_pingpong *pp,
 
 	return 0;
 }
-#else /*VENDOR_EDIT*/
-extern int oppo_request_power_status;
 
-static int sde_hw_pp_setup_te_config(struct sde_hw_pingpong *pp,
+static void sde_hw_pp_update_te(struct sde_hw_pingpong *pp,
 		struct sde_hw_tear_check *te)
 {
 	struct sde_hw_blk_reg_map *c;
 	int cfg;
-	int temp_vclks_line;
 
 	if (!pp || !te)
-		return -EINVAL;
+		return;
 	c = &pp->hw;
 
-	cfg = BIT(19); /*VSYNC_COUNTER_EN */
-	if (te->hw_vsync_mode)
-		cfg |= BIT(20);
-
-	temp_vclks_line = te->vsync_count;
-
-	if((oppo_request_power_status == OPPO_DISPLAY_POWER_DOZE) || (oppo_request_power_status == OPPO_DISPLAY_POWER_DOZE_SUSPEND)) {
-		temp_vclks_line = temp_vclks_line * 60 * 100 / 3000;
-	} else {
-		temp_vclks_line = temp_vclks_line * 60 * 100 / 6000;
-	}
-
-	cfg |= temp_vclks_line;
-
-	SDE_REG_WRITE(c, PP_SYNC_CONFIG_VSYNC, cfg);
-	SDE_REG_WRITE(c, PP_SYNC_CONFIG_HEIGHT, te->sync_cfg_height);
-	SDE_REG_WRITE(c, PP_VSYNC_INIT_VAL, te->vsync_init_val);
-	SDE_REG_WRITE(c, PP_RD_PTR_IRQ, te->rd_ptr_irq);
-	SDE_REG_WRITE(c, PP_START_POS, te->start_pos);
-	SDE_REG_WRITE(c, PP_SYNC_THRESH,
-			((te->sync_threshold_continue << 16) |
-			 te->sync_threshold_start));
-	SDE_REG_WRITE(c, PP_SYNC_WRCOUNT,
-			(te->start_pos + te->sync_threshold_start + 1));
-
-	return 0;
+	cfg = SDE_REG_READ(c, PP_SYNC_THRESH);
+	cfg &= ~0xFFFF;
+	cfg |= te->sync_threshold_start;
+	SDE_REG_WRITE(c, PP_SYNC_THRESH, cfg);
 }
-#endif /*VENDOR_EDIT*/
 
 static int sde_hw_pp_setup_autorefresh_config(struct sde_hw_pingpong *pp,
 		struct sde_hw_autorefresh *cfg)
@@ -387,23 +453,38 @@ line_count_exit:
 	return line;
 }
 
+static void sde_hw_pp_setup_3d_merge_mode(struct sde_hw_pingpong *pp,
+					enum sde_3d_blend_mode cfg)
+{
+	if (pp->merge_3d && pp->merge_3d->ops.setup_blend_mode)
+		pp->merge_3d->ops.setup_blend_mode(pp->merge_3d, cfg);
+}
+
+static void sde_hw_pp_reset_3d_merge_mode(struct sde_hw_pingpong *pp)
+{
+	if (pp->merge_3d && pp->merge_3d->ops.reset_blend_mode)
+		pp->merge_3d->ops.reset_blend_mode(pp->merge_3d);
+}
 static void _setup_pingpong_ops(struct sde_hw_pingpong_ops *ops,
 	const struct sde_pingpong_cfg *hw_cap)
 {
 	u32 version = 0;
 
-	ops->setup_tearcheck = sde_hw_pp_setup_te_config;
-	ops->enable_tearcheck = sde_hw_pp_enable_te;
-	ops->connect_external_te = sde_hw_pp_connect_external_te;
-	ops->get_vsync_info = sde_hw_pp_get_vsync_info;
-	ops->setup_autorefresh = sde_hw_pp_setup_autorefresh_config;
+	if (hw_cap->features & BIT(SDE_PINGPONG_TE)) {
+		ops->setup_tearcheck = sde_hw_pp_setup_te_config;
+		ops->enable_tearcheck = sde_hw_pp_enable_te;
+		ops->update_tearcheck = sde_hw_pp_update_te;
+		ops->connect_external_te = sde_hw_pp_connect_external_te;
+		ops->get_vsync_info = sde_hw_pp_get_vsync_info;
+		ops->setup_autorefresh = sde_hw_pp_setup_autorefresh_config;
+		ops->get_autorefresh = sde_hw_pp_get_autorefresh_config;
+		ops->poll_timeout_wr_ptr = sde_hw_pp_poll_timeout_wr_ptr;
+		ops->get_line_count = sde_hw_pp_get_line_count;
+	}
 	ops->setup_dsc = sde_hw_pp_setup_dsc;
 	ops->enable_dsc = sde_hw_pp_dsc_enable;
 	ops->disable_dsc = sde_hw_pp_dsc_disable;
 	ops->get_dsc_status = sde_hw_pp_get_dsc_status;
-	ops->get_autorefresh = sde_hw_pp_get_autorefresh_config;
-	ops->poll_timeout_wr_ptr = sde_hw_pp_poll_timeout_wr_ptr;
-	ops->get_line_count = sde_hw_pp_get_line_count;
 
 	version = SDE_COLOR_PROCESS_MAJOR(hw_cap->sblk->dither.version);
 	switch (version) {
@@ -413,6 +494,10 @@ static void _setup_pingpong_ops(struct sde_hw_pingpong_ops *ops,
 	default:
 		ops->setup_dither = NULL;
 		break;
+	}
+	if (test_bit(SDE_PINGPONG_MERGE_3D, &hw_cap->features)) {
+		ops->setup_3d_mode = sde_hw_pp_setup_3d_merge_mode;
+		ops->reset_3d_mode = sde_hw_pp_reset_3d_merge_mode;
 	}
 };
 
@@ -441,6 +526,14 @@ struct sde_hw_pingpong *sde_hw_pingpong_init(enum sde_pingpong idx,
 
 	c->idx = idx;
 	c->caps = cfg;
+	if (test_bit(SDE_PINGPONG_MERGE_3D, &cfg->features)) {
+		c->merge_3d = _sde_pp_merge_3d_init(cfg->merge_3d_id, addr, m);
+			if (IS_ERR(c->merge_3d)) {
+				SDE_ERROR("invalid merge_3d block %d\n", idx);
+				return ERR_PTR(-ENOMEM);
+			}
+	}
+
 	_setup_pingpong_ops(&c->ops, c->caps);
 
 	rc = sde_hw_blk_init(&c->base, SDE_HW_BLK_PINGPONG, idx, &sde_hw_ops);
@@ -452,6 +545,15 @@ struct sde_hw_pingpong *sde_hw_pingpong_init(enum sde_pingpong idx,
 	sde_dbg_reg_register_dump_range(SDE_DBG_NAME, cfg->name, c->hw.blk_off,
 			c->hw.blk_off + c->hw.length, c->hw.xin_id);
 
+	if (cfg->sblk->dither.base && cfg->sblk->dither.len) {
+		sde_dbg_reg_register_dump_range(SDE_DBG_NAME,
+			cfg->sblk->dither.name,
+			c->hw.blk_off + cfg->sblk->dither.base,
+			c->hw.blk_off + cfg->sblk->dither.base +
+			cfg->sblk->dither.len,
+			c->hw.xin_id);
+	}
+
 	return c;
 
 blk_init_error:
@@ -462,7 +564,9 @@ blk_init_error:
 
 void sde_hw_pingpong_destroy(struct sde_hw_pingpong *pp)
 {
-	if (pp)
+	if (pp) {
 		sde_hw_blk_destroy(&pp->base);
-	kfree(pp);
+		kfree(pp->merge_3d);
+		kfree(pp);
+	}
 }

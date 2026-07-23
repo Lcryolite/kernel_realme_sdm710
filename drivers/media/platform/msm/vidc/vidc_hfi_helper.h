@@ -20,12 +20,13 @@
 #define HFI_VIDEO_DOMAIN_ENCODER	(HFI_COMMON_BASE + 0x1)
 #define HFI_VIDEO_DOMAIN_DECODER	(HFI_COMMON_BASE + 0x2)
 #define HFI_VIDEO_DOMAIN_VPE		(HFI_COMMON_BASE + 0x4)
-#define HFI_VIDEO_DOMAIN_MBI		(HFI_COMMON_BASE + 0x8)
+#define HFI_VIDEO_DOMAIN_CVP		(HFI_COMMON_BASE + 0x8)
 
 #define HFI_DOMAIN_BASE_COMMON		(HFI_COMMON_BASE + 0)
 #define HFI_DOMAIN_BASE_VDEC		(HFI_COMMON_BASE + 0x01000000)
 #define HFI_DOMAIN_BASE_VENC		(HFI_COMMON_BASE + 0x02000000)
 #define HFI_DOMAIN_BASE_VPE			(HFI_COMMON_BASE + 0x03000000)
+#define HFI_DOMAIN_BASE_CVP			(HFI_COMMON_BASE + 0x04000000)
 
 #define HFI_VIDEO_ARCH_OX			(HFI_COMMON_BASE + 0x1)
 
@@ -82,6 +83,7 @@
 #define HFI_VIDEO_CODEC_HEVC				0x00002000
 #define HFI_VIDEO_CODEC_VP9				0x00004000
 #define HFI_VIDEO_CODEC_TME				0x00008000
+#define HFI_VIDEO_CODEC_CVP				0x00010000
 
 #define HFI_PROFILE_UNKNOWN				0x00000000
 #define HFI_LEVEL_UNKNOWN				0x00000000
@@ -112,6 +114,9 @@
 #define HFI_H264_LEVEL_5					0x00004000
 #define HFI_H264_LEVEL_51					0x00008000
 #define HFI_H264_LEVEL_52					0x00010000
+#define HFI_H264_LEVEL_6					0x00020000
+#define HFI_H264_LEVEL_61					0x00040000
+#define HFI_H264_LEVEL_62					0x00080000
 
 #define HFI_MPEG2_PROFILE_SIMPLE			0x00000001
 #define HFI_MPEG2_PROFILE_MAIN				0x00000002
@@ -199,6 +204,8 @@ struct hfi_buffer_info {
 	(HFI_PROPERTY_SYS_COMMON_START + 0x006)
 #define  HFI_PROPERTY_SYS_CONFIG_COVERAGE    \
 	(HFI_PROPERTY_SYS_COMMON_START + 0x007)
+#define  HFI_PROPERTY_SYS_UBWC_CONFIG    \
+	(HFI_PROPERTY_SYS_COMMON_START + 0x008)
 
 #define HFI_PROPERTY_PARAM_COMMON_START	\
 	(HFI_DOMAIN_BASE_COMMON + HFI_ARCH_COMMON_OFFSET + 0x1000)
@@ -236,6 +243,8 @@ struct hfi_buffer_info {
 	(HFI_PROPERTY_PARAM_COMMON_START + 0x015)
 #define  HFI_PROPERTY_TME_VERSION_SUPPORTED                 \
 	(HFI_PROPERTY_PARAM_COMMON_START + 0x016)
+#define  HFI_PROPERTY_PARAM_WORK_ROUTE                 \
+	(HFI_PROPERTY_PARAM_COMMON_START + 0x017)
 
 #define HFI_PROPERTY_CONFIG_COMMON_START				\
 	(HFI_DOMAIN_BASE_COMMON + HFI_ARCH_COMMON_OFFSET + 0x2000)
@@ -243,6 +252,8 @@ struct hfi_buffer_info {
 	(HFI_PROPERTY_CONFIG_COMMON_START + 0x001)
 #define HFI_PROPERTY_CONFIG_VIDEOCORES_USAGE				\
 	(HFI_PROPERTY_CONFIG_COMMON_START + 0x002)
+#define HFI_PROPERTY_CONFIG_OPERATING_RATE				\
+	(HFI_PROPERTY_CONFIG_COMMON_START + 0x003)
 
 #define HFI_PROPERTY_PARAM_VDEC_COMMON_START				\
 	(HFI_DOMAIN_BASE_VDEC + HFI_ARCH_COMMON_OFFSET + 0x3000)
@@ -319,14 +330,16 @@ struct hfi_buffer_info {
 	(HFI_PROPERTY_PARAM_VENC_COMMON_START + 0x02F)
 #define  HFI_PROPERTY_PARAM_VENC_BITRATE_TYPE		\
 	(HFI_PROPERTY_PARAM_VENC_COMMON_START + 0x031)
-#define  HFI_PROPERTY_PARAM_VENC_VQZIP_SEI_TYPE		\
-	(HFI_PROPERTY_PARAM_VENC_COMMON_START + 0x033)
 #define  HFI_PROPERTY_PARAM_VENC_IFRAMESIZE			\
 	(HFI_PROPERTY_PARAM_VENC_COMMON_START + 0x034)
 #define  HFI_PROPERTY_PARAM_VENC_SEND_OUTPUT_FOR_SKIPPED_FRAMES	\
 	(HFI_PROPERTY_PARAM_VENC_COMMON_START + 0x035)
 #define  HFI_PROPERTY_PARAM_VENC_HDR10_PQ_SEI			\
 	(HFI_PROPERTY_PARAM_VENC_COMMON_START + 0x036)
+#define  HFI_PROPERTY_PARAM_VENC_ADAPTIVE_B \
+	(HFI_PROPERTY_PARAM_VENC_COMMON_START + 0x037)
+#define  HFI_PROPERTY_PARAM_VENC_BITRATE_SAVINGS \
+	(HFI_PROPERTY_PARAM_VENC_COMMON_START + 0x038)
 
 #define HFI_PROPERTY_CONFIG_VENC_COMMON_START				\
 	(HFI_DOMAIN_BASE_VENC + HFI_ARCH_COMMON_OFFSET + 0x6000)
@@ -348,6 +361,8 @@ struct hfi_buffer_info {
 	(HFI_PROPERTY_CONFIG_VENC_COMMON_START + 0x00A)
 #define  HFI_PROPERTY_CONFIG_VENC_HIER_P_ENH_LAYER		\
 	(HFI_PROPERTY_CONFIG_VENC_COMMON_START + 0x00B)
+#define  HFI_PROPERTY_CONFIG_VENC_VBV_HRD_BUF_SIZE		\
+	(HFI_PROPERTY_CONFIG_VENC_COMMON_START + 0x00D)
 #define  HFI_PROPERTY_CONFIG_VENC_PERF_MODE			\
 	(HFI_PROPERTY_CONFIG_VENC_COMMON_START + 0x00E)
 #define HFI_PROPERTY_CONFIG_VENC_BASELAYER_PRIORITYID		\
@@ -362,8 +377,6 @@ struct hfi_buffer_info {
 	(HFI_PROPERTY_CONFIG_VENC_COMMON_START + 0x014)
 #define HFI_PROPERTY_CONFIG_HEIC_GRID_ENABLE			\
 	(HFI_PROPERTY_CONFIG_VENC_COMMON_START + 0x015)
-#define HFI_PROPERTY_CONFIG_VENC_FRAME_QP_RANGE			\
-	(HFI_PROPERTY_CONFIG_VENC_COMMON_START + 0x016)
 
 #define HFI_PROPERTY_PARAM_VPE_COMMON_START				\
 	(HFI_DOMAIN_BASE_VPE + HFI_ARCH_COMMON_OFFSET + 0x7000)
@@ -386,14 +399,6 @@ struct hfi_bitrate {
 
 struct hfi_colour_space {
 	u32 colour_space;
-};
-
-struct hfi_frame_crop {
-	u32 left;
-	u32 top;
-	u32 width;
-	u32 height;
-	u32 reserved[3];
 };
 
 #define HFI_CAPABILITY_FRAME_WIDTH			(HFI_COMMON_BASE + 0x1)
@@ -430,8 +435,10 @@ struct hfi_frame_crop {
 #define HFI_CAPABILITY_MAX_VIDEOCORES			(HFI_COMMON_BASE + 0X2B)
 #define HFI_CAPABILITY_MAX_WORKMODES			(HFI_COMMON_BASE + 0X2C)
 #define HFI_CAPABILITY_UBWC_CR_STATS			(HFI_COMMON_BASE + 0X2D)
+#define HFI_CAPABILITY_ROTATION				(HFI_COMMON_BASE + 0X2F)
+#define HFI_CAPABILITY_COLOR_SPACE_CONVERSION		(HFI_COMMON_BASE + 0X30)
+#define HFI_CAPABILITY_MAX_WORKROUTES			(HFI_COMMON_BASE + 0X31)
 #define HFI_CAPABILITY_CQ_QUALITY_LEVEL			(HFI_COMMON_BASE + 0X32)
-#define HFI_CAPABILITY_IMG_GRID_DIMENSION		(HFI_COMMON_BASE + 0X33)
 
 struct hfi_capability_supported {
 	u32 capability_type;
@@ -499,6 +506,10 @@ struct hfi_heic_frame_quality {
 
 struct hfi_heic_grid_enable {
 	u32 grid_enable;
+};
+
+struct hfi_operating_rate {
+	u32 operating_rate;
 };
 
 #define HFI_INTRA_REFRESH_NONE				(HFI_COMMON_BASE + 0x1)
@@ -631,6 +642,10 @@ struct hfi_videocores_usage_type {
 
 struct hfi_video_work_mode {
 	u32 video_work_mode;
+};
+
+struct hfi_video_work_route {
+	u32 video_work_route;
 };
 
 struct hfi_video_signal_metadata {
@@ -974,7 +989,7 @@ struct hfi_cmd_session_set_property_packet {
 	u32 packet_type;
 	u32 session_id;
 	u32 num_properties;
-	u32 rg_property_data[0];
+	u32 rg_property_data[1];
 };
 
 struct hfi_cmd_session_set_buffers_packet {
@@ -987,6 +1002,32 @@ struct hfi_cmd_session_set_buffers_packet {
 	u32 min_buffer_size;
 	u32 num_buffers;
 	u32 rg_buffer_info[1];
+};
+
+struct hfi_buffer_mapping_type {
+	u32 index;
+	u32 device_addr;
+	u32 size;
+};
+
+struct hfi_cmd_session_register_buffers_packet {
+	u32 size;
+	u32 packet_type;
+	u32 session_id;
+	u32 client_data;
+	u32 response_req;
+	u32 num_buffers;
+	struct hfi_buffer_mapping_type buffer[1];
+};
+
+struct hfi_cmd_session_unregister_buffers_packet {
+	u32 size;
+	u32 packet_type;
+	u32 session_id;
+	u32 client_data;
+	u32 response_req;
+	u32 num_buffers;
+	struct hfi_buffer_mapping_type buffer[1];
 };
 
 struct hfi_cmd_session_sync_process_packet {
@@ -1119,6 +1160,10 @@ struct hfi_content_light_level_sei_payload {
 struct hfi_hdr10_pq_sei {
 	struct hfi_mastering_display_colour_sei_payload mdisp_info;
 	struct hfi_content_light_level_sei_payload cll_info;
+};
+
+struct hfi_vbv_hdr_buf_size {
+	u32 vbv_hdr_buf_size;
 };
 
 #endif

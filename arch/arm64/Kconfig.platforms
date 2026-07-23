@@ -1,11 +1,16 @@
 menu "Platform selection"
 
+config ARCH_ACTIONS
+	bool "Actions Semi Platforms"
+	select OWL_TIMER
+	help
+	  This enables support for the Actions Semiconductor S900 SoC family.
+
 config ARCH_SUNXI
 	bool "Allwinner sunxi 64-bit SoC Family"
 	select ARCH_HAS_RESET_CONTROLLER
 	select GENERIC_IRQ_CHIP
 	select PINCTRL
-	select PINCTRL_SUN50I_A64
 	select RESET_CONTROLLER
 	help
 	  This enables support for Allwinner sunxi based SoCs like the A64.
@@ -17,9 +22,18 @@ config ARCH_ALPINE
 	  This enables support for the Annapurna Labs Alpine
 	  Soc family.
 
+config ARCH_SDM660
+	bool "Enable Support for Qualcomm Technologies Inc SDM660"
+	depends on ARCH_QCOM
+	select COMMON_CLK
+	select COMMON_CLK_QCOM
+	select QCOM_GDSC
+	help
+	  This enables support for the SDM660 chipset.
+
 config ARCH_BCM2835
 	bool "Broadcom BCM2835 family"
-	select CLKSRC_OF
+	select TIMER_OF
 	select GPIOLIB
 	select PINCTRL
 	select PINCTRL_BCM2835
@@ -57,6 +71,8 @@ config ARCH_BRCMSTB
 config ARCH_EXYNOS
 	bool "ARMv8 based Samsung Exynos SoC family"
 	select COMMON_CLK_SAMSUNG
+	select EXYNOS_PM_DOMAINS if PM_GENERIC_DOMAINS
+	select EXYNOS_PMU
 	select HAVE_S3C2410_WATCHDOG if WATCHDOG
 	select HAVE_S3C_RTC if RTC_CLASS
 	select PINCTRL
@@ -106,8 +122,17 @@ config ARCH_MVEBU
 	select ARMADA_AP806_SYSCON
 	select ARMADA_CP110_SYSCON
 	select ARMADA_37XX_CLK
+	select GPIOLIB
+	select GPIOLIB_IRQCHIP
+	select MVEBU_GICP
+	select MVEBU_ICU
 	select MVEBU_ODMI
 	select MVEBU_PIC
+	select OF_GPIO
+	select PINCTRL
+	select PINCTRL_ARMADA_37XX
+	select PINCTRL_ARMADA_AP806
+	select PINCTRL_ARMADA_CP110
 	help
 	  This enables support for Marvell EBU familly, including:
 	   - Armada 3700 SoC Family
@@ -116,131 +141,125 @@ config ARCH_MVEBU
 
 config ARCH_QCOM
 	bool "Qualcomm Platforms"
+	select GPIOLIB
 	select PINCTRL
+	select PM_OPP
+	select SOC_BUS
+	select MFD_CORE
 	select CLKDEV_LOOKUP
 	select HAVE_CLK
 	select HAVE_CLK_PREPARE
-	select SOC_BUS
 	select PM_OPP
-	select MFD_CORE
-	select SND_SOC_COMPRESS
-	select SND_HWDEP
 	help
 	  This enables support for the ARMv8 based Qualcomm chipsets.
 
-config ARCH_SDM845
-	bool "Enable Support for Qualcomm Technologies Inc. SDM845"
+config ARCH_SM8150
+	bool "Enable Support for Qualcomm Technologies, Inc. SM8150"
 	depends on ARCH_QCOM
 	select COMMON_CLK
 	select COMMON_CLK_QCOM
-	select QCOM_GDSC
 	help
-	  This enables support for the SDM845 chipset. If you do not
+	  This enables support for the SM8150 chipset. If you do not
 	  wish to build a kernel that runs on this chipset, say 'N' here.
-
-config ARCH_SDM845_VM
-	bool "Enable Support for Qualcomm Technologies Inc. SDM845 VM"
-	select QCOM_VM_WDT if WATCHDOG
-	help
-	  This enables support for VM on sdm845 chipset.If you do not
-	  wish to build a kernel that runs on this chipset, say 'N' here.
-
-	  To compile this driver as a module, choose M here: the
-	  module will be called SDM845_VM.
 
 config ARCH_SDM670
-	bool "Enable Support for Qualcomm Technologies Inc. SDM670"
+	bool "Enable Support for Qualcomm Technologies, Inc. SDM670/SDM710"
 	depends on ARCH_QCOM
 	select COMMON_CLK
 	select COMMON_CLK_QCOM
-	select QCOM_GDSC
+	select QTI_PDC_SDM670
 	help
-	  This enables support for the SDM670 chipset. If you do not
+	  Enable the common platform support used by SDM670 and SDM710.
+	  RMX1901 uses SDM710 silicon while retaining the qcom,sdm670
+	  device-tree compatibility contract.
+
+config ARCH_SDMSHRIKE
+	bool "Enable Support for Qualcomm Technologies, Inc. SDMSHRIKE"
+	depends on ARCH_QCOM
+	select COMMON_CLK
+	select COMMON_CLK_QCOM
+	help
+	  This configuration option enables support to build kernel for
+	  SDMSHRIKE SoC.
+	  If you do not wish to build a kernel that runs on this chipset,
+	  say 'N' here.
+
+config ARCH_SM6150
+	bool "Enable Support for Qualcomm Technologies, Inc. SM6150"
+	depends on ARCH_QCOM
+	select COMMON_CLK
+	select COMMON_CLK_QCOM
+	help
+	  This enables support for the SM6150 chipset. If you do not
 	  wish to build a kernel that runs on this chipset, say 'N' here.
 
-config ARCH_MSM8953
-	bool "Enable Support for Qualcomm Technologies Inc. MSM8953"
+config ARCH_ATOLL
+	bool "Enable Support for Qualcomm Technologies, Inc. ATOLL"
 	depends on ARCH_QCOM
-	select CPU_FREQ_QCOM
-	select COMMON_CLK_MSM
-	select ARCH_MSM8953_SOC_SETTINGS
+	select COMMON_CLK
+	select COMMON_CLK_QCOM
+	select QTI_PDC_ATOLL
 	help
-	  This enables support for the MSM8953 chipset. If you do not
+	  This enables support for the ATOLL chipset. If you do not
 	  wish to build a kernel that runs on this chipset, say 'N' here.
 
-config ARCH_MSM8937
-	bool "Enable Support for Qualcomm Technologies Inc. MSM8937"
+config ARCH_QCS405
+	bool "Enable Support for Qualcomm Technologies, Inc. QCS405"
 	depends on ARCH_QCOM
-	select CPU_FREQ_QCOM
-	select COMMON_CLK_MSM
+	select COMMON_CLK
+	select COMMON_CLK_QCOM
 	help
-	  This enables support for the MSM8937 chipset. If you do not
+	 This configuration option enables support to build kernel for
+	 QCS405 SoC.
+	 If you do not wish to build a kernel that runs on this chipset,
+	 say 'N' here.
+
+config ARCH_QCS403
+        bool "Enable Support for Qualcomm Technologies, Inc. QCS403"
+        depends on ARCH_QCOM
+	select COMMON_CLK
+	select COMMON_CLK_QCOM
+        help
+         This configuration option enables support to build kernel for
+         QCS403 SoC.
+         If you do not wish to build a kernel that runs on this chipset,
+         say 'N' here.
+
+config ARCH_SDMMAGPIE
+	bool "Enable Support for Qualcomm Technologies, Inc. SDMMAGPIE"
+	depends on ARCH_QCOM
+	select COMMON_CLK
+	select COMMON_CLK_QCOM
+	help
+	  This enables support for the SDMMAGPIE chipset. If you do not
 	  wish to build a kernel that runs on this chipset, say 'N' here.
 
-config ARCH_MSM8940
-	bool "Enable Support for Qualcomm Technologies Inc. MSM8940"
+config ARCH_TRINKET
+	bool "Enable Support for Qualcomm Technologies, Inc. TRINKET"
 	depends on ARCH_QCOM
-	select CPU_FREQ_QCOM
-	select COMMON_CLK_MSM
+	select COMMON_CLK
+	select COMMON_CLK_QCOM
 	help
-	  This enables support for the MSM8940 chipset. If you do not
+	  This enables support for the TRINKET chipset. If you do not
 	  wish to build a kernel that runs on this chipset, say 'N' here.
 
-config ARCH_MSM8917
-	bool "Enable Support for Qualcomm Technologies Inc. MSM8917"
+config ARCH_SDM429W
+	bool "Enable Support for Qualcomm Technologies Inc. SDM429W"
 	depends on ARCH_QCOM
 	select CPU_FREQ_QCOM
-	select COMMON_CLK_MSM
+	select COMMON_CLK
+	select COMMON_CLK_QCOM
 	help
-	  This enables support for the MSM8917 chipset. If you do not
-	  wish to build a kernel that runs on this chipset, say 'N' here.
+	  This configuration option enables support to build kernel for
+	  SDM429W SoC.
+	  If you do not wish to build a kernel that runs on this chipset,
+	  say 'N' here.
 
-config ARCH_QM215
-	bool "Enable Support for Qualcomm Technologies Inc. QM215"
-	depends on ARCH_QCOM
-	select CPU_FREQ_QCOM
-	select COMMON_CLK_MSM
+config ARCH_REALTEK
+	bool "Realtek Platforms"
 	help
-	  This enables support for the QM215 chipset. If you do not
-	  wish to build a kernel that runs on this chipset, say 'N' here.
-
-config ARCH_SDM450
-	bool "Enable Support for Qualcomm Technologies Inc. SDM450"
-	depends on ARCH_QCOM
-	select CPU_FREQ_QCOM
-	select COMMON_CLK_MSM
-	select ARCH_MSM8953_SOC_SETTINGS
-	help
-	  This enables support for the sdm450 chipset. If you do not
-	  wish to build a kernel that runs on this chipset, say 'N' here.
-
-config ARCH_SDM632
-	bool "Enable Support for Qualcomm Technologies Inc. SDM632"
-	depends on ARCH_QCOM
-	select CPU_FREQ_QCOM
-	select COMMON_CLK_MSM
-	select ARCH_MSM8953_SOC_SETTINGS
-	help
-	  This enables support for the sdm632 chipset. If you do not
-	  wish to build a kernel that runs on this chipset, say 'N' here.
-
-config ARCH_SDM429
-	bool "Enable Support for Qualcomm Technologies Inc. SDM429"
-	depends on ARCH_QCOM
-	select CPU_FREQ_QCOM
-	select COMMON_CLK_MSM
-	help
-	  This enables support for the sdm429 chipset. If you do not
-	  wish to build a kernel that runs on this chipset, say 'N' here.
-
-config ARCH_SDM439
-	bool "Enable Support for Qualcomm Technologies Inc. SDM439"
-	depends on ARCH_QCOM
-	select CPU_FREQ_QCOM
-	select COMMON_CLK_MSM
-	help
-	  This enables support for the sdm439 chipset. If you do not
-	  wish to build a kernel that runs on this chipset, say 'N' here.
+	  This enables support for the ARMv8 based Realtek chipsets,
+	  like the RTD1295.
 
 config ARCH_ROCKCHIP
 	bool "Rockchip Platforms"
@@ -269,6 +288,7 @@ config ARCH_RENESAS
 	select PM
 	select PM_GENERIC_DOMAINS
 	select RENESAS_IRQC
+	select SOC_BUS
 	help
 	  This enables support for the ARMv8 based Renesas SoCs.
 
@@ -284,6 +304,12 @@ config ARCH_R8A7796
 	help
 	  This enables support for the Renesas R-Car M3-W SoC.
 
+config ARCH_R8A77995
+	bool "Renesas R-Car D3 SoC Platform"
+	depends on ARCH_RENESAS
+	help
+	  This enables support for the Renesas R-Car D3 SoC.
+
 config ARCH_STRATIX10
 	bool "Altera's Stratix 10 SoCFPGA Family"
 	help
@@ -294,7 +320,7 @@ config ARCH_TEGRA
 	select ARCH_HAS_RESET_CONTROLLER
 	select CLKDEV_LOOKUP
 	select CLKSRC_MMIO
-	select CLKSRC_OF
+	select TIMER_OF
 	select GENERIC_CLOCKEVENTS
 	select GPIOLIB
 	select PINCTRL
@@ -313,6 +339,13 @@ config ARCH_THUNDER
 	bool "Cavium Inc. Thunder SoC Family"
 	help
 	  This enables support for Cavium's Thunder Family of SoCs.
+
+config ARCH_THUNDER2
+	bool "Cavium ThunderX2 Server Processors"
+	select GPIOLIB
+	help
+	  This enables support for Cavium's ThunderX2 CN99XX family of
+	  server processors.
 
 config ARCH_UNIPHIER
 	bool "Socionext UniPhier SoC Family"
@@ -334,10 +367,7 @@ config ARCH_VEXPRESS
 	  Express).
 
 config ARCH_VULCAN
-	bool "Broadcom Vulcan SOC Family"
-	select GPIOLIB
-	help
-	  This enables support for Broadcom Vulcan SoC Family
+	def_bool n
 
 config ARCH_XGENE
 	bool "AppliedMicro X-Gene SOC Family"
@@ -346,6 +376,7 @@ config ARCH_XGENE
 
 config ARCH_ZX
 	bool "ZTE ZX SoC Family"
+	select PINCTRL
 	help
 	  This enables support for ZTE ZX SoC Family
 

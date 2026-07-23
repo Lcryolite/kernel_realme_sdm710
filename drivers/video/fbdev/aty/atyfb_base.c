@@ -274,7 +274,7 @@ static struct fb_var_screeninfo default_var = {
 	0, FB_VMODE_NONINTERLACED
 };
 
-static struct fb_videomode defmode = {
+static const struct fb_videomode defmode = {
 	/* 640x480 @ 60 Hz, 31.5 kHz hsync */
 	NULL, 60, 640, 480, 39721, 40, 24, 32, 11, 96, 2,
 	0, FB_VMODE_NONINTERLACED
@@ -802,7 +802,7 @@ static int aty_var_to_crtc(const struct fb_info *info,
 {
 	struct atyfb_par *par = (struct atyfb_par *) info->par;
 	u32 xres, yres, vxres, vyres, xoffset, yoffset, bpp;
-	u32 sync, vmode, vdisplay;
+	u32 sync, vmode;
 	u32 h_total, h_disp, h_sync_strt, h_sync_end, h_sync_dly, h_sync_wid, h_sync_pol;
 	u32 v_total, v_disp, v_sync_strt, v_sync_end, v_sync_wid, v_sync_pol, c_sync;
 	u32 pix_width, dp_pix_width, dp_chain_mask;
@@ -984,12 +984,6 @@ static int aty_var_to_crtc(const struct fb_info *info,
 		v_total <<= 1;
 	}
 
-	vdisplay = yres;
-#ifdef CONFIG_FB_ATY_GENERIC_LCD
-	if ((par->lcd_table != 0) && (crtc->lcd_gen_cntl & LCD_ON))
-		vdisplay  = par->lcd_height;
-#endif
-
 	v_disp--;
 	v_sync_strt--;
 	v_sync_end--;
@@ -1036,7 +1030,7 @@ static int aty_var_to_crtc(const struct fb_info *info,
 		crtc->gen_cntl |= CRTC_INTERLACE_EN;
 #ifdef CONFIG_FB_ATY_GENERIC_LCD
 	if (par->lcd_table != 0) {
-		vdisplay = yres;
+		u32 vdisplay = yres;
 		if (vmode & FB_VMODE_DOUBLE)
 			vdisplay <<= 1;
 		crtc->gen_cntl &= ~(CRTC2_EN | CRTC2_PIX_WIDTH);
@@ -3441,11 +3435,15 @@ static int atyfb_setup_generic(struct pci_dev *pdev, struct fb_info *info,
 	}
 
 	info->fix.mmio_start = raddr;
+#if defined(__i386__) || defined(__ia64__)
 	/*
 	 * By using strong UC we force the MTRR to never have an
 	 * effect on the MMIO region on both non-PAT and PAT systems.
 	 */
 	par->ati_regbase = ioremap_uc(info->fix.mmio_start, 0x1000);
+#else
+	par->ati_regbase = ioremap(info->fix.mmio_start, 0x1000);
+#endif
 	if (par->ati_regbase == NULL)
 		return -ENOMEM;
 
@@ -3763,7 +3761,7 @@ static void atyfb_pci_remove(struct pci_dev *pdev)
 	atyfb_remove(info);
 }
 
-static struct pci_device_id atyfb_pci_tbl[] = {
+static const struct pci_device_id atyfb_pci_tbl[] = {
 #ifdef CONFIG_FB_ATY_GX
 	{ PCI_DEVICE(PCI_VENDOR_ID_ATI, PCI_CHIP_MACH64GX) },
 	{ PCI_DEVICE(PCI_VENDOR_ID_ATI, PCI_CHIP_MACH64CX) },

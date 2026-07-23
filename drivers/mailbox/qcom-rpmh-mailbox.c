@@ -29,6 +29,7 @@
 #include <linux/of_irq.h>
 #include <linux/platform_device.h>
 #include <linux/spinlock.h>
+
 #include <asm/arch_timer.h>
 #include <asm-generic/io.h>
 
@@ -126,7 +127,6 @@ struct tcs_mbox {
 struct rsc_drv {
 	struct mbox_controller mbox;
 	const char *name;
-	unsigned long addr;
 	void __iomem *base; /* start address of the RSC's registers */
 	void __iomem *reg_base; /* start address for DRV specific register */
 	int irq;
@@ -150,7 +150,7 @@ struct rsc_drv {
 
 /* Log to IPC and Ftrace */
 #define log_send_msg(drv, m, n, i, a, d, c, t) do {			\
-	trace_rpmh_send_msg(drv->name, drv->addr, m, n, i, a, d, c, t);	\
+	trace_rpmh_send_msg(drv->name, m, n, i, a, d, c, t);		\
 	ipc_log_string(drv->ipc_log_ctx,				\
 		"send msg: m=%d n=%d msgid=0x%x addr=0x%x data=0x%x cmpl=%d trigger=%d", \
 		m, n, i, a, d, c, t);					\
@@ -419,6 +419,21 @@ static inline void enable_tcs_irq(struct rsc_drv *drv, int m, bool enable)
 	else
 		data &= ~BIT(m);
 	write_tcs_reg(base, RSC_DRV_IRQ_ENABLE, 0, 0, data);
+}
+
+static int rsc_suspend(struct device *dev)
+{
+	return 0;
+}
+
+static int rsc_resume(struct device *dev)
+{
+	struct rsc_drv *drv = (struct rsc_drv *)dev_get_drvdata(dev);
+
+	write_tcs_reg(drv->reg_base, RSC_DRV_IRQ_ENABLE, 0, 0,
+					drv->tcs[ACTIVE_TCS].tcs_mask);
+
+	return 0;
 }
 
 /**
@@ -1097,7 +1112,7 @@ static void chan_shutdown(struct mbox_chan *chan)
 
 static const struct mbox_chan_ops mbox_ops = {
 	.send_data = chan_tcs_write,
-	.write_controller_data = chan_tcs_ctrl_write,
+	.send_controller_data = chan_tcs_ctrl_write,
 	.startup = chan_init,
 	.shutdown = chan_shutdown,
 };
@@ -1147,7 +1162,6 @@ static int rsc_drv_probe(struct platform_device *pdev)
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res)
 		return -EINVAL;
-	drv->addr = res->start;
 	drv->base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(drv->base))
 		return PTR_ERR(drv->base);
@@ -1203,8 +1217,7 @@ static int rsc_drv_probe(struct platform_device *pdev)
 
 		if (tcs->num_tcs > MAX_TCS_PER_TYPE ||
 			st + tcs->num_tcs > max_tcs ||
-			st + tcs->num_tcs >=
-				BITS_PER_BYTE * sizeof(tcs->tcs_mask))
+			st + tcs->num_tcs >= 8 * sizeof(tcs->tcs_mask))
 			return -EINVAL;
 
 		tcs->tcs_mask = ((1 << tcs->num_tcs) - 1) << st;
@@ -1298,11 +1311,18 @@ static int rsc_drv_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
+	platform_set_drvdata(pdev, drv);
+
 	pr_debug("Mailbox controller (%s, drv=%d) registered\n",
 					dn->full_name, drv->drv_id);
 
 	return 0;
 }
+
+static const struct dev_pm_ops rpmh_mailbox_dev_pm_ops = {
+	.poweroff_noirq = rsc_suspend,
+	.restore_noirq = rsc_resume,
+};
 
 static const struct of_device_id rsc_drv_match[] = {
 	{ .compatible = "qcom,tcs-drv", },
@@ -1313,6 +1333,7 @@ static struct platform_driver rpmh_mbox_driver = {
 	.probe = rsc_drv_probe,
 	.driver = {
 		.name = KBUILD_MODNAME,
+		.pm = &rpmh_mailbox_dev_pm_ops,
 		.of_match_table = rsc_drv_match,
 		.suppress_bind_attrs = true,
 	},

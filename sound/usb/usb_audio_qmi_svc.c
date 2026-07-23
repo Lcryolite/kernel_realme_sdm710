@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -23,18 +23,22 @@
 #include <sound/core.h>
 #include <sound/asound.h>
 #include <linux/usb.h>
-#include <linux/qmi_encdec.h>
-#include <soc/qcom/msm_qmi_interface.h>
+#include <linux/soc/qcom/qmi.h>
 #include <linux/iommu.h>
 #include <linux/dma-mapping.h>
 #include <linux/platform_device.h>
 #include <linux/usb/audio-v3.h>
+#include <linux/ipc_logging.h>
 
 #include "usbaudio.h"
 #include "card.h"
 #include "helper.h"
 #include "pcm.h"
 #include "usb_audio_qmi_v01.h"
+
+#define BUS_INTERVAL_FULL_SPEED 1000 /* in us */
+#define BUS_INTERVAL_HIGHSPEED_AND_ABOVE 125 /* in us */
+#define MAX_BINTERVAL_ISOC_EP 16
 
 #define SND_PCM_CARD_NUM_MASK 0xffff0000
 #define SND_PCM_DEV_NUM_MASK 0xff00
@@ -118,32 +122,25 @@ static struct uaudio_qmi_dev *uaudio_qdev;
 
 struct uaudio_qmi_svc {
 	struct qmi_handle *uaudio_svc_hdl;
-	void *curr_conn;
-	struct work_struct recv_msg_work;
 	struct work_struct qmi_disconnect_work;
 	struct workqueue_struct *uaudio_wq;
-	ktime_t t_request_recvd;
-	ktime_t t_resp_sent;
+	struct sockaddr_qrtr client_sq;
+	bool client_connected;
+	void *uaudio_ipc_log;
 };
 
 static struct uaudio_qmi_svc *uaudio_svc;
+static void handle_uaudio_stream_req(struct qmi_handle *handle,
+			struct sockaddr_qrtr *sq,
+			struct qmi_txn *txn,
+			const void *decoded_msg);
 
-static struct msg_desc uaudio_stream_req_desc = {
-	.max_msg_len = QMI_UAUDIO_STREAM_REQ_MSG_V01_MAX_MSG_LEN,
+static struct qmi_msg_handler uaudio_stream_req_handlers = {
+	.type = QMI_REQUEST,
 	.msg_id = QMI_UAUDIO_STREAM_REQ_V01,
-	.ei_array = qmi_uaudio_stream_req_msg_v01_ei,
-};
-
-static struct msg_desc uaudio_stream_resp_desc = {
-	.max_msg_len = QMI_UAUDIO_STREAM_RESP_MSG_V01_MAX_MSG_LEN,
-	.msg_id = QMI_UAUDIO_STREAM_RESP_V01,
-	.ei_array = qmi_uaudio_stream_resp_msg_v01_ei,
-};
-
-static struct msg_desc uaudio_stream_ind_desc = {
-	.max_msg_len = QMI_UAUDIO_STREAM_IND_MSG_V01_MAX_MSG_LEN,
-	.msg_id = QMI_UADUIO_STREAM_IND_V01,
-	.ei_array = qmi_uaudio_stream_ind_msg_v01_ei,
+	.ei = qmi_uaudio_stream_req_msg_v01_ei,
+	.decoded_size = QMI_UAUDIO_STREAM_REQ_MSG_V01_MAX_MSG_LEN,
+	.fn = handle_uaudio_stream_req,
 };
 
 enum mem_type {
@@ -173,6 +170,26 @@ enum usb_qmi_audio_format {
 	USB_QMI_PCM_FORMAT_U32_BE,
 };
 
+#define uaudio_print(level, fmt, ...) do { \
+	ipc_log_string(uaudio_svc->uaudio_ipc_log, "%s%s: " fmt, "", __func__,\
+			##__VA_ARGS__); \
+	printk("%s%s: " fmt, level, __func__, ##__VA_ARGS__); \
+	} while (0)
+
+#ifdef CONFIG_DYNAMIC_DEBUG
+#define uaudio_dbg(fmt, ...) do { \
+	ipc_log_string(uaudio_svc->uaudio_ipc_log, "%s: " fmt, __func__,\
+			##__VA_ARGS__); \
+	dynamic_pr_debug("%s: " fmt, __func__, ##__VA_ARGS__); \
+	} while (0)
+#else
+#define uaudio_dbg(fmt, ...) uaudio_print(KERN_DEBUG, fmt, ##__VA_ARGS__)
+#endif
+
+#define uaudio_err(fmt, ...) uaudio_print(KERN_ERR, fmt, ##__VA_ARGS__)
+
+#define NUM_LOG_PAGES		10
+
 static void uaudio_iommu_unmap(enum mem_type mtype, unsigned long va,
 	size_t iova_size, size_t mapped_iova_size);
 
@@ -191,7 +208,7 @@ get_speed_info(enum usb_device_speed udev_speed)
 	case USB_SPEED_SUPER_PLUS:
 		return USB_AUDIO_DEVICE_SPEED_SUPER_PLUS_V01;
 	default:
-		pr_err("%s: udev speed %d\n", __func__, udev_speed);
+		uaudio_err("udev speed %d\n", udev_speed);
 		return USB_AUDIO_DEVICE_SPEED_INVALID_V01;
 	}
 }
@@ -206,18 +223,16 @@ static unsigned long uaudio_get_iova(unsigned long *curr_iova,
 	bool found = false;
 
 	if (size % PAGE_SIZE) {
-		pr_err("%s: size %zu is not page size multiple\n", __func__,
-			size);
+		uaudio_err("size %zu is not page size multiple\n", size);
 		goto done;
 	}
 
 	if (size > *curr_iova_size) {
-		pr_err("%s: size %zu > curr size %zu\n", __func__, size,
-			*curr_iova_size);
+		uaudio_err("size %zu > curr size %zu\n", size, *curr_iova_size);
 		goto done;
 	}
 	if (*curr_iova_size == 0) {
-		pr_err("%s: iova mapping is full\n", __func__);
+		uaudio_err("iova mapping is full\n");
 		goto done;
 	}
 
@@ -228,13 +243,12 @@ static unsigned long uaudio_get_iova(unsigned long *curr_iova,
 			va = info->start_iova;
 			*curr_iova_size -= size;
 			found = true;
-			pr_debug("%s: exact size :%zu found\n", __func__, size);
+			uaudio_dbg("exact size :%zu found\n", size);
 			goto done;
 		} else if (!info->in_use && tmp_size >= info->size) {
 			if (!new_info)
 				new_info = info;
-			pr_debug("%s: partial size: %zu found\n", __func__,
-				info->size);
+			uaudio_dbg("partial size: %zu found\n", info->size);
 			tmp_size -= info->size;
 			if (tmp_size)
 				continue;
@@ -273,10 +287,10 @@ static unsigned long uaudio_get_iova(unsigned long *curr_iova,
 
 done:
 	if (!found)
-		pr_err("%s: unable to find %zu size iova\n", __func__, size);
+		uaudio_err("unable to find %zu size iova\n", size);
 	else
-		pr_debug("%s: va:%lu curr_iova:%lu curr_iova_size:%zu\n",
-		__func__, va, *curr_iova, *curr_iova_size);
+		uaudio_dbg("va:%lu curr_iova:%lu curr_iova_size:%zu\n", va,
+				*curr_iova, *curr_iova_size);
 
 	return va;
 }
@@ -309,7 +323,7 @@ static unsigned long uaudio_iommu_map(enum mem_type mtype, phys_addr_t pa,
 		size);
 		break;
 	default:
-		pr_err("%s: unknown mem type %d\n", __func__, mtype);
+		uaudio_err("unknown mem type %d\n", mtype);
 	}
 
 	if (!va || !map)
@@ -325,36 +339,36 @@ static unsigned long uaudio_iommu_map(enum mem_type mtype, phys_addr_t pa,
 		ret = iommu_map(uaudio_qdev->domain, va_sg, pa_sg, sg_len,
 			IOMMU_READ | IOMMU_WRITE | IOMMU_MMIO);
 		if (ret) {
-			pr_err("%s:mapping failed ret%d\n", __func__, ret);
-			pr_err("memtype:%d, pa:%pK iova:%lu sg_len:%zu\n",
+			uaudio_err("mapping failed ret%d\n", ret);
+			uaudio_err("memtype:%d, pa:%pK iova:%lu sg_len:%zu\n",
 				mtype, &pa_sg, va_sg, sg_len);
 			uaudio_iommu_unmap(MEM_XFER_BUF, va, size, total_len);
 			va = 0;
 			goto done;
 		}
-		pr_debug("%s:memtype %d:map pa:%pK to iova:%lu len:%zu\n",
-			__func__, mtype, &pa_sg, va_sg, sg_len);
+		uaudio_dbg("memtype %d:map pa:%pK to iova:%lu len:%zu\n", mtype,
+				&pa_sg, va_sg, sg_len);
 		va_sg += sg_len;
 		total_len += sg_len;
 	}
 
 	if (size != total_len) {
-		pr_err("%s: iova size %zu != mapped iova size %zu\n", __func__,
-			size, total_len);
+		uaudio_err("iova size %zu != mapped iova size %zu\n", size,
+				total_len);
 		uaudio_iommu_unmap(MEM_XFER_BUF, va, size, total_len);
 		va = 0;
 	}
 	return va;
 
 skip_sgt_map:
-	pr_debug("%s:memtype:%d map pa:%pK to iova %lu size:%zu\n", __func__,
-		mtype, &pa, va, size);
+	uaudio_dbg("memtype:%d map pa:%pK to iova %lu size:%zu\n", mtype, &pa,
+			va, size);
 
 	ret = iommu_map(uaudio_qdev->domain, va, pa, size,
 		IOMMU_READ | IOMMU_WRITE | IOMMU_MMIO);
 	if (ret)
-		pr_err("%s:failed to map pa:%pK iova:%lu memtype:%d ret:%d\n",
-			__func__, &pa, va, mtype, ret);
+		uaudio_err("failed to map pa:%pK iova:%lu memtype:%d ret:%d\n",
+				&pa, va, mtype, ret);
 done:
 	return va;
 }
@@ -369,8 +383,7 @@ static void uaudio_put_iova(unsigned long va, size_t size, struct list_head
 	list_for_each_entry(info, head, list) {
 		if (info->start_iova == va) {
 			if (!info->in_use) {
-				pr_err("%s: va %lu is not in use\n", __func__,
-					va);
+				uaudio_err("va %lu is not in use\n", va);
 				return;
 			}
 			found = true;
@@ -388,12 +401,12 @@ static void uaudio_put_iova(unsigned long va, size_t size, struct list_head
 	}
 
 	if (!found) {
-		pr_err("%s: unable to find the va %lu\n", __func__, va);
+		uaudio_err("unable to find the va %lu\n", va);
 		return;
 	}
 done:
 	*curr_iova_size += size;
-	pr_debug("%s: curr_iova_size %zu\n", __func__, *curr_iova_size);
+	uaudio_dbg("curr_iova_size %zu\n", *curr_iova_size);
 }
 
 static void uaudio_iommu_unmap(enum mem_type mtype, unsigned long va,
@@ -422,20 +435,20 @@ static void uaudio_iommu_unmap(enum mem_type mtype, unsigned long va,
 		&uaudio_qdev->xfer_buf_iova_size);
 		break;
 	default:
-		pr_err("%s: unknown mem type %d\n", __func__, mtype);
+		uaudio_err("unknown mem type %d\n", mtype);
 		unmap = false;
 	}
 
 	if (!unmap || !mapped_iova_size)
 		return;
 
-	pr_debug("%s:memtype %d: unmap iova %lu size %zu\n", __func__, mtype,
-		va, mapped_iova_size);
+	uaudio_dbg("memtype %d: unmap iova %lu size %zu\n", mtype, va,
+			mapped_iova_size);
 
 	umap_size = iommu_unmap(uaudio_qdev->domain, va, mapped_iova_size);
 	if (umap_size != mapped_iova_size)
-		pr_err("%s:unmapped size %zu for iova %lu of mapped size %zu\n",
-		__func__, umap_size, va, mapped_iova_size);
+		uaudio_err("unmapped size %zu for iova %lu of mapped size %zu\n",
+				umap_size, va, mapped_iova_size);
 }
 
 static int prepare_qmi_response(struct snd_usb_substream *subs,
@@ -463,8 +476,7 @@ static int prepare_qmi_response(struct snd_usb_substream *subs,
 
 	iface = usb_ifnum_to_if(subs->dev, subs->interface);
 	if (!iface) {
-		pr_err("%s: interface # %d does not exist\n", __func__,
-			subs->interface);
+		uaudio_err("interface # %d does not exist\n", subs->interface);
 		ret = -ENODEV;
 		goto err;
 	}
@@ -482,15 +494,15 @@ static int prepare_qmi_response(struct snd_usb_substream *subs,
 		fmt = snd_usb_find_csint_desc(alts->extra, alts->extralen, NULL,
 				UAC_FORMAT_TYPE);
 		if (!fmt) {
-			pr_err("%s: %u:%d : no UAC_FORMAT_TYPE desc\n",
-				__func__, subs->interface, subs->altset_idx);
+			uaudio_err("%u:%d : no UAC_FORMAT_TYPE desc\n",
+					subs->interface, subs->altset_idx);
 			ret = -ENODEV;
 			goto err;
 		}
 	}
 
 	if (!uadev[card_num].ctrl_intf) {
-		pr_err("%s: audio ctrl intf info not cached\n", __func__);
+		uaudio_err("audio ctrl intf info not cached\n");
 		ret = -ENODEV;
 		goto err;
 	}
@@ -501,7 +513,7 @@ static int prepare_qmi_response(struct snd_usb_substream *subs,
 				uadev[card_num].ctrl_intf->extralen,
 				NULL, UAC_HEADER);
 		if (!hdr_ptr) {
-			pr_err("%s: no UAC_HEADER desc\n", __func__);
+			uaudio_err("no UAC_HEADER desc\n");
 			ret = -ENODEV;
 			goto err;
 		}
@@ -511,8 +523,8 @@ static int prepare_qmi_response(struct snd_usb_substream *subs,
 		as = snd_usb_find_csint_desc(alts->extra, alts->extralen, NULL,
 			UAC_AS_GENERAL);
 		if (!as) {
-			pr_err("%s: %u:%d : no UAC_AS_GENERAL desc\n", __func__,
-				subs->interface, subs->altset_idx);
+			uaudio_err("%u:%d : no UAC_AS_GENERAL desc\n",
+					subs->interface, subs->altset_idx);
 			ret = -ENODEV;
 			goto err;
 		}
@@ -552,14 +564,14 @@ static int prepare_qmi_response(struct snd_usb_substream *subs,
 		}
 
 		default:
-			pr_err("%d: %u: Invalid wMaxPacketSize\n",
+			uaudio_err("%d: %u: Invalid wMaxPacketSize\n",
 				subs->interface, subs->altset_idx);
 			ret = -EINVAL;
 			goto err;
 		}
 		resp->usb_audio_subslot_size_valid = 1;
 	} else {
-		pr_err("%s: unknown protocol version %x\n", __func__, protocol);
+		uaudio_err("unknown protocol version %x\n", protocol);
 		ret = -ENODEV;
 		goto err;
 	}
@@ -572,8 +584,8 @@ static int prepare_qmi_response(struct snd_usb_substream *subs,
 
 	ep = usb_pipe_endpoint(subs->dev, subs->data_endpoint->pipe);
 	if (!ep) {
-		pr_err("%s: data ep # %d context is null\n", __func__,
-			subs->data_endpoint->ep_num);
+		uaudio_err("data ep # %d context is null\n",
+				subs->data_endpoint->ep_num);
 		ret = -ENODEV;
 		goto err;
 	}
@@ -583,7 +595,7 @@ static int prepare_qmi_response(struct snd_usb_substream *subs,
 
 	tr_data_pa = usb_get_xfer_ring_phys_addr(subs->dev, ep, &dma);
 	if (!tr_data_pa) {
-		pr_err("%s:failed to get data ep ring dma address\n", __func__);
+		uaudio_err("failed to get data ep ring dma address\n");
 		ret = -ENODEV;
 		goto err;
 	}
@@ -593,7 +605,7 @@ static int prepare_qmi_response(struct snd_usb_substream *subs,
 	if (subs->sync_endpoint) {
 		ep = usb_pipe_endpoint(subs->dev, subs->sync_endpoint->pipe);
 		if (!ep) {
-			pr_debug("%s: implicit fb on data ep\n", __func__);
+			uaudio_dbg("implicit fb on data ep\n");
 			goto skip_sync_ep;
 		}
 		sync_ep_pipe = subs->sync_endpoint->pipe;
@@ -602,8 +614,7 @@ static int prepare_qmi_response(struct snd_usb_substream *subs,
 
 		tr_sync_pa = usb_get_xfer_ring_phys_addr(subs->dev, ep, &dma);
 		if (!tr_sync_pa) {
-			pr_err("%s:failed to get sync ep ring dma address\n",
-				__func__);
+			uaudio_err("failed to get sync ep ring dma address\n");
 			ret = -ENODEV;
 			goto err;
 		}
@@ -626,16 +637,14 @@ skip_sync_ep:
 	/* event ring */
 	ret = usb_sec_event_ring_setup(subs->dev, resp->interrupter_num);
 	if (ret) {
-		pr_err("%s: failed to setup sec event ring ret %d\n", __func__,
-			ret);
+		uaudio_err("failed to setup sec event ring ret %d\n", ret);
 		goto err;
 	}
 
 	xhci_pa = usb_get_sec_event_ring_phys_addr(subs->dev,
 			resp->interrupter_num, &dma);
 	if (!xhci_pa) {
-		pr_err("%s: failed to get sec event ring dma address\n",
-		__func__);
+		uaudio_err("failed to get sec event ring dma address\n");
 		ret = -ENODEV;
 		goto err;
 	}
@@ -699,8 +708,8 @@ skip_sync:
 	len += remainder ? PAGE_SIZE : 0;
 
 	if (len > MAX_XFER_BUFF_LEN) {
-		pr_err("%s: req buf len %d > max buf len %lu, setting %lu\n",
-		__func__, len, MAX_XFER_BUFF_LEN, MAX_XFER_BUFF_LEN);
+		uaudio_err("req buf len %d > max buf len %lu, setting %lu\n",
+				len, MAX_XFER_BUFF_LEN, MAX_XFER_BUFF_LEN);
 		len = MAX_XFER_BUFF_LEN;
 	}
 
@@ -733,9 +742,8 @@ skip_sync:
 		init_waitqueue_head(&uadev[card_num].disconnect_wq);
 		uadev[card_num].num_intf =
 			subs->dev->config->desc.bNumInterfaces;
-		uadev[card_num].info =
-			kzalloc(sizeof(struct intf_info) *
-			uadev[card_num].num_intf, GFP_KERNEL);
+		uadev[card_num].info = kcalloc(uadev[card_num].num_intf,
+			sizeof(struct intf_info), GFP_KERNEL);
 		if (!uadev[card_num].info) {
 			ret = -ENOMEM;
 			goto unmap_sync;
@@ -817,8 +825,8 @@ static void uaudio_dev_cleanup(struct uaudio_dev *dev)
 		if (!dev->info[if_idx].in_use)
 			continue;
 		uaudio_dev_intf_cleanup(dev->udev, &dev->info[if_idx]);
-		pr_debug("%s: release resources: intf# %d card# %d\n", __func__,
-			dev->info[if_idx].intf_num, dev->card_num);
+		uaudio_dbg("release resources: intf# %d card# %d\n",
+				dev->info[if_idx].intf_num, dev->card_num);
 	}
 
 	dev->num_intf = 0;
@@ -834,7 +842,7 @@ static void uaudio_dev_cleanup(struct uaudio_dev *dev)
 		uaudio_iommu_unmap(MEM_EVENT_RING, IOVA_BASE, PAGE_SIZE,
 			PAGE_SIZE);
 		usb_sec_event_ring_cleanup(dev->udev, uaudio_qdev->intr_num);
-		pr_debug("%s: all audio devices disconnected\n", __func__);
+		uaudio_dbg("all audio devices disconnected\n");
 	}
 
 	dev->udev = NULL;
@@ -848,10 +856,10 @@ static void uaudio_disconnect_cb(struct snd_usb_audio *chip)
 	struct uaudio_qmi_svc *svc = uaudio_svc;
 	struct qmi_uaudio_stream_ind_msg_v01 disconnect_ind = {0};
 
-	pr_debug("%s: for card# %d\n", __func__, card_num);
+	uaudio_dbg("for card# %d\n", card_num);
 
 	if (card_num >=  SNDRV_CARDS) {
-		pr_err("%s: invalid card number\n", __func__);
+		uaudio_err("invalid card number\n");
 		return;
 	}
 
@@ -860,31 +868,34 @@ static void uaudio_disconnect_cb(struct snd_usb_audio *chip)
 
 	/* clean up */
 	if (!dev->udev) {
-		pr_debug("%s: no clean up required\n", __func__);
+		uaudio_dbg("no clean up required\n");
 		goto done;
 	}
 
 	if (atomic_read(&dev->in_use)) {
 		mutex_unlock(&chip->dev_lock);
-
-		pr_debug("%s: sending qmi indication disconnect\n", __func__);
+		uaudio_dbg("sending qmi indication disconnect\n");
+		uaudio_dbg("sq->sq_family:%x sq->sq_node:%x sq->sq_port:%x\n",
+				svc->client_sq.sq_family,
+				svc->client_sq.sq_node, svc->client_sq.sq_port);
 		disconnect_ind.dev_event = USB_AUDIO_DEV_DISCONNECT_V01;
 		disconnect_ind.slot_id = dev->udev->slot_id;
 		disconnect_ind.controller_num = dev->usb_core_id;
 		disconnect_ind.controller_num_valid = 1;
-		ret = qmi_send_ind(svc->uaudio_svc_hdl, svc->curr_conn,
-				&uaudio_stream_ind_desc, &disconnect_ind,
-				sizeof(disconnect_ind));
+		ret = qmi_send_indication(svc->uaudio_svc_hdl, &svc->client_sq,
+				QMI_UADUIO_STREAM_IND_V01,
+				QMI_UAUDIO_STREAM_IND_MSG_V01_MAX_MSG_LEN,
+				qmi_uaudio_stream_ind_msg_v01_ei,
+				&disconnect_ind);
 		if (ret < 0) {
-			pr_err("%s: qmi send failed wiht err: %d\n",
-					__func__, ret);
+			uaudio_err("qmi send failed wiht err: %d\n", ret);
 			return;
 		}
 
 		ret = wait_event_interruptible(dev->disconnect_wq,
 				!atomic_read(&dev->in_use));
 		if (ret < 0) {
-			pr_debug("%s: failed with ret %d\n", __func__, ret);
+			uaudio_dbg("failed with ret %d\n", ret);
 			return;
 		}
 		mutex_lock(&chip->dev_lock);
@@ -899,7 +910,7 @@ static void uaudio_dev_release(struct kref *kref)
 {
 	struct uaudio_dev *dev = container_of(kref, struct uaudio_dev, kref);
 
-	pr_debug("%s for dev %pK\n", __func__, dev);
+	uaudio_dbg("for dev %pK\n", dev);
 
 	atomic_set(&dev->in_use, 0);
 
@@ -910,7 +921,7 @@ static void uaudio_dev_release(struct kref *kref)
 		usb_sec_event_ring_cleanup(dev->udev, uaudio_qdev->intr_num);
 		uaudio_iommu_unmap(MEM_EVENT_RING, IOVA_BASE, PAGE_SIZE,
 			PAGE_SIZE);
-		pr_debug("%s: all audio devices disconnected\n", __func__);
+		uaudio_dbg("all audio devices disconnected\n");
 	}
 
 	wake_up(&dev->disconnect_wq);
@@ -983,7 +994,36 @@ static int info_idx_from_ifnum(int card_num, int intf_num, bool enable)
 	return -EINVAL;
 }
 
-static int handle_uaudio_stream_req(void *req_h, void *req)
+static int get_data_interval_from_si(struct snd_usb_substream *subs,
+	u32 service_interval)
+{
+	unsigned int bus_intval, bus_intval_mult, binterval;
+
+	if (subs->dev->speed >= USB_SPEED_HIGH)
+		bus_intval = BUS_INTERVAL_HIGHSPEED_AND_ABOVE;
+	else
+		bus_intval = BUS_INTERVAL_FULL_SPEED;
+
+	if (service_interval % bus_intval)
+		return -EINVAL;
+
+	bus_intval_mult = service_interval / bus_intval;
+	binterval = ffs(bus_intval_mult);
+	if (!binterval || binterval > MAX_BINTERVAL_ISOC_EP)
+		return -EINVAL;
+
+	/* check if another bit is set then bail out */
+	bus_intval_mult = bus_intval_mult >> binterval;
+	if (bus_intval_mult)
+		return -EINVAL;
+
+	return (binterval - 1);
+}
+
+static void handle_uaudio_stream_req(struct qmi_handle *handle,
+			struct sockaddr_qrtr *sq,
+			struct qmi_txn *txn,
+			const void *decoded_msg)
 {
 	struct qmi_uaudio_stream_req_msg_v01 *req_msg;
 	struct qmi_uaudio_stream_resp_msg_v01 resp = {{0}, 0};
@@ -992,15 +1032,23 @@ static int handle_uaudio_stream_req(void *req_h, void *req)
 	struct uaudio_qmi_svc *svc = uaudio_svc;
 	struct intf_info *info;
 	struct usb_host_endpoint *ep;
+	ktime_t t_request_recvd = ktime_get();
+
 	int pcm_format;
 	u8 pcm_card_num, pcm_dev_num, direction;
-	int info_idx = -EINVAL, ret = 0;
+	int info_idx = -EINVAL, datainterval = -EINVAL, ret = 0;
 
-	req_msg = (struct qmi_uaudio_stream_req_msg_v01 *)req;
+	uaudio_dbg("sq_node:%x sq_port:%x sq_family:%x\n", sq->sq_node,
+			sq->sq_port, sq->sq_family);
+	if (!svc->client_connected) {
+		svc->client_sq = *sq;
+		svc->client_connected = true;
+	}
 
+	req_msg = (struct qmi_uaudio_stream_req_msg_v01 *)decoded_msg;
 	if (!req_msg->audio_format_valid || !req_msg->bit_rate_valid ||
 	!req_msg->number_of_ch_valid || !req_msg->xfer_buff_size_valid) {
-		pr_err("%s: invalid request msg\n", __func__);
+		uaudio_err("invalid request msg\n");
 		ret = -EINVAL;
 		goto response;
 	}
@@ -1009,21 +1057,21 @@ static int handle_uaudio_stream_req(void *req_h, void *req)
 	pcm_dev_num = (req_msg->usb_token & SND_PCM_DEV_NUM_MASK) >> 8;
 	pcm_card_num = (req_msg->usb_token & SND_PCM_CARD_NUM_MASK) >> 16;
 
-	pr_debug("%s:card#:%d dev#:%d dir:%d en:%d fmt:%d rate:%d #ch:%d\n",
-		__func__, pcm_card_num, pcm_dev_num, direction, req_msg->enable,
-		req_msg->audio_format, req_msg->bit_rate,
-		req_msg->number_of_ch);
+	uaudio_dbg("card#:%d dev#:%d dir:%d en:%d fmt:%d rate:%d #ch:%d\n",
+			pcm_card_num, pcm_dev_num, direction, req_msg->enable,
+			req_msg->audio_format, req_msg->bit_rate,
+			req_msg->number_of_ch);
 
 	if (pcm_card_num >= SNDRV_CARDS) {
-		pr_err("%s: invalid card # %u", __func__, pcm_card_num);
+		uaudio_err("invalid card # %u", pcm_card_num);
 		ret = -EINVAL;
 		goto response;
 	}
 
 	pcm_format = map_pcm_format(req_msg->audio_format);
 	if (pcm_format == -EINVAL) {
-		pr_err("%s: unsupported pcm format received %d\n",
-		__func__, req_msg->audio_format);
+		uaudio_err("unsupported pcm format received %d\n",
+				req_msg->audio_format);
 		ret = -EINVAL;
 		goto response;
 	}
@@ -1031,8 +1079,8 @@ static int handle_uaudio_stream_req(void *req_h, void *req)
 	subs = find_snd_usb_substream(pcm_card_num, pcm_dev_num, direction,
 					&chip, uaudio_disconnect_cb);
 	if (!subs || !chip || atomic_read(&chip->shutdown)) {
-		pr_err("%s: can't find substream for card# %u, dev# %u dir%u\n",
-			__func__, pcm_card_num, pcm_dev_num, direction);
+		uaudio_err("can't find substream for card# %u, dev# %u dir%u\n",
+				pcm_card_num, pcm_dev_num, direction);
 		ret = -ENODEV;
 		goto response;
 	}
@@ -1049,8 +1097,8 @@ static int handle_uaudio_stream_req(void *req_h, void *req)
 
 	if (req_msg->enable) {
 		if (info_idx < 0) {
-			pr_err("%s interface# %d already in use card# %d\n",
-				__func__, subs->interface, pcm_card_num);
+			uaudio_err("interface# %d already in use card# %d\n",
+					subs->interface, pcm_card_num);
 			ret = -EBUSY;
 			mutex_unlock(&chip->dev_lock);
 			goto response;
@@ -1060,6 +1108,20 @@ static int handle_uaudio_stream_req(void *req_h, void *req)
 	subs->pcm_format = pcm_format;
 	subs->channels = req_msg->number_of_ch;
 	subs->cur_rate = req_msg->bit_rate;
+	if (req_msg->service_interval_valid) {
+		ret = get_data_interval_from_si(subs,
+						req_msg->service_interval);
+		if (ret == -EINVAL) {
+			uaudio_err("invalid service interval %u\n",
+					req_msg->service_interval);
+			mutex_unlock(&chip->dev_lock);
+			goto response;
+		}
+
+		datainterval = ret;
+		uaudio_dbg("data interval %u\n", ret);
+	}
+
 	uadev[pcm_card_num].ctrl_intf = chip->ctrl_intf;
 
 	if (!req_msg->enable) {
@@ -1068,7 +1130,7 @@ static int handle_uaudio_stream_req(void *req_h, void *req)
 			ep = usb_pipe_endpoint(uadev[pcm_card_num].udev,
 						info->data_ep_pipe);
 			if (!ep)
-				pr_debug("%s: no data ep\n", __func__);
+				uaudio_dbg("no data ep\n");
 			else
 				usb_stop_endpoint(uadev[pcm_card_num].udev, ep);
 			info->data_ep_pipe = 0;
@@ -1078,14 +1140,14 @@ static int handle_uaudio_stream_req(void *req_h, void *req)
 			ep = usb_pipe_endpoint(uadev[pcm_card_num].udev,
 						info->sync_ep_pipe);
 			if (!ep)
-				pr_debug("%s: no sync ep\n", __func__);
+				uaudio_dbg("no sync ep\n");
 			else
 				usb_stop_endpoint(uadev[pcm_card_num].udev, ep);
 			info->sync_ep_pipe = 0;
 		}
 	}
 
-	ret = snd_usb_enable_audio_stream(subs, req_msg->enable);
+	ret = snd_usb_enable_audio_stream(subs, datainterval, req_msg->enable);
 
 	if (!ret && req_msg->enable)
 		ret = prepare_qmi_response(subs, req_msg, &resp, info_idx);
@@ -1094,17 +1156,17 @@ static int handle_uaudio_stream_req(void *req_h, void *req)
 
 response:
 	if (!req_msg->enable && ret != -EINVAL) {
+		mutex_lock(&chip->dev_lock);
 		if (info_idx >= 0) {
-			mutex_lock(&chip->dev_lock);
 			info = &uadev[pcm_card_num].info[info_idx];
 			uaudio_dev_intf_cleanup(uadev[pcm_card_num].udev, info);
-			pr_debug("%s:release resources: intf# %d card# %d\n",
-				__func__, subs->interface, pcm_card_num);
-			mutex_unlock(&chip->dev_lock);
+			uaudio_dbg("release resources: intf# %d card# %d\n",
+					subs->interface, pcm_card_num);
 		}
 		if (atomic_read(&uadev[pcm_card_num].in_use))
 			kref_put(&uadev[pcm_card_num].kref,
 					uaudio_dev_release);
+		mutex_unlock(&chip->dev_lock);
 	}
 
 	resp.usb_token = req_msg->usb_token;
@@ -1113,32 +1175,13 @@ response:
 	resp.internal_status_valid = 1;
 	resp.status = ret ? USB_AUDIO_STREAM_REQ_FAILURE_V01 : ret;
 	resp.status_valid = 1;
-	ret = qmi_send_resp_from_cb(svc->uaudio_svc_hdl, svc->curr_conn, req_h,
-			&uaudio_stream_resp_desc, &resp, sizeof(resp));
+	ret = qmi_send_response(svc->uaudio_svc_hdl, sq, txn,
+			QMI_UAUDIO_STREAM_RESP_V01,
+			QMI_UAUDIO_STREAM_RESP_MSG_V01_MAX_MSG_LEN,
+			qmi_uaudio_stream_resp_msg_v01_ei, &resp);
 
-	svc->t_resp_sent = ktime_get();
-
-	pr_debug("%s: t_resp sent - t_req recvd (in ms) %lld\n", __func__,
-		ktime_to_ms(ktime_sub(svc->t_resp_sent, svc->t_request_recvd)));
-
-	return ret;
-}
-
-static int uaudio_qmi_svc_connect_cb(struct qmi_handle *handle,
-			       void *conn_h)
-{
-	struct uaudio_qmi_svc *svc = uaudio_svc;
-
-	if (svc->uaudio_svc_hdl != handle || !conn_h) {
-		pr_err("%s: handle mismatch\n", __func__);
-		return -EINVAL;
-	}
-	if (svc->curr_conn) {
-		pr_err("%s: Service is busy\n", __func__);
-		return -ECONNREFUSED;
-	}
-	svc->curr_conn = conn_h;
-	return 0;
+	uaudio_dbg("ret %d: qmi response latency %lld ms\n", ret,
+		ktime_to_ms(ktime_sub(ktime_get(), t_request_recvd)));
 }
 
 static void uaudio_qmi_disconnect_work(struct work_struct *w)
@@ -1163,13 +1206,13 @@ static void uaudio_qmi_disconnect_work(struct work_struct *w)
 							&chip,
 							uaudio_disconnect_cb);
 			if (!subs || !chip || atomic_read(&chip->shutdown)) {
-				pr_debug("%s:no subs for c#%u, dev#%u dir%u\n",
-					__func__, info->pcm_card_num,
-					info->pcm_dev_num,
-					info->direction);
+				uaudio_dbg("no subs for c#%u, dev#%u dir%u\n",
+						info->pcm_card_num,
+						info->pcm_dev_num,
+						info->direction);
 				continue;
 			}
-			snd_usb_enable_audio_stream(subs, 0);
+			snd_usb_enable_audio_stream(subs, -EINVAL, 0);
 		}
 		atomic_set(&uadev[idx].in_use, 0);
 		mutex_lock(&chip->dev_lock);
@@ -1178,105 +1221,49 @@ static void uaudio_qmi_disconnect_work(struct work_struct *w)
 	}
 }
 
-static int uaudio_qmi_svc_disconnect_cb(struct qmi_handle *handle,
-				  void *conn_h)
+static void uaudio_qmi_bye_cb(struct qmi_handle *handle, unsigned int node)
 {
 	struct uaudio_qmi_svc *svc = uaudio_svc;
 
-	if (svc->uaudio_svc_hdl != handle || svc->curr_conn != conn_h) {
-		pr_err("%s: handle mismatch\n", __func__);
-		return -EINVAL;
+	if (svc->uaudio_svc_hdl != handle) {
+		uaudio_err("handle mismatch\n");
+		return;
 	}
 
-	svc->curr_conn = NULL;
-	queue_work(svc->uaudio_wq, &svc->qmi_disconnect_work);
-
-	return 0;
-}
-
-static int uaudio_qmi_svc_req_cb(struct qmi_handle *handle, void *conn_h,
-			void *req_h, unsigned int msg_id, void *req)
-{
-	int ret;
-	struct uaudio_qmi_svc *svc = uaudio_svc;
-
-	if (svc->uaudio_svc_hdl != handle || svc->curr_conn != conn_h) {
-		pr_err("%s: handle mismatch\n", __func__);
-		return -EINVAL;
+	if (svc->client_connected && svc->client_sq.sq_node == node) {
+		uaudio_dbg("node: %u\n", node);
+		queue_work(svc->uaudio_wq, &svc->qmi_disconnect_work);
+		svc->client_sq.sq_node = 0;
+		svc->client_sq.sq_port = 0;
+		svc->client_sq.sq_family = 0;
+		svc->client_connected = false;
 	}
-
-	switch (msg_id) {
-	case QMI_UAUDIO_STREAM_REQ_V01:
-		ret = handle_uaudio_stream_req(req_h, req);
-		break;
-
-	default:
-		ret = -ENOTSUPP;
-		break;
-	}
-	return ret;
 }
 
-static int uaudio_qmi_svc_req_desc_cb(unsigned int msg_id,
-	struct msg_desc **req_desc)
-{
-	int ret;
-
-	pr_debug("%s: msg_id %d\n", __func__, msg_id);
-
-	switch (msg_id) {
-	case QMI_UAUDIO_STREAM_REQ_V01:
-		*req_desc = &uaudio_stream_req_desc;
-		ret = sizeof(struct qmi_uaudio_stream_req_msg_v01);
-		break;
-
-	default:
-		ret = -ENOTSUPP;
-		break;
-	}
-	return ret;
-}
-
-static void uaudio_qmi_svc_recv_msg(struct work_struct *w)
-{
-	int ret;
-	struct uaudio_qmi_svc *svc = container_of(w, struct uaudio_qmi_svc,
-		recv_msg_work);
-
-	do {
-		pr_debug("%s: Notified about a Receive Event", __func__);
-	} while ((ret = qmi_recv_msg(svc->uaudio_svc_hdl)) == 0);
-
-	if (ret != -ENOMSG)
-		pr_err("%s: Error receiving message\n", __func__);
-}
-
-static void uaudio_qmi_svc_ntfy(struct qmi_handle *handle,
-		enum qmi_event_type event, void *priv)
+static void uaudio_qmi_svc_disconnect_cb(struct qmi_handle *handle,
+				  unsigned int node, unsigned int port)
 {
 	struct uaudio_qmi_svc *svc = uaudio_svc;
 
-	pr_debug("%s: event %d", __func__, event);
+	if (svc->uaudio_svc_hdl != handle) {
+		uaudio_err("handle mismatch\n");
+		return;
+	}
 
-	svc->t_request_recvd = ktime_get();
-
-	switch (event) {
-	case QMI_RECV_MSG:
-		queue_work(svc->uaudio_wq, &svc->recv_msg_work);
-		break;
-	default:
-		break;
+	if (svc->client_connected && svc->client_sq.sq_node == node &&
+			svc->client_sq.sq_port == port) {
+		uaudio_dbg("client node:%x port:%x\n", node, port);
+		queue_work(svc->uaudio_wq, &svc->qmi_disconnect_work);
+		svc->client_sq.sq_node = 0;
+		svc->client_sq.sq_port = 0;
+		svc->client_sq.sq_family = 0;
+		svc->client_connected = false;
 	}
 }
 
-static struct qmi_svc_ops_options uaudio_svc_ops_options = {
-	.version = 1,
-	.service_id = UAUDIO_STREAM_SERVICE_ID_V01,
-	.service_vers = UAUDIO_STREAM_SERVICE_VERS_V01,
-	.connect_cb = uaudio_qmi_svc_connect_cb,
-	.disconnect_cb = uaudio_qmi_svc_disconnect_cb,
-	.req_desc_cb = uaudio_qmi_svc_req_desc_cb,
-	.req_cb = uaudio_qmi_svc_req_cb,
+static struct qmi_ops uaudio_svc_ops_options = {
+	.bye = uaudio_qmi_bye_cb,
+	.del_client = uaudio_qmi_svc_disconnect_cb,
 };
 
 static int uaudio_qmi_plat_probe(struct platform_device *pdev)
@@ -1377,28 +1364,42 @@ static int uaudio_qmi_svc_init(void)
 		goto free_svc;
 	}
 
-	svc->uaudio_svc_hdl = qmi_handle_create(uaudio_qmi_svc_ntfy, NULL);
+	svc->uaudio_svc_hdl = kzalloc(sizeof(struct qmi_handle), GFP_KERNEL);
 	if (!svc->uaudio_svc_hdl) {
-		pr_err("%s: Error creating svc_hdl\n", __func__);
-		ret = -EFAULT;
+		ret = -ENOMEM;
 		goto destroy_uaudio_wq;
 	}
 
-	ret = qmi_svc_register(svc->uaudio_svc_hdl, &uaudio_svc_ops_options);
+	ret = qmi_handle_init(svc->uaudio_svc_hdl,
+				QMI_UAUDIO_STREAM_REQ_MSG_V01_MAX_MSG_LEN,
+				&uaudio_svc_ops_options,
+				&uaudio_stream_req_handlers);
 	if (ret < 0) {
 		pr_err("%s:Error registering uaudio svc %d\n", __func__, ret);
-		goto destroy_svc_handle;
+		goto free_svc_hdl;
 	}
 
-	INIT_WORK(&svc->recv_msg_work, uaudio_qmi_svc_recv_msg);
+	ret = qmi_add_server(svc->uaudio_svc_hdl, UAUDIO_STREAM_SERVICE_ID_V01,
+					UAUDIO_STREAM_SERVICE_VERS_V01, 0);
+	if (ret < 0) {
+		pr_err("%s: failed to add uaudio svc server :%d\n",
+							__func__, ret);
+		goto release_uaudio_svs_hdl;
+	}
+
 	INIT_WORK(&svc->qmi_disconnect_work, uaudio_qmi_disconnect_work);
 
 	uaudio_svc = svc;
 
+	svc->uaudio_ipc_log = ipc_log_context_create(NUM_LOG_PAGES, "usb_audio",
+			0);
+
 	return 0;
 
-destroy_svc_handle:
-	qmi_handle_destroy(svc->uaudio_svc_hdl);
+release_uaudio_svs_hdl:
+	qmi_handle_release(svc->uaudio_svc_hdl);
+free_svc_hdl:
+	kfree(svc->uaudio_svc_hdl);
 destroy_uaudio_wq:
 	destroy_workqueue(svc->uaudio_wq);
 free_svc:
@@ -1410,10 +1411,11 @@ static void uaudio_qmi_svc_exit(void)
 {
 	struct uaudio_qmi_svc *svc = uaudio_svc;
 
-	qmi_svc_unregister(svc->uaudio_svc_hdl);
+	qmi_handle_release(svc->uaudio_svc_hdl);
 	flush_workqueue(svc->uaudio_wq);
-	qmi_handle_destroy(svc->uaudio_svc_hdl);
 	destroy_workqueue(svc->uaudio_wq);
+	kfree(svc->uaudio_svc_hdl);
+	ipc_log_context_destroy(svc->uaudio_ipc_log);
 	kfree(svc);
 	uaudio_svc = NULL;
 }

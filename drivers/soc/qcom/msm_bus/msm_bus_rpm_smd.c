@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2016, 2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -182,15 +182,15 @@ static int msm_bus_rpm_commit_arb(struct msm_bus_fabric_registration
 			break;
 		}
 		cd->slv_arb[i].dirty = false;
-		}
+	}
 
 	return status;
 }
 
-/**
-* msm_bus_remote_hw_commit() - Commit the arbitration data to RPM
-* @fabric: Fabric for which the data should be committed
-**/
+/*
+ * msm_bus_remote_hw_commit() - Commit the arbitration data to RPM
+ * @fabric: Fabric for which the data should be committed
+ */
 int msm_bus_remote_hw_commit(struct msm_bus_fabric_registration
 	*fab_pdata, void *hw_data, void **cdata)
 {

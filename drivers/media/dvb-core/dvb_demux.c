@@ -15,13 +15,9 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU Lesser General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
- *
  */
 
-#include <linux/sched.h>
+#include <linux/sched/signal.h>
 #include <linux/spinlock.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
@@ -29,15 +25,16 @@
 #include <linux/poll.h>
 #include <linux/string.h>
 #include <linux/crc32.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/div64.h>
+#include <linux/ratelimit.h>
 
 #include "dvb_demux.h"
 
 #define NOBUFS
 /*
-** #define DVB_DEMUX_SECTION_LOSS_LOG to monitor payload loss in the syslog
-*/
+ * #define DVB_DEMUX_SECTION_LOSS_LOG to monitor payload loss in the syslog
+ */
 // #define DVB_DEMUX_SECTION_LOSS_LOG
 
 static int dvb_demux_tscheck;
@@ -63,9 +60,9 @@ module_param(dvb_demux_performancecheck, int, 0644);
 MODULE_PARM_DESC(dvb_demux_performancecheck,
 		"enable transport stream performance check, reported through debugfs");
 
-#define dprintk_tscheck(x...) do {                              \
-		if (dvb_demux_tscheck && printk_ratelimit())    \
-			printk(x);                              \
+#define dprintk_tscheck(x...) do {               \
+		if (dvb_demux_tscheck)           \
+			pr_debug_ratelimited(x); \
 	} while (0)
 
 static const struct dvb_dmx_video_patterns mpeg2_seq_hdr = {
@@ -129,39 +126,6 @@ static const struct dvb_dmx_video_patterns h264_non_idr = {
 	{0xFF, 0xFF, 0xFF, 0x1F, 0x80},
 	5,
 	DMX_IDX_H264_NON_IDR_START
-};
-
-/*
- *  Forbidden (1 bit) + NAL idc (2 bits) + NAL type (5 bits)
- *  I-Slice NAL idc = 3, NAL type = 5, 01100101 mask 0x7F
- */
-static const struct dvb_dmx_video_patterns h264_idr_islice = {
-	{0x00, 0x00, 0x01, 0x65, 0x80},
-	{0xFF, 0xFF, 0xFF, 0x7F, 0x80},
-	5,
-	DMX_IDX_H264_IDR_ISLICE_START
-};
-
-/*
- *  Forbidden (1 bit) + NAL idc (2 bits) + NAL type (5 bits)
- *  P-Slice NAL idc = 2, NAL type = 1, 01000001 mask 0x7F
- */
-static const struct dvb_dmx_video_patterns h264_non_idr_pslice = {
-	{0x00, 0x00, 0x01, 0x41, 0x80},
-	{0xFF, 0xFF, 0xFF, 0x7F, 0x80},
-	5,
-	DMX_IDX_H264_NON_IDR_PSLICE_START
-};
-
-/*
- *  Forbidden (1 bit) + NAL idc (2 bits) + NAL type (5 bits)
- *  B-Slice NAL idc = 0, NAL type = 1, 00000001  mask 0x7F
- */
-static const struct dvb_dmx_video_patterns h264_non_idr_bslice = {
-	{0x00, 0x00, 0x01, 0x01, 0x80},
-	{0xFF, 0xFF, 0xFF, 0x7F, 0x80},
-	5,
-	DMX_IDX_H264_NON_IDR_BSLICE_START
 };
 
 static const struct dvb_dmx_video_patterns h264_non_access_unit_del = {
@@ -678,12 +642,12 @@ static void dvb_dmx_swfilter_section_new(struct dvb_demux_feed *feed)
 		 * but just first and last.
 		 */
 		if (sec->secbuf[0] != 0xff || sec->secbuf[n - 1] != 0xff) {
-			printk("dvb_demux.c section ts padding loss: %d/%d\n",
+			pr_debug("dvb_demux.c section ts padding loss: %d/%d\n",
 			       n, sec->tsfeedp);
-			printk("dvb_demux.c pad data:");
+			pr_debug("dvb_demux.c pad data:");
 			for (i = 0; i < n; i++)
-				printk(" %02x", sec->secbuf[i]);
-			printk("\n");
+				pr_debug(" %02x", sec->secbuf[i]);
+			pr_debug("\n");
 		}
 	}
 #endif
@@ -722,7 +686,7 @@ static int dvb_dmx_swfilter_section_copy_dump(struct dvb_demux_feed *feed,
 
 	if (sec->tsfeedp + len > DMX_MAX_SECFEED_SIZE) {
 #ifdef DVB_DEMUX_SECTION_LOSS_LOG
-		printk("dvb_demux.c section buffer full loss: %d/%d\n",
+		pr_err("dvb_demux.c section buffer full loss: %d/%d\n",
 		       sec->tsfeedp + len - DMX_MAX_SECFEED_SIZE,
 		       DMX_MAX_SECFEED_SIZE);
 #endif
@@ -757,7 +721,7 @@ static int dvb_dmx_swfilter_section_copy_dump(struct dvb_demux_feed *feed,
 			dvb_dmx_swfilter_section_feed(feed);
 #ifdef DVB_DEMUX_SECTION_LOSS_LOG
 		else
-			printk("dvb_demux.c pusi not seen, discarding section data\n");
+			pr_err("dvb_demux.c pusi not seen, discarding section data\n");
 #endif
 		sec->secbufp += seclen;	/* secbufp and secbuf moving together is */
 		sec->secbuf += seclen;	/* redundant but saves pointer arithmetic */
@@ -801,7 +765,7 @@ static int dvb_dmx_swfilter_section_one_packet(struct dvb_demux_feed *feed,
 
 	if (!ccok || dc_i) {
 #ifdef DVB_DEMUX_SECTION_LOSS_LOG
-		printk("dvb_demux.c discontinuity detected %d bytes lost\n",
+		pr_err("dvb_demux.c discontinuity detected %d bytes lost\n",
 		       count);
 		/*
 		 * those bytes under sume circumstances will again be reported
@@ -834,7 +798,7 @@ static int dvb_dmx_swfilter_section_one_packet(struct dvb_demux_feed *feed,
 		}
 #ifdef DVB_DEMUX_SECTION_LOSS_LOG
 		else if (count > 0)
-			printk("dvb_demux.c PUSI=1 but %d bytes lost\n", count);
+			pr_err("dvb_demux.c PUSI=1 but %d bytes lost\n", count);
 #endif
 	} else {
 		/* PUSI=0 (is not set), no section boundary */
@@ -1040,18 +1004,6 @@ static void dvb_dmx_process_pattern_result(struct dvb_demux_feed *feed,
 			idx_event.type = DMX_IDX_H264_IDR_END;
 			frame_end_in_seq = DMX_IDX_H264_FIRST_SPS_FRAME_END;
 		} else if (feed->prev_frame_type & DMX_IDX_H264_NON_IDR_START) {
-			idx_event.type = DMX_IDX_H264_NON_IDR_END;
-			frame_end_in_seq = DMX_IDX_H264_FIRST_SPS_FRAME_END;
-		} else if (feed->prev_frame_type &
-			   DMX_IDX_H264_IDR_ISLICE_START) {
-			idx_event.type = DMX_IDX_H264_IDR_END;
-			frame_end_in_seq = DMX_IDX_H264_FIRST_SPS_FRAME_END;
-		} else if (feed->prev_frame_type &
-			   DMX_IDX_H264_NON_IDR_PSLICE_START) {
-			idx_event.type = DMX_IDX_H264_NON_IDR_END;
-			frame_end_in_seq = DMX_IDX_H264_FIRST_SPS_FRAME_END;
-		} else if (feed->prev_frame_type &
-			   DMX_IDX_H264_NON_IDR_BSLICE_START) {
 			idx_event.type = DMX_IDX_H264_NON_IDR_END;
 			frame_end_in_seq = DMX_IDX_H264_FIRST_SPS_FRAME_END;
 		} else {
@@ -1675,10 +1627,12 @@ static inline int find_next_packet(const u8 *buf, int pos, size_t count,
 static inline void _dvb_dmx_swfilter(struct dvb_demux *demux, const u8 *buf,
 		size_t count, const int pktsize, const int leadingbytes)
 {
-	int p = 0, i, j;
+	int p = 0, i = 0, j = 0;
 	const u8 *q;
 	ktime_t pre_time;
 	u8 timestamp[TIMESTAMP_LEN];
+
+	pre_time = ktime_set(0, 0);
 
 	if (dvb_demux_performancecheck)
 		pre_time = ktime_get();
@@ -1885,15 +1839,6 @@ const struct dvb_dmx_video_patterns *dvb_dmx_get_pattern(u64 dmx_idx_pattern)
 	case DMX_IDX_H264_NON_IDR_START:
 		return &h264_non_idr;
 
-	case DMX_IDX_H264_IDR_ISLICE_START:
-		return &h264_idr_islice;
-
-	case DMX_IDX_H264_NON_IDR_PSLICE_START:
-		return &h264_non_idr_pslice;
-
-	case DMX_IDX_H264_NON_IDR_BSLICE_START:
-		return &h264_non_idr_bslice;
-
 	case DMX_IDX_H264_ACCESS_UNIT_DEL:
 		return &h264_non_access_unit_del;
 
@@ -2018,40 +1963,6 @@ static void dvb_dmx_init_idx_state(struct dvb_demux_feed *feed)
 		  DMX_IDX_H264_FIRST_SPS_FRAME_END))) {
 		feed->patterns[feed->pattern_num] =
 			dvb_dmx_get_pattern(DMX_IDX_H264_NON_IDR_START);
-		feed->pattern_num++;
-	}
-
-	/* H264 IDR ISlice */
-	if ((feed->pattern_num < DVB_DMX_MAX_SEARCH_PATTERN_NUM) &&
-		(feed->idx_params.types &
-		 (DMX_IDX_H264_IDR_ISLICE_START | DMX_IDX_H264_IDR_END |
-		  DMX_IDX_H264_NON_IDR_END |
-		  DMX_IDX_H264_FIRST_SPS_FRAME_START |
-		  DMX_IDX_H264_FIRST_SPS_FRAME_END))) {
-		feed->patterns[feed->pattern_num] =
-			dvb_dmx_get_pattern(DMX_IDX_H264_IDR_ISLICE_START);
-		feed->pattern_num++;
-	}
-	/* H264 non-IDR PSlice */
-	if ((feed->pattern_num < DVB_DMX_MAX_SEARCH_PATTERN_NUM) &&
-		(feed->idx_params.types &
-		 (DMX_IDX_H264_NON_IDR_PSLICE_START | DMX_IDX_H264_NON_IDR_END |
-		  DMX_IDX_H264_IDR_END |
-		  DMX_IDX_H264_FIRST_SPS_FRAME_START |
-		  DMX_IDX_H264_FIRST_SPS_FRAME_END))) {
-		feed->patterns[feed->pattern_num] =
-			dvb_dmx_get_pattern(DMX_IDX_H264_NON_IDR_PSLICE_START);
-		feed->pattern_num++;
-	}
-	/* H264 non-IDR BSlice */
-	if ((feed->pattern_num < DVB_DMX_MAX_SEARCH_PATTERN_NUM) &&
-		(feed->idx_params.types &
-		 (DMX_IDX_H264_NON_IDR_BSLICE_START | DMX_IDX_H264_NON_IDR_END |
-		  DMX_IDX_H264_IDR_END |
-		  DMX_IDX_H264_FIRST_SPS_FRAME_START |
-		  DMX_IDX_H264_FIRST_SPS_FRAME_END))) {
-		feed->patterns[feed->pattern_num] =
-			dvb_dmx_get_pattern(DMX_IDX_H264_NON_IDR_BSLICE_START);
 		feed->pattern_num++;
 	}
 
@@ -3445,8 +3356,6 @@ int dvb_dmx_init(struct dvb_demux *dvbdemux)
 	}
 
 	dvbdemux->cnt_storage = vmalloc(MAX_PID + 1);
-	if (!dvbdemux->cnt_storage)
-		printk(KERN_WARNING "Couldn't allocate memory for TS/TEI check. Disabling it\n");
 
 	INIT_LIST_HEAD(&dvbdemux->frontend_list);
 

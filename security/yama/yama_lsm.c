@@ -309,7 +309,7 @@ static int task_is_descendant(struct task_struct *parent,
  * @tracer: the task_struct of the process attempting ptrace
  * @tracee: the task_struct of the process to be ptraced
  *
- * Returns 1 if tracer has is ptracer exception ancestor for tracee.
+ * Returns 1 if tracer has a ptracer exception ancestor for tracee.
  */
 static int ptracer_exception_found(struct task_struct *tracer,
 				   struct task_struct *tracee)
@@ -320,6 +320,18 @@ static int ptracer_exception_found(struct task_struct *tracer,
 	bool found = false;
 
 	rcu_read_lock();
+
+	/*
+	 * If there's already an active tracing relationship, then make an
+	 * exception for the sake of other accesses, like process_vm_rw().
+	 */
+	parent = ptrace_parent(tracee);
+	if (parent != NULL && same_thread_group(parent, tracer)) {
+		rc = 1;
+		goto unlock;
+	}
+
+	/* Look for a PR_SET_PTRACER relationship. */
 	if (!thread_group_leader(tracee))
 		tracee = rcu_dereference(tracee->group_leader);
 	list_for_each_entry_rcu(relation, &ptracer_relations, node) {
@@ -334,6 +346,8 @@ static int ptracer_exception_found(struct task_struct *tracer,
 
 	if (found && (parent == NULL || task_is_descendant(parent, tracer)))
 		rc = 1;
+
+unlock:
 	rcu_read_unlock();
 
 	return rc;
@@ -425,7 +439,7 @@ static struct security_hook_list yama_hooks[] __lsm_ro_after_init = {
 
 #ifdef CONFIG_SYSCTL
 static int yama_dointvec_minmax(struct ctl_table *table, int write,
-				void __user *buffer, size_t *lenp, loff_t *ppos)
+				void *buffer, size_t *lenp, loff_t *ppos)
 {
 	struct ctl_table table_copy;
 
@@ -470,9 +484,15 @@ static void __init yama_init_sysctl(void)
 static inline void yama_init_sysctl(void) { }
 #endif /* CONFIG_SYSCTL */
 
-void __init yama_add_hooks(void)
+static int __init yama_init(void)
 {
 	pr_info("Yama: becoming mindful.\n");
-	security_add_hooks(yama_hooks, ARRAY_SIZE(yama_hooks));
+	security_add_hooks(yama_hooks, ARRAY_SIZE(yama_hooks), "yama");
 	yama_init_sysctl();
+	return 0;
 }
+
+DEFINE_LSM(yama) = {
+	.name = "yama",
+	.init = yama_init,
+};

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2016, 2020 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -25,13 +25,11 @@ enum apr_subsys_state apr_get_subsys_state(void)
 {
 	return apr_get_modem_state();
 }
-EXPORT_SYMBOL(apr_get_subsys_state);
 
 void apr_set_subsys_state(void)
 {
 	apr_set_modem_state(APR_SUBSYS_DOWN);
 }
-EXPORT_SYMBOL(apr_set_subsys_state);
 
 uint16_t apr_get_data_src(struct apr_hdr *hdr)
 {
@@ -42,7 +40,6 @@ int apr_get_dest_id(char *dest)
 {
 	return DEST_ID;
 }
-EXPORT_SYMBOL(apr_get_dest_id);
 
 void subsys_notif_register(char *client_name, int domain,
 			   struct notifier_block *nb)

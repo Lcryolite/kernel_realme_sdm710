@@ -124,6 +124,33 @@ config MAILBOX_TEST
 	  Test client to help with testing new Controller driver
 	  implementations.
 
+config QCOM_APCS_IPC
+	tristate "Qualcomm APCS IPC driver"
+	depends on ARCH_QCOM || COMPILE_TEST
+	help
+	  Say y here to enable support for the APCS IPC mailbox driver,
+	  providing an interface for invoking the inter-process communication
+	  signals from the application processor to other masters.
+
+config QCOM_GVM_IPC
+	tristate "Qualcomm Technologies, Inc. GVM IPC driver"
+	depends on ARCH_QCOM
+	help
+	  Say y here to enable support for the GVM IPC mailbox driver,
+	  This driver will providing an interface for invoking the communication
+	  between GVM and primary host through virtual IRQ line. It signals from
+	  the GVM to primary host and primary host will send different signal to
+	  remote sub system.
+
+config TEGRA_HSP_MBOX
+	bool "Tegra HSP (Hardware Synchronization Primitives) Driver"
+	depends on ARCH_TEGRA_186_SOC
+	help
+	  The Tegra HSP driver is used for the interprocessor communication
+	  between different remote processors and host processors on Tegra186
+	  and later SoCs. Say Y here if you want to have this support.
+	  If unsure say N.
+
 config XGENE_SLIMPRO_MBOX
 	tristate "APM SoC X-Gene SLIMpro Mailbox Controller"
 	depends on ARCH_XGENE
@@ -135,14 +162,24 @@ config XGENE_SLIMPRO_MBOX
 	  want to use the APM X-Gene SLIMpro IPCM support.
 
 config BCM_PDC_MBOX
-	tristate "Broadcom PDC Mailbox"
-	depends on ARM64 || COMPILE_TEST
+	tristate "Broadcom FlexSparx DMA Mailbox"
+	depends on ARCH_BCM_IPROC || COMPILE_TEST
 	depends on HAS_DMA
+	help
+	  Mailbox implementation for the Broadcom FlexSparx DMA ring manager,
+	  which provides access to various offload engines on Broadcom
+	  SoCs, including FA2/FA+ on Northstar Plus and PDC on Northstar 2.
+
+config BCM_FLEXRM_MBOX
+	tristate "Broadcom FlexRM Mailbox"
+	depends on ARM64
+	depends on HAS_DMA
+	select GENERIC_MSI_IRQ_DOMAIN
 	default ARCH_BCM_IPROC
 	help
-	  Mailbox implementation for the Broadcom PDC ring manager,
+	  Mailbox implementation of the Broadcom FlexRM ring manager,
 	  which provides access to various offload engines on Broadcom
-	  SoCs. Say Y here if you want to use the Broadcom PDC.
+	  SoCs. Say Y here if you want to use the Broadcom FlexRM.
 
 config QTI_RPMH_MBOX
 	bool "TCS Mailbox for QTI RPMH Communication"
@@ -152,10 +189,10 @@ config QTI_RPMH_MBOX
 	  Qualcomm Technologies Inc (QTI) SoCs using TCS hardware mailbox.
 
 config MSM_QMP
-	bool "QTI Mailbox Protocol(QMP)"
-	depends on MSM_SMEM
-	help
-	  QMP is a lightweight communication protocol for sending messages to
-	  a remote processor. This protocol fits into the Generic Mailbox
-	  Framework. QMP uses a mailbox located in shared memory.
+         bool "QTI Mailbox Protocol(QMP)"
+         help
+           QMP is a lightweight communication protocol for sending messages to
+           a remote processor. This protocol fits into the Generic Mailbox
+           Framework. QMP uses a mailbox located in shared memory.
+
 endif

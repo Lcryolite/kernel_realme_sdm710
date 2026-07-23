@@ -141,8 +141,6 @@ struct genericFormat *udf_add_extendedattr(struct inode *inode, uint32_t size,
 		iinfo->i_lenEAttr += size;
 		return (struct genericFormat *)&ea[offset];
 	}
-	if (loc & 0x02)
-		;
 
 	return NULL;
 }
@@ -220,7 +218,7 @@ struct buffer_head *udf_read_tagged(struct super_block *sb, uint32_t block,
 
 	bh = udf_tread(sb, block);
 	if (!bh) {
-		udf_err(sb, "read failed, block=%u, location=%d\n",
+		udf_err(sb, "read failed, block=%u, location=%u\n",
 			block, location);
 		return NULL;
 	}
@@ -258,7 +256,7 @@ struct buffer_head *udf_read_tagged(struct super_block *sb, uint32_t block,
 					le16_to_cpu(tag_p->descCRCLength)))
 		return bh;
 
-	udf_debug("Crc failure block %d: crc = %d, crclen = %d\n", block,
+	udf_debug("Crc failure block %u: crc = %u, crclen = %u\n", block,
 		  le16_to_cpu(tag_p->descCRC),
 		  le16_to_cpu(tag_p->descCRCLength));
 error_out:

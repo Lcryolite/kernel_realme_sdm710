@@ -194,11 +194,8 @@ Optional properties:
 					"bl_ctrl_pwm" = Backlight controlled by PWM gpio.
 					"bl_ctrl_wled" = Backlight controlled by WLED.
 					"bl_ctrl_dcs" = Backlight controlled by DCS commands.
+					"bl_ctrl_tlmm_gpio" = Backlight controlled by TLMM GPIO.
 					other: Unknown backlight control. (default)
-- qcom,mdss-dsi-bl-dcs-command-state:	A string that specifies the ctrl state for sending brightness
-					controlling commands, this is only available when backlight is controlled by DCS commands.
-					"dsi_lp_mode" = DSI low power mode (default).
-					"dsi_hs_mode" = DSI high speed mode.
 - qcom,mdss-dsi-bl-pwm-pmi:		Boolean to indicate that PWM control is through second pmic chip.
 - qcom,mdss-dsi-bl-pmic-bank-select:	LPG channel for backlight.
 					Required if blpmiccontroltype is PWM
@@ -210,6 +207,8 @@ Optional properties:
 					0 = default value.
 - qcom,mdss-dsi-bl-max-level:		Specifies the max backlight level supported by the panel.
 					255 = default value.
+- qcom,mdss-dsi-bl-inverted-dbv:	A boolean to specify whether to invert the display brightness value.
+					When this boolean is set, will inverted display brightness value.
 - qcom,mdss-brightness-max-level:	Specifies the max brightness level supported.
 					255 = default value.
 - qcom,mdss-dsi-interleave-mode:	Specifies interleave mode.
@@ -384,9 +383,6 @@ the fps window.
 					--> Sleep value (in ms)
 - qcom,partial-update-enabled:		Boolean used to enable partial
 					panel update for command mode panels.
-- qcom,partial-update-addr-offset:	An array of two values indicate the panel
-					column, row address offset value.
-					Two default values are 0.
 - qcom,mdss-dsi-horizontal-line-idle:	List of width ranges (EC - SC) in pixels indicating
 					additional idle time in dsi clock cycles that is needed
 					to compensate for smaller line width.
@@ -488,11 +484,6 @@ the fps window.
 - qcom,cmd-to-video-mode-switch-commands:	List of commands that need to be sent
 					to panel in order to switch from command mode to video mode dynamically.
 					Refer to "qcom,mdss-dsi-on-command" section for adding commands.
-- qcom,mode-switch-commands-state:	String that specifies the ctrl state for sending commands to switch
-					the panel mode, it applies for both switches, from command to video and
-					from video to command.
-					"dsi_lp_mode" = DSI low power mode (default)
-					"dsi_hs_mode" = DSI high speed mode
 - qcom,send-pps-before-switch:		Boolean propety to indicate when PPS commands should be sent,
 					either before or after switch commands during dynamic resolution
 					switch in DSC panels. If the property is not present, the default
@@ -731,7 +722,6 @@ Example:
 		qcom,video-to-cmd-mode-switch-commands = [15 01 00 00 00 00 02 C2 0B
 						15 01 00 00 00 00 02 C2 08];
 		qcom,cmd-to-video-mode-switch-commands = [15 01 00 00 00 00 02 C2 03];
-		qcom,mode-switch-commands-state = "dsi_hs_mode";
 		qcom,send-pps-before-switch;
 		qcom,panel-ack-disabled;
 		qcom,mdss-dsi-horizontal-line-idle = <0 40 256>,

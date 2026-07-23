@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -17,11 +17,13 @@
 #include <linux/slab.h>
 
 #include "dsi_pwr.h"
+#include "dsi_parser.h"
 
 /*
  * dsi_pwr_parse_supply_node() - parse power supply node from root device node
  */
-static int dsi_pwr_parse_supply_node(struct device_node *root,
+static int dsi_pwr_parse_supply_node(struct dsi_parser_utils *utils,
+				     struct device_node *root,
 				     struct dsi_regulator_info *regs)
 {
 	int rc = 0;
@@ -29,10 +31,10 @@ static int dsi_pwr_parse_supply_node(struct device_node *root,
 	u32 tmp = 0;
 	struct device_node *node = NULL;
 
-	for_each_child_of_node(root, node) {
+	dsi_for_each_child_node(root, node) {
 		const char *st = NULL;
 
-		rc = of_property_read_string(node, "qcom,supply-name", &st);
+		rc = utils->read_string(node, "qcom,supply-name", &st);
 		if (rc) {
 			pr_err("failed to read name, rc = %d\n", rc);
 			goto error;
@@ -42,32 +44,28 @@ static int dsi_pwr_parse_supply_node(struct device_node *root,
 			 ARRAY_SIZE(regs->vregs[i].vreg_name),
 			 "%s", st);
 
-		rc = of_property_read_u32(node, "qcom,supply-min-voltage",
-					  &tmp);
+		rc = utils->read_u32(node, "qcom,supply-min-voltage", &tmp);
 		if (rc) {
 			pr_err("failed to read min voltage, rc = %d\n", rc);
 			goto error;
 		}
 		regs->vregs[i].min_voltage = tmp;
 
-		rc = of_property_read_u32(node, "qcom,supply-max-voltage",
-					  &tmp);
+		rc = utils->read_u32(node, "qcom,supply-max-voltage", &tmp);
 		if (rc) {
 			pr_err("failed to read max voltage, rc = %d\n", rc);
 			goto error;
 		}
 		regs->vregs[i].max_voltage = tmp;
 
-		rc = of_property_read_u32(node, "qcom,supply-enable-load",
-					  &tmp);
+		rc = utils->read_u32(node, "qcom,supply-enable-load", &tmp);
 		if (rc) {
 			pr_err("failed to read enable load, rc = %d\n", rc);
 			goto error;
 		}
 		regs->vregs[i].enable_load = tmp;
 
-		rc = of_property_read_u32(node, "qcom,supply-disable-load",
-					  &tmp);
+		rc = utils->read_u32(node, "qcom,supply-disable-load", &tmp);
 		if (rc) {
 			pr_err("failed to read disable load, rc = %d\n", rc);
 			goto error;
@@ -75,8 +73,15 @@ static int dsi_pwr_parse_supply_node(struct device_node *root,
 		regs->vregs[i].disable_load = tmp;
 
 		/* Optional values */
-		rc = of_property_read_u32(node, "qcom,supply-pre-on-sleep",
-					  &tmp);
+		rc = utils->read_u32(node, "qcom,supply-off-min-voltage", &tmp);
+		if (rc) {
+			pr_debug("off-min-voltage not specified\n");
+			rc = 0;
+		} else {
+			regs->vregs[i].off_min_voltage = tmp;
+		}
+
+		rc = utils->read_u32(node, "qcom,supply-pre-on-sleep", &tmp);
 		if (rc) {
 			pr_debug("pre-on-sleep not specified\n");
 			rc = 0;
@@ -84,8 +89,7 @@ static int dsi_pwr_parse_supply_node(struct device_node *root,
 			regs->vregs[i].pre_on_sleep = tmp;
 		}
 
-		rc = of_property_read_u32(node, "qcom,supply-pre-off-sleep",
-					  &tmp);
+		rc = utils->read_u32(node, "qcom,supply-pre-off-sleep", &tmp);
 		if (rc) {
 			pr_debug("pre-off-sleep not specified\n");
 			rc = 0;
@@ -93,8 +97,7 @@ static int dsi_pwr_parse_supply_node(struct device_node *root,
 			regs->vregs[i].pre_off_sleep = tmp;
 		}
 
-		rc = of_property_read_u32(node, "qcom,supply-post-on-sleep",
-					  &tmp);
+		rc = utils->read_u32(node, "qcom,supply-post-on-sleep", &tmp);
 		if (rc) {
 			pr_debug("post-on-sleep not specified\n");
 			rc = 0;
@@ -102,8 +105,7 @@ static int dsi_pwr_parse_supply_node(struct device_node *root,
 			regs->vregs[i].post_on_sleep = tmp;
 		}
 
-		rc = of_property_read_u32(node, "qcom,supply-post-off-sleep",
-					  &tmp);
+		rc = utils->read_u32(node, "qcom,supply-post-off-sleep", &tmp);
 		if (rc) {
 			pr_debug("post-off-sleep not specified\n");
 			rc = 0;
@@ -173,6 +175,11 @@ static int dsi_pwr_enable_vregs(struct dsi_regulator_info *regs, bool enable)
 			if (regs->vregs[i].pre_off_sleep)
 				msleep(regs->vregs[i].pre_off_sleep);
 
+			if (regs->vregs[i].off_min_voltage)
+				(void)regulator_set_voltage(regs->vregs[i].vreg,
+						regs->vregs[i].off_min_voltage,
+						regs->vregs[i].max_voltage);
+
 			(void)regulator_set_load(regs->vregs[i].vreg,
 						regs->vregs[i].disable_load);
 			(void)regulator_disable(regs->vregs[i].vreg);
@@ -214,29 +221,30 @@ error:
 }
 
 /**
-* dsi_pwr_of_get_vreg_data - Parse regulator supply information
-* @of_node:        Device of node to parse for supply information.
-* @regs:           Pointer where regulator information will be copied to.
-* @supply_name:    Name of the supply node.
-*
-* return: error code in case of failure or 0 for success.
-*/
-int dsi_pwr_of_get_vreg_data(struct device_node *of_node,
+ * dsi_pwr_of_get_vreg_data - Parse regulator supply information
+ * @of_node:        Device of node to parse for supply information.
+ * @regs:           Pointer where regulator information will be copied to.
+ * @supply_name:    Name of the supply node.
+ *
+ * return: error code in case of failure or 0 for success.
+ */
+int dsi_pwr_of_get_vreg_data(struct dsi_parser_utils *utils,
 				 struct dsi_regulator_info *regs,
 				 char *supply_name)
 {
 	int rc = 0;
 	struct device_node *supply_root_node = NULL;
 
-	if (!of_node || !regs) {
+	if (!utils || !regs) {
 		pr_err("Bad params\n");
 		return -EINVAL;
 	}
 
 	regs->count = 0;
-	supply_root_node = of_get_child_by_name(of_node, supply_name);
+	supply_root_node = utils->get_child_by_name(utils->data, supply_name);
 	if (!supply_root_node) {
-		supply_root_node = of_parse_phandle(of_node, supply_name, 0);
+		supply_root_node = of_parse_phandle(utils->node,
+					supply_name, 0);
 		if (!supply_root_node) {
 			pr_debug("No supply entry present for %s\n",
 					supply_name);
@@ -244,7 +252,7 @@ int dsi_pwr_of_get_vreg_data(struct device_node *of_node,
 		}
 	}
 
-	regs->count = of_get_available_child_count(supply_root_node);
+	regs->count = utils->get_available_child_count(supply_root_node);
 	if (regs->count == 0) {
 		pr_err("No vregs defined for %s\n", supply_name);
 		return -EINVAL;
@@ -256,7 +264,7 @@ int dsi_pwr_of_get_vreg_data(struct device_node *of_node,
 		return -ENOMEM;
 	}
 
-	rc = dsi_pwr_parse_supply_node(supply_root_node, regs);
+	rc = dsi_pwr_parse_supply_node(utils, supply_root_node, regs);
 	if (rc) {
 		pr_err("failed to parse supply node for %s, rc = %d\n",
 			supply_name, rc);
@@ -285,6 +293,7 @@ int dsi_pwr_get_dt_vreg_data(struct device *dev,
 	struct device_node *of_node = NULL;
 	struct device_node *supply_node = NULL;
 	struct device_node *supply_root_node = NULL;
+	struct dsi_parser_utils utils = *dsi_parser_get_of_utils();
 
 	if (!dev || !regs) {
 		pr_err("Bad params\n");
@@ -318,7 +327,10 @@ int dsi_pwr_get_dt_vreg_data(struct device *dev,
 		return -ENOMEM;
 	}
 
-	rc = dsi_pwr_parse_supply_node(supply_root_node, regs);
+	utils.data = of_node;
+	utils.node = of_node;
+
+	rc = dsi_pwr_parse_supply_node(&utils, supply_root_node, regs);
 	if (rc) {
 		pr_err("failed to parse supply node for %s, rc = %d\n",
 		       supply_name, rc);
@@ -340,6 +352,11 @@ int dsi_pwr_get_dt_vreg_data(struct device *dev,
 int dsi_pwr_enable_regulator(struct dsi_regulator_info *regs, bool enable)
 {
 	int rc = 0;
+
+	if (regs->count == 0) {
+		pr_debug("No valid regulators to enable\n");
+		return 0;
+	}
 
 	if (!regs->vregs) {
 		pr_err("Invalid params\n");
@@ -365,6 +382,54 @@ int dsi_pwr_enable_regulator(struct dsi_regulator_info *regs, bool enable)
 					pr_err("failed to disable vregs\n");
 			}
 		}
+	}
+
+	return rc;
+}
+
+/**
+ * dsi_pwr_panel_regulator_mode_set()
+ * set the AB/IBB regulator mode for OLED panel
+ * AOD mode entry and exit
+ * @regs:       Pointer to set of regulators to enable or disable.
+ * @reg_name:	Name of panel power we want to set.
+ * @regulator_mode:	Regulator mode values, like:
+ *                  REGULATOR_MODE_INVALID
+ *                  REGULATOR_MODE_FAST
+ *                  REGULATOR_MODE_NORMAL
+ *                  REGULATOR_MODE_IDLE
+ *                  REGULATOR_MODE_STANDBY
+ *
+ * return: error code in case of failure or 0 for success.
+ */
+int dsi_pwr_panel_regulator_mode_set(struct dsi_regulator_info *regs,
+					 const char *reg_name,
+					 int regulator_mode)
+{
+	int i = 0, rc = 0;
+	struct dsi_vreg *vreg;
+
+	if (regs->count == 0)
+		return -EINVAL;
+
+	if (!regs->vregs)
+		return -EINVAL;
+
+	for (i = 0; i < regs->count; i++) {
+		vreg = &regs->vregs[i];
+		if (!strcmp(vreg->vreg_name, reg_name)) {
+			rc = regulator_set_mode(vreg->vreg,
+						regulator_mode);
+			if (rc)
+				pr_err("Regulator %s set mode %d failed\n",
+				       vreg->vreg_name, rc);
+			break;
+		}
+	}
+
+	if (i >= regs->count) {
+		pr_err("Regulator %s was not found\n", reg_name);
+		return -EINVAL;
 	}
 
 	return rc;

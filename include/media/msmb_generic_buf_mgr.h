@@ -48,4 +48,3 @@ struct msm_buf_mngr_info32_t {
 #endif
 
 #endif
-

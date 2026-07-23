@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <linux/proc_fs.h>
 #include <linux/nsproxy.h>
 #include <linux/ptrace.h>
@@ -23,6 +24,7 @@ static const struct proc_ns_operations *ns_entries[] = {
 #endif
 #ifdef CONFIG_PID_NS
 	&pidns_operations,
+	&pidns_for_children_operations,
 #endif
 #ifdef CONFIG_USER_NS
 	&userns_operations,

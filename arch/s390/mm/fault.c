@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *  S390 version
  *    Copyright IBM Corp. 1999
@@ -12,6 +13,7 @@
 #include <linux/perf_event.h>
 #include <linux/signal.h>
 #include <linux/sched.h>
+#include <linux/sched/debug.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/string.h>
@@ -129,12 +131,12 @@ static int bad_address(void *p)
 
 static void dump_pagetable(unsigned long asce, unsigned long address)
 {
-	unsigned long *table = __va(asce & PAGE_MASK);
+	unsigned long *table = __va(asce & _ASCE_ORIGIN);
 
 	pr_alert("AS:%016lx ", asce);
 	switch (asce & _ASCE_TYPE_MASK) {
 	case _ASCE_TYPE_REGION1:
-		table = table + ((address >> 53) & 0x7ff);
+		table += (address & _REGION1_INDEX) >> _REGION1_SHIFT;
 		if (bad_address(table))
 			goto bad;
 		pr_cont("R1:%016lx ", *table);
@@ -143,7 +145,7 @@ static void dump_pagetable(unsigned long asce, unsigned long address)
 		table = (unsigned long *)(*table & _REGION_ENTRY_ORIGIN);
 		/* fallthrough */
 	case _ASCE_TYPE_REGION2:
-		table = table + ((address >> 42) & 0x7ff);
+		table += (address & _REGION2_INDEX) >> _REGION2_SHIFT;
 		if (bad_address(table))
 			goto bad;
 		pr_cont("R2:%016lx ", *table);
@@ -152,7 +154,7 @@ static void dump_pagetable(unsigned long asce, unsigned long address)
 		table = (unsigned long *)(*table & _REGION_ENTRY_ORIGIN);
 		/* fallthrough */
 	case _ASCE_TYPE_REGION3:
-		table = table + ((address >> 31) & 0x7ff);
+		table += (address & _REGION3_INDEX) >> _REGION3_SHIFT;
 		if (bad_address(table))
 			goto bad;
 		pr_cont("R3:%016lx ", *table);
@@ -161,7 +163,7 @@ static void dump_pagetable(unsigned long asce, unsigned long address)
 		table = (unsigned long *)(*table & _REGION_ENTRY_ORIGIN);
 		/* fallthrough */
 	case _ASCE_TYPE_SEGMENT:
-		table = table + ((address >> 20) & 0x7ff);
+		table += (address & _SEGMENT_INDEX) >> _SEGMENT_SHIFT;
 		if (bad_address(table))
 			goto bad;
 		pr_cont("S:%016lx ", *table);
@@ -169,7 +171,7 @@ static void dump_pagetable(unsigned long asce, unsigned long address)
 			goto out;
 		table = (unsigned long *)(*table & _SEGMENT_ENTRY_ORIGIN);
 	}
-	table = table + ((address >> 12) & 0xff);
+	table += (address & _PAGE_INDEX) >> _PAGE_SHIFT;
 	if (bad_address(table))
 		goto bad;
 	pr_cont("P:%016lx ", *table);
@@ -311,12 +313,34 @@ static noinline void do_sigbus(struct pt_regs *regs)
 	force_sig_info(SIGBUS, &si, tsk);
 }
 
-static noinline void do_fault_error(struct pt_regs *regs, int fault)
+static noinline int signal_return(struct pt_regs *regs)
+{
+	u16 instruction;
+	int rc;
+
+	rc = __get_user(instruction, (u16 __user *) regs->psw.addr);
+	if (rc)
+		return rc;
+	if (instruction == 0x0a77) {
+		set_pt_regs_flag(regs, PIF_SYSCALL);
+		regs->int_code = 0x00040077;
+		return 0;
+	} else if (instruction == 0x0aad) {
+		set_pt_regs_flag(regs, PIF_SYSCALL);
+		regs->int_code = 0x000400ad;
+		return 0;
+	}
+	return -EACCES;
+}
+
+static noinline void do_fault_error(struct pt_regs *regs, int access, int fault)
 {
 	int si_code;
 
 	switch (fault) {
 	case VM_FAULT_BADACCESS:
+		if (access == VM_EXEC && signal_return(regs) == 0)
+			break;
 	case VM_FAULT_BADMAP:
 		/* Bad memory access. Check if it is kernel or user space. */
 		if (user_mode(regs)) {
@@ -324,7 +348,7 @@ static noinline void do_fault_error(struct pt_regs *regs, int fault)
 			si_code = (fault == VM_FAULT_BADMAP) ?
 				SEGV_MAPERR : SEGV_ACCERR;
 			do_sigsegv(regs, si_code);
-			return;
+			break;
 		}
 	case VM_FAULT_BADCONTEXT:
 	case VM_FAULT_PFAULT:
@@ -406,7 +430,7 @@ static inline int do_exception(struct pt_regs *regs, int access)
 
 	address = trans_exc_code & __FAIL_ADDR_MASK;
 	perf_sw_event(PERF_COUNT_SW_PAGE_FAULTS, 1, regs, address);
-	flags = FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE;
+	flags = FAULT_FLAG_DEFAULT;
 	if (user_mode(regs))
 		flags |= FAULT_FLAG_USER;
 	if ((trans_exc_code & store_indication) == 0x400)
@@ -461,8 +485,7 @@ retry:
 	 * the fault.
 	 */
 	fault = handle_mm_fault(vma, address, flags);
-	/* No reason to continue if interrupted by SIGKILL. */
-	if ((fault & VM_FAULT_RETRY) && fatal_signal_pending(current)) {
+	if (fault_signal_pending(fault, regs)) {
 		fault = VM_FAULT_SIGNAL;
 		if (flags & FAULT_FLAG_RETRY_NOWAIT)
 			goto out_up;
@@ -496,10 +519,7 @@ retry:
 				goto out_up;
 			}
 #endif
-			/* Clear FAULT_FLAG_ALLOW_RETRY to avoid any risk
-			 * of starvation. */
-			flags &= ~(FAULT_FLAG_ALLOW_RETRY |
-				   FAULT_FLAG_RETRY_NOWAIT);
+			flags &= ~FAULT_FLAG_RETRY_NOWAIT;
 			flags |= FAULT_FLAG_TRIED;
 			down_read(&mm->mmap_sem);
 			goto retry;
@@ -529,7 +549,7 @@ out:
 void do_protection_exception(struct pt_regs *regs)
 {
 	unsigned long trans_exc_code;
-	int fault;
+	int access, fault;
 
 	trans_exc_code = regs->int_parm_long;
 	/*
@@ -548,9 +568,17 @@ void do_protection_exception(struct pt_regs *regs)
 		do_low_address(regs);
 		return;
 	}
-	fault = do_exception(regs, VM_WRITE);
+	if (unlikely(MACHINE_HAS_NX && (trans_exc_code & 0x80))) {
+		regs->int_parm_long = (trans_exc_code & ~PAGE_MASK) |
+					(regs->psw.addr & PAGE_MASK);
+		access = VM_EXEC;
+		fault = VM_FAULT_BADACCESS;
+	} else {
+		access = VM_WRITE;
+		fault = do_exception(regs, access);
+	}
 	if (unlikely(fault))
-		do_fault_error(regs, fault);
+		do_fault_error(regs, access, fault);
 }
 NOKPROBE_SYMBOL(do_protection_exception);
 
@@ -561,7 +589,7 @@ void do_dat_exception(struct pt_regs *regs)
 	access = VM_READ | VM_EXEC | VM_WRITE;
 	fault = do_exception(regs, access);
 	if (unlikely(fault))
-		do_fault_error(regs, fault);
+		do_fault_error(regs, access, fault);
 }
 NOKPROBE_SYMBOL(do_dat_exception);
 
@@ -678,7 +706,7 @@ static void pfault_interrupt(struct ext_code ext_code,
 		return;
 	inc_irq_stat(IRQEXT_PFL);
 	/* Get the token (= pid of the affected task). */
-	pid = param64 & LPP_PFAULT_PID_MASK;
+	pid = param64 & LPP_PID_MASK;
 	rcu_read_lock();
 	tsk = find_task_by_pid_ns(pid, &init_pid_ns);
 	if (tsk)
@@ -737,6 +765,7 @@ block:
 			 * return to userspace schedule() to block. */
 			__set_current_state(TASK_UNINTERRUPTIBLE);
 			set_tsk_need_resched(tsk);
+			set_preempt_need_resched();
 		}
 	}
 out:

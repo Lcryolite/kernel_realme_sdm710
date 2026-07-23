@@ -43,6 +43,7 @@
 #include <linux/input/sparse-keymap.h>
 #include <acpi/video.h>
 
+ACPI_MODULE_NAME(KBUILD_MODNAME);
 MODULE_AUTHOR("Carlos Corbacho");
 MODULE_DESCRIPTION("Acer Laptop WMI Extras Driver");
 MODULE_LICENSE("GPL");
@@ -93,7 +94,7 @@ MODULE_ALIAS("wmi:676AA15E-6A47-4D9F-A2CC-1E6D18D14026");
 
 enum acer_wmi_event_ids {
 	WMID_HOTKEY_EVENT = 0x1,
-	WMID_ACCEL_EVENT = 0x5,
+	WMID_ACCEL_OR_KBD_DOCK_EVENT = 0x5,
 };
 
 static const struct key_entry acer_wmi_keymap[] __initconst = {
@@ -136,6 +137,7 @@ static const struct key_entry acer_wmi_keymap[] __initconst = {
 	{KE_KEY, KEY_TOUCHPAD_OFF, {KEY_TOUCHPAD_OFF} },
 	{KE_IGNORE, 0x83, {KEY_TOUCHPAD_TOGGLE} },
 	{KE_KEY, 0x85, {KEY_TOUCHPAD_TOGGLE} },
+	{KE_KEY, 0x86, {KEY_WLAN} },
 	{KE_END, 0}
 };
 
@@ -146,7 +148,9 @@ struct event_return_value {
 	u8 function;
 	u8 key_num;
 	u16 device_state;
-	u32 reserved;
+	u16 reserved1;
+	u8 kbd_dock_state;
+	u8 reserved2;
 } __attribute__((packed));
 
 /*
@@ -156,17 +160,34 @@ struct event_return_value {
 #define ACER_WMID3_GDS_THREEG		(1<<6)	/* 3G */
 #define ACER_WMID3_GDS_WIMAX		(1<<7)	/* WiMAX */
 #define ACER_WMID3_GDS_BLUETOOTH	(1<<11)	/* BT */
+#define ACER_WMID3_GDS_RFBTN		(1<<14)	/* RF Button */
+
 #define ACER_WMID3_GDS_TOUCHPAD		(1<<1)	/* Touchpad */
 
-struct lm_input_params {
+/* Hotkey Customized Setting and Acer Application Status.
+ * Set Device Default Value and Report Acer Application Status.
+ * When Acer Application starts, it will run this method to inform
+ * BIOS/EC that Acer Application is on.
+ * App Status
+ *	Bit[0]: Launch Manager Status
+ *	Bit[1]: ePM Status
+ *	Bit[2]: Device Control Status
+ *	Bit[3]: Acer Power Button Utility Status
+ *	Bit[4]: RF Button Status
+ *	Bit[5]: ODD PM Status
+ *	Bit[6]: Device Default Value Control
+ *	Bit[7]: Hall Sensor Application Status
+ */
+struct func_input_params {
 	u8 function_num;        /* Function Number */
 	u16 commun_devices;     /* Communication type devices default status */
 	u16 devices;            /* Other type devices default status */
-	u8 lm_status;           /* Launch Manager Status */
-	u16 reserved;
+	u8 app_status;          /* Acer Device Status. LM, ePM, RF Button... */
+	u8 app_mask;		/* Bit mask to app_status */
+	u8 reserved;
 } __attribute__((packed));
 
-struct lm_return_value {
+struct func_return_value {
 	u8 error_code;          /* Error Code */
 	u8 ec_return_value;     /* EC Return Value */
 	u16 reserved;
@@ -207,13 +228,13 @@ struct hotkey_function_type_aa {
 /*
  * Interface capability flags
  */
-#define ACER_CAP_MAILLED		(1<<0)
-#define ACER_CAP_WIRELESS		(1<<1)
-#define ACER_CAP_BLUETOOTH		(1<<2)
-#define ACER_CAP_BRIGHTNESS		(1<<3)
-#define ACER_CAP_THREEG			(1<<4)
-#define ACER_CAP_ACCEL			(1<<5)
-#define ACER_CAP_ANY			(0xFFFFFFFF)
+#define ACER_CAP_MAILLED		BIT(0)
+#define ACER_CAP_WIRELESS		BIT(1)
+#define ACER_CAP_BLUETOOTH		BIT(2)
+#define ACER_CAP_BRIGHTNESS		BIT(3)
+#define ACER_CAP_THREEG			BIT(4)
+#define ACER_CAP_SET_FUNCTION_MODE	BIT(5)
+#define ACER_CAP_KBD_DOCK		BIT(6)
 
 /*
  * Interface type flags
@@ -320,6 +341,15 @@ static void __init set_quirks(void)
 static int __init dmi_matched(const struct dmi_system_id *dmi)
 {
 	quirks = dmi->driver_data;
+	return 1;
+}
+
+static int __init set_force_caps(const struct dmi_system_id *dmi)
+{
+	if (force_caps == -1) {
+		force_caps = (uintptr_t)dmi->driver_data;
+		pr_info("Found %s, set force_caps to 0x%x\n", dmi->ident, force_caps);
+	}
 	return 1;
 }
 
@@ -500,6 +530,42 @@ static const struct dmi_system_id acer_quirks[] __initconst = {
 			DMI_MATCH(DMI_PRODUCT_NAME, "TravelMate 4200"),
 		},
 		.driver_data = &quirk_acer_travelmate_2490,
+	},
+	{
+		.callback = set_force_caps,
+		.ident = "Acer Aspire Switch 10E SW3-016",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Acer"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "Aspire SW3-016"),
+		},
+		.driver_data = (void *)ACER_CAP_KBD_DOCK,
+	},
+	{
+		.callback = set_force_caps,
+		.ident = "Acer Aspire Switch 10 SW5-012",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Acer"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "Aspire SW5-012"),
+		},
+		.driver_data = (void *)ACER_CAP_KBD_DOCK,
+	},
+	{
+		.callback = set_force_caps,
+		.ident = "Acer Aspire Switch V 10 SW5-017",
+		.matches = {
+			DMI_EXACT_MATCH(DMI_SYS_VENDOR, "Acer"),
+			DMI_EXACT_MATCH(DMI_PRODUCT_NAME, "SW5-017"),
+		},
+		.driver_data = (void *)ACER_CAP_KBD_DOCK,
+	},
+	{
+		.callback = set_force_caps,
+		.ident = "Acer One 10 (S1003)",
+		.matches = {
+			DMI_EXACT_MATCH(DMI_SYS_VENDOR, "Acer"),
+			DMI_EXACT_MATCH(DMI_PRODUCT_NAME, "One S1003"),
+		},
+		.driver_data = (void *)ACER_CAP_KBD_DOCK,
 	},
 	{}
 };
@@ -695,7 +761,7 @@ struct acpi_buffer *result)
 	input.length = sizeof(struct wmab_args);
 	input.pointer = (u8 *)regbuf;
 
-	status = wmi_evaluate_method(AMW0_GUID1, 1, 1, &input, result);
+	status = wmi_evaluate_method(AMW0_GUID1, 0, 1, &input, result);
 
 	return status;
 }
@@ -960,7 +1026,7 @@ WMI_execute_u32(u32 method_id, u32 in, u32 *out)
 	u32 tmp = 0;
 	acpi_status status;
 
-	status = wmi_evaluate_method(WMID_GUID1, 1, method_id, &input, &result);
+	status = wmi_evaluate_method(WMID_GUID1, 0, method_id, &input, &result);
 
 	if (ACPI_FAILURE(status))
 		return status;
@@ -1259,6 +1325,8 @@ static void __init type_aa_dmi_decode(const struct dmi_header *header, void *d)
 		interface->capability |= ACER_CAP_THREEG;
 	if (type_aa->commun_func_bitmap & ACER_WMID3_GDS_BLUETOOTH)
 		interface->capability |= ACER_CAP_BLUETOOTH;
+	if (type_aa->commun_func_bitmap & ACER_WMID3_GDS_RFBTN)
+		commun_func_bitmap &= ~ACER_WMID3_GDS_RFBTN;
 
 	commun_fn_key_number = type_aa->commun_fn_key_number;
 }
@@ -1270,7 +1338,7 @@ static acpi_status __init WMID_set_capabilities(void)
 	acpi_status status;
 	u32 devices;
 
-	status = wmi_query_block(WMID_GUID2, 1, &out);
+	status = wmi_query_block(WMID_GUID2, 0, &out);
 	if (ACPI_FAILURE(status))
 		return status;
 
@@ -1519,7 +1587,7 @@ static int acer_gsensor_event(void)
 	struct acpi_buffer output;
 	union acpi_object out_obj[5];
 
-	if (!has_cap(ACER_CAP_ACCEL))
+	if (!acer_wmi_accel_dev)
 		return -1;
 
 	output.length = sizeof(out_obj);
@@ -1540,6 +1608,71 @@ static int acer_gsensor_event(void)
 		(s16)out_obj->package.elements[2].integer.value);
 	input_sync(acer_wmi_accel_dev);
 	return 0;
+}
+
+/*
+ * Switch series keyboard dock status
+ */
+static int acer_kbd_dock_state_to_sw_tablet_mode(u8 kbd_dock_state)
+{
+	switch (kbd_dock_state) {
+	case 0x01: /* Docked, traditional clamshell laptop mode */
+		return 0;
+	case 0x04: /* Stand-alone tablet */
+	case 0x40: /* Docked, tent mode, keyboard not usable */
+		return 1;
+	default:
+		pr_warn("Unknown kbd_dock_state 0x%02x\n", kbd_dock_state);
+	}
+
+	return 0;
+}
+
+static void acer_kbd_dock_get_initial_state(void)
+{
+	u8 *output, input[8] = { 0x05, 0x00, };
+	struct acpi_buffer input_buf = { sizeof(input), input };
+	struct acpi_buffer output_buf = { ACPI_ALLOCATE_BUFFER, NULL };
+	union acpi_object *obj;
+	acpi_status status;
+	int sw_tablet_mode;
+
+	status = wmi_evaluate_method(WMID_GUID3, 0, 0x2, &input_buf, &output_buf);
+	if (ACPI_FAILURE(status)) {
+		ACPI_EXCEPTION((AE_INFO, status, "Error getting keyboard-dock initial status"));
+		return;
+	}
+
+	obj = output_buf.pointer;
+	if (!obj || obj->type != ACPI_TYPE_BUFFER || obj->buffer.length != 8) {
+		pr_err("Unexpected output format getting keyboard-dock initial status\n");
+		goto out_free_obj;
+	}
+
+	output = obj->buffer.pointer;
+	if (output[0] != 0x00 || (output[3] != 0x05 && output[3] != 0x45)) {
+		pr_err("Unexpected output [0]=0x%02x [3]=0x%02x getting keyboard-dock initial status\n",
+		       output[0], output[3]);
+		goto out_free_obj;
+	}
+
+	sw_tablet_mode = acer_kbd_dock_state_to_sw_tablet_mode(output[4]);
+	input_report_switch(acer_wmi_input_dev, SW_TABLET_MODE, sw_tablet_mode);
+
+out_free_obj:
+	kfree(obj);
+}
+
+static void acer_kbd_dock_event(const struct event_return_value *event)
+{
+	int sw_tablet_mode;
+
+	if (!has_cap(ACER_CAP_KBD_DOCK))
+		return;
+
+	sw_tablet_mode = acer_kbd_dock_state_to_sw_tablet_mode(event->kbd_dock_state);
+	input_report_switch(acer_wmi_input_dev, SW_TABLET_MODE, sw_tablet_mode);
+	input_sync(acer_wmi_input_dev);
 }
 
 /*
@@ -1769,8 +1902,9 @@ static void acer_wmi_notify(u32 value, void *context)
 			sparse_keymap_report_event(acer_wmi_input_dev, scancode, 1, true);
 		}
 		break;
-	case WMID_ACCEL_EVENT:
+	case WMID_ACCEL_OR_KBD_DOCK_EVENT:
 		acer_gsensor_event();
+		acer_kbd_dock_event(&return_value);
 		break;
 	default:
 		pr_warn("Unknown function number - %d - %d\n",
@@ -1780,13 +1914,13 @@ static void acer_wmi_notify(u32 value, void *context)
 }
 
 static acpi_status __init
-wmid3_set_lm_mode(struct lm_input_params *params,
-		  struct lm_return_value *return_value)
+wmid3_set_function_mode(struct func_input_params *params,
+			struct func_return_value *return_value)
 {
 	acpi_status status;
 	union acpi_object *obj;
 
-	struct acpi_buffer input = { sizeof(struct lm_input_params), params };
+	struct acpi_buffer input = { sizeof(struct func_input_params), params };
 	struct acpi_buffer output = { ACPI_ALLOCATE_BUFFER, NULL };
 
 	status = wmi_evaluate_method(WMID_GUID3, 0, 0x1, &input, &output);
@@ -1807,7 +1941,7 @@ wmid3_set_lm_mode(struct lm_input_params *params,
 		return AE_ERROR;
 	}
 
-	*return_value = *((struct lm_return_value *)obj->buffer.pointer);
+	*return_value = *((struct func_return_value *)obj->buffer.pointer);
 	kfree(obj);
 
 	return status;
@@ -1815,16 +1949,17 @@ wmid3_set_lm_mode(struct lm_input_params *params,
 
 static int __init acer_wmi_enable_ec_raw(void)
 {
-	struct lm_return_value return_value;
+	struct func_return_value return_value;
 	acpi_status status;
-	struct lm_input_params params = {
+	struct func_input_params params = {
 		.function_num = 0x1,
 		.commun_devices = 0xFFFF,
 		.devices = 0xFFFF,
-		.lm_status = 0x00,            /* Launch Manager Deactive */
+		.app_status = 0x00,		/* Launch Manager Deactive */
+		.app_mask = 0x01,
 	};
 
-	status = wmid3_set_lm_mode(&params, &return_value);
+	status = wmid3_set_function_mode(&params, &return_value);
 
 	if (return_value.error_code || return_value.ec_return_value)
 		pr_warn("Enabling EC raw mode failed: 0x%x - 0x%x\n",
@@ -1838,19 +1973,42 @@ static int __init acer_wmi_enable_ec_raw(void)
 
 static int __init acer_wmi_enable_lm(void)
 {
-	struct lm_return_value return_value;
+	struct func_return_value return_value;
 	acpi_status status;
-	struct lm_input_params params = {
+	struct func_input_params params = {
 		.function_num = 0x1,
 		.commun_devices = 0xFFFF,
 		.devices = 0xFFFF,
-		.lm_status = 0x01,            /* Launch Manager Active */
+		.app_status = 0x01,            /* Launch Manager Active */
+		.app_mask = 0x01,
 	};
 
-	status = wmid3_set_lm_mode(&params, &return_value);
+	status = wmid3_set_function_mode(&params, &return_value);
 
 	if (return_value.error_code || return_value.ec_return_value)
 		pr_warn("Enabling Launch Manager failed: 0x%x - 0x%x\n",
+			return_value.error_code,
+			return_value.ec_return_value);
+
+	return status;
+}
+
+static int __init acer_wmi_enable_rf_button(void)
+{
+	struct func_return_value return_value;
+	acpi_status status;
+	struct func_input_params params = {
+		.function_num = 0x1,
+		.commun_devices = 0xFFFF,
+		.devices = 0xFFFF,
+		.app_status = 0x10,            /* RF Button Active */
+		.app_mask = 0x10,
+	};
+
+	status = wmid3_set_function_mode(&params, &return_value);
+
+	if (return_value.error_code || return_value.ec_return_value)
+		pr_warn("Enabling RF Button failed: 0x%x - 0x%x\n",
 			return_value.error_code,
 			return_value.ec_return_value);
 
@@ -1904,8 +2062,6 @@ static int __init acer_wmi_accel_setup(void)
 	if (err)
 		return err;
 
-	interface->capability |= ACER_CAP_ACCEL;
-
 	acer_wmi_accel_dev = input_allocate_device();
 	if (!acer_wmi_accel_dev)
 		return -ENOMEM;
@@ -1931,11 +2087,6 @@ err_free_dev:
 	return err;
 }
 
-static void acer_wmi_accel_destroy(void)
-{
-	input_unregister_device(acer_wmi_accel_dev);
-}
-
 static int __init acer_wmi_input_setup(void)
 {
 	acpi_status status;
@@ -1953,12 +2104,18 @@ static int __init acer_wmi_input_setup(void)
 	if (err)
 		goto err_free_dev;
 
+	if (has_cap(ACER_CAP_KBD_DOCK))
+		input_set_capability(acer_wmi_input_dev, EV_SW, SW_TABLET_MODE);
+
 	status = wmi_install_notify_handler(ACERWMID_EVENT_GUID,
 						acer_wmi_notify, NULL);
 	if (ACPI_FAILURE(status)) {
 		err = -EIO;
-		goto err_free_keymap;
+		goto err_free_dev;
 	}
+
+	if (has_cap(ACER_CAP_KBD_DOCK))
+		acer_kbd_dock_get_initial_state();
 
 	err = input_register_device(acer_wmi_input_dev);
 	if (err)
@@ -1968,8 +2125,6 @@ static int __init acer_wmi_input_setup(void)
 
 err_uninstall_notifier:
 	wmi_remove_notify_handler(ACERWMID_EVENT_GUID);
-err_free_keymap:
-	sparse_keymap_free(acer_wmi_input_dev);
 err_free_dev:
 	input_free_device(acer_wmi_input_dev);
 	return err;
@@ -1978,7 +2133,6 @@ err_free_dev:
 static void acer_wmi_input_destroy(void)
 {
 	wmi_remove_notify_handler(ACERWMID_EVENT_GUID);
-	sparse_keymap_free(acer_wmi_input_dev);
 	input_unregister_device(acer_wmi_input_dev);
 }
 
@@ -1992,7 +2146,7 @@ static u32 get_wmid_devices(void)
 	acpi_status status;
 	u32 devices = 0;
 
-	status = wmi_query_block(WMID_GUID2, 1, &out);
+	status = wmi_query_block(WMID_GUID2, 0, &out);
 	if (ACPI_FAILURE(status))
 		return 0;
 
@@ -2093,7 +2247,7 @@ static int acer_resume(struct device *dev)
 	if (has_cap(ACER_CAP_BRIGHTNESS))
 		set_u32(data->brightness, ACER_CAP_BRIGHTNESS);
 
-	if (has_cap(ACER_CAP_ACCEL))
+	if (acer_wmi_accel_dev)
 		acer_gsensor_init();
 
 	return 0;
@@ -2238,10 +2392,17 @@ static int __init acer_wmi_init(void)
 	if (acpi_video_get_backlight_type() != acpi_backlight_vendor)
 		interface->capability &= ~ACER_CAP_BRIGHTNESS;
 
+	if (wmi_has_guid(WMID_GUID3))
+		interface->capability |= ACER_CAP_SET_FUNCTION_MODE;
+
 	if (force_caps != -1)
 		interface->capability = force_caps;
 
-	if (wmi_has_guid(WMID_GUID3)) {
+	if (wmi_has_guid(WMID_GUID3) &&
+	    (interface->capability & ACER_CAP_SET_FUNCTION_MODE)) {
+		if (ACPI_FAILURE(acer_wmi_enable_rf_button()))
+			pr_warn("Cannot enable RF Button Driver\n");
+
 		if (ec_raw_mode) {
 			if (ACPI_FAILURE(acer_wmi_enable_ec_raw())) {
 				pr_err("Cannot enable EC raw mode\n");
@@ -2301,8 +2462,8 @@ error_device_alloc:
 error_platform_register:
 	if (wmi_has_guid(ACERWMID_EVENT_GUID))
 		acer_wmi_input_destroy();
-	if (has_cap(ACER_CAP_ACCEL))
-		acer_wmi_accel_destroy();
+	if (acer_wmi_accel_dev)
+		input_unregister_device(acer_wmi_accel_dev);
 
 	return err;
 }
@@ -2312,8 +2473,8 @@ static void __exit acer_wmi_exit(void)
 	if (wmi_has_guid(ACERWMID_EVENT_GUID))
 		acer_wmi_input_destroy();
 
-	if (has_cap(ACER_CAP_ACCEL))
-		acer_wmi_accel_destroy();
+	if (acer_wmi_accel_dev)
+		input_unregister_device(acer_wmi_accel_dev);
 
 	remove_debugfs();
 	platform_device_unregister(acer_platform_device);

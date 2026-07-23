@@ -36,7 +36,6 @@
 #define SCM_EBUSY		-55
 #define SCM_V2_EBUSY		-12
 
-static atomic_t scm_call_count = ATOMIC_INIT(0);
 static DEFINE_MUTEX(scm_lock);
 
 /*
@@ -195,6 +194,7 @@ static int scm_remap_error(int err)
 static u32 smc(u32 cmd_addr)
 {
 	int context_id;
+
 	register u32 r0 asm(R0_STR) = 1;
 	register u32 r1 asm(R1_STR) = (uintptr_t)&context_id;
 	register u32 r2 asm(R2_STR) = cmd_addr;
@@ -338,13 +338,13 @@ static int _scm_call_retry(u32 svc_id, u32 cmd_id, const void *cmd_buf,
 	do {
 		ret = scm_call_common(svc_id, cmd_id, cmd_buf, cmd_len,
 					resp_buf, resp_len, cmd, len);
-		if (ret == -EBUSY)
+		if (ret == SCM_EBUSY)
 			msleep(SCM_EBUSY_WAIT_MS);
 		if (retry_count == 33)
 			pr_warn("scm: secure world has been busy for 1 second!\n");
-	} while (ret == -EBUSY && (retry_count++ < SCM_EBUSY_MAX_RETRY));
+	} while (ret == SCM_EBUSY && (retry_count++ < SCM_EBUSY_MAX_RETRY));
 
-	if (ret == -EBUSY)
+	if (ret == SCM_EBUSY)
 		pr_err("scm: secure world busy (rc = SCM_EBUSY)\n");
 
 	return ret;
@@ -391,7 +391,6 @@ static int __scm_call_armv8_64(u64 x0, u64 x1, u64 x2, u64 x3, u64 x4, u64 x5,
 	register u64 r5 asm("x5") = x5;
 	register u64 r6 asm("x6") = 0;
 
-	atomic_inc(&scm_call_count);
 	do {
 		asm volatile(
 			__asmeq("%0", R0_STR)
@@ -419,7 +418,6 @@ static int __scm_call_armv8_64(u64 x0, u64 x1, u64 x2, u64 x3, u64 x4, u64 x5,
 			: "x7", "x8", "x9", "x10", "x11", "x12", "x13",
 			  "x14", "x15", "x16", "x17");
 	} while (r0 == SCM_INTERRUPTED);
-	atomic_dec(&scm_call_count);
 
 	if (ret1)
 		*ret1 = r1;
@@ -442,7 +440,6 @@ static int __scm_call_armv8_32(u32 w0, u32 w1, u32 w2, u32 w3, u32 w4, u32 w5,
 	register u32 r5 asm("w5") = w5;
 	register u32 r6 asm("w6") = 0;
 
-	atomic_inc(&scm_call_count);
 	do {
 		asm volatile(
 			__asmeq("%0", R0_STR)
@@ -471,7 +468,6 @@ static int __scm_call_armv8_32(u32 w0, u32 w1, u32 w2, u32 w3, u32 w4, u32 w5,
 			"x14", "x15", "x16", "x17");
 
 	} while (r0 == SCM_INTERRUPTED);
-	atomic_dec(&scm_call_count);
 
 	if (ret1)
 		*ret1 = r1;
@@ -496,7 +492,6 @@ static int __scm_call_armv8_32(u32 w0, u32 w1, u32 w2, u32 w3, u32 w4, u32 w5,
 	register u32 r5 asm("r5") = w5;
 	register u32 r6 asm("r6") = 0;
 
-	atomic_inc(&scm_call_count);
 	do {
 		asm volatile(
 			__asmeq("%0", R0_STR)
@@ -523,7 +518,6 @@ static int __scm_call_armv8_32(u32 w0, u32 w1, u32 w2, u32 w3, u32 w4, u32 w5,
 			 "r" (r5), "r" (r6));
 
 	} while (r0 == SCM_INTERRUPTED);
-	atomic_dec(&scm_call_count);
 
 	if (ret1)
 		*ret1 = r1;
@@ -620,10 +614,8 @@ static int allocate_extra_arg_buffer(struct scm_desc *desc, gfp_t flags)
 	}
 
 	argbuf = kzalloc(argbuflen, flags);
-	if (!argbuf) {
-		pr_err("scm_call: failed to alloc mem for extended argument buffer\n");
+	if (!argbuf)
 		return -ENOMEM;
-	}
 
 	desc->extra_arg_buf = argbuf;
 
@@ -656,6 +648,8 @@ static int __scm_call2(u32 fn_id, struct scm_desc *desc, bool retry)
 		return ret;
 
 	x0 = fn_id | scm_version_mask;
+
+	trace_scm_call_start(x0, desc);
 	do {
 		mutex_lock(&scm_lock);
 
@@ -663,8 +657,6 @@ static int __scm_call2(u32 fn_id, struct scm_desc *desc, bool retry)
 			mutex_lock(&scm_lmh_lock);
 
 		desc->ret[0] = desc->ret[1] = desc->ret[2] = 0;
-
-		trace_scm_call_start(x0, desc);
 
 		if (scm_version == SCM_ARMV8_64)
 			ret = __scm_call_armv8_64(x0, desc->arginfo,
@@ -679,8 +671,6 @@ static int __scm_call2(u32 fn_id, struct scm_desc *desc, bool retry)
 						  &desc->ret[0], &desc->ret[1],
 						  &desc->ret[2]);
 
-		trace_scm_call_end(desc);
-
 		if (SCM_SVC_ID(fn_id) == SCM_SVC_LMH)
 			mutex_unlock(&scm_lmh_lock);
 
@@ -694,6 +684,7 @@ static int __scm_call2(u32 fn_id, struct scm_desc *desc, bool retry)
 			pr_warn("scm: secure world has been busy for 1 second!\n");
 	} while (ret == SCM_V2_EBUSY && (retry_count++ < SCM_EBUSY_MAX_RETRY));
 out:
+	trace_scm_call_end(desc);
 	if (ret < 0)
 		pr_err("scm_call failed: func id %#llx, ret: %d, syscall returns: %#llx, %#llx, %#llx\n",
 			x0, ret, desc->ret[0], desc->ret[1], desc->ret[2]);
@@ -767,6 +758,7 @@ int scm_call2_atomic(u32 fn_id, struct scm_desc *desc)
 
 	x0 = fn_id | BIT(SMC_ATOMIC_SYSCALL) | scm_version_mask;
 
+	trace_scm_call_start(x0, desc);
 	if (scm_version == SCM_ARMV8_64)
 		ret = __scm_call_armv8_64(x0, desc->arginfo, desc->args[0],
 					  desc->args[1], desc->args[2],
@@ -777,6 +769,7 @@ int scm_call2_atomic(u32 fn_id, struct scm_desc *desc)
 					  desc->args[1], desc->args[2],
 					  desc->x5, &desc->ret[0],
 					  &desc->ret[1], &desc->ret[2]);
+	trace_scm_call_end(desc);
 	if (ret < 0)
 		pr_err("scm_call failed: func id %#llx, ret: %d, syscall returns: %#llx, %#llx, %#llx\n",
 			x0, ret, desc->ret[0],
@@ -788,7 +781,7 @@ int scm_call2_atomic(u32 fn_id, struct scm_desc *desc)
 		return scm_remap_error(ret);
 	return ret;
 }
-EXPORT_SYMBOL(scm_call2_atomic);
+
 /**
  * scm_call() - Send an SCM command
  * @svc_id: service identifier
@@ -823,7 +816,7 @@ int scm_call(u32 svc_id, u32 cmd_id, const void *cmd_buf, size_t cmd_len,
 
 	ret = scm_call_common(svc_id, cmd_id, cmd_buf, cmd_len, resp_buf,
 				resp_len, cmd, len);
-	if (unlikely(ret == -EBUSY))
+	if (unlikely(ret == SCM_EBUSY))
 		ret = _scm_call_retry(svc_id, cmd_id, cmd_buf, cmd_len,
 				      resp_buf, resp_len, cmd, PAGE_ALIGN(len));
 	kfree(cmd);
@@ -850,6 +843,7 @@ EXPORT_SYMBOL(scm_call);
 s32 scm_call_atomic1(u32 svc, u32 cmd, u32 arg1)
 {
 	int context_id;
+
 	register u32 r0 asm(R0_STR) = SCM_ATOMIC(svc, cmd, 1);
 	register u32 r1 asm(R1_STR) = (uintptr_t)&context_id;
 	register u32 r2 asm(R2_STR) = arg1;
@@ -883,6 +877,7 @@ EXPORT_SYMBOL(scm_call_atomic1);
 s32 scm_call_atomic1_1(u32 svc, u32 cmd, u32 arg1, u32 *ret1)
 {
 	int context_id;
+
 	register u32 r0 asm(R0_STR) = SCM_ATOMIC(svc, cmd, 1);
 	register u32 r1 asm(R1_STR) = (uintptr_t)&context_id;
 	register u32 r2 asm(R2_STR) = arg1;
@@ -919,6 +914,7 @@ EXPORT_SYMBOL(scm_call_atomic1_1);
 s32 scm_call_atomic2(u32 svc, u32 cmd, u32 arg1, u32 arg2)
 {
 	int context_id;
+
 	register u32 r0 asm(R0_STR) = SCM_ATOMIC(svc, cmd, 2);
 	register u32 r1 asm(R1_STR) = (uintptr_t)&context_id;
 	register u32 r2 asm(R2_STR) = arg1;
@@ -954,6 +950,7 @@ EXPORT_SYMBOL(scm_call_atomic2);
 s32 scm_call_atomic3(u32 svc, u32 cmd, u32 arg1, u32 arg2, u32 arg3)
 {
 	int context_id;
+
 	register u32 r0 asm(R0_STR) = SCM_ATOMIC(svc, cmd, 3);
 	register u32 r1 asm(R1_STR) = (uintptr_t)&context_id;
 	register u32 r2 asm(R2_STR) = arg1;
@@ -982,6 +979,7 @@ s32 scm_call_atomic4_3(u32 svc, u32 cmd, u32 arg1, u32 arg2,
 {
 	int ret;
 	int context_id;
+
 	register u32 r0 asm(R0_STR) = SCM_ATOMIC(svc, cmd, 4);
 	register u32 r1 asm(R1_STR) = (uintptr_t)&context_id;
 	register u32 r2 asm(R2_STR) = arg1;
@@ -1033,6 +1031,7 @@ s32 scm_call_atomic5_3(u32 svc, u32 cmd, u32 arg1, u32 arg2,
 {
 	int ret;
 	int context_id;
+
 	register u32 r0 asm(R0_STR) = SCM_ATOMIC(svc, cmd, 5);
 	register u32 r1 asm(R1_STR) = (uintptr_t)&context_id;
 	register u32 r2 asm(R2_STR) = arg1;
@@ -1073,6 +1072,7 @@ u32 scm_get_version(void)
 {
 	int context_id;
 	static u32 version = -1;
+
 	register u32 r0 asm(R0_STR);
 	register u32 r1 asm(R1_STR);
 
@@ -1177,6 +1177,7 @@ int scm_get_feat_version(u32 feat)
 	if (!is_scm_armv8()) {
 		if (scm_is_call_available(SCM_SVC_INFO, GET_FEAT_VERSION_CMD)) {
 			u32 version;
+
 			if (!scm_call(SCM_SVC_INFO, GET_FEAT_VERSION_CMD, &feat,
 				      sizeof(feat), &version, sizeof(version)))
 				return version;
@@ -1268,7 +1269,48 @@ bool scm_is_secure_device(void)
 }
 EXPORT_SYMBOL(scm_is_secure_device);
 
-bool under_scm_call(void)
+/*
+ * SCM call command ID to protect kernel memory
+ * in Hyp Stage 2 page tables.
+ * Return zero for success.
+ * Return non-zero for failure.
+ */
+#define TZ_RTIC_ENABLE_MEM_PROTECTION	0x4
+#if IS_ENABLED(CONFIG_QCOM_QHEE_ENABLE_MEM_PROTECTION)
+int scm_enable_mem_protection(void)
 {
-	return atomic_read(&scm_call_count);
+	struct scm_desc desc = {0};
+	int ret = 0, resp;
+
+	if (!is_scm_armv8()) {
+		ret = scm_call(SCM_SVC_RTIC, TZ_RTIC_ENABLE_MEM_PROTECTION,
+				NULL, 0, &resp, sizeof(resp));
+	} else {
+		desc.args[0] = 0;
+		desc.arginfo = 0;
+		ret = scm_call2(SCM_SIP_FNID(SCM_SVC_RTIC,
+			TZ_RTIC_ENABLE_MEM_PROTECTION),
+			&desc);
+		resp = desc.ret[0];
+	}
+
+	if (ret == -1) {
+		pr_err("%s: SCM call not supported\n", __func__);
+		return ret;
+	} else if (ret || resp) {
+		pr_err("%s: SCM call failed\n", __func__);
+		if (ret)
+			return ret;
+		else
+			return resp;
+	}
+
+	return resp;
 }
+#else
+inline int scm_enable_mem_protection(void)
+{
+	return 0;
+}
+#endif
+EXPORT_SYMBOL(scm_enable_mem_protection);

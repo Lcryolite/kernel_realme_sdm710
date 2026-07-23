@@ -1,4 +1,4 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
  * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -37,6 +37,7 @@
 #define A6XX_INT_UCHE_TRAP_INTR         25
 #define A6XX_INT_DEBBUS_INTR_0          26
 #define A6XX_INT_DEBBUS_INTR_1          27
+#define A6XX_INT_TSB_WRITE_ERROR	28
 #define A6XX_INT_ISDB_CPU_IRQ           30
 #define A6XX_INT_ISDB_UNDER_DEBUG       31
 
@@ -58,9 +59,11 @@
 #define A6XX_CP_RB_RPTR                  0x806
 #define A6XX_CP_RB_WPTR                  0x807
 #define A6XX_CP_SQE_CNTL                 0x808
+#define A6XX_CP_CP2GMU_STATUS            0x812
 #define A6XX_CP_HW_FAULT                 0x821
 #define A6XX_CP_INTERRUPT_STATUS         0x823
-#define A6XX_CP_PROTECT_STATUS           0X824
+#define A6XX_CP_PROTECT_STATUS           0x824
+#define A6XX_CP_STATUS_1                 0x825
 #define A6XX_CP_SQE_INSTR_BASE_LO        0x830
 #define A6XX_CP_SQE_INSTR_BASE_HI        0x831
 #define A6XX_CP_MISC_CNTL                0x840
@@ -400,6 +403,7 @@
 #define A6XX_RBBM_PERFCTR_SRAM_INIT_STATUS       0x50f
 
 #define A6XX_RBBM_ISDB_CNT                       0x533
+#define A6XX_RBBM_NC_MODE_CNTL                   0x534
 
 #define A6XX_RBBM_SECVID_TRUST_CNTL              0xF400
 #define A6XX_RBBM_SECVID_TSB_TRUSTED_BASE_LO     0xF800
@@ -409,15 +413,20 @@
 #define A6XX_RBBM_SECVID_TSB_ADDR_MODE_CNTL      0xF810
 
 #define A6XX_RBBM_VBIF_CLIENT_QOS_CNTL   0x00010
+#define A6XX_RBBM_GBIF_CLIENT_QOS_CNTL   0x00011
+#define A6XX_RBBM_GBIF_HALT              0x00016
+#define A6XX_RBBM_GBIF_HALT_ACK          0x00017
 #define A6XX_RBBM_GPR0_CNTL              0x00018
 #define A6XX_RBBM_INTERFACE_HANG_INT_CNTL 0x0001f
 #define A6XX_RBBM_INT_CLEAR_CMD          0x00037
 #define A6XX_RBBM_INT_0_MASK             0x00038
+#define A6XX_RBBM_INT_2_MASK             0x0003A
 #define A6XX_RBBM_SP_HYST_CNT            0x00042
 #define A6XX_RBBM_SW_RESET_CMD           0x00043
 #define A6XX_RBBM_RAC_THRESHOLD_CNT      0x00044
 #define A6XX_RBBM_BLOCK_SW_RESET_CMD     0x00045
 #define A6XX_RBBM_BLOCK_SW_RESET_CMD2    0x00046
+#define A6XX_RBBM_BLOCK_GX_RETENTION_CNTL 0x00050
 #define A6XX_RBBM_CLOCK_CNTL             0x000ae
 #define A6XX_RBBM_CLOCK_CNTL_SP0         0x000b0
 #define A6XX_RBBM_CLOCK_CNTL_SP1         0x000b1
@@ -521,9 +530,37 @@
 #define A6XX_RBBM_CLOCK_DELAY_HLSQ_2	 0x00117
 #define A6XX_RBBM_CLOCK_CNTL_GMU_GX      0x00118
 #define A6XX_RBBM_CLOCK_DELAY_GMU_GX     0x00119
+#define A6XX_RBBM_CLOCK_CNTL_TEX_FCHE    0x00120
+#define A6XX_RBBM_CLOCK_DELAY_TEX_FCHE   0x00121
+#define A6XX_RBBM_CLOCK_HYST_TEX_FCHE    0x00122
 #define A6XX_RBBM_CLOCK_HYST_GMU_GX      0x0011a
 #define A6XX_RBBM_CLOCK_MODE_HLSQ	 0x0011b
 #define A6XX_RBBM_CLOCK_DELAY_HLSQ       0x0011c
+#define A6XX_RBBM_CLOCK_HYST_HLSQ        0x0011d
+
+/* ISDB SP0 and SP1 registers */
+#define A6XX_SP0_ISDB_ISDB_EN                           0xf40001
+#define A6XX_SP0_ISDB_ISDB_BRKPT_CFG                    0xf40005
+#define A6XX_SP0_ISDB_ISDB_SHADER_ID_CFG                0xf40006
+#define A6XX_SP0_ISDB_ISDB_WAVE_ID_CFG                  0xf40007
+#define A6XX_SP0_ISDB_ISDB_SAC_CFG                      0xf40024
+#define A6XX_SP0_ISDB_ISDB_SAC_ADDR_0                   0xf40020
+#define A6XX_SP0_ISDB_ISDB_SAC_ADDR_1                   0xf40021
+#define A6XX_SP0_ISDB_ISDB_SAC_MASK_0                   0xf40022
+#define A6XX_SP0_ISDB_ISDB_SAC_MASK_1                   0xf40023
+#define A6XX_HLSQ_ISDB_ISDB_HLSQ_ISDB_CL_WGID_CTRL      0xf44000
+#define A6XX_HLSQ_ISDB_ISDB_HLSQ_ISDB_CL_WGID_X         0xf44001
+#define A6XX_HLSQ_ISDB_ISDB_HLSQ_ISDB_CL_WGID_Y         0xf44002
+#define A6XX_HLSQ_ISDB_ISDB_HLSQ_ISDB_CL_WGID_Z         0xf44003
+#define A6XX_SP1_ISDB_ISDB_EN                           0xf40401
+#define A6XX_SP1_ISDB_ISDB_SAC_CFG                      0xf40424
+#define A6XX_SP1_ISDB_ISDB_SAC_ADDR_0                   0xf40420
+#define A6XX_SP1_ISDB_ISDB_SAC_ADDR_1                   0xf40421
+#define A6XX_SP1_ISDB_ISDB_SAC_MASK_0                   0xf40422
+#define A6XX_SP1_ISDB_ISDB_SAC_MASK_1                   0xf40423
+#define A6XX_SP1_ISDB_ISDB_SHADER_ID_CFG                0xf40406
+#define A6XX_SP1_ISDB_ISDB_WAVE_ID_CFG                  0xf40407
+#define A6XX_SP1_ISDB_ISDB_BRKPT_CFG                    0xf40405
 
 /* DBGC_CFG registers */
 #define A6XX_DBGC_CFG_DBGBUS_SEL_A                  0x600
@@ -812,9 +849,17 @@
 #define GBIF_AXI1_WRITE_DATA_TOTAL_BEATS   47
 
 /* GBIF registers */
+#define A6XX_GBIF_SCACHE_CNTL1            0x3c02
+#define A6XX_GBIF_QSB_SIDE0               0x3c03
+#define A6XX_GBIF_QSB_SIDE1               0x3c04
+#define A6XX_GBIF_QSB_SIDE2               0x3c05
+#define A6XX_GBIF_QSB_SIDE3               0x3c06
 #define A6XX_GBIF_HALT                    0x3c45
 #define A6XX_GBIF_HALT_ACK                0x3c46
-#define A6XX_GBIF_HALT_MASK               0x2
+
+#define A6XX_GBIF_CLIENT_HALT_MASK        BIT(0)
+#define A6XX_GBIF_ARB_HALT_MASK           BIT(1)
+#define A6XX_GBIF_GX_HALT_MASK            BIT(0)
 
 #define A6XX_GBIF_PERF_PWR_CNT_EN         0x3cc0
 #define A6XX_GBIF_PERF_CNT_SEL            0x3cc2
@@ -923,6 +968,8 @@
 #define A6XX_GMU_DCVS_PERF_SETTING		0x1CBFD
 #define A6XX_GMU_DCVS_BW_SETTING		0x1CBFE
 #define A6XX_GMU_DCVS_RETURN			0x1CBFF
+#define A6XX_GMU_ICACHE_CONFIG			0x1F400
+#define A6XX_GMU_DCACHE_CONFIG			0x1F401
 #define A6XX_GMU_SYS_BUS_CONFIG			0x1F40F
 #define A6XX_GMU_CM3_SYSRESET			0x1F800
 #define A6XX_GMU_CM3_BOOT_CONFIG		0x1F801
@@ -955,6 +1002,7 @@
 #define A6XX_GMU_RPMH_CTRL			0x1F8E8
 #define A6XX_GMU_RPMH_HYST_CTRL			0x1F8E9
 #define A6XX_GPU_GMU_CX_GMU_RPMH_POWER_STATE    0x1F8EC
+#define A6XX_GPU_GMU_CX_GMU_PWR_COL_CP_MSG      0x1F900
 #define A6XX_GMU_BOOT_KMD_LM_HANDSHAKE		0x1F9F0
 #define A6XX_GMU_LLM_GLM_SLEEP_CTRL		0x1F957
 #define A6XX_GMU_LLM_GLM_SLEEP_STATUS		0x1F958
@@ -985,7 +1033,9 @@
 #define A6XX_GMU_HOST2GMU_INTR_INFO_1		0x1F99C
 #define A6XX_GMU_HOST2GMU_INTR_INFO_2		0x1F99D
 #define A6XX_GMU_HOST2GMU_INTR_INFO_3		0x1F99E
+#define A6XX_GMU_GENERAL_0			0x1F9C5
 #define A6XX_GMU_GENERAL_1			0x1F9C6
+#define A6XX_GMU_GENERAL_6			0x1F9CB
 #define A6XX_GMU_GENERAL_7			0x1F9CC
 
 /* ISENSE registers */
@@ -1012,6 +1062,11 @@
 #define A6XX_GMU_RBBM_INT_UNMASKED_STATUS	0x23B15
 #define A6XX_GMU_AO_SPARE_CNTL			0x23B16
 
+/* RGMU GLM registers */
+#define A6XX_GMU_AO_RGMU_GLM_SLEEP_CTRL		0x23B80
+#define A6XX_GMU_AO_RGMU_GLM_SLEEP_STATUS	0x23B81
+#define A6XX_GMU_AO_RGMU_GLM_HW_CRC_DISABLE	0x23B82
+
 /* GMU RSC control registers */
 #define A6XX_GPU_RSCC_RSC_STATUS0_DRV0		0x23404
 #define A6XX_GMU_RSCC_CONTROL_REQ		0x23B07
@@ -1024,6 +1079,7 @@
 /* GPUCC registers */
 #define A6XX_GPU_CC_GX_GDSCR                   0x24403
 #define A6XX_GPU_CC_GX_DOMAIN_MISC		0x24542
+#define A6XX_GPU_CC_CX_GDSCR                   0x2441B
 
 /* GPU RSC sequencer registers */
 #define	A6XX_RSCC_PDC_SEQ_START_ADDR			0x23408
@@ -1040,38 +1096,55 @@
 #define A6XX_RSCC_SEQ_BUSY_DRV0				0x23501
 #define A6XX_RSCC_SEQ_MEM_0_DRV0			0x23580
 #define A6XX_RSCC_TCS0_DRV0_STATUS			0x23746
-#define A6XX_RSCC_TCS1_DRV0_STATUS                      0x238AE
-#define A6XX_RSCC_TCS2_DRV0_STATUS                      0x23A16
-#define A6XX_RSCC_TCS3_DRV0_STATUS                      0x23B7E
+#define A6XX_RSCC_TCS1_DRV0_STATUS                      0x237EE
+#define A6XX_RSCC_TCS2_DRV0_STATUS                      0x23896
+#define A6XX_RSCC_TCS3_DRV0_STATUS                      0x2393E
 
 /* GPU PDC sequencer registers in AOSS.RPMh domain */
-#define	PDC_GPU_ENABLE_PDC			0x21140
-#define PDC_GPU_SEQ_START_ADDR			0x21148
-#define PDC_GPU_TCS0_CONTROL			0x21540
-#define PDC_GPU_TCS0_CMD_ENABLE_BANK		0x21541
-#define PDC_GPU_TCS0_CMD_WAIT_FOR_CMPL_BANK	0x21542
-#define PDC_GPU_TCS0_CMD0_MSGID			0x21543
-#define PDC_GPU_TCS0_CMD0_ADDR			0x21544
-#define PDC_GPU_TCS0_CMD0_DATA			0x21545
-#define PDC_GPU_TCS1_CONTROL			0x21572
-#define PDC_GPU_TCS1_CMD_ENABLE_BANK		0x21573
-#define PDC_GPU_TCS1_CMD_WAIT_FOR_CMPL_BANK	0x21574
-#define PDC_GPU_TCS1_CMD0_MSGID			0x21575
-#define PDC_GPU_TCS1_CMD0_ADDR			0x21576
-#define PDC_GPU_TCS1_CMD0_DATA			0x21577
-#define PDC_GPU_TCS2_CONTROL			0x215A4
-#define PDC_GPU_TCS2_CMD_ENABLE_BANK		0x215A5
-#define PDC_GPU_TCS2_CMD_WAIT_FOR_CMPL_BANK	0x215A6
-#define PDC_GPU_TCS2_CMD0_MSGID			0x215A7
-#define PDC_GPU_TCS2_CMD0_ADDR			0x215A8
-#define PDC_GPU_TCS2_CMD0_DATA			0x215A9
-#define PDC_GPU_TCS3_CONTROL			0x215D6
-#define PDC_GPU_TCS3_CMD_ENABLE_BANK		0x215D7
-#define PDC_GPU_TCS3_CMD_WAIT_FOR_CMPL_BANK	0x215D8
-#define PDC_GPU_TCS3_CMD0_MSGID			0x215D9
-#define PDC_GPU_TCS3_CMD0_ADDR			0x215DA
-#define PDC_GPU_TCS3_CMD0_DATA			0x215DB
-#define PDC_GPU_SEQ_MEM_0			0xA0000
+#define PDC_GPU_ENABLE_PDC			0x1140
+#define PDC_GPU_SEQ_START_ADDR			0x1148
+#define PDC_GPU_TCS0_CONTROL			0x1540
+#define PDC_GPU_TCS0_CMD_ENABLE_BANK		0x1541
+#define PDC_GPU_TCS0_CMD_WAIT_FOR_CMPL_BANK	0x1542
+#define PDC_GPU_TCS0_CMD0_MSGID			0x1543
+#define PDC_GPU_TCS0_CMD0_ADDR			0x1544
+#define PDC_GPU_TCS0_CMD0_DATA			0x1545
+#define PDC_GPU_TCS1_CONTROL			0x1572
+#define PDC_GPU_TCS1_CMD_ENABLE_BANK		0x1573
+#define PDC_GPU_TCS1_CMD_WAIT_FOR_CMPL_BANK	0x1574
+#define PDC_GPU_TCS1_CMD0_MSGID			0x1575
+#define PDC_GPU_TCS1_CMD0_ADDR			0x1576
+#define PDC_GPU_TCS1_CMD0_DATA			0x1577
+#define PDC_GPU_TCS2_CONTROL			0x15A4
+#define PDC_GPU_TCS2_CMD_ENABLE_BANK		0x15A5
+#define PDC_GPU_TCS2_CMD_WAIT_FOR_CMPL_BANK	0x15A6
+#define PDC_GPU_TCS2_CMD0_MSGID			0x15A7
+#define PDC_GPU_TCS2_CMD0_ADDR			0x15A8
+#define PDC_GPU_TCS2_CMD0_DATA			0x15A9
+#define PDC_GPU_TCS3_CONTROL			0x15D6
+#define PDC_GPU_TCS3_CMD_ENABLE_BANK		0x15D7
+#define PDC_GPU_TCS3_CMD_WAIT_FOR_CMPL_BANK	0x15D8
+#define PDC_GPU_TCS3_CMD0_MSGID			0x15D9
+#define PDC_GPU_TCS3_CMD0_ADDR			0x15DA
+#define PDC_GPU_TCS3_CMD0_DATA			0x15DB
+
+/*
+ * Legacy DTSI used an offset from the start of the PDC resource
+ * for PDC SEQ programming. We are now using PDC subsections so
+ * start the PDC SEQ offset at zero.
+ */
+#define PDC_GPU_SEQ_MEM_0			0x0
+
+/* RGMU(PCC) registers in A6X_GMU_CX_0_NON_CONTEXT_DEC domain */
+#define A6XX_RGMU_CX_INTR_GEN_EN		0x1F80F
+#define A6XX_RGMU_CX_RGMU_TIMER0		0x1F834
+#define A6XX_RGMU_CX_RGMU_TIMER1		0x1F835
+#define A6XX_RGMU_CX_PCC_CTRL			0x1F838
+#define A6XX_RGMU_CX_PCC_INIT_RESULT		0x1F839
+#define A6XX_RGMU_CX_PCC_BKPT_CFG		0x1F83A
+#define A6XX_RGMU_CX_PCC_BKPT_ADDR		0x1F83B
+#define A6XX_RGMU_CX_PCC_STATUS			0x1F83C
+#define A6XX_RGMU_CX_PCC_DEBUG			0x1F83D
 
 /* GPU CX_MISC registers */
 #define A6XX_GPU_CX_MISC_SYSTEM_CACHE_CNTL_0	0x1

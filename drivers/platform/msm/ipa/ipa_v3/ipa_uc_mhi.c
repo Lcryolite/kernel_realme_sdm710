@@ -266,7 +266,7 @@ union IpaHwMhiStopEventUpdateData_t {
  * @channelHandle: The channel identifier
  * @additonalParams: For stop: the number of pending transport descriptors
  * currently queued
-*/
+ */
 union IpaHwMhiChangeChannelStateResponseData_t {
 	struct IpaHwMhiChangeChannelStateResponseParams_t {
 		u32 state:8;
@@ -530,31 +530,34 @@ static void ipa3_uc_mhi_event_hdlr(struct IpaHwSharedMemCommonMapping_t
 
 static void ipa3_uc_mhi_event_log_info_hdlr(
 	struct IpaHwEventLogInfoData_t *uc_event_top_mmio)
-
 {
-	if ((uc_event_top_mmio->featureMask & (1 << IPA_HW_FEATURE_MHI)) == 0) {
+	struct Ipa3HwEventInfoData_t *evt_info_ptr;
+	u32 size;
+
+	if ((uc_event_top_mmio->protocolMask & (1 << IPA_HW_FEATURE_MHI))
+		== 0) {
 		IPAERR("MHI feature missing 0x%x\n",
-			uc_event_top_mmio->featureMask);
+			uc_event_top_mmio->protocolMask);
 		return;
 	}
 
-	if (uc_event_top_mmio->statsInfo.featureInfo[IPA_HW_FEATURE_MHI].
-		params.size != sizeof(struct IpaHwStatsMhiInfoData_t)) {
+	evt_info_ptr = &uc_event_top_mmio->statsInfo;
+	size = evt_info_ptr->featureInfo[IPA_HW_FEATURE_MHI].params.size;
+	if (size != sizeof(struct IpaHwStatsMhiInfoData_t)) {
 		IPAERR("mhi stats sz invalid exp=%zu is=%u\n",
 			sizeof(struct IpaHwStatsMhiInfoData_t),
-			uc_event_top_mmio->statsInfo.
-			featureInfo[IPA_HW_FEATURE_MHI].params.size);
+			size);
 		return;
 	}
 
-	ipa3_uc_mhi_ctx->mhi_uc_stats_ofst = uc_event_top_mmio->
-		statsInfo.baseAddrOffset + uc_event_top_mmio->statsInfo.
-		featureInfo[IPA_HW_FEATURE_MHI].params.offset;
+	ipa3_uc_mhi_ctx->mhi_uc_stats_ofst =
+		evt_info_ptr->baseAddrOffset +
+		evt_info_ptr->featureInfo[IPA_HW_FEATURE_MHI].params.offset;
 	IPAERR("MHI stats ofst=0x%x\n", ipa3_uc_mhi_ctx->mhi_uc_stats_ofst);
 	if (ipa3_uc_mhi_ctx->mhi_uc_stats_ofst +
 		sizeof(struct IpaHwStatsMhiInfoData_t) >=
 		ipa3_ctx->ctrl->ipa_reg_base_ofst +
-		ipahal_get_reg_n_ofst(IPA_SRAM_DIRECT_ACCESS_n, 0) +
+		ipahal_get_reg_n_ofst(IPA_SW_AREA_RAM_DIRECT_ACCESS_n, 0) +
 		ipa3_ctx->smem_sz) {
 		IPAERR("uc_mhi_stats 0x%x outside SRAM\n",
 			ipa3_uc_mhi_ctx->mhi_uc_stats_ofst);

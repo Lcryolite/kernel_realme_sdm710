@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2018, 2020 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -23,7 +23,7 @@
 #include <linux/types.h>
 #include <linux/version.h>
 #include <linux/io.h>
-#include <media/msm_vidc.h>
+#include "msm_vidc.h"
 #include "msm_vidc_common.h"
 #include "msm_vidc_debug.h"
 #include "msm_vidc_internal.h"
@@ -31,6 +31,9 @@
 #include "msm_vidc_resources.h"
 #include "venus_boot.h"
 #include "vidc_hfi_api.h"
+#include "msm_v4l2_private.h"
+#include "msm_vidc_clocks.h"
+#include <soc/qcom/boot_stats.h>
 
 #define BASE_DEVICE_NUMBER 32
 
@@ -53,7 +56,7 @@ static int msm_v4l2_open(struct file *filp)
 	struct msm_vidc_core *core = video_drvdata(filp);
 	struct msm_vidc_inst *vidc_inst;
 
-	trace_msm_v4l2_vidc_open_start("msm_v4l2_open start");
+	trace_msm_v4l2_vidc_open_start("msm v4l2_open start");
 	vidc_inst = msm_vidc_open(core->id, vid_dev->type);
 	if (!vidc_inst) {
 		dprintk(VIDC_ERR,
@@ -63,7 +66,7 @@ static int msm_v4l2_open(struct file *filp)
 	}
 	clear_bit(V4L2_FL_USES_V4L2_FH, &vdev->flags);
 	filp->private_data = &(vidc_inst->event_handler);
-	trace_msm_v4l2_vidc_open_end("msm_v4l2_open end");
+	trace_msm_v4l2_vidc_open_end("msm v4l2_open end");
 	return 0;
 }
 
@@ -72,12 +75,12 @@ static int msm_v4l2_close(struct file *filp)
 	int rc = 0;
 	struct msm_vidc_inst *vidc_inst;
 
-	trace_msm_v4l2_vidc_close_start("msm_v4l2_close start");
+	trace_msm_v4l2_vidc_close_start("msm v4l2_close start");
 	vidc_inst = get_vidc_inst(filp, NULL);
 
 	rc = msm_vidc_close(vidc_inst);
 	filp->private_data = NULL;
-	trace_msm_v4l2_vidc_close_end("msm_v4l2_close end");
+	trace_msm_v4l2_vidc_close_end("msm v4l2_close end");
 	return rc;
 }
 
@@ -251,6 +254,14 @@ static int msm_v4l2_queryctrl(struct file *file, void *fh,
 	return msm_vidc_query_ctrl((void *)vidc_inst, ctrl);
 }
 
+static long msm_v4l2_default(struct file *file, void *fh,
+	bool valid_prio, unsigned int cmd, void *arg)
+{
+	struct msm_vidc_inst *vidc_inst = get_vidc_inst(file, fh);
+
+	return msm_vidc_private((void *)vidc_inst, cmd, arg);
+}
+
 static const struct v4l2_ioctl_ops msm_v4l2_ioctl_ops = {
 	.vidioc_querycap = msm_v4l2_querycap,
 	.vidioc_enum_fmt_vid_cap_mplane = msm_v4l2_enum_fmt,
@@ -277,6 +288,7 @@ static const struct v4l2_ioctl_ops msm_v4l2_ioctl_ops = {
 	.vidioc_g_parm = msm_v4l2_g_parm,
 	.vidioc_g_crop = msm_v4l2_g_crop,
 	.vidioc_enum_framesizes = msm_v4l2_enum_framesizes,
+	.vidioc_default = msm_v4l2_default,
 };
 
 static const struct v4l2_ioctl_ops msm_v4l2_enc_ioctl_ops = {
@@ -295,6 +307,9 @@ static const struct v4l2_file_operations msm_v4l2_vidc_fops = {
 	.open = msm_v4l2_open,
 	.release = msm_v4l2_close,
 	.unlocked_ioctl = video_ioctl2,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl32 = msm_v4l2_private,
+#endif
 	.poll = msm_v4l2_poll,
 };
 
@@ -350,14 +365,9 @@ static int msm_vidc_initialize_core(struct platform_device *pdev,
 	}
 
 	INIT_DELAYED_WORK(&core->fw_unload_work, msm_vidc_fw_unload_handler);
+	INIT_WORK(&core->ssr_work, msm_vidc_ssr_handler);
 
-	mutex_lock(&core->lock);
-	core->vote_data = kcalloc(MAX_SUPPORTED_INSTANCES,
-		sizeof(*core->vote_data), GFP_KERNEL);
-	if (!core->vote_data)
-		dprintk(VIDC_ERR, "%s: failed to allocate memory\n", __func__);
-	mutex_unlock(&core->lock);
-
+	msm_vidc_init_core_clk_ops(core);
 	return rc;
 }
 
@@ -372,6 +382,8 @@ static ssize_t msm_vidc_link_name_show(struct device *dev,
 			return snprintf(buf, PAGE_SIZE, "venus_dec");
 		else if (dev == &core->vdev[MSM_VIDC_ENCODER].vdev.dev)
 			return snprintf(buf, PAGE_SIZE, "venus_enc");
+		else if (dev == &core->vdev[MSM_VIDC_CVP].vdev.dev)
+			return snprintf(buf, PAGE_SIZE, "venus_cvp");
 		else
 			return 0;
 	else
@@ -484,15 +496,45 @@ static const struct of_device_id msm_vidc_dt_match[] = {
 	{.compatible = "qcom,msm-vidc"},
 	{.compatible = "qcom,msm-vidc,context-bank"},
 	{.compatible = "qcom,msm-vidc,bus"},
+	{.compatible = "qcom,msm-vidc,mem-cdsp"},
 	{}
 };
+static int msm_vidc_register_video_device(enum session_type sess_type,
+		int nr, struct msm_vidc_core *core, struct device *dev)
+{
+	int rc = 0;
 
+	core->vdev[sess_type].vdev.release =
+		msm_vidc_release_video_device;
+	core->vdev[sess_type].vdev.fops = &msm_v4l2_vidc_fops;
+	core->vdev[sess_type].vdev.ioctl_ops = &msm_v4l2_ioctl_ops;
+	core->vdev[sess_type].vdev.vfl_dir = VFL_DIR_M2M;
+	core->vdev[sess_type].type = sess_type;
+	core->vdev[sess_type].vdev.v4l2_dev = &core->v4l2_dev;
+	rc = video_register_device(&core->vdev[sess_type].vdev,
+					VFL_TYPE_GRABBER, nr);
+	if (rc) {
+		dprintk(VIDC_ERR, "Failed to register the video device\n");
+		return rc;
+	}
+	video_set_drvdata(&core->vdev[sess_type].vdev, core);
+	dev = &core->vdev[sess_type].vdev.dev;
+	rc = device_create_file(dev, &dev_attr_link_name);
+	if (rc) {
+		dprintk(VIDC_ERR, "Failed to create video device file\n");
+		video_unregister_device(&core->vdev[sess_type].vdev);
+		return rc;
+	}
+	return 0;
+}
 static int msm_vidc_probe_vidc_device(struct platform_device *pdev)
 {
 	int rc = 0;
 	struct msm_vidc_core *core;
 	struct device *dev;
 	int nr = BASE_DEVICE_NUMBER;
+
+	place_marker("M - DRIVER Video Start");
 
 	if (!vidc_driver) {
 		dprintk(VIDC_ERR, "Invalid vidc driver\n");
@@ -505,10 +547,6 @@ static int msm_vidc_probe_vidc_device(struct platform_device *pdev)
 
 	core->platform_data = vidc_get_drv_data(&pdev->dev);
 	dev_set_drvdata(&pdev->dev, core);
-	if (core->platform_data) {
-		core->resources.enable_max_resolution =
-			core->platform_data->enable_max_resolution;
-	}
 	rc = msm_vidc_initialize_core(pdev, core);
 	if (rc) {
 		dprintk(VIDC_ERR, "Failed to init core\n");
@@ -530,51 +568,29 @@ static int msm_vidc_probe_vidc_device(struct platform_device *pdev)
 	}
 
 	/* setup the decoder device */
-	core->vdev[MSM_VIDC_DECODER].vdev.release =
-		msm_vidc_release_video_device;
-	core->vdev[MSM_VIDC_DECODER].vdev.fops = &msm_v4l2_vidc_fops;
-	core->vdev[MSM_VIDC_DECODER].vdev.ioctl_ops = &msm_v4l2_ioctl_ops;
-	core->vdev[MSM_VIDC_DECODER].vdev.vfl_dir = VFL_DIR_M2M;
-	core->vdev[MSM_VIDC_DECODER].type = MSM_VIDC_DECODER;
-	core->vdev[MSM_VIDC_DECODER].vdev.v4l2_dev = &core->v4l2_dev;
-	rc = video_register_device(&core->vdev[MSM_VIDC_DECODER].vdev,
-					VFL_TYPE_GRABBER, nr);
+	rc = msm_vidc_register_video_device(MSM_VIDC_DECODER,
+			nr, core, dev);
 	if (rc) {
-		dprintk(VIDC_ERR, "Failed to register video decoder device");
-		goto err_dec_register;
-	}
-
-	video_set_drvdata(&core->vdev[MSM_VIDC_DECODER].vdev, core);
-	dev = &core->vdev[MSM_VIDC_DECODER].vdev.dev;
-	rc = device_create_file(dev, &dev_attr_link_name);
-	if (rc) {
-		dprintk(VIDC_ERR,
-				"Failed to create link name sysfs for decoder");
-		goto err_dec_attr_link_name;
+		dprintk(VIDC_ERR, "Failed to register video decoder\n");
+		goto err_dec;
 	}
 
 	/* setup the encoder device */
-	core->vdev[MSM_VIDC_ENCODER].vdev.release =
-		msm_vidc_release_video_device;
-	core->vdev[MSM_VIDC_ENCODER].vdev.fops = &msm_v4l2_vidc_fops;
-	core->vdev[MSM_VIDC_ENCODER].vdev.ioctl_ops = &msm_v4l2_ioctl_ops;
-	core->vdev[MSM_VIDC_ENCODER].vdev.vfl_dir = VFL_DIR_M2M;
-	core->vdev[MSM_VIDC_ENCODER].type = MSM_VIDC_ENCODER;
-	core->vdev[MSM_VIDC_ENCODER].vdev.v4l2_dev = &core->v4l2_dev;
-	rc = video_register_device(&core->vdev[MSM_VIDC_ENCODER].vdev,
-				VFL_TYPE_GRABBER, nr + 1);
+	rc = msm_vidc_register_video_device(MSM_VIDC_ENCODER,
+			nr + 1, core, dev);
 	if (rc) {
-		dprintk(VIDC_ERR, "Failed to register video encoder device");
-		goto err_enc_register;
+		dprintk(VIDC_ERR, "Failed to register video encoder\n");
+		goto err_enc;
 	}
 
-	video_set_drvdata(&core->vdev[MSM_VIDC_ENCODER].vdev, core);
-	dev = &core->vdev[MSM_VIDC_ENCODER].vdev.dev;
-	rc = device_create_file(dev, &dev_attr_link_name);
-	if (rc) {
-		dprintk(VIDC_ERR,
-				"Failed to create link name sysfs for encoder");
-		goto err_enc_attr_link_name;
+	/* setup the cvp device */
+	if (core->resources.domain_cvp) {
+		rc = msm_vidc_register_video_device(MSM_VIDC_CVP,
+				nr + 2, core, dev);
+		if (rc) {
+			dprintk(VIDC_ERR, "Failed to register video CVP\n");
+			goto err_cvp;
+		}
 	}
 
 	/* finish setting up the 'core' */
@@ -626,21 +642,26 @@ static int msm_vidc_probe_vidc_device(struct platform_device *pdev)
 		goto err_fail_sub_device_probe;
 	}
 
+	place_marker("M - DRIVER Video Ready");
 	return rc;
 
 err_fail_sub_device_probe:
 	vidc_hfi_deinitialize(core->hfi_type, core->device);
 err_cores_exceeded:
+	if (core->resources.domain_cvp) {
+		device_remove_file(&core->vdev[MSM_VIDC_CVP].vdev.dev,
+			&dev_attr_link_name);
+		video_unregister_device(&core->vdev[MSM_VIDC_CVP].vdev);
+	}
+err_cvp:
 	device_remove_file(&core->vdev[MSM_VIDC_ENCODER].vdev.dev,
 			&dev_attr_link_name);
-err_enc_attr_link_name:
 	video_unregister_device(&core->vdev[MSM_VIDC_ENCODER].vdev);
-err_enc_register:
+err_enc:
 	device_remove_file(&core->vdev[MSM_VIDC_DECODER].vdev.dev,
 			&dev_attr_link_name);
-err_dec_attr_link_name:
 	video_unregister_device(&core->vdev[MSM_VIDC_DECODER].vdev);
-err_dec_register:
+err_dec:
 	v4l2_device_unregister(&core->v4l2_dev);
 err_v4l2_register:
 	sysfs_remove_group(&pdev->dev.kobj, &msm_vidc_core_attr_group);
@@ -648,6 +669,11 @@ err_core_init:
 	dev_set_drvdata(&pdev->dev, NULL);
 	kfree(core);
 	return rc;
+}
+
+static int msm_vidc_probe_mem_cdsp(struct platform_device *pdev)
+{
+	return read_mem_cdsp_resources_from_dt(pdev);
 }
 
 static int msm_vidc_probe_context_bank(struct platform_device *pdev)
@@ -675,6 +701,9 @@ static int msm_vidc_probe(struct platform_device *pdev)
 	} else if (of_device_is_compatible(pdev->dev.of_node,
 		"qcom,msm-vidc,context-bank")) {
 		return msm_vidc_probe_context_bank(pdev);
+	} else if (of_device_is_compatible(pdev->dev.of_node,
+		"qcom,msm-vidc,mem-cdsp")) {
+		return msm_vidc_probe_mem_cdsp(pdev);
 	}
 
 	/* How did we end up here? */
@@ -702,6 +731,11 @@ static int msm_vidc_remove(struct platform_device *pdev)
 		venus_boot_deinit();
 
 	vidc_hfi_deinitialize(core->hfi_type, core->device);
+	if (core->resources.domain_cvp) {
+		device_remove_file(&core->vdev[MSM_VIDC_CVP].vdev.dev,
+				&dev_attr_link_name);
+		video_unregister_device(&core->vdev[MSM_VIDC_CVP].vdev);
+	}
 	device_remove_file(&core->vdev[MSM_VIDC_ENCODER].vdev.dev,
 				&dev_attr_link_name);
 	video_unregister_device(&core->vdev[MSM_VIDC_ENCODER].vdev);
@@ -711,14 +745,9 @@ static int msm_vidc_remove(struct platform_device *pdev)
 	v4l2_device_unregister(&core->v4l2_dev);
 
 	msm_vidc_free_platform_resources(&core->resources);
-	kfree(core->vote_data);
 	sysfs_remove_group(&pdev->dev.kobj, &msm_vidc_core_attr_group);
 	dev_set_drvdata(&pdev->dev, NULL);
 	mutex_destroy(&core->lock);
-
-	mutex_lock(&vidc_driver->lock);
-	list_del(&core->list);
-	mutex_unlock(&vidc_driver->lock);
 	kfree(core);
 	return rc;
 }
@@ -756,12 +785,92 @@ static int msm_vidc_pm_suspend(struct device *dev)
 
 static int msm_vidc_pm_resume(struct device *dev)
 {
+	update_marker("vidc resumed");
 	dprintk(VIDC_INFO, "%s\n", __func__);
 	return 0;
 }
 
+int msm_vidc_freeze_core(struct msm_vidc_core *core)
+{
+	int rc = 0;
+	int max_retry = 300;
+	struct hfi_device *hdev;
+
+	hdev = core->device;
+
+	mutex_lock(&core->lock);
+
+	dprintk(VIDC_WARN, "%s: fatal SSR intended to dismantle vidc\n",
+			__func__);
+
+	core->ssr_type = SSR_ERR_FATAL;
+
+	if (core->state == VIDC_CORE_INIT_DONE) {
+		dprintk(VIDC_INFO, "%s: ssr type %d\n", __func__,
+			core->ssr_type);
+		/*
+		 * In current implementation user-initiated SSR triggers
+		 * a fatal error from hardware. However, there is no way
+		 * to know if fatal error is due to SSR or not. Handle
+		 * user SSR as non-fatal.
+		 */
+
+		core->trigger_ssr = true;
+		rc = call_hfi_op(hdev, core_trigger_ssr,
+				hdev->hfi_device_data, core->ssr_type);
+
+		if (rc) {
+			dprintk(VIDC_ERR, "%s: trigger_ssr failed\n", __func__);
+			core->trigger_ssr = false;
+		}
+
+	} else {
+		dprintk(VIDC_WARN, "%s: video core %pK not initialized\n",
+			__func__, core);
+	}
+	mutex_unlock(&core->lock);
+
+	while ((core->state != VIDC_CORE_UNINIT) && (max_retry > 0)) {
+		msleep(20);
+		max_retry--;
+	}
+
+	mutex_lock(&core->lock);
+	core->trigger_ssr = false;
+	mutex_unlock(&core->lock);
+
+	return rc;
+}
+
+static int msm_vidc_pm_freeze(struct device *dev)
+{
+	int rc = 0;
+	struct msm_vidc_core *core;
+
+	if (!dev || !dev->driver)
+		return 0;
+
+	core = dev_get_drvdata(dev);
+	if (!core)
+		return 0;
+
+	if (of_device_is_compatible(dev->of_node, "qcom,msm-vidc")) {
+		place_marker("vidc hibernation start");
+
+		rc = msm_vidc_freeze_core(core);
+
+		place_marker("vidc hibernation end");
+	}
+
+	dprintk(VIDC_INFO, "%s: done\n", __func__);
+
+	return rc;
+}
+
 static const struct dev_pm_ops msm_vidc_pm_ops = {
-	SET_SYSTEM_SLEEP_PM_OPS(msm_vidc_pm_suspend, msm_vidc_pm_resume)
+	.suspend = msm_vidc_pm_suspend,
+	.resume = msm_vidc_pm_resume,
+	.freeze = msm_vidc_pm_freeze,
 };
 
 MODULE_DEVICE_TABLE(of, msm_vidc_dt_match);

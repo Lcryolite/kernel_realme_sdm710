@@ -62,7 +62,7 @@ extern int vfs_path_lookup(struct dentry *, struct vfsmount *,
 extern void *copy_mount_options(const void __user *);
 extern char *copy_mount_string(const void __user *);
 
-extern struct vfsmount *lookup_mnt(struct path *);
+extern struct vfsmount *lookup_mnt(const struct path *);
 extern int finish_automount(struct vfsmount *, struct path *);
 
 extern int sb_prepare_remount_readonly(struct super_block *);
@@ -71,9 +71,10 @@ extern void __init mnt_init(void);
 
 extern int __mnt_want_write(struct vfsmount *);
 extern int __mnt_want_write_file(struct file *);
+extern int mnt_want_write_file_path(struct file *);
 extern void __mnt_drop_write(struct vfsmount *);
 extern void __mnt_drop_write_file(struct file *);
-int path_umount(struct path *path, int flags);
+extern void mnt_drop_write_file_path(struct file *);
 
 /*
  * fs_struct.c
@@ -111,10 +112,8 @@ extern struct file *do_filp_open(int dfd, struct filename *pathname,
 extern struct file *do_file_open_root(struct dentry *, struct vfsmount *,
 		const char *, const struct open_flags *);
 
-extern long do_handle_open(int mountdirfd,
-			   struct file_handle __user *ufh, int open_flag);
 extern int open_check_o_direct(struct file *f);
-extern int vfs_open(const struct path *, struct file *, const struct cred *);
+extern int vfs_open(const struct path *, struct file *);
 extern struct file *filp_clone_open(struct file *);
 
 /*
@@ -130,8 +129,6 @@ static inline bool atime_needs_update_rcu(const struct path *path,
 {
 	return __atime_needs_update(path, inode, true);
 }
-
-extern bool atime_needs_update_rcu(const struct path *, struct inode *);
 
 /*
  * fs-writeback.c
@@ -184,5 +181,34 @@ typedef loff_t (*iomap_actor_t)(struct inode *inode, loff_t pos, loff_t len,
 		void *data, struct iomap *iomap);
 
 loff_t iomap_apply(struct inode *inode, loff_t pos, loff_t length,
-		unsigned flags, struct iomap_ops *ops, void *data,
+		unsigned flags, const struct iomap_ops *ops, void *data,
 		iomap_actor_t actor);
+
+/* direct-io.c: */
+int sb_init_dio_done_wq(struct super_block *sb);
+
+#ifdef CONFIG_FILE_TABLE_DEBUG
+void global_filetable_print_warning_once(void);
+void global_filetable_add(struct file *filp);
+void global_filetable_del(struct file *filp);
+void global_filetable_delayed_print(struct mount *mnt);
+
+#else /* i.e NOT CONFIG_FILE_TABLE_DEBUG */
+
+static inline void global_filetable_print_warning_once(void)
+{
+}
+
+static inline void global_filetable_add(struct file *filp)
+{
+}
+
+static inline void global_filetable_del(struct file *filp)
+{
+}
+
+static inline void global_filetable_delayed_print(struct mount *mnt)
+{
+}
+
+#endif /* CONFIG_FILE_TABLE_DEBUG */

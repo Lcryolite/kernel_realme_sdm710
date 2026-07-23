@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2020 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -80,6 +80,7 @@ struct sde_encoder_phys;
  *			Note: This is called from IRQ handler context.
  * @handle_frame_done:	Notify virtual encoder that this phys encoder
  *			completes last request frame.
+ * @get_qsync_fps:	Returns the min fps for the qsync feature.
  */
 struct sde_encoder_virt_ops {
 	void (*handle_vblank_virt)(struct drm_encoder *,
@@ -88,6 +89,8 @@ struct sde_encoder_virt_ops {
 			struct sde_encoder_phys *phys);
 	void (*handle_frame_done)(struct drm_encoder *,
 			struct sde_encoder_phys *phys, u32 event);
+	void (*get_qsync_fps)(struct drm_encoder *,
+			u32 *qsync_fps);
 };
 
 /**
@@ -137,6 +140,7 @@ struct sde_encoder_virt_ops {
  * @wait_dma_trigger:		Returns true if lut dma has to trigger and wait
  *                              unitl transaction is complete.
  * @wait_for_active:		Wait for display scan line to be in active area
+ * @setup_vsync_source:		Configure vsync source selection for cmd mode.
  */
 
 struct sde_encoder_phys_ops {
@@ -186,6 +190,8 @@ struct sde_encoder_phys_ops {
 	int (*get_wr_line_count)(struct sde_encoder_phys *phys);
 	bool (*wait_dma_trigger)(struct sde_encoder_phys *phys);
 	int (*wait_for_active)(struct sde_encoder_phys *phys);
+	void (*setup_vsync_source)(struct sde_encoder_phys *phys,
+			u32 vsync_source, bool is_dummy);
 };
 
 /**
@@ -195,8 +201,11 @@ struct sde_encoder_phys_ops {
  * @INTR_IDX_UNDERRUN: Underrun unterrupt for video and cmd mode panel
  * @INTR_IDX_RDPTR:    Readpointer done unterrupt for cmd mode panel
  * @INTR_IDX_WB_DONE:  Writeback done interrupt for WB
+ * @INTR_IDX_PP1_OVFL: Pingpong overflow interrupt on PP1 for Concurrent WB
  * @INTR_IDX_PP2_OVFL: Pingpong overflow interrupt on PP2 for Concurrent WB
- * @INTR_IDX_PP2_OVFL: Pingpong overflow interrupt on PP3 for Concurrent WB
+ * @INTR_IDX_PP3_OVFL: Pingpong overflow interrupt on PP3 for Concurrent WB
+ * @INTR_IDX_PP4_OVFL: Pingpong overflow interrupt on PP4 for Concurrent WB
+ * @INTR_IDX_PP5_OVFL: Pingpong overflow interrupt on PP5 for Concurrent WB
  * @INTR_IDX_AUTOREFRESH_DONE:  Autorefresh done for cmd mode panel meaning
  *                              autorefresh has triggered a double buffer flip
  */
@@ -208,8 +217,11 @@ enum sde_intr_idx {
 	INTR_IDX_RDPTR,
 	INTR_IDX_AUTOREFRESH_DONE,
 	INTR_IDX_WB_DONE,
+	INTR_IDX_PP1_OVFL,
 	INTR_IDX_PP2_OVFL,
 	INTR_IDX_PP3_OVFL,
+	INTR_IDX_PP4_OVFL,
+	INTR_IDX_PP5_OVFL,
 	INTR_IDX_MAX,
 };
 
@@ -242,7 +254,9 @@ struct sde_encoder_irq {
  * @parent_ops:		Callbacks exposed by the parent to the phys_enc
  * @hw_mdptop:		Hardware interface to the top registers
  * @hw_ctl:		Hardware interface to the ctl registers
+ * @hw_intf:		Hardware interface to INTF registers
  * @hw_cdm:		Hardware interface to the cdm registers
+ * @hw_qdss:		Hardware interface to the qdss registers
  * @cdm_cfg:		Chroma-down hardware configuration
  * @hw_pp:		Hardware interface to the ping pong registers
  * @sde_kms:		Pointer to the sde_kms top level
@@ -251,8 +265,14 @@ struct sde_encoder_irq {
  * @split_role:		Role to play in a split-panel configuration
  * @intf_mode:		Interface mode
  * @intf_idx:		Interface index on sde hardware
+ * @intf_cfg:		Interface hardware configuration
+ * @intf_cfg_v1:        Interface hardware configuration to be used if control
+ *                      path supports SDE_CTL_ACTIVE_CFG
  * @comp_type:      Type of compression supported
- * @enc_cdm_csc:	Cached CSC type of CDM block
+ * @comp_ratio:		Compression ratio
+ * @dsc_extra_pclk_cycle_cnt: Extra pclk cycle count for DSC over DP
+ * @dsc_extra_disp_width: Additional display width for DSC over DP
+ * @wide_bus_en:	Wide-bus configuraiton
  * @enc_spinlock:	Virtual-Encoder-Wide Spin Lock for IRQ purposes
  * @enable_state:	Enable state tracking
  * @vblank_refcount:	Reference count of vblank request
@@ -270,8 +290,9 @@ struct sde_encoder_irq {
  * @pending_kickoff_wq:		Wait queue for blocking until kickoff completes
  * @ctlstart_timeout:		Indicates if ctl start timeout occurred
  * @irq:			IRQ tracking structures
+ * @has_intf_te:		Interface TE configuration support
  * @cont_splash_single_flush	Variable to check if single flush is enabled.
- * @cont_splash_settings	Variable to store continuous splash settings.
+ * @cont_splash_enabled:	Variable to store continuous splash settings.
  * @in_clone_mode		Indicates if encoder is in clone mode ref@CWB
  * @vfp_cached:			cached vertical front porch to be used for
  *				programming ROT and MDP fetch start
@@ -283,7 +304,9 @@ struct sde_encoder_phys {
 	struct sde_encoder_virt_ops parent_ops;
 	struct sde_hw_mdp *hw_mdptop;
 	struct sde_hw_ctl *hw_ctl;
+	struct sde_hw_intf *hw_intf;
 	struct sde_hw_cdm *hw_cdm;
+	struct sde_hw_qdss *hw_qdss;
 	struct sde_hw_cdm_cfg cdm_cfg;
 	struct sde_hw_pingpong *hw_pp;
 	struct sde_kms *sde_kms;
@@ -291,8 +314,13 @@ struct sde_encoder_phys {
 	enum sde_enc_split_role split_role;
 	enum sde_intf_mode intf_mode;
 	enum sde_intf intf_idx;
+	struct sde_hw_intf_cfg intf_cfg;
+	struct sde_hw_intf_cfg_v1 intf_cfg_v1;
 	enum msm_display_compression_type comp_type;
-	enum sde_csc_type enc_cdm_csc;
+	enum msm_display_compression_ratio comp_ratio;
+	u32 dsc_extra_pclk_cycle_cnt;
+	u32 dsc_extra_disp_width;
+	bool wide_bus_en;
 	spinlock_t *enc_spinlock;
 	enum sde_enc_enable_state enable_state;
 	struct mutex *vblank_ctl_lock;
@@ -303,11 +331,12 @@ struct sde_encoder_phys {
 	atomic_t pending_ctlstart_cnt;
 	atomic_t pending_kickoff_cnt;
 	atomic_t pending_retire_fence_cnt;
-	wait_queue_head_t pending_kickoff_wq;
 	atomic_t ctlstart_timeout;
+	wait_queue_head_t pending_kickoff_wq;
 	struct sde_encoder_irq irq[INTR_IDX_MAX];
+	bool has_intf_te;
 	u32 cont_splash_single_flush;
-	bool cont_splash_settings;
+	bool cont_splash_enabled;
 	bool in_clone_mode;
 	int vfp_cached;
 };
@@ -322,7 +351,6 @@ static inline int sde_encoder_phys_inc_pending(struct sde_encoder_phys *phys)
  * struct sde_encoder_phys_vid - sub-class of sde_encoder_phys to handle video
  *	mode specific operations
  * @base:	Baseclass physical encoder structure
- * @hw_intf:	Hardware interface to the intf registers
  * @timing_params: Current timing parameter
  * @rot_fetch:	Prefill for inline rotation
  * @error_count: Number of consecutive kickoffs that experienced an error
@@ -330,7 +358,6 @@ static inline int sde_encoder_phys_inc_pending(struct sde_encoder_phys *phys)
  */
 struct sde_encoder_phys_vid {
 	struct sde_encoder_phys base;
-	struct sde_hw_intf *hw_intf;
 	struct intf_timing_params timing_params;
 	struct intf_prog_fetch rot_fetch;
 	int error_count;
@@ -364,6 +391,8 @@ struct sde_encoder_phys_cmd_autorefresh {
  * @rd_ptr_timestamp: last rd_ptr_irq timestamp
  * @pending_vblank_cnt: Atomic counter tracking pending wait for VBLANK
  * @pending_vblank_wq: Wait queue for blocking until VBLANK received
+ * @ctl_start_threshold: A threshold in microseconds allows command mode
+ *   engine to trigger the retire fence without waiting for rd_ptr.
  */
 struct sde_encoder_phys_cmd {
 	struct sde_encoder_phys base;
@@ -375,6 +404,7 @@ struct sde_encoder_phys_cmd {
 	ktime_t rd_ptr_timestamp;
 	atomic_t pending_vblank_cnt;
 	wait_queue_head_t pending_vblank_wq;
+	u32 ctl_start_threshold;
 };
 
 /**
@@ -384,14 +414,14 @@ struct sde_encoder_phys_cmd {
  * @hw_wb:		Hardware interface to the wb registers
  * @wbdone_timeout:	Timeout value for writeback done in msec
  * @bypass_irqreg:	Bypass irq register/unregister if non-zero
- * @wbdone_complete:	for wbdone irq synchronization
  * @wb_cfg:		Writeback hardware configuration
  * @cdp_cfg:		Writeback CDP configuration
- * @intf_cfg:		Interface hardware configuration
  * @wb_roi:		Writeback region-of-interest
  * @wb_fmt:		Writeback pixel format
  * @wb_fb:		Pointer to current writeback framebuffer
  * @wb_aspace:		Pointer to current writeback address space
+ * @cwb_old_fb:		Pointer to old writeback framebuffer
+ * @cwb_old_aspace:	Pointer to old writeback address space
  * @frame_count:	Counter of completed writeback operations
  * @kickoff_count:	Counter of issued writeback operations
  * @aspace:		address space identifier for non-secure/secure domain
@@ -407,14 +437,14 @@ struct sde_encoder_phys_wb {
 	struct sde_hw_wb *hw_wb;
 	u32 wbdone_timeout;
 	u32 bypass_irqreg;
-	struct completion wbdone_complete;
 	struct sde_hw_wb_cfg wb_cfg;
 	struct sde_hw_wb_cdp_cfg cdp_cfg;
-	struct sde_hw_intf_cfg intf_cfg;
 	struct sde_rect wb_roi;
 	const struct sde_format *wb_fmt;
 	struct drm_framebuffer *wb_fb;
 	struct msm_gem_address_space *wb_aspace;
+	struct drm_framebuffer *cwb_old_fb;
+	struct msm_gem_address_space *cwb_old_aspace;
 	u32 frame_count;
 	u32 kickoff_count;
 	struct msm_gem_address_space *aspace[SDE_IOMMU_DOMAIN_MAX];
@@ -495,10 +525,8 @@ struct sde_encoder_phys *sde_encoder_phys_wb_init(
 #endif
 
 void sde_encoder_phys_setup_cdm(struct sde_encoder_phys *phys_enc,
-		const struct sde_format *format, u32 output_type,
-		struct sde_rect *roi);
-
-void sde_encoder_phys_destroy_cdm(struct sde_encoder_phys *phys_enc);
+		struct drm_framebuffer *fb, const struct sde_format *format,
+		struct sde_rect *wb_roi);
 
 /**
  * sde_encoder_helper_trigger_flush - control flush helper function
@@ -515,6 +543,15 @@ void sde_encoder_helper_trigger_flush(struct sde_encoder_phys *phys_enc);
  * @phys_enc: Pointer to physical encoder structure
  */
 void sde_encoder_helper_trigger_start(struct sde_encoder_phys *phys_enc);
+
+/**
+ * sde_encoder_helper_vsync_config - configure vsync source for cmd mode
+ * @phys_enc: Pointer to physical encoder structure
+ * @vsync_source: vsync source selection
+ * @is_dummy: used only for RSC
+ */
+void sde_encoder_helper_vsync_config(struct sde_encoder_phys *phys_enc,
+			u32 vsync_source, bool is_dummy);
 
 /**
  * sde_encoder_helper_wait_event_timeout - wait for event with timeout
@@ -551,12 +588,6 @@ static inline enum sde_3d_blend_mode sde_encoder_helper_get_3d_blend_mode(
 	if (phys_enc->split_role == ENC_ROLE_SOLO &&
 			(topology == SDE_RM_TOPOLOGY_DUALPIPE_3DMERGE ||
 			 topology == SDE_RM_TOPOLOGY_DUALPIPE_3DMERGE_DSC))
-		return BLEND_3D_H_ROW_INT;
-
-	if ((phys_enc->split_role == ENC_ROLE_MASTER ||
-		phys_enc->split_role == ENC_ROLE_SLAVE) &&
-		 ((topology == SDE_RM_TOPOLOGY_QUADPIPE_3DMERGE) ||
-		 (topology == SDE_RM_TOPOLOGY_QUADPIPE_3DMERGE_DSC)))
 		return BLEND_3D_H_ROW_INT;
 
 	return BLEND_3D_NONE;
@@ -620,5 +651,80 @@ int sde_encoder_helper_register_irq(struct sde_encoder_phys *phys_enc,
  */
 int sde_encoder_helper_unregister_irq(struct sde_encoder_phys *phys_enc,
 		enum sde_intr_idx intr_idx);
+
+/**
+ * sde_encoder_helper_update_intf_cfg - update interface configuration for
+ *                                      single control path.
+ * @phys_enc: Pointer to physical encoder structure
+ */
+void sde_encoder_helper_update_intf_cfg(
+		struct sde_encoder_phys *phys_enc);
+
+/**
+ * _sde_encoder_phys_is_dual_ctl - check if encoder needs dual ctl path.
+ * @phys_enc: Pointer to physical encoder structure
+ * @Return: true if dual ctl paths else false
+ */
+static inline bool _sde_encoder_phys_is_dual_ctl(
+		struct sde_encoder_phys *phys_enc)
+{
+	struct sde_kms *sde_kms;
+	enum sde_rm_topology_name topology;
+
+	if (!phys_enc) {
+		pr_err("invalid phys_enc\n");
+		return false;
+	}
+
+	sde_kms = phys_enc->sde_kms;
+	if (!sde_kms) {
+		pr_err("invalid kms\n");
+		return false;
+	}
+
+	topology = sde_connector_get_topology_name(phys_enc->connector);
+
+	return sde_rm_topology_is_dual_ctl(&sde_kms->rm, topology);
+}
+
+/**
+ * _sde_encoder_phys_is_ppsplit - check if pp_split is enabled
+ * @phys_enc: Pointer to physical encoder structure
+ * @Return: true or false
+ */
+static inline bool _sde_encoder_phys_is_ppsplit(
+		struct sde_encoder_phys *phys_enc)
+{
+	enum sde_rm_topology_name topology;
+
+	if (!phys_enc) {
+		pr_err("invalid phys_enc\n");
+		return false;
+	}
+
+	topology = sde_connector_get_topology_name(phys_enc->connector);
+	if (topology == SDE_RM_TOPOLOGY_PPSPLIT)
+		return true;
+
+	return false;
+}
+
+static inline bool sde_encoder_phys_needs_single_flush(
+		struct sde_encoder_phys *phys_enc)
+{
+	if (!phys_enc)
+		return false;
+
+	return (_sde_encoder_phys_is_ppsplit(phys_enc) ||
+				!_sde_encoder_phys_is_dual_ctl(phys_enc));
+}
+
+/**
+ * sde_encoder_helper_phys_disable - helper function to disable virt encoder
+ * @phys_enc: Pointer to physical encoder structure
+ * @wb_enc: Pointer to writeback encoder structure
+ */
+void sde_encoder_helper_phys_disable(struct sde_encoder_phys *phys_enc,
+		struct sde_encoder_phys_wb *wb_enc);
 
 #endif /* __sde_encoder_phys_H__ */

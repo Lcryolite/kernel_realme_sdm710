@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -25,11 +25,13 @@
 #include <linux/clk.h>
 #include <linux/extcon.h>
 #include <linux/reset.h>
+#include <linux/hrtimer.h>
+#include <soc/qcom/socinfo.h>
 
-enum ldo_levels {
-	VOLTAGE_LEVEL_NONE = 0,
-	VOLTAGE_LEVEL_MIN,
-	VOLTAGE_LEVEL_MAX,
+enum core_ldo_levels {
+	CORE_LEVEL_NONE = 0,
+	CORE_LEVEL_MIN,
+	CORE_LEVEL_MAX,
 };
 
 #define INIT_MAX_TIME_USEC			1000
@@ -37,9 +39,7 @@ enum ldo_levels {
 /* default CORE votlage and load values */
 #define USB_SSPHY_1P2_VOL_MIN		1200000 /* uV */
 #define USB_SSPHY_1P2_VOL_MAX		1200000 /* uV */
-#define USB_SSPHY_HPM_LOAD		23000	/* uA */
-
-#define USB_SSPHY_LOAD_DEFAULT		-1
+#define USB_SSPHY_HPM_LOAD		30000	/* uA */
 
 /* USB3PHY_PCIE_USB3_PCS_PCS_STATUS bit */
 #define PHYSTATUS				BIT(6)
@@ -81,6 +81,15 @@ enum ldo_levels {
 /* USB3_DP_COM_PHY_MODE_CTRL bits */
 #define USB3_MODE		BIT(0) /* enables USB3 mode */
 #define DP_MODE			BIT(1) /* enables DP mode */
+#define USB3_DP_COMBO_MODE	(USB3_MODE | DP_MODE) /*enables combo mode */
+
+/* PCS_STATUS2 link training indicator */
+#define RX_EQUALIZATION_IN_PROGRESS	BIT(3)
+
+/* PCS_CONFIG5 register offsets for Gen2 link training SW WA */
+#define USB3_DP_PCS_EQ_CONFIG5		0x1DEC
+#define USB3_UNI_PCS_EQ_CONFIG5		0x09EC
+#define RXEQ_RETRAIN_MODE_SEL		BIT(6)
 
 enum qmp_phy_rev_reg {
 	USB3_PHY_PCS_STATUS,
@@ -89,6 +98,9 @@ enum qmp_phy_rev_reg {
 	USB3_PHY_POWER_DOWN_CONTROL,
 	USB3_PHY_SW_RESET,
 	USB3_PHY_START,
+
+	/* TypeC port select configuration (optional) */
+	USB3_PHY_PCS_MISC_TYPEC_CTRL,
 
 	/* USB DP Combo PHY related */
 	USB3_DP_DP_PHY_PD_CTL,
@@ -99,8 +111,9 @@ enum qmp_phy_rev_reg {
 	USB3_DP_COM_TYPEC_CTRL,
 	USB3_DP_COM_SWI_CTRL,
 	USB3_PCS_MISC_CLAMP_ENABLE,
-	/* TypeC port select configuration (optional) */
-	USB3_PHY_PCS_MISC_TYPEC_CTRL,
+	USB3_DP_PCS_PCS_STATUS2,
+	USB3_DP_PCS_INSIG_SW_CTRL3,
+	USB3_DP_PCS_INSIG_MX_CTRL3,
 	USB3_PHY_REG_MAX,
 };
 
@@ -120,11 +133,10 @@ struct msm_ssphy_qmp {
 
 	struct regulator	*vdd;
 	int			vdd_levels[3]; /* none, low, high */
+	int			vdd_max_uA;
 	struct regulator	*core_ldo;
 	int			core_voltage_levels[3];
-	struct regulator	*fpc_redrive_ldo;
-	int			redrive_voltage_levels[3];
-	int			redrive_load;
+	int			core_max_uA;
 	struct clk		*ref_clk_src;
 	struct clk		*ref_clk;
 	struct clk		*aux_clk;
@@ -140,12 +152,14 @@ struct msm_ssphy_qmp {
 	bool			clk_enabled;
 	bool			cable_connected;
 	bool			in_suspend;
-	bool			emulation;
-	unsigned int		*phy_reg; /* revision based offset */
-	unsigned int		*qmp_phy_init_seq;
-	int			init_seq_len;
-	unsigned int		*qmp_phy_reg_offset;
+	u32			*phy_reg; /* revision based offset */
 	int			reg_offset_cnt;
+	u32			*qmp_phy_init_seq;
+	int			init_seq_len;
+	struct hrtimer		timer;
+
+	bool			link_training_reset;
+	u32			eq_config5_offset;
 };
 
 static const struct of_device_id msm_usb_id_table[] = {
@@ -170,6 +184,7 @@ MODULE_DEVICE_TABLE(of, msm_usb_id_table);
 
 static void usb_qmp_powerup_phy(struct msm_ssphy_qmp *phy);
 static void msm_ssphy_qmp_enable_clks(struct msm_ssphy_qmp *phy, bool on);
+static int msm_ssphy_qmp_link_training(struct usb_phy *uphy, bool start);
 
 static inline char *get_cable_status_str(struct msm_ssphy_qmp *phy)
 {
@@ -178,11 +193,11 @@ static inline char *get_cable_status_str(struct msm_ssphy_qmp *phy)
 
 static void msm_ssusb_qmp_clr_lfps_rxterm_int(struct msm_ssphy_qmp *phy)
 {
-	writeb_relaxed(1, phy->base +
+	writel_relaxed(1, phy->base +
 			phy->phy_reg[USB3_PHY_LFPS_RXTERM_IRQ_CLEAR]);
 	/* flush the previous write before next write */
 	wmb();
-	writeb_relaxed(0, phy->base +
+	writel_relaxed(0, phy->base +
 			phy->phy_reg[USB3_PHY_LFPS_RXTERM_IRQ_CLEAR]);
 }
 
@@ -195,7 +210,8 @@ static void msm_ssusb_qmp_clamp_enable(struct msm_ssphy_qmp *phy, bool val)
 		break;
 	case USB_PHY_TYPE_USB3_OR_DP:
 	case USB_PHY_TYPE_USB3:
-		writel_relaxed(!!val, phy->vls_clamp_reg);
+		if (phy->vls_clamp_reg)
+			writel_relaxed(!!val, phy->vls_clamp_reg);
 		if (phy->pcs_clamp_enable_reg)
 			writel_relaxed(!val, phy->pcs_clamp_enable_reg);
 		break;
@@ -207,7 +223,7 @@ static void msm_ssusb_qmp_clamp_enable(struct msm_ssphy_qmp *phy, bool val)
 static void msm_ssusb_qmp_enable_autonomous(struct msm_ssphy_qmp *phy,
 		int enable)
 {
-	u8 val;
+	u32 val;
 	unsigned int autonomous_mode_offset =
 			phy->phy_reg[USB3_PHY_AUTONOMOUS_MODE_CTRL];
 
@@ -216,7 +232,7 @@ static void msm_ssusb_qmp_enable_autonomous(struct msm_ssphy_qmp *phy,
 
 	if (enable) {
 		msm_ssusb_qmp_clr_lfps_rxterm_int(phy);
-		val = readb_relaxed(phy->base + autonomous_mode_offset);
+		val = readl_relaxed(phy->base + autonomous_mode_offset);
 		val |= ARCVR_DTCT_EN;
 		if (phy->phy.flags & DEVICE_IN_SS_MODE) {
 			val |= ALFPS_DTCT_EN;
@@ -225,40 +241,13 @@ static void msm_ssusb_qmp_enable_autonomous(struct msm_ssphy_qmp *phy,
 			val &= ~ALFPS_DTCT_EN;
 			val |= ARCVR_DTCT_EVENT_SEL;
 		}
-		writeb_relaxed(val, phy->base + autonomous_mode_offset);
+		writel_relaxed(val, phy->base + autonomous_mode_offset);
 		msm_ssusb_qmp_clamp_enable(phy, true);
 	} else {
 		msm_ssusb_qmp_clamp_enable(phy, false);
-		writeb_relaxed(0, phy->base + autonomous_mode_offset);
+		writel_relaxed(0, phy->base + autonomous_mode_offset);
 		msm_ssusb_qmp_clr_lfps_rxterm_int(phy);
 	}
-}
-
-static int msm_ldo_enable(struct msm_ssphy_qmp *phy,
-		struct regulator *ldo, int *voltage_levels, int load)
-{
-	int ret = 0;
-
-	dev_dbg(phy->phy.dev,
-		"ldo: min_vol:%duV max_vol:%duV\n",
-		voltage_levels[VOLTAGE_LEVEL_MIN],
-		voltage_levels[VOLTAGE_LEVEL_MAX]);
-
-	if (load > 0) {
-		ret = regulator_set_load(ldo, load);
-		if (ret < 0)
-			return ret;
-	}
-
-	ret = regulator_set_voltage(ldo,
-			voltage_levels[VOLTAGE_LEVEL_MIN],
-			voltage_levels[VOLTAGE_LEVEL_MAX]);
-	if (ret)
-		return ret;
-
-	ret = regulator_enable(ldo);
-
-	return ret;
 }
 
 static int msm_ssusb_qmp_ldo_enable(struct msm_ssphy_qmp *phy, int on)
@@ -280,65 +269,84 @@ static int msm_ssusb_qmp_ldo_enable(struct msm_ssphy_qmp *phy, int on)
 	if (!on)
 		goto disable_regulators;
 
-	if (phy->fpc_redrive_ldo) {
-		rc = msm_ldo_enable(phy, phy->fpc_redrive_ldo,
-				phy->redrive_voltage_levels,
-				phy->redrive_load);
-		if (rc < 0) {
-			dev_err(phy->phy.dev,
-				"enable phy->fpc_redrive_ldo failed\n");
-			return rc;
-		}
-
-		dev_dbg(phy->phy.dev,
-			"fpc redrive ldo: min_vol:%duV max_vol:%duV\n",
-			phy->redrive_voltage_levels[VOLTAGE_LEVEL_MIN],
-			phy->redrive_voltage_levels[VOLTAGE_LEVEL_MAX]);
+	rc = regulator_set_load(phy->vdd, phy->vdd_max_uA);
+	if (rc < 0) {
+		dev_err(phy->phy.dev, "Unable to set HPM of %s\n", "vdd");
+		return rc;
 	}
 
-	rc = msm_ldo_enable(phy, phy->vdd, phy->vdd_levels,
-			USB_SSPHY_LOAD_DEFAULT);
-	if (rc < 0) {
-		dev_err(phy->phy.dev, "enable phy->vdd failed\n");
-		goto disable_fpc_redrive;
+	rc = regulator_set_voltage(phy->vdd, phy->vdd_levels[min],
+				    phy->vdd_levels[2]);
+	if (rc) {
+		dev_err(phy->phy.dev, "Unable to set voltage for %s\n", "vdd");
+		goto put_vdd_lpm;
 	}
 
-	dev_dbg(phy->phy.dev,
-		"vdd ldo: min_vol:%duV max_vol:%duV\n",
-		phy->vdd_levels[VOLTAGE_LEVEL_MIN],
-		phy->vdd_levels[VOLTAGE_LEVEL_MAX]);
+	dev_dbg(phy->phy.dev, "min_vol:%d max_vol:%d\n",
+		phy->vdd_levels[min], phy->vdd_levels[2]);
 
-	rc = msm_ldo_enable(phy, phy->core_ldo, phy->core_voltage_levels,
-			USB_SSPHY_HPM_LOAD);
+	rc = regulator_enable(phy->vdd);
+	if (rc) {
+		dev_err(phy->phy.dev, "Unable to enable %s\n", "vdd");
+		goto unconfig_vdd;
+	}
+
+	rc = regulator_set_load(phy->core_ldo, phy->core_max_uA);
 	if (rc < 0) {
-		dev_err(phy->phy.dev, "enable phy->core_ldo failed\n");
+		dev_err(phy->phy.dev, "Unable to set HPM of %s\n", "core_ldo");
 		goto disable_vdd;
 	}
 
-	dev_dbg(phy->phy.dev,
-		"core ldo: min_vol:%duV max_vol:%duV\n",
-		phy->core_voltage_levels[VOLTAGE_LEVEL_MIN],
-		phy->core_voltage_levels[VOLTAGE_LEVEL_MAX]);
+	rc = regulator_set_voltage(phy->core_ldo,
+			phy->core_voltage_levels[CORE_LEVEL_MIN],
+			phy->core_voltage_levels[CORE_LEVEL_MAX]);
+	if (rc) {
+		dev_err(phy->phy.dev, "Unable to set voltage for %s\n",
+				"core_ldo");
+		goto put_core_ldo_lpm;
+	}
+
+	rc = regulator_enable(phy->core_ldo);
+	if (rc) {
+		dev_err(phy->phy.dev, "Unable to enable %s\n", "core_ldo");
+		goto unset_core_ldo;
+	}
 
 	return 0;
 
 disable_regulators:
 	rc = regulator_disable(phy->core_ldo);
 	if (rc)
-		dev_err(phy->phy.dev, "disable phy->core_ldo failed\n");
+		dev_err(phy->phy.dev, "Unable to disable %s\n", "core_ldo");
+
+unset_core_ldo:
+	rc = regulator_set_voltage(phy->core_ldo,
+			phy->core_voltage_levels[CORE_LEVEL_NONE],
+			phy->core_voltage_levels[CORE_LEVEL_MAX]);
+	if (rc)
+		dev_err(phy->phy.dev, "Unable to set voltage for %s\n",
+				"core_ldo");
+
+put_core_ldo_lpm:
+	rc = regulator_set_load(phy->core_ldo, 0);
+	if (rc < 0)
+		dev_err(phy->phy.dev, "Unable to set LPM of %s\n", "core_ldo");
 
 disable_vdd:
 	rc = regulator_disable(phy->vdd);
 	if (rc)
-		dev_err(phy->phy.dev, "disable phy->vdd failed\n");
+		dev_err(phy->phy.dev, "Unable to disable %s\n", "vdd");
 
-disable_fpc_redrive:
-	if (phy->fpc_redrive_ldo) {
-		rc = regulator_disable(phy->fpc_redrive_ldo);
-		if (rc)
-			dev_err(phy->phy.dev,
-				"disable phy->fpc_redrive_ldo failed\n");
-	}
+unconfig_vdd:
+	rc = regulator_set_voltage(phy->vdd, phy->vdd_levels[min],
+				    phy->vdd_levels[2]);
+	if (rc)
+		dev_err(phy->phy.dev, "Unable to set voltage for %s\n", "vdd");
+
+put_vdd_lpm:
+	rc = regulator_set_load(phy->vdd, 0);
+	if (rc < 0)
+		dev_err(phy->phy.dev, "Unable to set LPM of %s\n", "vdd");
 
 	return rc < 0 ? rc : 0;
 }
@@ -363,6 +371,18 @@ static int configure_phy_regs(struct usb_phy *uphy,
 	return 0;
 }
 
+static void msm_ssphy_qmp_setmode(struct msm_ssphy_qmp *phy, u32 mode)
+{
+	mode = mode & USB3_DP_COMBO_MODE;
+
+	writel_relaxed(mode,
+			phy->base + phy->phy_reg[USB3_DP_COM_PHY_MODE_CTRL]);
+
+	/* flush the write by reading it */
+	readl_relaxed(phy->base + phy->phy_reg[USB3_DP_COM_PHY_MODE_CTRL]);
+}
+
+
 static void usb_qmp_update_portselect_phymode(struct msm_ssphy_qmp *phy)
 {
 	int val;
@@ -380,12 +400,11 @@ static void usb_qmp_update_portselect_phymode(struct msm_ssphy_qmp *phy)
 	switch (phy->phy.type) {
 	case USB_PHY_TYPE_USB3_AND_DP:
 		/* override hardware control for reset of qmp phy */
-		if (!(phy->phy.flags & PHY_USB_DP_CONCURRENT_MODE)) {
+		if (!(phy->phy.flags & PHY_USB_DP_CONCURRENT_MODE))
 			writel_relaxed(SW_DPPHY_RESET_MUX | SW_DPPHY_RESET |
 				SW_USB3PHY_RESET_MUX | SW_USB3PHY_RESET,
 				phy->base +
 				phy->phy_reg[USB3_DP_COM_RESET_OVRD_CTRL]);
-		}
 
 		/* update port select */
 		if (val > 0) {
@@ -396,13 +415,10 @@ static void usb_qmp_update_portselect_phymode(struct msm_ssphy_qmp *phy)
 		}
 
 		if (!(phy->phy.flags & PHY_USB_DP_CONCURRENT_MODE)) {
-			writel_relaxed(USB3_MODE | DP_MODE,
-				phy->base +
-				phy->phy_reg[USB3_DP_COM_PHY_MODE_CTRL]);
+			msm_ssphy_qmp_setmode(phy, USB3_DP_COMBO_MODE);
 
 			/* bring both USB and DP PHYs PCS block out of reset */
-			writel_relaxed(0x00,
-				phy->base +
+			writel_relaxed(0x00, phy->base +
 				phy->phy_reg[USB3_DP_COM_RESET_OVRD_CTRL]);
 		}
 		break;
@@ -455,9 +471,27 @@ static void usb_qmp_powerup_phy(struct msm_ssphy_qmp *phy)
 	mb();
 }
 
-#ifdef VENDOR_EDIT
-int oplus_m3p5db_v0 = 0x13;  // 0x1c28, PCS_TXDEEMPH_M3P5DB_V0
-#endif
+static void usb_qmp_apply_link_training_workarounds(struct msm_ssphy_qmp *phy)
+{
+	u32 version, major, minor, val;
+
+	if (!phy->link_training_reset)
+		return;
+
+	version = socinfo_get_version();
+	minor = SOCINFO_VERSION_MINOR(version);
+	major = SOCINFO_VERSION_MAJOR(version);
+
+	/* sw workaround is needed only for hw reviosions below 2.1 */
+	if ((major < 2) || (major == 2 && minor == 0)) {
+		val = readl_relaxed(phy->base + phy->eq_config5_offset);
+		val |= RXEQ_RETRAIN_MODE_SEL;
+		writel_relaxed(val, phy->base + phy->eq_config5_offset);
+		phy->phy.link_training	= msm_ssphy_qmp_link_training;
+		return;
+	}
+}
+
 /* SSPHY Initialization */
 static int msm_ssphy_qmp_init(struct usb_phy *uphy)
 {
@@ -468,9 +502,6 @@ static int msm_ssphy_qmp_init(struct usb_phy *uphy)
 	const struct qmp_reg_val *reg = NULL;
 
 	dev_dbg(uphy->dev, "Initializing QMP phy\n");
-
-	if (phy->emulation)
-		return 0;
 
 	ret = msm_ssusb_qmp_ldo_enable(phy, 1);
 	if (ret) {
@@ -496,12 +527,9 @@ static int msm_ssphy_qmp_init(struct usb_phy *uphy)
 		dev_err(uphy->dev, "Failed the main PHY configuration\n");
 		return ret;
 	}
-#ifdef VENDOR_EDIT
-	if(oplus_m3p5db_v0 != 0) {
-		dev_err(uphy->dev, "oplus rewrite  0x1c28, PCS_TXDEEMPH_M3P5DB_V0 = [0x%x]\n", oplus_m3p5db_v0);
-		writel_relaxed(oplus_m3p5db_v0, phy->base + 0x1c28);
-	}
-#endif
+
+	usb_qmp_apply_link_training_workarounds(phy);
+
 	/* perform software reset of PHY common logic */
 	if (phy->phy.type == USB_PHY_TYPE_USB3_AND_DP &&
 				!(phy->phy.flags & PHY_USB_DP_CONCURRENT_MODE))
@@ -693,15 +721,21 @@ static int msm_ssphy_qmp_set_suspend(struct usb_phy *uphy, int suspend)
 	}
 
 	if (suspend) {
-		if (phy->cable_connected)
+		if (phy->cable_connected) {
 			msm_ssusb_qmp_enable_autonomous(phy, 1);
-		else
+		} else {
+			/* Reset phy mode to USB only if DP not connected */
+			if (uphy->type  == USB_PHY_TYPE_USB3_AND_DP &&
+				!(phy->phy.flags & PHY_USB_DP_CONCURRENT_MODE))
+				msm_ssphy_qmp_setmode(phy, USB3_MODE);
 			writel_relaxed(0x00,
 			phy->base + phy->phy_reg[USB3_PHY_POWER_DOWN_CONTROL]);
+		}
 
 		/* Make sure above write completed with PHY */
 		wmb();
 
+		hrtimer_cancel(&phy->timer);
 		msm_ssphy_qmp_enable_clks(phy, false);
 		phy->in_suspend = true;
 		msm_ssphy_power_enable(phy, 0);
@@ -721,6 +755,74 @@ static int msm_ssphy_qmp_set_suspend(struct usb_phy *uphy, int suspend)
 
 		phy->in_suspend = false;
 		dev_dbg(uphy->dev, "QMP PHY is resumed\n");
+	}
+
+	return 0;
+}
+
+static enum hrtimer_restart timer_fn(struct hrtimer *timer)
+{
+	struct msm_ssphy_qmp *phy =
+		container_of(timer, struct msm_ssphy_qmp, timer);
+	u8 status2, status2_1, sw1, mx1, sw2, mx2;
+	int timeout = 15000;
+
+	status2_1 = sw1 = sw2 = mx1 = mx2 = 0;
+
+	status2 = readl_relaxed(phy->base +
+			phy->phy_reg[USB3_DP_PCS_PCS_STATUS2]);
+	if (status2 & RX_EQUALIZATION_IN_PROGRESS) {
+		while (timeout > 0) {
+			status2_1 = readl_relaxed(phy->base +
+					phy->phy_reg[USB3_DP_PCS_PCS_STATUS2]);
+			if (status2_1 & RX_EQUALIZATION_IN_PROGRESS) {
+				timeout -= 500;
+				udelay(500);
+				continue;
+			}
+
+			writel_relaxed(0x08, phy->base +
+				phy->phy_reg[USB3_DP_PCS_INSIG_SW_CTRL3]);
+			writel_relaxed(0x08, phy->base +
+				phy->phy_reg[USB3_DP_PCS_INSIG_MX_CTRL3]);
+			sw1 = readl_relaxed(phy->base +
+				phy->phy_reg[USB3_DP_PCS_INSIG_SW_CTRL3]);
+			mx1 = readl_relaxed(phy->base +
+				phy->phy_reg[USB3_DP_PCS_INSIG_MX_CTRL3]);
+			udelay(1);
+			writel_relaxed(0x0, phy->base +
+				phy->phy_reg[USB3_DP_PCS_INSIG_SW_CTRL3]);
+			writel_relaxed(0x0, phy->base +
+				phy->phy_reg[USB3_DP_PCS_INSIG_MX_CTRL3]);
+			sw2 = readl_relaxed(phy->base +
+				phy->phy_reg[USB3_DP_PCS_INSIG_SW_CTRL3]);
+			mx2 = readl_relaxed(phy->base +
+				phy->phy_reg[USB3_DP_PCS_INSIG_MX_CTRL3]);
+
+			break;
+		}
+	}
+
+	dev_dbg(phy->phy.dev,
+		"st=%x st2=%x sw1=%x sw2=%x mx1=%x mx2=%x timeout=%d\n",
+		status2, status2_1, sw1, sw2, mx1, mx2, timeout);
+
+	hrtimer_forward_now(timer, ms_to_ktime(1));
+
+	return HRTIMER_RESTART;
+}
+
+static int msm_ssphy_qmp_link_training(struct usb_phy *uphy, bool start)
+{
+	struct msm_ssphy_qmp *phy = container_of(uphy, struct msm_ssphy_qmp,
+					phy);
+
+	if (start) {
+		hrtimer_start(&phy->timer, 0, HRTIMER_MODE_REL);
+		dev_dbg(uphy->dev, "link training start\n");
+	} else {
+		hrtimer_cancel(&phy->timer);
+		dev_dbg(uphy->dev, "link training stop\n");
 	}
 
 	return 0;
@@ -748,9 +850,42 @@ static int msm_ssphy_qmp_notify_disconnect(struct usb_phy *uphy,
 		phy->base + phy->phy_reg[USB3_PHY_POWER_DOWN_CONTROL]);
 	readl_relaxed(phy->base + phy->phy_reg[USB3_PHY_POWER_DOWN_CONTROL]);
 
+	hrtimer_cancel(&phy->timer);
 	dev_dbg(uphy->dev, "QMP phy disconnect notification\n");
 	dev_dbg(uphy->dev, " cable_connected=%d\n", phy->cable_connected);
 	phy->cable_connected = false;
+	return 0;
+}
+
+static int msm_ssphy_qmp_powerup(struct usb_phy *uphy, bool powerup)
+{
+	struct msm_ssphy_qmp *phy = container_of(uphy, struct msm_ssphy_qmp,
+					phy);
+	u8 reg = powerup ? 1 : 0;
+	u8 temp;
+
+	if (!(uphy->flags & PHY_WAKEUP_WA_EN))
+		return 0;
+
+	temp = readl_relaxed(phy->base +
+			phy->phy_reg[USB3_PHY_POWER_DOWN_CONTROL]);
+
+	if (temp == powerup)
+		return 0;
+
+	writel_relaxed(reg,
+			phy->base + phy->phy_reg[USB3_PHY_POWER_DOWN_CONTROL]);
+	temp = readl_relaxed(phy->base +
+			phy->phy_reg[USB3_PHY_POWER_DOWN_CONTROL]);
+
+	dev_dbg(uphy->dev, "P3 powerup:%x\n", temp);
+
+	return 0;
+}
+
+static int msm_ssphy_qmp_vbus_notifier(struct notifier_block *nb,
+		unsigned long event, void *ptr)
+{
 	return 0;
 }
 
@@ -786,6 +921,7 @@ static int msm_ssphy_qmp_extcon_register(struct msm_ssphy_qmp *phy,
 	}
 
 	phy->extcon_dp = edev;
+	phy->phy.vbus_nb.notifier_call = msm_ssphy_qmp_vbus_notifier;
 	phy->dp_nb.notifier_call = msm_ssphy_qmp_dp_notifier;
 	ret = extcon_register_blocking_notifier(edev, EXTCON_DISP_DP,
 								&phy->dp_nb);
@@ -916,7 +1052,7 @@ static int msm_ssphy_qmp_probe(struct platform_device *pdev)
 		phy->phy.type = USB_PHY_TYPE_USB3_AND_DP;
 
 	if (of_device_is_compatible(dev->of_node,
-			"qcom,usb-ssphy-qmp-usb-or-dp"))
+			"qcom,usb-ssphy-qmp-usb3-or-dp"))
 		phy->phy.type = USB_PHY_TYPE_USB3_OR_DP;
 
 	ret = msm_ssphy_qmp_get_clks(phy, dev);
@@ -950,11 +1086,9 @@ static int msm_ssphy_qmp_probe(struct platform_device *pdev)
 
 	of_get_property(dev->of_node, "qcom,qmp-phy-reg-offset", &size);
 	if (size) {
-		phy->qmp_phy_reg_offset = devm_kzalloc(dev,
-						size, GFP_KERNEL);
-		if (phy->qmp_phy_reg_offset) {
-			phy->reg_offset_cnt =
-				(size / sizeof(*phy->qmp_phy_reg_offset));
+		phy->phy_reg = devm_kzalloc(dev, size, GFP_KERNEL);
+		if (phy->phy_reg) {
+			phy->reg_offset_cnt = (size / sizeof(*phy->phy_reg));
 			if (phy->reg_offset_cnt > USB3_PHY_REG_MAX) {
 				dev_err(dev, "invalid reg offset count\n");
 				return -EINVAL;
@@ -962,13 +1096,11 @@ static int msm_ssphy_qmp_probe(struct platform_device *pdev)
 
 			of_property_read_u32_array(dev->of_node,
 				"qcom,qmp-phy-reg-offset",
-				phy->qmp_phy_reg_offset,
-				phy->reg_offset_cnt);
+				phy->phy_reg, phy->reg_offset_cnt);
 		} else {
 			dev_err(dev, "err mem alloc for qmp_phy_reg_offset\n");
 			return -ENOMEM;
 		}
-		phy->phy_reg = phy->qmp_phy_reg_offset;
 	} else {
 		dev_err(dev, "err provide qcom,qmp-phy-reg-offset\n");
 		return -EINVAL;
@@ -991,12 +1123,12 @@ static int msm_ssphy_qmp_probe(struct platform_device *pdev)
 		goto err;
 	}
 
-	if (phy->phy.type != USB_PHY_TYPE_USB3_AND_DP) {
-		res = platform_get_resource_byname(pdev,
-				IORESOURCE_MEM, "vls_clamp_reg");
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
+			"vls_clamp_reg");
+	if (res) {
 		phy->vls_clamp_reg = devm_ioremap_resource(dev, res);
 		if (IS_ERR(phy->vls_clamp_reg)) {
-			dev_err(dev, "couldn't find vls_clamp_reg address.\n");
+			dev_err(dev, "err getting vls_clamp_reg address\n");
 			return PTR_ERR(phy->vls_clamp_reg);
 		}
 	}
@@ -1021,39 +1153,31 @@ static int msm_ssphy_qmp_probe(struct platform_device *pdev)
 		}
 	}
 
-	phy->emulation = of_property_read_bool(dev->of_node,
-						"qcom,emulation");
-	if (!phy->emulation) {
-		of_get_property(dev->of_node, "qcom,qmp-phy-init-seq", &size);
-		if (size) {
-			if (size % sizeof(*phy->qmp_phy_init_seq)) {
-				dev_err(dev, "invalid init_seq_len\n");
-				return -EINVAL;
-			}
-			phy->qmp_phy_init_seq = devm_kzalloc(dev,
-							size, GFP_KERNEL);
-			if (phy->qmp_phy_init_seq) {
-				phy->init_seq_len =
-					(size / sizeof(*phy->qmp_phy_init_seq));
-
-				of_property_read_u32_array(dev->of_node,
-					"qcom,qmp-phy-init-seq",
-					phy->qmp_phy_init_seq,
-					phy->init_seq_len);
-			} else {
-				dev_err(dev, "error allocating memory for phy_init_seq\n");
-				return -EINVAL;
-			}
-		} else {
-			dev_err(dev, "error need qmp-phy-init-seq\n");
+	of_get_property(dev->of_node, "qcom,qmp-phy-init-seq", &size);
+	if (size) {
+		if (size % sizeof(*phy->qmp_phy_init_seq)) {
+			dev_err(dev, "invalid init_seq_len\n");
 			return -EINVAL;
 		}
+
+		phy->qmp_phy_init_seq = devm_kzalloc(dev, size, GFP_KERNEL);
+		if (!phy->qmp_phy_init_seq)
+			return -ENOMEM;
+
+		phy->init_seq_len = (size / sizeof(*phy->qmp_phy_init_seq));
+		of_property_read_u32_array(dev->of_node,
+				"qcom,qmp-phy-init-seq",
+				phy->qmp_phy_init_seq,
+				phy->init_seq_len);
+	} else {
+		dev_err(dev, "error need qmp-phy-init-seq\n");
+		return -EINVAL;
 	}
 
 	/* Set default core voltage values */
-	phy->core_voltage_levels[VOLTAGE_LEVEL_NONE] = 0;
-	phy->core_voltage_levels[VOLTAGE_LEVEL_MIN] = USB_SSPHY_1P2_VOL_MIN;
-	phy->core_voltage_levels[VOLTAGE_LEVEL_MAX] = USB_SSPHY_1P2_VOL_MAX;
+	phy->core_voltage_levels[CORE_LEVEL_NONE] = 0;
+	phy->core_voltage_levels[CORE_LEVEL_MIN] = USB_SSPHY_1P2_VOL_MIN;
+	phy->core_voltage_levels[CORE_LEVEL_MAX] = USB_SSPHY_1P2_VOL_MAX;
 
 	if (of_get_property(dev->of_node, "qcom,core-voltage-level", &len) &&
 		len == sizeof(phy->core_voltage_levels)) {
@@ -1066,6 +1190,10 @@ static int msm_ssphy_qmp_probe(struct platform_device *pdev)
 			goto err;
 		}
 	}
+
+	if (of_property_read_s32(dev->of_node, "qcom,core-max-load-uA",
+				&phy->core_max_uA) || !phy->core_max_uA)
+		phy->core_max_uA = USB_SSPHY_HPM_LOAD;
 
 	if (of_get_property(dev->of_node, "qcom,vdd-voltage-level", &len) &&
 		len == sizeof(phy->vdd_levels)) {
@@ -1083,6 +1211,10 @@ static int msm_ssphy_qmp_probe(struct platform_device *pdev)
 		goto err;
 	}
 
+	if (of_property_read_s32(dev->of_node, "qcom,vdd-max-load-uA",
+				&phy->vdd_max_uA) || !phy->vdd_max_uA)
+		phy->vdd_max_uA = USB_SSPHY_HPM_LOAD;
+
 	phy->vdd = devm_regulator_get(dev, "vdd");
 	if (IS_ERR(phy->vdd)) {
 		dev_err(dev, "unable to get vdd supply\n");
@@ -1097,54 +1229,31 @@ static int msm_ssphy_qmp_probe(struct platform_device *pdev)
 		goto err;
 	}
 
-	phy->fpc_redrive_ldo = devm_regulator_get_optional(dev, "fpc-redrive");
-	if (IS_ERR(phy->fpc_redrive_ldo)) {
-		phy->fpc_redrive_ldo = NULL;
-		dev_dbg(dev, "no FPC re-drive ldo regulator\n");
-	} else {
-		if (of_get_property(dev->of_node,
-				"qcom,redrive-voltage-level", &len) &&
-				len == sizeof(phy->redrive_voltage_levels)) {
-			ret = of_property_read_u32_array(dev->of_node,
-					"qcom,redrive-voltage-level",
-					(u32 *) phy->redrive_voltage_levels,
-					len / sizeof(u32));
-			if (ret) {
-				dev_err(dev,
-					"err qcom,redrive-voltage-level\n");
-				goto err;
-			}
-		} else {
-			ret = -EINVAL;
-			dev_err(dev, "err inputs for redrive-voltage-level\n");
-			goto err;
-		}
-
-		ret = of_property_read_u32(dev->of_node, "qcom,redrive-load",
-				&phy->redrive_load);
-		if (ret) {
-			dev_err(&pdev->dev, "unable to read redrive load\n");
-			goto err;
-		}
-
-		dev_dbg(dev, "Get FPC re-drive ldo regulator\n");
-	}
-
 	platform_set_drvdata(pdev, phy);
 
 	if (of_property_read_bool(dev->of_node, "qcom,vbus-valid-override"))
 		phy->phy.flags |= PHY_VBUS_VALID_OVERRIDE;
+
+	hrtimer_init(&phy->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	phy->timer.function = timer_fn;
 
 	phy->phy.dev			= dev;
 	phy->phy.init			= msm_ssphy_qmp_init;
 	phy->phy.set_suspend		= msm_ssphy_qmp_set_suspend;
 	phy->phy.notify_connect		= msm_ssphy_qmp_notify_connect;
 	phy->phy.notify_disconnect	= msm_ssphy_qmp_notify_disconnect;
+	phy->phy.powerup		= msm_ssphy_qmp_powerup;
+	phy->phy.reset			= msm_ssphy_qmp_reset;
 
-	if (phy->phy.type == USB_PHY_TYPE_USB3_AND_DP)
-		phy->phy.reset		= msm_ssphy_qmp_dp_combo_reset;
-	else
-		phy->phy.reset		= msm_ssphy_qmp_reset;
+	if (phy->phy.type == USB_PHY_TYPE_USB3_AND_DP) {
+		phy->eq_config5_offset = USB3_DP_PCS_EQ_CONFIG5;
+		phy->phy.reset	= msm_ssphy_qmp_dp_combo_reset;
+	} else if (phy->phy.type == USB_PHY_TYPE_USB3) {
+		phy->eq_config5_offset = USB3_UNI_PCS_EQ_CONFIG5;
+	}
+
+	phy->link_training_reset = of_property_read_bool(dev->of_node,
+					"qcom,link-training-reset");
 
 	ret = msm_ssphy_qmp_extcon_register(phy, dev);
 	if (ret)

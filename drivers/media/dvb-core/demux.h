@@ -21,10 +21,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU Lesser General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
- *
  */
 
 #ifndef __DEMUX_H
@@ -82,6 +78,14 @@ enum dmx_success {
 	DMX_OK_SCRAMBLING_STATUS, /* Received OK, new scrambling status */
 };
 
+struct ion_dma_buff_info {
+	struct dma_buf *dmabuf;
+	struct sg_table *sgt;
+	struct dma_buf_attachment *attach;
+	phys_addr_t pa;
+	void *va;
+	size_t len;
+};
 
 /*
  * struct dmx_data_ready: Parameters for event notification callback.
@@ -152,13 +156,9 @@ struct data_buffer {
 	/* dvb_ringbuffer managed by demux-device */
 	const struct dvb_ringbuffer *ringbuff;
 
+	/* ion_dma_buff_info managed by demux-device */
+	struct ion_dma_buff_info buff_dma_info;
 
-	/*
-	 * Private handle returned by kernel demux when
-	 * map_buffer is called in case external buffer
-	 * is used. NULL if buffer is allocated internally.
-	 */
-	void *priv_handle;
 };
 /*
  * TS packet reception
@@ -346,10 +346,6 @@ struct dmx_section_feed {
 	int (*flush_buffer)(struct dmx_section_feed *feed, size_t length);
 };
 
-/*
- * Callback functions
- */
-
 /**
  * typedef dmx_ts_cb - DVB demux TS filter callback function prototype
  *
@@ -365,8 +361,7 @@ struct dmx_section_feed {
  * the &dmx_demux.
  * Any TS packets that match the filter settings are copied to a circular
  * buffer. The filtered TS packets are delivered to the client using this
- * callback function. The size of the circular buffer is controlled by the
- * circular_buffer_size parameter of the &dmx_ts_feed.@set function.
+ * callback function.
  * It is expected that the @buffer1 and @buffer2 callback parameters point to
  * addresses within the circular buffer, but other implementations are also
  * possible. Note that the called party should not try to free the memory
@@ -376,7 +371,7 @@ struct dmx_section_feed {
  * the start of the first undelivered TS packet within a circular buffer.
  * The @buffer2 buffer parameter is normally NULL, except when the received
  * TS packets have crossed the last address of the circular buffer and
- * ”wrapped” to the beginning of the buffer. In the latter case the @buffer1
+ * "wrapped" to the beginning of the buffer. In the latter case the @buffer1
  * parameter would contain an address within the circular buffer, while the
  * @buffer2 parameter would contain the first address of the circular buffer.
  * The number of bytes delivered with this function (i.e. @buffer1_length +
@@ -530,13 +525,6 @@ enum dmx_demux_caps {
 
 /*
  * Demux resource type identifier.
- */
-
-/*
- * DMX_FE_ENTRY(): Casts elements in the list of registered
- * front-ends from the generic type struct list_head
- * to the type * struct dmx_frontend.
- *
  */
 
 /**
@@ -786,15 +774,20 @@ struct dmx_demux {
 
 	int (*write_cancel)(struct dmx_demux *demux);
 
+	/*
+	 * Only used at av7110, to read some data from firmware.
+	 * As this was never documented, we have no clue about what's
+	 * there, and its usage on other drivers aren't encouraged.
+	 */
 	int (*get_stc)(struct dmx_demux *demux, unsigned int num,
 		       u64 *stc, unsigned int *base);
 
 	int (*map_buffer)(struct dmx_demux *demux,
 			struct dmx_buffer *dmx_buffer,
-			void **priv_handle, void **mem);
+			struct ion_dma_buff_info *dma_buffer, void **mem);
 
 	int (*unmap_buffer)(struct dmx_demux *demux,
-			void *priv_handle);
+			struct ion_dma_buff_info *dma_buffer);
 
 	int (*get_tsp_size)(struct dmx_demux *demux);
 };

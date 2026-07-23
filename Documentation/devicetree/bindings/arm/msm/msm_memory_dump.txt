@@ -1,8 +1,9 @@
 Qualcomm Technologies Inc. memory dump driver
 
-QTI memory dump driver allows various client subsystems to register and allocate respective
-dump regions. At the time of deadlocks or cpu hangs these dump regions
-are captured to give a snapshot of the system at the time of the crash.
+QTI memory dump driver allows various client subsystems to register and
+allocate respective dump regions. At the time of deadlocks or cpu hangs
+these dump regions are captured to give a snapshot of the system at the
+time of the crash.
 
 Required properties:
 

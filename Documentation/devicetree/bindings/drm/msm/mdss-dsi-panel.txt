@@ -35,7 +35,7 @@ Required properties:
 - qcom,mdss-dsi-panel-destination:	A string that specifies the destination display for the panel.
 					"display_1" = DISPLAY_1
 					"display_2" = DISPLAY_2
-- qcom,mdss-dsi-panel-phy-timings:	An array of length 12 that specifies the PHY
+- qcom,mdss-dsi-panel-timings:		An array of length 12 that specifies the PHY
 					timing settings for the panel.
 - qcom,mdss-dsi-panel-timings-8996:		An array of length 40 char that specifies the 8996 PHY lane
 					timing settings for the panel.
@@ -79,6 +79,10 @@ then 3 options can be tried.
 
 Optional properties:
 - qcom,mdss-dsi-panel-name:		A string used as a descriptive name of the panel
+- qcom,mdss-dsi-physical-type:		A string used as a decriptive type of the panel.
+					"oled" : That indicate it's an OLED panel.
+					"lcd" : That indicate it's an LCD panel.
+					If it is not set, consider it is a LCD panel as default.
 - qcom,mdss-dsi-panel-phy-timings:	An array of length 'n' char that specifies the DSI PHY lane
 					timing settings for the panel. This is specific to SDE DRM driver.
 					The value of 'n' depends on the DSI PHY h/w revision and parsing this
@@ -139,6 +143,8 @@ Optional properties:
 					0 = default value
 - qcom,mdss-dsi-v-bottom-border:	Vertical bottom border in pixel.
 					0 = default value
+- qcom,mdss-dsi-overlap-pixels:		Horizontal overlap pixels for certain panels.
+					0 = default value
 - qcom,mdss-dsi-underflow-color:	Specifies the controller settings for the
 					panel under flow color.
 					0xff = default value.
@@ -170,13 +176,16 @@ Optional properties:
 					"bl_ctrl_pwm" = Backlight controlled by PWM gpio.
 					"bl_ctrl_wled" = Backlight controlled by WLED.
 					"bl_ctrl_dcs" = Backlight controlled by DCS commands.
+					"bl_ctrl_external" = Backlight controlled by externally
 					other: Unknown backlight control. (default)
-- qcom,mdss-dsi-bl-pwm-pmi:		Boolean to indicate that PWM control is through second pmic chip.
-- qcom,mdss-dsi-bl-pmic-bank-select:	LPG channel for backlight.
-					Required if backlight pmic control type is PWM
-- qcom,mdss-dsi-bl-pmic-pwm-frequency:	PWM period in microseconds.
-					Required if backlight pmic control type is PWM
-- qcom,mdss-dsi-pwm-gpio:		PMIC gpio binding to backlight.
+- qcom,mdss-dsi-sec-bl-pmic-control-type: A string that specifies the implementation of backlight
+					  control for secondary panel.
+					  "bl_ctrl_pwm" = Backlight controlled by PWM gpio.
+                                          "bl_ctrl_wled" = Backlight controlled by WLED.
+                                          "bl_ctrl_dcs" = Backlight controlled by DCS commands.
+                                          "bl_ctrl_external" = Backlight controlled by externally
+                                          other: Unknown backlight control. (default)
+- qcom,bl-pmic-pwm-period-usecs:	PWM period in microseconds.
 					Required if backlight pmic control type is PWM
 - qcom,mdss-dsi-bl-min-level:		Specifies the min backlight level supported by the panel.
 					0 = default value.
@@ -184,6 +193,8 @@ Optional properties:
 					255 = default value.
 - qcom,mdss-brightness-max-level:	Specifies the max brightness level supported.
 					255 = default value.
+- qcom,mdss-dsi-bl-default-level:	Specifies the default brightness level supported.
+					"brightness_max_level" = default value.
 - qcom,bl-update-flag:			A string that specifies controls for backlight update of the panel.
 					"delay_until_first_frame" = Delay backlight update of the panel
 					until the first frame is received from the HW.
@@ -197,6 +208,15 @@ Optional properties:
 - qcom,mdss-dsi-te-using-wd:		Boolean entry enables the watchdog timer support to generate the vsync signal
 					for command mode panel. By default, panel TE will be used to generate the vsync.
 - qcom,mdss-dsi-te-using-te-pin:	Boolean to specify whether using hardware vsync.
+- qcom,mdss-dsi-qsync-min-refresh-rate: A u32 entry to specify minimum refresh rate supported by the panel to enable qsync feature.
+- qcom,mdss-dsi-qsync-on-commands:	String that specifies the commands to enable qsync feature.
+- qcom,mdss-dsi-qsync-on-commands-state: String that specifies the ctrl state for sending qsync on commands.
+					"dsi_lp_mode" = DSI low power mode (default)
+					"dsi_hs_mode" = DSI high speed mode
+- qcom,mdss-dsi-qsync-off-commands:	String that specifies the commands to disable qsync feature.
+- qcom,mdss-dsi-qsync-off-commands-state: String that specifies the ctrl state for sending qsync off commands.
+					"dsi_lp_mode" = DSI low power mode (default)
+					"dsi_hs_mode" = DSI high speed mode
 - qcom,mdss-dsi-te-pin-select:		Specifies TE operating mode.
 					0 = TE through embedded dcs command
 					1 = TE through TE gpio pin. (default)
@@ -233,6 +253,7 @@ Optional properties:
 - qcom,mdss-dsi-color-order:		Specifies the R, G and B channel ordering.
 					"rgb_swap_rgb" = DSI_RGB_SWAP_RGB (default value)
 					"rgb_swap_rbg" = DSI_RGB_SWAP_RBG
+					"rgb_swap_bgr" = DSI_RGB_SWAP_BGR
 					"rgb_swap_brg" = DSI_RGB_SWAP_BRG
 					"rgb_swap_grb" = DSI_RGB_SWAP_GRB
 					"rgb_swap_gbr" = DSI_RGB_SWAP_GBR
@@ -241,9 +262,11 @@ Optional properties:
 - qcom,mdss-dsi-lane-2-state:		Boolean that specifies whether data lane 2 is enabled.
 - qcom,mdss-dsi-lane-3-state:		Boolean that specifies whether data lane 3 is enabled.
 - qcom,mdss-dsi-t-clk-post:		Specifies the byte clock cycles after mode switch.
-					0x03 = default value.
+					0x00 = default value.
 - qcom,mdss-dsi-t-clk-pre:		Specifies the byte clock cycles before mode switch.
-					0x24 = default value.
+					0x00 = default value.
+- qcom,mdss-dsi-t-clk-pre-extend:	Boolean that specifies whether to enable t_clk_pre counter
+					increment by 2 byteclk.
 - qcom,mdss-dsi-stream:			Specifies the packet stream to be used.
 					0 = stream 0 (default)
 					1 = stream 1
@@ -351,6 +374,9 @@ Optional properties:
 					resolution restrictions.
 - qcom,dcs-cmd-by-left:			Boolean to indicate that dcs command are sent
 					through the left DSI controller only in a dual-dsi configuration
+- qcom,split-link-enabled:		Boolean to indicate split link support in panel.
+- qcom,sublinks-count:			Number of sublinks present in a split link enabled configuration.
+- qcom,lanes-per-sublink:		Number of lanes present per sublink in a split link enabled configuration.
 - qcom,mdss-dsi-panel-hdr-enabled:      Boolean to indicate HDR support in panel.
 - qcom,mdss-dsi-panel-hdr-color-primaries:
                                         Array of 8 unsigned integers denoting chromaticity of panel.These
@@ -474,6 +500,7 @@ Optional properties:
 - qcom,panel-ack-disabled: A boolean property to indicate, whether we need to wait for any ACK from the panel
 			   for any commands that we send.
 - qcom,mdss-dsi-force-clock-lane-hs:	Boolean to force dsi clock lanes to HS mode always.
+- qcom,panel-cphy-mode:			Boolean to specify whether panel is using cphy.
 
 - qcom,compression-mode:		Select compression mode for panel.
 					"fbc" - frame buffer compression
@@ -519,15 +546,17 @@ Optional properties:
 					to identify the default topology for the
 					display. The first set is indexed by the
 					value 0.
+- qcom,mdss-dsi-ext-bridge:		Array of u32 values which specifies the external bridge chip reg number, it
+					should match the port config.
 - qcom,mdss-dsi-dma-schedule-line:	An integer value indicates the line number after vertical active
 					region, at which command DMA needs to be triggered.
-- qcom,mdss-dsi-panel-cmds-only-by-right: Boolean used to mention whether the panel support DSI1 or
-					DSI0 to send commands. If this was set, that mean the panel only support
-					DSI1 to send commands, otherwise DSI0 will send comands.
 - qcom,dsi-dyn-clk-enable:		Boolean to indicate dsi dynamic clock switch feature
 					is supported.
 - qcom,dsi-dyn-clk-list:		An u32 array which lists all the supported dsi bit clock
 					frequencies in Hz for the given panel.
+- qcom,dsi-dyn-clk-skip-timing-update:	Boolean to specify whether to skip phy timing parameter
+					update during dynamic clock switch.
+- qcom,csi-proxy-enable:		Boolean to config DSI transmission packet DataTypes to simulate the CSI-2 compatible signal
 
 Required properties for sub-nodes:	None
 Optional properties:
@@ -609,6 +638,7 @@ Example:
 		qcom,mdss-dsi-te-check-enable;
 		qcom,mdss-dsi-te-using-wd;
 		qcom,mdss-dsi-te-using-te-pin;
+		qcom,mdss-dsi-qsync-min-refresh-rate = <30>;
 		qcom,mdss-dsi-te-dcs-command = <1>;
 		qcom,mdss-dsi-wr-mem-continue = <0x3c>;
 		qcom,mdss-dsi-wr-mem-start = <0x2c>;
@@ -627,14 +657,16 @@ Example:
 		qcom,mdss-dsi-lane-1-state;
 		qcom,mdss-dsi-lane-2-state;
 		qcom,mdss-dsi-lane-3-state;
+		qcom,split-link-enabled;
+		qcom,sublinks-count = <2>;
+		qcom,lanes-per-sublink = <2>;
 		qcom,mdss-dsi-t-clk-post = <0x20>;
 		qcom,mdss-dsi-t-clk-pre = <0x2c>;
+		qcom,mdss-dsi-t-clk-pre-extend;
 		qcom,mdss-dsi-stream = <0>;
 		qcom,mdss-dsi-mdp-trigger = <0>;
 		qcom,mdss-dsi-dma-trigger = <0>;
 		qcom,mdss-dsi-panel-framerate = <60>;
-		qcom,mdss-dsi-panel-clockrate = <424000000>;
-		qcom,mdss-mdp-transfer-time-us = <12500>;
 		qcom,mdss-dsi-panel-timings = [7d 25 1d 00 37 33
 					22 27 1e 03 04 00];
                 qcom,mdss-dsi-panel-timings-8996 = [23 20 06 09 05 03 04 a0
@@ -651,9 +683,7 @@ Example:
 		qcom,mdss-dsi-pan-enable-dynamic-fps;
 		qcom,mdss-dsi-pan-fps-update = "dfps_suspend_resume_mode";
 		qcom,dsi-supported-dfps-list = <48 55 60>;
-		qcom,mdss-dsi-bl-pmic-bank-select = <0>;
-		qcom,mdss-dsi-bl-pmic-pwm-frequency = <0>;
-		qcom,mdss-dsi-pwm-gpio = <&pm8941_mpps 5 0>;
+		qcom,bl-pmic-pwm-period-usecs = <0>;
 		qcom,5v-boost-gpio = <&pm8994_gpios 14 0>;
 		qcom,mdss-pan-physical-width-dimension = <60>;
 		qcom,mdss-pan-physical-height-dimension = <140>;
@@ -711,6 +741,8 @@ Example:
 				qcom,mdss-dsi-v-front-porch = <728>;
 				qcom,mdss-dsi-v-pulse-width = <4>;
 				qcom,mdss-dsi-panel-framerate = <60>;
+				qcom,mdss-dsi-panel-clockrate = <424000000>;
+				qcom,mdss-mdp-transfer-time-us = <12500>;
 				qcom,mdss-dsi-panel-timings = [E6 38 26 00 68 6E 2A 3C 2C 03 04 00];
 				qcom,mdss-dsi-t-clk-post = <0x02>;
 				qcom,mdss-dsi-t-clk-pre = <0x2a>;
@@ -721,6 +753,10 @@ Example:
 					29 00 00 00 00 00 02 B0 04
 					29 00 00 00 00 00 02 F1 00];
 				qcom,mdss-dsi-timing-switch-command-state = "dsi_lp_mode";
+				qcom,mdss-dsi-qsync-on-commands = [15 01 00 00 00 00 02 51 00];
+				qcom,mdss-dsi-qsync-on-commands-state = "dsi_hs_mode";
+				qcom,mdss-dsi-qsync-off-commands = [15 01 00 00 00 00 02 51 00];
+				qcom,mdss-dsi-qsync-off-commands-state = "dsi_hs_mode";
 
 				qcom,mdss-dsc-slice-height = <16>;
 				qcom,mdss-dsc-slice-width = <360>;

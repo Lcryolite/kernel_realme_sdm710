@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -72,6 +72,7 @@ enum rsc_vsync_req {
  *				TCS command.
  * @hw_vsync:			Enables the vsync on RSC block.
  * @tcs_use_ok:			set TCS set to high to allow RSC to use it.
+ * @bwi_status:			It updates the BW increase/decrease status.
  * @is_amc_mode:		Check current amc mode status
  * @debug_dump:			dump debug bus registers or enable debug bus
  * @state_update:		Enable/override the solver based on rsc state
@@ -87,6 +88,7 @@ struct sde_rsc_hw_ops {
 	int (*hw_vsync)(struct sde_rsc_priv *rsc, enum rsc_vsync_req request,
 		char *buffer, int buffer_size, u32 mode);
 	int (*tcs_use_ok)(struct sde_rsc_priv *rsc);
+	int (*bwi_status)(struct sde_rsc_priv *rsc, bool bw_indication);
 	bool (*is_amc_mode)(struct sde_rsc_priv *rsc);
 	void (*debug_dump)(struct sde_rsc_priv *rsc, u32 mux_sel);
 	int (*state_update)(struct sde_rsc_priv *rsc, enum sde_rsc_state state);
@@ -106,6 +108,9 @@ struct sde_rsc_hw_ops {
  * @rsc_time_slot_0_ns:		mode-0 time slot threshold in nano seconds
  * @rsc_time_slot_1_ns:		mode-1 time slot threshold in nano seconds
  * @rsc_time_slot_2_ns:		mode-2 time slot threshold in nano seconds
+ *
+ * @min_threshold_time_ns:	minimum time required to enter & exit mode0
+ * @bwi_threshold_time_ns:	worst case time to increase the BW vote
  */
 struct sde_rsc_timer_config {
 	u32 static_wakeup_time_ns;
@@ -116,14 +121,51 @@ struct sde_rsc_timer_config {
 	u32 rsc_time_slot_0_ns;
 	u32 rsc_time_slot_1_ns;
 	u32 rsc_time_slot_2_ns;
+
+	u32 min_threshold_time_ns;
+	u32 bwi_threshold_time_ns;
 };
 
+struct sde_rsc_state_switch_ops {
+	int (*switch_to_idle)(struct sde_rsc_priv *rsc,
+		struct sde_rsc_cmd_config *config,
+		struct sde_rsc_client *caller_client,
+		int *wait_vblank_crtc_id);
+	int (*switch_to_vid)(struct sde_rsc_priv *rsc,
+		struct sde_rsc_cmd_config *config,
+		struct sde_rsc_client *caller_client,
+		int *wait_vblank_crtc_id);
+	int (*switch_to_cmd)(struct sde_rsc_priv *rsc,
+		struct sde_rsc_cmd_config *config,
+		struct sde_rsc_client *caller_client,
+		int *wait_vblank_crtc_id);
+	int (*switch_to_clk)(struct sde_rsc_priv *rsc,
+		int *wait_vblank_crtc_id);
+};
+
+/**
+ * struct sde_rsc_bw_config: bandwidth configuration
+ *
+ * @ab_vote:	Stored ab_vote for SDE_POWER_HANDLE_DBUS_ID_MAX
+ * @ib_vote:	Stored ib_vote for SDE_POWER_HANDLE_DBUS_ID_MAX
+ * @new_ab_vote:	ab_vote for incoming frame.
+ * @new_ib_vote:	ib_vote for incoming frame.
+ */
+struct sde_rsc_bw_config {
+	u64	ab_vote[SDE_POWER_HANDLE_DBUS_ID_MAX];
+	u64	ib_vote[SDE_POWER_HANDLE_DBUS_ID_MAX];
+
+	u64	new_ab_vote[SDE_POWER_HANDLE_DBUS_ID_MAX];
+	u64	new_ib_vote[SDE_POWER_HANDLE_DBUS_ID_MAX];
+};
 /**
  * struct sde_rsc_priv: sde resource state coordinator(rsc) private handle
  * @version:		rsc sequence version
  * @phandle:		module power handle for clocks
  * @pclient:		module power client of phandle
  * @fs:			"MDSS GDSC" handle
+ * @sw_fs_enabled:	track "MDSS GDSC" sw vote during probe
+ * @need_hwinit:	rsc hw init is required for the next update
  *
  * @disp_rsc:		display rsc handle
  * @drv_io:		sde drv io data mapping
@@ -137,6 +179,7 @@ struct sde_rsc_timer_config {
  * cmd_config:		current panel config
  * current_state:	current rsc state (video/command), solver
  *                      override/enabled.
+ * vsync_source:	Interface index to provide the vsync ticks
  * debug_mode:		enables the logging for each register read/write
  * debugfs_root:	debugfs file system root node
  *
@@ -147,16 +190,26 @@ struct sde_rsc_timer_config {
  *			invalid state. It can be blocked by this boolean entry.
  * primary_client:	A client which is allowed to make command state request
  *			and ab/ib vote on display rsc
+ * single_tcs_execution_time: worst case time to execute one tcs vote
+ *			(sleep/wake)
+ * backoff_time_ns:	time to only wake tcs in any mode
+ * mode_threshold_time_ns: time to wake TCS in mode-0, must be greater than
+ *			backoff time
+ * time_slot_0_ns:	time for sleep & wake TCS in mode-1
  * master_drm:		Primary client waits for vsync on this drm object based
  *			on crtc id
  * rsc_vsync_wait:   Refcount to indicate if we have to wait for the vsync.
  * rsc_vsync_waitq:   Queue to wait for the vsync.
+ * bw_config:		check sde_rsc_bw_config structure description.
+ * post_poms:		bool if a panel mode change occurred
  */
 struct sde_rsc_priv {
 	u32 version;
 	struct sde_power_handle phandle;
 	struct sde_power_client *pclient;
 	struct regulator *fs;
+	bool sw_fs_enabled;
+	bool need_hwinit;
 
 	struct rpmh_client *disp_rsc;
 	struct dss_io_data drv_io;
@@ -169,6 +222,8 @@ struct sde_rsc_priv {
 	struct sde_rsc_timer_config timer_config;
 	struct sde_rsc_cmd_config cmd_config;
 	u32	current_state;
+	u32	vsync_source;
+	struct sde_rsc_state_switch_ops state_ops;
 
 	u32 debug_mode;
 	struct dentry *debugfs_root;
@@ -178,18 +233,35 @@ struct sde_rsc_priv {
 	bool power_collapse_block;
 	struct sde_rsc_client *primary_client;
 
+	u32 single_tcs_execution_time;
+	u32 backoff_time_ns;
+	u32 mode_threshold_time_ns;
+	u32 time_slot_0_ns;
+
 	struct drm_device *master_drm;
 	atomic_t rsc_vsync_wait;
 	wait_queue_head_t rsc_vsync_waitq;
+
+	struct sde_rsc_bw_config bw_config;
+	bool post_poms;
 };
 
 /**
- * sde_rsc_hw_register() - register hardware API
+ * sde_rsc_hw_register() - register hardware API. It manages V1 and V2 support.
  *
  * @client:	 Client pointer provided by sde_rsc_client_create().
  *
  * Return: error code.
  */
 int sde_rsc_hw_register(struct sde_rsc_priv *rsc);
+
+/**
+ * sde_rsc_hw_register_v3() - register hardware API. It manages V3 support.
+ *
+ * @client:	 Client pointer provided by sde_rsc_client_create().
+ *
+ * Return: error code.
+ */
+int sde_rsc_hw_register_v3(struct sde_rsc_priv *rsc);
 
 #endif /* _SDE_RSC_PRIV_H_ */

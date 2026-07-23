@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2014, 2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2014, 2019 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -17,6 +17,7 @@
 #include <linux/dma-mapping.h>
 
 #include <linux/msm-sps.h>
+#include <linux/soc/qcom/smem_state.h>
 
 #define BAM_MUX_HDR_MAGIC_NO			0x33fc
 #define BAM_MUX_HDR_CMD_DATA			0
@@ -60,17 +61,13 @@
  */
 struct bam_ops_if {
 	/* smsm */
-	int (*smsm_change_state_ptr)(uint32_t smsm_entry,
-		uint32_t clear_mask, uint32_t set_mask);
+	int (*smsm_change_state_ptr)(struct qcom_smem_state *state, u32 mask,
+		u32 value);
 
-	uint32_t (*smsm_get_state_ptr)(uint32_t smsm_entry);
+	struct qcom_smem_state *(*smsm_get_state_ptr)(struct device *dev,
+		const char *con_id, unsigned int *bit);
 
-	int (*smsm_state_cb_register_ptr)(uint32_t smsm_entry, uint32_t mask,
-		void (*notify)(void *, uint32_t old_state, uint32_t new_state),
-		void *data);
-
-	int (*smsm_state_cb_deregister_ptr)(uint32_t smsm_entry, uint32_t mask,
-		void (*notify)(void *, uint32_t, uint32_t), void *data);
+	void (*smsm_put_state_ptr)(struct qcom_smem_state *state);
 
 	/* sps */
 	int (*sps_connect_ptr)(struct sps_pipe *h, struct sps_connect *connect);
@@ -111,6 +108,12 @@ struct bam_ops_if {
 	enum dma_data_direction dma_to;
 
 	enum dma_data_direction dma_from;
+
+	u32 a2_pwr_state;
+
+	void *pwr_state;
+
+	void *pwr_ack_state;
 };
 
 /**

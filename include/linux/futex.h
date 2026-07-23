@@ -1,16 +1,17 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _LINUX_FUTEX_H
 #define _LINUX_FUTEX_H
 
 #include <linux/sched.h>
+#include <linux/ktime.h>
 
 #include <uapi/linux/futex.h>
 
 struct inode;
 struct mm_struct;
 struct task_struct;
-union ktime;
 
-long do_futex(u32 __user *uaddr, int op, u32 val, union ktime *timeout,
+long do_futex(u32 __user *uaddr, int op, u32 val, ktime_t *timeout,
 	      u32 __user *uaddr2, u32 val2, u32 val3);
 
 /*
@@ -85,4 +86,5 @@ static inline void futex_exit_recursive(struct task_struct *tsk) { }
 static inline void futex_exit_release(struct task_struct *tsk) { }
 static inline void futex_exec_release(struct task_struct *tsk) { }
 #endif
+
 #endif

@@ -135,17 +135,26 @@ void irq_gc_ack_clr_bit(struct irq_data *d)
 }
 
 /**
- * irq_gc_mask_disable_reg_and_ack - Mask and ack pending interrupt
+ * irq_gc_mask_disable_and_ack_set - Mask and ack pending interrupt
  * @d: irq_data
+ *
+ * This generic implementation of the irq_mask_ack method is for chips
+ * with separate enable/disable registers instead of a single mask
+ * register and where a pending interrupt is acknowledged by setting a
+ * bit.
+ *
+ * Note: This is the only permutation currently used.  Similar generic
+ * functions should be added here if other permutations are required.
  */
-void irq_gc_mask_disable_reg_and_ack(struct irq_data *d)
+void irq_gc_mask_disable_and_ack_set(struct irq_data *d)
 {
 	struct irq_chip_generic *gc = irq_data_get_irq_chip_data(d);
 	struct irq_chip_type *ct = irq_data_get_chip_type(d);
 	u32 mask = d->mask;
 
 	irq_gc_lock(gc);
-	irq_reg_writel(gc, mask, ct->regs.mask);
+	irq_reg_writel(gc, mask, ct->regs.disable);
+	*ct->mask_cache &= ~mask;
 	irq_reg_writel(gc, mask, ct->regs.ack);
 	irq_gc_unlock(gc);
 }
@@ -201,10 +210,9 @@ static void irq_writel_be(u32 val, void __iomem *addr)
 	iowrite32be(val, addr);
 }
 
-static void
-irq_init_generic_chip(struct irq_chip_generic *gc, const char *name,
-		      int num_ct, unsigned int irq_base,
-		      void __iomem *reg_base, irq_flow_handler_t handler)
+void irq_init_generic_chip(struct irq_chip_generic *gc, const char *name,
+			   int num_ct, unsigned int irq_base,
+			   void __iomem *reg_base, irq_flow_handler_t handler)
 {
 	raw_spin_lock_init(&gc->lock);
 	gc->num_ct = num_ct;
@@ -323,7 +331,6 @@ int __irq_alloc_domain_generic_chips(struct irq_domain *d, int irqs_per_chip,
 		/* Calc pointer to the next generic chip */
 		tmp += sizeof(*gc) + num_ct * sizeof(struct irq_chip_type);
 	}
-	d->name = name;
 	return 0;
 }
 EXPORT_SYMBOL_GPL(__irq_alloc_domain_generic_chips);
@@ -526,21 +533,34 @@ EXPORT_SYMBOL_GPL(irq_setup_alt_chip);
 void irq_remove_generic_chip(struct irq_chip_generic *gc, u32 msk,
 			     unsigned int clr, unsigned int set)
 {
-	unsigned int i = gc->irq_base;
+	unsigned int i, virq;
 
 	raw_spin_lock(&gc_lock);
 	list_del(&gc->list);
 	raw_spin_unlock(&gc_lock);
 
-	for (; msk; msk >>= 1, i++) {
+	for (i = 0; msk; msk >>= 1, i++) {
 		if (!(msk & 0x01))
 			continue;
 
+		/*
+		 * Interrupt domain based chips store the base hardware
+		 * interrupt number in gc::irq_base. Otherwise gc::irq_base
+		 * contains the base Linux interrupt number.
+		 */
+		if (gc->domain) {
+			virq = irq_find_mapping(gc->domain, gc->irq_base + i);
+			if (!virq)
+				continue;
+		} else {
+			virq = gc->irq_base + i;
+		}
+
 		/* Remove handler first. That will mask the irq line */
-		irq_set_handler(i, NULL);
-		irq_set_chip(i, &no_irq_chip);
-		irq_set_chip_data(i, NULL);
-		irq_modify_status(i, clr, set);
+		irq_set_handler(virq, NULL);
+		irq_set_chip(virq, &no_irq_chip);
+		irq_set_chip_data(virq, NULL);
+		irq_modify_status(virq, clr, set);
 	}
 }
 EXPORT_SYMBOL_GPL(irq_remove_generic_chip);

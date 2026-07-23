@@ -55,6 +55,8 @@
 #include <linux/latencytop.h>
 #include <linux/export.h>
 #include <linux/sched.h>
+#include <linux/sched/debug.h>
+#include <linux/sched/stat.h>
 #include <linux/list.h>
 #include <linux/stacktrace.h>
 
@@ -290,8 +292,8 @@ static int __init init_lstats_procfs(void)
 	return 0;
 }
 
-int sysctl_latencytop(struct ctl_table *table, int write,
-			void __user *buffer, size_t *lenp, loff_t *ppos)
+int sysctl_latencytop(struct ctl_table *table, int write, void *buffer,
+		size_t *lenp, loff_t *ppos)
 {
 	int err;
 

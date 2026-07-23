@@ -1,13 +1,5 @@
-/* Copyright (c) 2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0
+ * Copyright (c) 2018, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/init.h>
@@ -15,7 +7,11 @@
 #include <linux/slab.h>
 #include <soc/qcom/subsystem_notif.h>
 #include <soc/qcom/ramdump.h>
-#include <soc/qcom/smem.h>
+#include <linux/soc/qcom/smem.h>
+
+#define SMEM_SSR_REASON_MSS0	421
+#define SMEM_SSR_DATA_MSS0	611
+#define SMEM_MODEM	1
 
 /*
  * This program collects the data from SMEM regions whenever the modem crashes
@@ -35,41 +31,43 @@ static int microdump_modem_notifier_nb(struct notifier_block *nb,
 		unsigned long code, void *data)
 {
 	int ret = 0;
-	unsigned int size_reason = 0, size_data = 0;
+	size_t size_reason = 0, size_data = 0;
 	char *crash_reason = NULL;
 	char *crash_data = NULL;
-	unsigned int smem_id = 611;
 	struct ramdump_segment segment[2];
 
-	if (SUBSYS_RAMDUMP_NOTIFICATION == code || SUBSYS_SOC_RESET == code) {
+	if (SUBSYS_RAMDUMP_NOTIFICATION != code && SUBSYS_SOC_RESET != code)
+		return NOTIFY_OK;
 
-		memset(segment, 0, sizeof(segment));
+	memset(segment, 0, sizeof(segment));
 
-		crash_reason = smem_get_entry(SMEM_SSR_REASON_MSS0, &size_reason
-				, 0, SMEM_ANY_HOST_FLAG);
-		if (IS_ERR_OR_NULL(crash_reason)) {
-			pr_info("%s: smem %d not available\n",
+	crash_reason = qcom_smem_get(QCOM_SMEM_HOST_ANY
+				, SMEM_SSR_REASON_MSS0, &size_reason);
+
+	if (IS_ERR_OR_NULL(crash_reason)) {
+		pr_info("%s: smem %d not available\n",
 				__func__, SMEM_SSR_REASON_MSS0);
-			goto out;
-		}
-
-		segment[0].v_address = crash_reason;
-		segment[0].size = size_reason;
-
-		crash_data = smem_get_entry(smem_id, &size_data, SMEM_MODEM, 0);
-		if (IS_ERR_OR_NULL(crash_data)) {
-			pr_info("%s: smem %d not available\n ",
-				__func__, smem_id);
-			goto out;
-		}
-
-		segment[1].v_address = crash_data;
-		segment[1].size = size_data;
-
-		ret = do_ramdump(drv->microdump_dev, segment, 2);
-		if (ret)
-			pr_info("%s: do_ramdump() failed\n", __func__);
+		goto out;
 	}
+
+	segment[0].v_address = crash_reason;
+	segment[0].size = size_reason;
+
+	crash_data = qcom_smem_get(SMEM_MODEM
+				, SMEM_SSR_DATA_MSS0, &size_data);
+
+	if (IS_ERR_OR_NULL(crash_data)) {
+		pr_info("%s: smem %d not available\n",
+				__func__, SMEM_SSR_DATA_MSS0);
+		goto out;
+	}
+
+	segment[1].v_address = crash_data;
+	segment[1].size = size_data;
+
+	ret = do_ramdump(drv->microdump_dev, segment, 2);
+	if (ret)
+		pr_info("%s: do_ramdump() failed\n", __func__);
 
 out:
 	return NOTIFY_OK;
@@ -131,6 +129,7 @@ static int __init microdump_init(void)
 		goto out_kfree;
 	}
 	return ret;
+
 out_kfree:
 	pr_err("%s: Failed to register microdump collector\n", __func__);
 	kfree(drv);
@@ -141,15 +140,8 @@ out:
 
 static void __exit microdump_exit(void)
 {
-	if (!drv)
-		return;
-
-	if (!IS_ERR(drv->microdump_modem_notify_handler))
-		microdump_modem_ssr_unregister_notifier(drv);
-
-	if (drv->microdump_dev)
-		destroy_ramdump_device(drv->microdump_dev);
-
+	microdump_modem_ssr_unregister_notifier(drv);
+	destroy_ramdump_device(drv->microdump_dev);
 	kfree(drv);
 }
 

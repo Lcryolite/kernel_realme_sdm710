@@ -44,6 +44,7 @@
 
 #include <asm/assembly.h>
 #include <asm/pdc.h>
+#include <asm/psw.h>
 
 #include <linux/linkage.h>
 #include <linux/init.h>
@@ -136,7 +137,7 @@ ENTRY(os_hpmc)
 	 * So turn on the Q bit and turn off the M bit.
 	 */
 
-	ldo     8(%r0),%r4                       /* PSW Q on, PSW M off */
+	ldi     PSW_SM_Q,%r4                   /* PSW Q on, PSW M off */
 	mtctl   %r4,ipsw
 	mtctl   %r0,pcsq
 	mtctl   %r0,pcsq
@@ -258,7 +259,7 @@ os_hpmc_5:
 
 	tovirt_r1 %r30      /* make sp virtual */
 
-	rsm 8,%r0           /* Clear Q bit */
+	rsm     PSW_SM_Q,%r0           /* Clear Q bit */
 	ldi     1,%r8       /* Set trap code to "1" for HPMC */
 	load32	PA(intr_save),%r1
 	be      0(%sr7,%r1)

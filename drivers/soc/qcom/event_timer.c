@@ -329,8 +329,8 @@ static void irq_affinity_change_notifier(struct irq_affinity_notify *notify,
 	 */
 	if (!is_event_active(event) ||
 		(is_event_next(event) &&
-		(hrtimer_try_to_cancel(&per_cpu(per_cpu_hrtimer.
-				event_hrtimer, old_cpu)) < 0))) {
+		(hrtimer_try_to_cancel(&per_cpu(per_cpu_hrtimer.event_hrtimer,
+						old_cpu)) < 0))) {
 		event->cpu = new_cpu;
 		spin_unlock_irqrestore(&event_timer_lock, flags);
 		if (msm_event_debug_mask && MSM_EVENT_TIMER_DEBUG)

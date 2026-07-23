@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  * L2TP-over-IP socket for L2TPv3.
  *
@@ -123,8 +124,8 @@ enum {
 	L2TP_ATTR_STATS,		/* nested */
 	L2TP_ATTR_IP6_SADDR,		/* struct in6_addr */
 	L2TP_ATTR_IP6_DADDR,		/* struct in6_addr */
-	L2TP_ATTR_UDP_ZERO_CSUM6_TX,	/* u8 */
-	L2TP_ATTR_UDP_ZERO_CSUM6_RX,	/* u8 */
+	L2TP_ATTR_UDP_ZERO_CSUM6_TX,	/* flag */
+	L2TP_ATTR_UDP_ZERO_CSUM6_RX,	/* flag */
 	L2TP_ATTR_PAD,
 	__L2TP_ATTR_MAX,
 };

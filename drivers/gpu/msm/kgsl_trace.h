@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2017,2020-2021, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2021, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -17,7 +17,7 @@
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM kgsl
 #undef TRACE_INCLUDE_PATH
-#define TRACE_INCLUDE_PATH .
+#define TRACE_INCLUDE_PATH ../../drivers/gpu/msm/
 #undef TRACE_INCLUDE_FILE
 #define TRACE_INCLUDE_FILE kgsl_trace
 
@@ -821,14 +821,15 @@ TRACE_EVENT(kgsl_constraint,
 TRACE_EVENT(kgsl_mmu_pagefault,
 
 	TP_PROTO(struct kgsl_device *device, unsigned long page,
-		 unsigned int pt, const char *op),
+		 unsigned int pt, const char *name, const char *op),
 
-	TP_ARGS(device, page, pt, op),
+	TP_ARGS(device, page, pt, name, op),
 
 	TP_STRUCT__entry(
 		__string(device_name, device->name)
 		__field(unsigned long, page)
 		__field(unsigned int, pt)
+		__string(name, name)
 		__string(op, op)
 	),
 
@@ -836,13 +837,14 @@ TRACE_EVENT(kgsl_mmu_pagefault,
 		__assign_str(device_name, device->name);
 		__entry->page = page;
 		__entry->pt = pt;
+		__assign_str(name, name);
 		__assign_str(op, op);
 	),
 
 	TP_printk(
-		"d_name=%s page=0x%lx pt=%u op=%s",
+		"d_name=%s page=0x%lx pt=%u op=%s name=%s",
 		__get_str(device_name), __entry->page, __entry->pt,
-		__get_str(op)
+		__get_str(op), __get_str(name)
 	)
 );
 
@@ -869,6 +871,78 @@ TRACE_EVENT(kgsl_regwrite,
 		"d_name=%s reg=0x%x value=0x%x",
 		__get_str(device_name), __entry->offset, __entry->value
 	)
+);
+
+TRACE_EVENT(kgsl_popp_level,
+
+	TP_PROTO(struct kgsl_device *device, int level1, int level2),
+
+	TP_ARGS(device, level1, level2),
+
+	TP_STRUCT__entry(
+		__string(device_name, device->name)
+		__field(int, level1)
+		__field(int, level2)
+	),
+
+	TP_fast_assign(
+		__assign_str(device_name, device->name);
+		__entry->level1 = level1;
+		__entry->level2 = level2;
+	),
+
+	TP_printk(
+		"d_name=%s old level=%d new level=%d",
+		__get_str(device_name), __entry->level1, __entry->level2)
+);
+
+TRACE_EVENT(kgsl_popp_mod,
+
+	TP_PROTO(struct kgsl_device *device, int x, int y),
+
+	TP_ARGS(device, x, y),
+
+	TP_STRUCT__entry(
+		__string(device_name, device->name)
+		__field(int, x)
+		__field(int, y)
+	),
+
+	TP_fast_assign(
+		__assign_str(device_name, device->name);
+		__entry->x = x;
+		__entry->y = y;
+	),
+
+	TP_printk(
+		"d_name=%s GPU busy mod=%d bus busy mod=%d",
+		__get_str(device_name), __entry->x, __entry->y)
+);
+
+TRACE_EVENT(kgsl_popp_nap,
+
+	TP_PROTO(struct kgsl_device *device, int t, int nap, int percent),
+
+	TP_ARGS(device, t, nap, percent),
+
+	TP_STRUCT__entry(
+		__string(device_name, device->name)
+		__field(int, t)
+		__field(int, nap)
+		__field(int, percent)
+	),
+
+	TP_fast_assign(
+		__assign_str(device_name, device->name);
+		__entry->t = t;
+		__entry->nap = nap;
+		__entry->percent = percent;
+	),
+
+	TP_printk(
+		"d_name=%s nap time=%d number of naps=%d percentage=%d",
+		__get_str(device_name), __entry->t, __entry->nap,
+			__entry->percent)
 );
 
 TRACE_EVENT(kgsl_register_event,
@@ -1126,7 +1200,7 @@ TRACE_EVENT(kgsl_clock_throttling,
 		int crc_50pct,
 		int crc_more50pct,
 		int crc_less50pct,
-		int adj
+		int64_t adj
 	),
 	TP_ARGS(
 		idle_10pct,
@@ -1140,7 +1214,7 @@ TRACE_EVENT(kgsl_clock_throttling,
 		__field(int, crc_50pct)
 		__field(int, crc_more50pct)
 		__field(int, crc_less50pct)
-		__field(int, adj)
+		__field(int64_t, adj)
 	),
 	TP_fast_assign(
 		__entry->idle_10pct = idle_10pct;
@@ -1149,7 +1223,7 @@ TRACE_EVENT(kgsl_clock_throttling,
 		__entry->crc_less50pct = crc_less50pct;
 		__entry->adj = adj;
 	),
-	TP_printk("idle_10=%d crc_50=%d crc_more50=%d crc_less50=%d adj=%d",
+	TP_printk("idle_10=%d crc_50=%d crc_more50=%d crc_less50=%d adj=%lld",
 		__entry->idle_10pct, __entry->crc_50pct, __entry->crc_more50pct,
 		__entry->crc_less50pct, __entry->adj
 	)

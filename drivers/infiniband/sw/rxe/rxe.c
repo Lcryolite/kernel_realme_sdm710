@@ -31,13 +31,13 @@
  * SOFTWARE.
  */
 
+#include <net/addrconf.h>
 #include "rxe.h"
 #include "rxe_loc.h"
 
 MODULE_AUTHOR("Bob Pearson, Frank Zago, John Groves, Kamal Heib");
 MODULE_DESCRIPTION("Soft RDMA transport");
 MODULE_LICENSE("Dual BSD/GPL");
-MODULE_VERSION("0.2");
 
 /* free resources for all ports on a device */
 static void rxe_cleanup_ports(struct rxe_dev *rxe)
@@ -64,6 +64,8 @@ static void rxe_cleanup(struct rxe_dev *rxe)
 	rxe_pool_cleanup(&rxe->mc_elem_pool);
 
 	rxe_cleanup_ports(rxe);
+
+	crypto_free_shash(rxe->tfm);
 }
 
 /* called when all references have been dropped */
@@ -124,6 +126,8 @@ static int rxe_init_device_param(struct rxe_dev *rxe)
 	rxe->attr.max_fast_reg_page_list_len	= RXE_MAX_FMR_PAGE_LIST_LEN;
 	rxe->attr.max_pkeys			= RXE_MAX_PKEYS;
 	rxe->attr.local_ca_ack_delay		= RXE_LOCAL_CA_ACK_DELAY;
+	addrconf_addr_eui48((unsigned char *)&rxe->attr.sys_image_guid,
+			rxe->ndev->dev_addr);
 
 	rxe->max_ucontext			= RXE_MAX_UCONTEXT;
 
@@ -175,7 +179,8 @@ static int rxe_init_ports(struct rxe_dev *rxe)
 		return -ENOMEM;
 
 	port->pkey_tbl[0] = 0xffff;
-	port->port_guid = rxe_port_guid(rxe);
+	addrconf_addr_eui48((unsigned char *)&port->port_guid,
+			    rxe->ndev->dev_addr);
 
 	spin_lock_init(&port->port_lock);
 

@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) 2014-2021, The Linux Foundation. All rights reserved.
  * Copyright (C) 2013 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
@@ -19,6 +20,7 @@
 #define pr_fmt(fmt)	"[drm:%s:%d] " fmt, __func__, __LINE__
 
 #include <drm/drm_crtc.h>
+#include <drm/drm_fixed.h>
 #include <linux/debugfs.h>
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
@@ -53,9 +55,6 @@
 #include "sde_trace.h"
 
 /* defines for secure channel call */
-#define SEC_SID_CNT               2
-#define SEC_SID_MASK_0            0x80881
-#define SEC_SID_MASK_1            0x80C81
 #define MEM_PROTECT_SD_CTRL_SWITCH 0x18
 #define MDP_DEVICE_ID            0x1A
 
@@ -106,32 +105,6 @@ static int _sde_kms_register_events(struct msm_kms *kms,
 bool sde_is_custom_client(void)
 {
 	return sdecustom;
-}
-
-bool sde_kms_is_vbif_operation_allowed(struct sde_kms *sde_kms)
-{
-	struct drm_device *dev;
-	struct drm_crtc *crtc;
-	bool sui_enhancement = false;
-
-	if (!sde_kms || !sde_kms->dev)
-		return false;
-	dev = sde_kms->dev;
-
-	if (!sde_kms->catalog->sui_misr_supported)
-		return true;
-
-	list_for_each_entry(crtc, &dev->mode_config.crtc_list, head) {
-		if (!crtc->state || !crtc->state->active)
-			continue;
-
-		sui_enhancement |= sde_crtc_is_sui_enhancement_enabled(crtc);
-	}
-
-	if (!sui_enhancement)
-		return true;
-
-	return !sde_kms_is_secure_session_inprogress(sde_kms);
 }
 
 #ifdef CONFIG_DEBUG_FS
@@ -365,6 +338,10 @@ static int _sde_debugfs_init(struct sde_kms *sde_kms)
 		return rc;
 	}
 
+	if (sde_kms->catalog->qdss_count)
+		debugfs_create_u32("qdss", 0600, debugfs_root,
+				(u32 *)&sde_kms->qdss_enabled);
+
 	return 0;
 }
 
@@ -390,12 +367,43 @@ static void _sde_debugfs_destroy(struct sde_kms *sde_kms)
 
 static int sde_kms_enable_vblank(struct msm_kms *kms, struct drm_crtc *crtc)
 {
-	return sde_crtc_vblank(crtc, true);
+	int ret = 0;
+	struct sde_kms *sde_kms;
+	struct msm_drm_private *priv;
+	struct sde_crtc *sde_crtc;
+	struct drm_encoder *drm_enc;
+
+	sde_kms = to_sde_kms(kms);
+	priv = sde_kms->dev->dev_private;
+	sde_crtc = to_sde_crtc(crtc);
+
+	SDE_ATRACE_BEGIN("sde_kms_enable_vblank");
+
+	if (sde_crtc->vblank_requested == false) {
+		SDE_ATRACE_BEGIN("sde_encoder_trigger_early_wakeup");
+		drm_for_each_encoder(drm_enc, crtc->dev)
+			sde_encoder_trigger_early_wakeup(drm_enc);
+
+		if (sde_kms->first_kickoff) {
+			sde_power_scale_reg_bus(&priv->phandle,
+					sde_kms->core_client,
+					VOTE_INDEX_HIGH, false);
+		}
+		SDE_ATRACE_END("sde_encoder_trigger_early_wakeup");
+	}
+
+	ret = sde_crtc_vblank(crtc, true);
+
+	SDE_ATRACE_END("sde_kms_enable_vblank");
+
+	return ret;
 }
 
 static void sde_kms_disable_vblank(struct msm_kms *kms, struct drm_crtc *crtc)
 {
+	SDE_ATRACE_BEGIN("sde_kms_disable_vblank");
 	sde_crtc_vblank(crtc, false);
+	SDE_ATRACE_END("sde_kms_disable_vblank");
 }
 
 static void sde_kms_wait_for_frame_transfer_complete(struct msm_kms *kms,
@@ -473,31 +481,36 @@ static int _sde_kms_secure_ctrl_xin_clients(struct sde_kms *sde_kms,
 
 /**
  * _sde_kms_scm_call - makes secure channel call to switch the VMIDs
- * @vimd: switch the stage 2 translation to this VMID.
+ * @sde_kms: Pointer to sde_kms struct
+ * @vimd: switch the stage 2 translation to this VMID
  */
-static int _sde_kms_scm_call(int vmid)
+static int _sde_kms_scm_call(struct sde_kms *sde_kms, int vmid)
 {
 	struct scm_desc desc = {0};
 	uint32_t num_sids;
 	uint32_t *sec_sid;
 	uint32_t mem_protect_sd_ctrl_id = MEM_PROTECT_SD_CTRL_SWITCH;
-	int ret = 0;
+	struct sde_mdss_cfg *sde_cfg = sde_kms->catalog;
+	int ret = 0, i;
 
-	/* This info should be queried from catalog */
-	num_sids = SEC_SID_CNT;
+	num_sids = sde_cfg->sec_sid_mask_count;
+	if (!num_sids) {
+		SDE_ERROR("secure SID masks not configured, vmid 0x%x\n", vmid);
+		return -EINVAL;
+	}
+
 	sec_sid = kcalloc(num_sids, sizeof(uint32_t), GFP_KERNEL);
 	if (!sec_sid)
 		return -ENOMEM;
 
-	/*
-	 * derive this info from device tree/catalog, this is combination of
-	 * smr mask and SID for secure
-	 */
-	sec_sid[0] = SEC_SID_MASK_0;
-	sec_sid[1] = SEC_SID_MASK_1;
+	for (i = 0; i < num_sids; i++) {
+		sec_sid[i] = sde_cfg->sec_sid_mask[i];
+		SDE_DEBUG("sid_mask[%d]: %d\n", i, sec_sid[i]);
+	}
 	dmac_flush_range(sec_sid, sec_sid + num_sids);
 
-	SDE_DEBUG("calling scm_call for vmid %d", vmid);
+	SDE_DEBUG("calling scm_call for vmid 0x%x, num_sids %d",
+				vmid, num_sids);
 
 	desc.arginfo = SCM_ARGS(4, SCM_VAL, SCM_RW, SCM_VAL, SCM_VAL);
 	desc.args[0] = MDP_DEVICE_ID;
@@ -508,17 +521,16 @@ static int _sde_kms_scm_call(int vmid)
 	ret = scm_call2(SCM_SIP_FNID(SCM_SVC_MP,
 				mem_protect_sd_ctrl_id), &desc);
 	if (ret)
-		SDE_ERROR("Error:scm_call2, vmid (%lld): ret%d\n",
+		SDE_ERROR("Error:scm_call2, vmid %lld, ret%d\n",
 				desc.args[3], ret);
 	SDE_EVT32(mem_protect_sd_ctrl_id,
-			desc.args[0], desc.args[3], num_sids,
-			sec_sid[0], sec_sid[1], ret);
+			desc.args[0], desc.args[3], num_sids, ret);
 
 	kfree(sec_sid);
 	return ret;
 }
 
-static int _sde_kms_detach_all_cb(struct sde_kms *sde_kms)
+static int _sde_kms_detach_all_cb(struct sde_kms *sde_kms, u32 vmid)
 {
 	u32 ret = 0;
 
@@ -532,7 +544,7 @@ static int _sde_kms_detach_all_cb(struct sde_kms *sde_kms)
 		goto end;
 	}
 
-	ret = _sde_kms_scm_call(VMID_CP_SEC_DISPLAY);
+	ret = _sde_kms_scm_call(sde_kms, vmid);
 	if (ret)
 		goto end;
 
@@ -540,14 +552,14 @@ end:
 	return ret;
 }
 
-static int _sde_kms_attach_all_cb(struct sde_kms *sde_kms)
+static int _sde_kms_attach_all_cb(struct sde_kms *sde_kms, int vmid)
 {
 	u32 ret = 0;
 
 	if (atomic_dec_return(&sde_kms->detach_all_cb) != 0)
 		goto end;
 
-	ret = _sde_kms_scm_call(VMID_CP_PIXEL);
+	ret = _sde_kms_scm_call(sde_kms, vmid);
 	if (ret)
 		goto end;
 
@@ -562,7 +574,7 @@ end:
 	return ret;
 }
 
-static int _sde_kms_detach_sec_cb(struct sde_kms *sde_kms)
+static int _sde_kms_detach_sec_cb(struct sde_kms *sde_kms, int vmid)
 {
 	u32 ret = 0;
 
@@ -576,7 +588,7 @@ static int _sde_kms_detach_sec_cb(struct sde_kms *sde_kms)
 		goto end;
 	}
 
-	ret = _sde_kms_scm_call(VMID_CP_CAMERA_PREVIEW);
+	ret = _sde_kms_scm_call(sde_kms, vmid);
 	if (ret)
 		goto end;
 
@@ -584,14 +596,14 @@ end:
 	return ret;
 }
 
-static int _sde_kms_attach_sec_cb(struct sde_kms *sde_kms)
+static int _sde_kms_attach_sec_cb(struct sde_kms *sde_kms, int vmid)
 {
 	u32 ret = 0;
 
 	if (atomic_dec_return(&sde_kms->detach_sec_cb) != 0)
 		goto end;
 
-	ret = _sde_kms_scm_call(VMID_CP_PIXEL);
+	ret = _sde_kms_scm_call(sde_kms, vmid);
 	if (ret)
 		goto end;
 
@@ -645,6 +657,7 @@ static int _sde_kms_secure_ctrl(struct sde_kms *sde_kms, struct drm_crtc *crtc,
 	struct sde_kms_smmu_state_data *smmu_state = &sde_kms->smmu_state;
 	int old_smmu_state = smmu_state->state;
 	int ret = 0;
+	u32 vmid;
 
 	if (!sde_kms || !crtc) {
 		SDE_ERROR("invalid argument(s)\n");
@@ -653,7 +666,7 @@ static int _sde_kms_secure_ctrl(struct sde_kms *sde_kms, struct drm_crtc *crtc,
 
 	SDE_EVT32(DRMID(crtc), smmu_state->state, smmu_state->transition_type,
 			post_commit, smmu_state->sui_misr_state,
-			SDE_EVTLOG_FUNC_ENTRY);
+			smmu_state->secure_level, SDE_EVTLOG_FUNC_ENTRY);
 
 	if ((!smmu_state->transition_type) ||
 	    ((smmu_state->transition_type == POST_COMMIT) && !post_commit))
@@ -669,36 +682,39 @@ static int _sde_kms_secure_ctrl(struct sde_kms *sde_kms, struct drm_crtc *crtc,
 
 	mutex_lock(&sde_kms->secure_transition_lock);
 	switch (smmu_state->state) {
-	/* Secure UI use case enable */
 	case DETACH_ALL_REQ:
-		ret = _sde_kms_detach_all_cb(sde_kms);
+		ret = _sde_kms_detach_all_cb(sde_kms, VMID_CP_SEC_DISPLAY);
 		if (!ret)
 			smmu_state->state = DETACHED;
 		break;
 
-	/* Secure UI use case disable */
 	case ATTACH_ALL_REQ:
-		ret = _sde_kms_attach_all_cb(sde_kms);
-		if (!ret)
+		ret = _sde_kms_attach_all_cb(sde_kms, VMID_CP_PIXEL);
+		if (!ret) {
 			smmu_state->state = ATTACHED;
+			smmu_state->secure_level = SDE_DRM_SEC_NON_SEC;
+		}
 		break;
 
-	/* Secure preview enable */
 	case DETACH_SEC_REQ:
-		ret = _sde_kms_detach_sec_cb(sde_kms);
+		vmid = (smmu_state->secure_level == SDE_DRM_SEC_ONLY) ?
+				VMID_CP_SEC_DISPLAY : VMID_CP_CAMERA_PREVIEW;
+
+		ret = _sde_kms_detach_sec_cb(sde_kms, vmid);
 		if (!ret)
 			smmu_state->state = DETACHED_SEC;
 		break;
 
-	/* Secure preview disable */
 	case ATTACH_SEC_REQ:
-		ret = _sde_kms_attach_sec_cb(sde_kms);
-		if (!ret)
+		ret = _sde_kms_attach_sec_cb(sde_kms, VMID_CP_PIXEL);
+		if (!ret) {
 			smmu_state->state = ATTACHED;
+			smmu_state->secure_level = SDE_DRM_SEC_NON_SEC;
+		}
 		break;
 
 	default:
-		SDE_ERROR("crtc:%d invalid smmu state:%d transition type:%d\n",
+		SDE_ERROR("crtc%d: invalid smmu state %d transition type %d\n",
 			DRMID(crtc), smmu_state->state,
 			smmu_state->transition_type);
 		ret = -EINVAL;
@@ -718,11 +734,12 @@ end:
 	smmu_state->transition_type = NONE;
 	smmu_state->transition_error = ret ? true : false;
 
-	SDE_DEBUG("crtc:%d, old_state %d new_state %d, ret %d\n",
-			DRMID(crtc), old_smmu_state, smmu_state->state, ret);
+	SDE_DEBUG("crtc %d: old_state %d, new_state %d, sec_lvl %d, ret %d\n",
+			DRMID(crtc), old_smmu_state, smmu_state->state,
+			smmu_state->secure_level, ret);
 	SDE_EVT32(DRMID(crtc), smmu_state->state, smmu_state->transition_type,
-			smmu_state->transition_error, ret,
-			SDE_EVTLOG_FUNC_EXIT);
+			smmu_state->transition_error, smmu_state->secure_level,
+			smmu_state->sui_misr_state, ret, SDE_EVTLOG_FUNC_EXIT);
 
 	return ret;
 }
@@ -828,18 +845,29 @@ no_ops:
 }
 
 static int _sde_kms_release_splash_buffer(unsigned int mem_addr,
-							unsigned int size)
+					unsigned int splash_buffer_size,
+					unsigned int ramdump_base,
+					unsigned int ramdump_buffer_size)
 {
 	unsigned long pfn_start, pfn_end, pfn_idx;
 	int ret = 0;
 
-	if (!mem_addr || !size)
+	if (!mem_addr || !splash_buffer_size) {
 		SDE_ERROR("invalid params\n");
+		return -EINVAL;
+	}
+
+	/* leave ramdump memory only if base address matches */
+	if (ramdump_base == mem_addr &&
+			ramdump_buffer_size <= splash_buffer_size) {
+		mem_addr +=  ramdump_buffer_size;
+		splash_buffer_size -= ramdump_buffer_size;
+	}
 
 	pfn_start = mem_addr >> PAGE_SHIFT;
-	pfn_end = (mem_addr + size) >> PAGE_SHIFT;
+	pfn_end = (mem_addr + splash_buffer_size) >> PAGE_SHIFT;
 
-	ret = memblock_free(mem_addr, size);
+	ret = memblock_free(mem_addr, splash_buffer_size);
 	if (ret) {
 		SDE_ERROR("continuous splash memory free failed:%d\n", ret);
 		return ret;
@@ -851,37 +879,11 @@ static int _sde_kms_release_splash_buffer(unsigned int mem_addr,
 
 }
 
-static int _sde_kms_splash_smmu_map(struct drm_device *dev, struct msm_mmu *mmu,
-		struct sde_splash_data *data)
+static int _sde_kms_splash_mem_get(struct sde_kms *sde_kms,
+		struct sde_splash_mem *splash)
 {
+	struct msm_mmu *mmu = NULL;
 	int ret = 0;
-
-	if (!mmu || !data)
-		return -EINVAL;
-
-	ret = mmu->funcs->one_to_one_map(mmu, data->splash_base,
-				data->splash_base, data->splash_size,
-				IOMMU_READ | IOMMU_NOEXEC);
-	if (ret)
-		SDE_ERROR("Splash smmu map failed: %d\n", ret);
-
-	return ret;
-}
-
-static int _sde_kms_splash_smmu_unmap(struct sde_kms *sde_kms)
-{
-	struct sde_splash_data *data;
-	struct msm_mmu *mmu;
-	int rc = 0;
-
-	if (!sde_kms)
-		return -EINVAL;
-
-	data = &sde_kms->splash_data;
-	if (!data) {
-		SDE_ERROR("Invalid splash data\n");
-		return -EINVAL;
-	}
 
 	if (!sde_kms->aspace[0]) {
 		SDE_ERROR("aspace not found for sde kms node\n");
@@ -894,11 +896,154 @@ static int _sde_kms_splash_smmu_unmap(struct sde_kms *sde_kms)
 		return -EINVAL;
 	}
 
-	if (mmu->funcs && mmu->funcs->one_to_one_unmap)
-		mmu->funcs->one_to_one_unmap(mmu, data->splash_base,
-				data->splash_size);
+	if (!splash || !mmu->funcs || !mmu->funcs->one_to_one_map) {
+		SDE_ERROR("invalid input params for map\n");
+		return -EINVAL;
+	}
+
+	if (!splash->ref_cnt) {
+		ret = mmu->funcs->one_to_one_map(mmu, splash->splash_buf_base,
+				splash->splash_buf_base,
+				splash->splash_buf_size,
+				IOMMU_READ | IOMMU_NOEXEC);
+		if (ret)
+			SDE_ERROR("splash memory smmu map failed:%d\n", ret);
+	}
+
+	splash->ref_cnt++;
+	SDE_DEBUG("one2one mapping done for base:%lx size:%x ref_cnt:%d\n",
+				splash->splash_buf_base,
+				splash->splash_buf_size,
+				splash->ref_cnt);
+
+	return ret;
+}
+
+static int _sde_kms_map_all_splash_regions(struct sde_kms *sde_kms)
+{
+	int i = 0;
+	int ret = 0;
+
+	if (!sde_kms)
+		return -EINVAL;
+
+	for (i = 0; i < sde_kms->splash_data.num_splash_displays; i++) {
+		ret = _sde_kms_splash_mem_get(sde_kms,
+				sde_kms->splash_data.splash_display[i].splash);
+		if (ret)
+			return ret;
+	}
+
+	return ret;
+}
+
+static void _sde_kms_log_splash_mapping(struct sde_kms *sde_kms,
+		const char *stage)
+{
+	struct msm_mmu *mmu;
+	struct sde_splash_mem *splash;
+	phys_addr_t first_pa, last_pa;
+	dma_addr_t first_iova, last_iova;
+	int i;
+
+	if (!sde_kms || !sde_kms->aspace[0] ||
+			!sde_kms->aspace[0]->mmu)
+		return;
+
+	mmu = sde_kms->aspace[0]->mmu;
+	if (!mmu->funcs || !mmu->funcs->iova_to_phys)
+		return;
+
+	for (i = 0; i < sde_kms->splash_data.num_splash_regions; i++) {
+		splash = &sde_kms->splash_data.splash_mem[i];
+		if (!splash->splash_buf_size)
+			continue;
+
+		first_iova = splash->splash_buf_base;
+		last_iova = first_iova + splash->splash_buf_size - PAGE_SIZE;
+		first_pa = mmu->funcs->iova_to_phys(mmu, first_iova);
+		last_pa = mmu->funcs->iova_to_phys(mmu, last_iova);
+		pr_info("RMX1901-R010: splash-map-state stage=%s region=%d base=0x%lx size=0x%x first=%pa last_iova=%pad last=%pa\n",
+			stage, i, splash->splash_buf_base,
+			splash->splash_buf_size, &first_pa, &last_iova,
+			&last_pa);
+	}
+}
+
+static int _sde_kms_splash_mem_put(struct sde_kms *sde_kms,
+		struct sde_splash_mem *splash, const char *reason,
+		bool preserve_on_validation_failure)
+{
+	struct msm_mmu *mmu = NULL;
+	int real_dsi_count;
+	int rc = 0;
+
+	if (!sde_kms)
+		return -EINVAL;
+
+	if (!sde_kms->aspace[0]) {
+		SDE_ERROR("aspace not found for sde kms node\n");
+		return -EINVAL;
+	}
+
+	mmu = sde_kms->aspace[0]->mmu;
+	if (!mmu) {
+		SDE_ERROR("mmu not found for aspace\n");
+		return -EINVAL;
+	}
+
+	if (!splash || !mmu->funcs || !mmu->funcs->one_to_one_unmap)
+		return -EINVAL;
+
+	real_dsi_count = dsi_display_get_num_of_displays();
+	pr_warn("RMX1901-R011: splash-put request reason=%s base=0x%lx size=0x%x refcnt=%d real_dsi=%d preserve_on_validation_failure=%d\n",
+		reason, splash->splash_buf_base, splash->splash_buf_size,
+		splash->ref_cnt, real_dsi_count,
+		preserve_on_validation_failure);
+
+	if (preserve_on_validation_failure) {
+		pr_warn("RMX1901-R011: splash-put preserved reason=%s real_dsi=%d; refcount, mapping, metadata and reserved pages unchanged\n",
+			reason, real_dsi_count);
+		_sde_kms_log_splash_mapping(sde_kms, "after-preserved-put");
+		return 0;
+	}
+
+	splash->ref_cnt--;
+
+	SDE_DEBUG("splash base:%lx refcnt:%d\n",
+			splash->splash_buf_base, splash->ref_cnt);
+
+	if (!splash->ref_cnt) {
+		mmu->funcs->one_to_one_unmap(mmu, splash->splash_buf_base,
+				splash->splash_buf_size);
+		rc = _sde_kms_release_splash_buffer(splash->splash_buf_base,
+				splash->splash_buf_size, splash->ramdump_base,
+				splash->ramdump_size);
+		splash->splash_buf_base = 0;
+		splash->splash_buf_size = 0;
+	}
 
 	return rc;
+}
+
+static int _sde_kms_unmap_all_splash_regions(struct sde_kms *sde_kms,
+		const char *reason, bool preserve_on_validation_failure)
+{
+	int i = 0;
+	int ret = 0;
+
+	if (!sde_kms)
+		return -EINVAL;
+
+	for (i = 0; i < sde_kms->splash_data.num_splash_displays; i++) {
+		ret = _sde_kms_splash_mem_put(sde_kms,
+				sde_kms->splash_data.splash_display[i].splash,
+				reason, preserve_on_validation_failure);
+		if (ret)
+			return ret;
+	}
+
+	return ret;
 }
 
 static void sde_kms_prepare_commit(struct msm_kms *kms,
@@ -921,12 +1066,13 @@ static void sde_kms_prepare_commit(struct msm_kms *kms,
 		return;
 	priv = dev->dev_private;
 
+	SDE_ATRACE_BEGIN("prepare_commit");
 	rc = sde_power_resource_enable(&priv->phandle, sde_kms->core_client,
 			true);
 	if (rc) {
 		SDE_ERROR("failed to enable power resource %d\n", rc);
 		SDE_EVT32(rc, SDE_EVTLOG_ERROR);
-		return;
+		goto end;
 	}
 
 	if (sde_kms->first_kickoff) {
@@ -951,6 +1097,8 @@ static void sde_kms_prepare_commit(struct msm_kms *kms,
 	 * transitions prepare below if any transtions is required.
 	 */
 	sde_kms_prepare_secure_transition(kms, state);
+end:
+	SDE_ATRACE_END("prepare_commit");
 }
 
 static void sde_kms_commit(struct msm_kms *kms,
@@ -970,67 +1118,70 @@ static void sde_kms_commit(struct msm_kms *kms,
 		return;
 	}
 
+	SDE_ATRACE_BEGIN("sde_kms_commit");
 	for_each_crtc_in_state(old_state, crtc, old_crtc_state, i) {
 		if (crtc->state->active) {
 			SDE_EVT32(DRMID(crtc));
 			sde_crtc_commit_kickoff(crtc, old_crtc_state);
 		}
 	}
+
+	SDE_ATRACE_END("sde_kms_commit");
 }
 
-static void _sde_kms_release_splash_resource(struct sde_kms *sde_kms,
-		struct drm_atomic_state *old_state)
+void sde_kms_release_splash_resource(struct sde_kms *sde_kms,
+		struct drm_crtc *crtc)
 {
-	struct drm_crtc *crtc;
-	struct drm_crtc_state *crtc_state;
-	bool primary_crtc_active = false;
 	struct msm_drm_private *priv;
-	int i, rc = 0;
+	struct sde_splash_display *splash_display;
+	int i;
+
+	if (!sde_kms || !crtc)
+		return;
 
 	priv = sde_kms->dev->dev_private;
 
-	if (!sde_kms->splash_data.resource_handoff_pending)
+	SDE_EVT32(crtc->base.id, crtc->state->active,
+			sde_kms->splash_data.num_splash_displays);
+	if (!crtc->state->active || !sde_kms->splash_data.num_splash_displays)
 		return;
 
-	SDE_EVT32(SDE_EVTLOG_FUNC_CASE1);
-	for_each_crtc_in_state(old_state, crtc, crtc_state, i) {
-		if (crtc->state->active)
-			primary_crtc_active = true;
-		SDE_EVT32(crtc->base.id, crtc->state->active);
+	for (i = 0; i < MAX_DSI_DISPLAYS; i++) {
+		splash_display = &sde_kms->splash_data.splash_display[i];
+		if (splash_display->encoder &&
+				crtc == splash_display->encoder->crtc)
+			break;
 	}
 
-	if (!primary_crtc_active) {
-		SDE_EVT32(SDE_EVTLOG_FUNC_CASE2);
+	if (i >= MAX_DSI_DISPLAYS)
 		return;
+
+	_sde_kms_splash_mem_put(sde_kms, splash_display->splash,
+			"normal-handoff", false);
+
+	if (splash_display->cont_splash_enabled) {
+		sde_encoder_update_caps_for_cont_splash(splash_display->encoder,
+				splash_display, false);
+		splash_display->cont_splash_enabled = false;
+		sde_kms->splash_data.num_splash_displays--;
+		SDE_DEBUG("cont_splash handoff done for dpy:%d remaining:%d\n",
+				i, sde_kms->splash_data.num_splash_displays);
+		memset(splash_display, 0x0, sizeof(struct sde_splash_display));
+
 	}
 
-	sde_kms->splash_data.resource_handoff_pending = false;
-
-	if (sde_kms->splash_data.cont_splash_en) {
-		SDE_DEBUG("disabling cont_splash feature\n");
-		sde_kms->splash_data.cont_splash_en = false;
-
+	/* remove the votes if all displays are done with splash */
+	if (!sde_kms->splash_data.num_splash_displays) {
 		for (i = 0; i < SDE_POWER_HANDLE_DBUS_ID_MAX; i++)
-			sde_power_data_bus_set_quota(&priv->phandle,
-				sde_kms->core_client,
-				SDE_POWER_HANDLE_DATA_BUS_CLIENT_RT, i,
-				SDE_POWER_HANDLE_ENABLE_BUS_AB_QUOTA,
-				SDE_POWER_HANDLE_ENABLE_BUS_IB_QUOTA);
+			if (sde_kms->perf.sde_rsc_available)
+				sde_power_data_bus_set_quota(&priv->phandle,
+						sde_kms->core_client,
+						SDE_POWER_HANDLE_DATA_BUS_CLIENT_RT, i,
+						SDE_POWER_HANDLE_ENABLE_BUS_AB_QUOTA,
+						SDE_POWER_HANDLE_ENABLE_BUS_IB_QUOTA);
 
-		sde_power_resource_enable(&priv->phandle, sde_kms->core_client,
-			false);
-	}
-
-	if (sde_kms->splash_data.splash_base) {
-		_sde_kms_splash_smmu_unmap(sde_kms);
-
-		rc = _sde_kms_release_splash_buffer(
-			sde_kms->splash_data.splash_base,
-			sde_kms->splash_data.splash_size);
-		if (rc)
-			pr_err("failed to release splash memory\n");
-		sde_kms->splash_data.splash_base = 0;
-		sde_kms->splash_data.splash_size = 0;
+		sde_power_resource_enable(&priv->phandle,
+				sde_kms->core_client, false);
 	}
 }
 
@@ -1043,6 +1194,8 @@ static void sde_kms_complete_commit(struct msm_kms *kms,
 	struct drm_crtc_state *old_crtc_state;
 	struct drm_connector *connector;
 	struct drm_connector_state *old_conn_state;
+	struct msm_display_conn_params params;
+
 	int i, rc = 0;
 
 	if (!kms || !old_state)
@@ -1058,6 +1211,8 @@ static void sde_kms_complete_commit(struct msm_kms *kms,
 		return;
 	}
 
+	SDE_ATRACE_BEGIN("sde_kms_complete_commit");
+
 	for_each_crtc_in_state(old_state, crtc, old_crtc_state, i) {
 		sde_crtc_complete_commit(crtc, old_crtc_state);
 
@@ -1072,7 +1227,18 @@ static void sde_kms_complete_commit(struct msm_kms *kms,
 		c_conn = to_sde_connector(connector);
 		if (!c_conn->ops.post_kickoff)
 			continue;
-		rc = c_conn->ops.post_kickoff(connector);
+
+		memset(&params, 0, sizeof(params));
+
+		if (c_conn->qsync_updated &&
+			(c_conn->qsync_mode == SDE_RM_QSYNC_ONE_SHOT_MODE)) {
+			/* Reset qsync states if mode is one shot */
+			params.qsync_mode = c_conn->qsync_mode = 0;
+			params.qsync_update = true;
+			SDE_EVT32(connector->base.id, c_conn->qsync_mode);
+		}
+
+		rc = c_conn->ops.post_kickoff(connector, &params);
 		if (rc) {
 			pr_err("Connector Post kickoff failed rc=%d\n",
 					 rc);
@@ -1081,9 +1247,11 @@ static void sde_kms_complete_commit(struct msm_kms *kms,
 
 	sde_power_resource_enable(&priv->phandle, sde_kms->core_client, false);
 
-	_sde_kms_release_splash_resource(sde_kms, old_state);
+	for_each_crtc_in_state(old_state, crtc, old_crtc_state, i)
+		sde_kms_release_splash_resource(sde_kms, crtc);
 
 	SDE_EVT32_VERBOSE(SDE_EVTLOG_FUNC_EXIT);
+	SDE_ATRACE_END("sde_kms_complete_commit");
 }
 
 static void sde_kms_wait_for_commit_done(struct msm_kms *kms,
@@ -1110,6 +1278,12 @@ static void sde_kms_wait_for_commit_done(struct msm_kms *kms,
 		return;
 	}
 
+	if (!sde_kms_power_resource_is_enabled(crtc->dev)) {
+		SDE_ERROR("power resource is not enabled\n");
+		return;
+	}
+
+	SDE_ATRACE_BEGIN("sde_kms_wait_for_commit_done");
 	list_for_each_entry(encoder, &dev->mode_config.encoder_list, head) {
 		if (encoder->crtc != crtc)
 			continue;
@@ -1127,6 +1301,8 @@ static void sde_kms_wait_for_commit_done(struct msm_kms *kms,
 
 		sde_crtc_complete_flip(crtc, NULL);
 	}
+
+	SDE_ATRACE_END("sde_ksm_wait_for_commit_done");
 }
 
 static void sde_kms_prepare_fence(struct msm_kms *kms,
@@ -1141,11 +1317,15 @@ static void sde_kms_prepare_fence(struct msm_kms *kms,
 		return;
 	}
 
+	SDE_ATRACE_BEGIN("sde_kms_prepare_fence");
+
 	/* old_state actually contains updated crtc pointers */
 	for_each_crtc_in_state(old_state, crtc, old_crtc_state, i) {
 		if (crtc->state->active)
 			sde_crtc_prepare_commit(crtc, old_crtc_state);
 	}
+
+	SDE_ATRACE_END("sde_kms_prepare_fence");
 }
 
 /**
@@ -1207,11 +1387,14 @@ static int _sde_kms_get_displays(struct sde_kms *sde_kms)
 		sde_kms->dp_display_count =
 			dp_display_get_displays(sde_kms->dp_displays,
 					sde_kms->dp_display_count);
+
+		sde_kms->dp_stream_count = dp_display_get_num_of_streams();
 	}
 	return 0;
 
 exit_deinit_dp:
 	kfree(sde_kms->dp_displays);
+	sde_kms->dp_stream_count = 0;
 	sde_kms->dp_display_count = 0;
 	sde_kms->dp_displays = NULL;
 
@@ -1263,7 +1446,7 @@ static int _sde_kms_setup_displays(struct drm_device *dev,
 		.set_info_blob = dsi_conn_set_info_blob,
 		.detect =     dsi_conn_detect,
 		.get_modes =  dsi_connector_get_modes,
-		.put_modes =  dsi_connector_put_modes,
+		.pre_destroy =  dsi_connector_put_modes,
 		.mode_valid = dsi_conn_mode_valid,
 		.get_info =   dsi_display_get_info,
 		.set_backlight = dsi_display_set_backlight,
@@ -1279,6 +1462,7 @@ static int _sde_kms_setup_displays(struct drm_device *dev,
 		.cmd_transfer = dsi_display_cmd_transfer,
 		.cont_splash_config = dsi_display_cont_splash_config,
 		.get_panel_vfp = dsi_display_get_panel_vfp,
+		.prepare_commit = dsi_conn_prepare_commit,
 	};
 	static const struct sde_connector_ops wb_ops = {
 		.post_init =    sde_wb_connector_post_init,
@@ -1304,27 +1488,12 @@ static int _sde_kms_setup_displays(struct drm_device *dev,
 		.get_info   = dp_connector_get_info,
 		.get_mode_info  = dp_connector_get_mode_info,
 		.post_open  = dp_connector_post_open,
-		.set_power = dp_display_set_power,
 		.check_status = NULL,
 		.config_hdr = dp_connector_config_hdr,
 		.cmd_transfer = NULL,
 		.cont_splash_config = NULL,
 		.get_panel_vfp = NULL,
-		.mode_needs_full_range = dp_connector_mode_needs_full_range,
-		.mode_is_cea_mode = dp_connector_mode_is_cea_mode,
-		.get_csc_type = dp_connector_get_csc_type,
-	};
-	static const struct sde_connector_ops ext_bridge_ops = {
-		.set_info_blob = dsi_conn_set_info_blob,
-		.mode_valid = dsi_conn_mode_valid,
-		.get_info = dsi_display_ext_bridge_get_info,
-		.soft_reset = dsi_display_soft_reset,
-		.clk_ctrl = dsi_display_clk_ctrl,
-		.get_mode_info = dsi_conn_ext_bridge_get_mode_info,
-		.get_dst_format = dsi_display_get_dst_format,
-		.enable_event = dsi_conn_enable_event,
-		.cmd_transfer = NULL,
-		.cont_splash_config = dsi_display_cont_splash_config,
+		.update_pps = dp_connector_update_pps,
 	};
 	struct msm_display_info info;
 	struct drm_encoder *encoder;
@@ -1338,7 +1507,8 @@ static int _sde_kms_setup_displays(struct drm_device *dev,
 	}
 
 	max_encoders = sde_kms->dsi_display_count + sde_kms->wb_display_count +
-				sde_kms->dp_display_count;
+				sde_kms->dp_display_count +
+				sde_kms->dp_stream_count;
 	if (max_encoders > ARRAY_SIZE(priv->encoders)) {
 		max_encoders = ARRAY_SIZE(priv->encoders);
 		SDE_ERROR("capping number of displays to %d", max_encoders);
@@ -1350,95 +1520,51 @@ static int _sde_kms_setup_displays(struct drm_device *dev,
 		display = sde_kms->dsi_displays[i];
 		encoder = NULL;
 
-		if (!dsi_display_has_ext_bridge(display)) {
-			memset(&info, 0x0, sizeof(info));
-			rc = dsi_display_get_info(&info, display);
-			if (rc) {
-				SDE_ERROR("dsi get_info %d failed\n", i);
-				continue;
-			}
+		memset(&info, 0x0, sizeof(info));
+		rc = dsi_display_get_info(NULL, &info, display);
+		if (rc) {
+			SDE_ERROR("dsi get_info %d failed\n", i);
+			continue;
+		}
 
-			encoder = sde_encoder_init(dev, &info);
-			if (IS_ERR_OR_NULL(encoder)) {
-				SDE_ERROR("encoder init failed for dsi %d\n",
-					i);
-				continue;
-			}
+		encoder = sde_encoder_init(dev, &info);
+		if (IS_ERR_OR_NULL(encoder)) {
+			SDE_ERROR("encoder init failed for dsi %d\n", i);
+			continue;
+		}
 
-			rc = dsi_display_drm_bridge_init(display, encoder);
-			if (rc) {
-				SDE_ERROR("dsi bridge %d init failed, %d\n",
-					i, rc);
-				sde_encoder_destroy(encoder);
-				continue;
-			}
+		rc = dsi_display_drm_bridge_init(display, encoder);
+		if (rc) {
+			SDE_ERROR("dsi bridge %d init failed, %d\n", i, rc);
+			sde_encoder_destroy(encoder);
+			continue;
+		}
 
-			connector = sde_connector_init(dev,
-						encoder,
-						NULL,
-						display,
-						&dsi_ops,
-						DRM_CONNECTOR_POLL_HPD,
-						DRM_MODE_CONNECTOR_DSI);
-			if (connector) {
-				priv->encoders[priv->num_encoders++] = encoder;
-			} else {
-				SDE_ERROR("dsi %d connector init failed\n", i);
-				dsi_display_drm_bridge_deinit(display);
-				sde_encoder_destroy(encoder);
-			}
+		connector = sde_connector_init(dev,
+					encoder,
+					0,
+					display,
+					&dsi_ops,
+					DRM_CONNECTOR_POLL_HPD,
+					DRM_MODE_CONNECTOR_DSI);
+		if (connector) {
+			priv->encoders[priv->num_encoders++] = encoder;
+			priv->connectors[priv->num_connectors++] = connector;
 		} else {
-			memset(&info, 0x0, sizeof(info));
-			rc = dsi_display_ext_bridge_get_info(&info, display);
-			if (rc) {
-				SDE_ERROR("ext get_info %d failed\n", i);
-				continue;
-			}
+			SDE_ERROR("dsi %d connector init failed\n", i);
+			dsi_display_drm_bridge_deinit(display);
+			sde_encoder_destroy(encoder);
+			continue;
+		}
 
-			encoder = sde_encoder_init(dev, &info);
-			if (IS_ERR_OR_NULL(encoder)) {
-				SDE_ERROR("encoder init failed for ext %d\n",
-					i);
-				continue;
-			}
-
-			rc = dsi_display_drm_bridge_init(display, encoder);
-			if (rc) {
-				SDE_ERROR("dsi bridge %d init failed for ext\n",
-					i);
-				sde_encoder_destroy(encoder);
-				continue;
-			}
-
-			connector = sde_connector_init(dev,
-						encoder,
-						NULL,
-						display,
-						&ext_bridge_ops,
-						DRM_CONNECTOR_POLL_HPD,
-						DRM_MODE_CONNECTOR_DSI);
-			if (connector) {
-				priv->encoders[priv->num_encoders++] = encoder;
-			} else {
-				SDE_ERROR("connector init %d failed for ext\n",
-					i);
-				dsi_display_drm_bridge_deinit(display);
-				sde_encoder_destroy(encoder);
-				continue;
-			}
-
-			rc = dsi_display_drm_ext_bridge_init(display,
-				encoder, connector);
-			if (rc) {
-				struct drm_connector *conn = connector;
-
-				SDE_ERROR("ext bridge %d init failed, %d\n",
-					i, rc);
-				conn->funcs->destroy(connector);
-				dsi_display_drm_bridge_deinit(display);
-				sde_encoder_destroy(encoder);
-				continue;
-			}
+		rc = dsi_display_drm_ext_bridge_init(display,
+					encoder,
+					connector);
+		if (rc) {
+			SDE_ERROR("dsi %d ext bridge init failed\n", rc);
+			dsi_display_drm_bridge_deinit(display);
+			sde_encoder_destroy(encoder);
+			sde_connector_destroy(connector);
 		}
 	}
 
@@ -1449,7 +1575,7 @@ static int _sde_kms_setup_displays(struct drm_device *dev,
 		encoder = NULL;
 
 		memset(&info, 0x0, sizeof(info));
-		rc = sde_wb_get_info(&info, display);
+		rc = sde_wb_get_info(NULL, &info, display);
 		if (rc) {
 			SDE_ERROR("wb get_info %d failed\n", i);
 			continue;
@@ -1477,20 +1603,24 @@ static int _sde_kms_setup_displays(struct drm_device *dev,
 				DRM_MODE_CONNECTOR_VIRTUAL);
 		if (connector) {
 			priv->encoders[priv->num_encoders++] = encoder;
+			priv->connectors[priv->num_connectors++] = connector;
 		} else {
 			SDE_ERROR("wb %d connector init failed\n", i);
 			sde_wb_drm_deinit(display);
 			sde_encoder_destroy(encoder);
 		}
 	}
+
 	/* dp */
 	for (i = 0; i < sde_kms->dp_display_count &&
 			priv->num_encoders < max_encoders; ++i) {
+		int idx;
+
 		display = sde_kms->dp_displays[i];
 		encoder = NULL;
 
 		memset(&info, 0x0, sizeof(info));
-		rc = dp_connector_get_info(&info, display);
+		rc = dp_connector_get_info(NULL, &info, display);
 		if (rc) {
 			SDE_ERROR("dp get_info %d failed\n", i);
 			continue;
@@ -1518,10 +1648,33 @@ static int _sde_kms_setup_displays(struct drm_device *dev,
 					DRM_MODE_CONNECTOR_DisplayPort);
 		if (connector) {
 			priv->encoders[priv->num_encoders++] = encoder;
+			priv->connectors[priv->num_connectors++] = connector;
 		} else {
 			SDE_ERROR("dp %d connector init failed\n", i);
 			dp_drm_bridge_deinit(display);
 			sde_encoder_destroy(encoder);
+		}
+
+		/* update display cap to MST_MODE for DP MST encoders */
+		info.capabilities |= MSM_DISPLAY_CAP_MST_MODE;
+		sde_kms->dp_stream_count = dp_display_get_num_of_streams();
+		for (idx = 0; idx < sde_kms->dp_stream_count &&
+			priv->num_encoders < max_encoders; idx++) {
+			info.h_tile_instance[0] = idx;
+			encoder = sde_encoder_init(dev, &info);
+			if (IS_ERR_OR_NULL(encoder)) {
+				SDE_ERROR("dp mst encoder init failed %d\n", i);
+				continue;
+			}
+
+			rc = dp_mst_drm_bridge_init(display, encoder);
+			if (rc) {
+				SDE_ERROR("dp mst bridge %d init failed, %d\n",
+						i, rc);
+				sde_encoder_destroy(encoder);
+				continue;
+			}
+			priv->encoders[priv->num_encoders++] = encoder;
 		}
 	}
 
@@ -1599,7 +1752,12 @@ static int _sde_kms_drm_obj_init(struct sde_kms *sde_kms)
 	if (!_sde_kms_get_displays(sde_kms))
 		(void)_sde_kms_setup_displays(dev, priv, sde_kms);
 
-	max_crtc_count = min(catalog->mixer_count, priv->num_encoders);
+	/* Follow user setting if preferred crtc number is set */
+	if (!of_property_read_u32(dev->dev->of_node,
+			"qcom,sde-crtc-num-pref", &max_crtc_count))
+		max_crtc_count = min(max_crtc_count, MAX_CRTCS);
+	else
+		max_crtc_count = min(catalog->mixer_count, priv->num_encoders);
 
 	/* Create the planes */
 	for (i = 0; i < catalog->sspp_count; i++) {
@@ -1683,6 +1841,7 @@ void sde_kms_timeline_status(struct drm_device *dev)
 {
 	struct drm_crtc *crtc;
 	struct drm_connector *conn;
+	struct drm_connector_list_iter conn_iter;
 
 	if (!dev) {
 		SDE_ERROR("invalid drm device node\n");
@@ -1697,305 +1856,19 @@ void sde_kms_timeline_status(struct drm_device *dev)
 		 *Probably locked from last close dumping status anyway
 		 */
 		SDE_ERROR("dumping conn_timeline without mode_config lock\n");
-		drm_for_each_connector(conn, dev)
+		drm_connector_list_iter_begin(dev, &conn_iter);
+		drm_for_each_connector_iter(conn, &conn_iter)
 			sde_conn_timeline_status(conn);
+		drm_connector_list_iter_end(&conn_iter);
 		return;
 	}
 
 	mutex_lock(&dev->mode_config.mutex);
-	drm_for_each_connector(conn, dev)
+	drm_connector_list_iter_begin(dev, &conn_iter);
+	drm_for_each_connector_iter(conn, &conn_iter)
 		sde_conn_timeline_status(conn);
+	drm_connector_list_iter_end(&conn_iter);
 	mutex_unlock(&dev->mode_config.mutex);
-}
-
-/**
- * struct sde_kms_fbo_fb - framebuffer creation list
- * @list: list of framebuffer attached to framebuffer object
- * @fb: Pointer to framebuffer attached to framebuffer object
- */
-struct sde_kms_fbo_fb {
-	struct list_head list;
-	struct drm_framebuffer *fb;
-};
-
-struct drm_framebuffer *sde_kms_fbo_create_fb(struct drm_device *dev,
-		struct sde_kms_fbo *fbo)
-{
-	struct drm_framebuffer *fb = NULL;
-	struct sde_kms_fbo_fb *fbo_fb;
-	struct drm_mode_fb_cmd2 mode_cmd = {0};
-	u32 base_offset = 0;
-	int i, ret;
-
-	if (!dev) {
-		SDE_ERROR("invalid drm device node\n");
-		return NULL;
-	}
-
-	fbo_fb = kzalloc(sizeof(struct sde_kms_fbo_fb), GFP_KERNEL);
-	if (!fbo_fb)
-		return NULL;
-
-	mode_cmd.pixel_format = fbo->pixel_format;
-	mode_cmd.width = fbo->width;
-	mode_cmd.height = fbo->height;
-	mode_cmd.flags = fbo->flags;
-
-	for (i = 0; i < fbo->nplane; i++) {
-		mode_cmd.offsets[i] = base_offset;
-		mode_cmd.pitches[i] = fbo->layout.plane_pitch[i];
-		mode_cmd.modifier[i] = fbo->modifier[i];
-		base_offset += fbo->layout.plane_size[i];
-		SDE_DEBUG("offset[%d]:%x\n", i, mode_cmd.offsets[i]);
-	}
-
-	fb = msm_framebuffer_init(dev, &mode_cmd, fbo->bo);
-	if (IS_ERR(fb)) {
-		ret = PTR_ERR(fb);
-		fb = NULL;
-		SDE_ERROR("failed to allocate fb %d\n", ret);
-		goto fail;
-	}
-
-	/* need to take one reference for gem object */
-	for (i = 0; i < fbo->nplane; i++)
-		drm_gem_object_reference(fbo->bo[i]);
-
-	SDE_DEBUG("register private fb:%d\n", fb->base.id);
-
-	INIT_LIST_HEAD(&fbo_fb->list);
-	fbo_fb->fb = fb;
-	drm_framebuffer_reference(fbo_fb->fb);
-	list_add_tail(&fbo_fb->list, &fbo->fb_list);
-
-	return fb;
-
-fail:
-	kfree(fbo_fb);
-	return NULL;
-}
-
-static void sde_kms_fbo_destroy(struct sde_kms_fbo *fbo)
-{
-	struct msm_drm_private *priv;
-	struct sde_kms *sde_kms;
-	struct drm_device *dev;
-	struct sde_kms_fbo_fb *curr, *next;
-	int i;
-
-	if (!fbo) {
-		SDE_ERROR("invalid drm device node\n");
-		return;
-	}
-	dev = fbo->dev;
-
-	if (!dev || !dev->dev_private) {
-		SDE_ERROR("invalid drm device node\n");
-		return;
-	}
-	priv = dev->dev_private;
-
-	if (!priv->kms) {
-		SDE_ERROR("invalid kms handle\n");
-		return;
-	}
-	sde_kms = to_sde_kms(priv->kms);
-
-	SDE_DEBUG("%dx%d@%c%c%c%c/%llx/%x\n", fbo->width, fbo->height,
-			fbo->pixel_format >> 0, fbo->pixel_format >> 8,
-			fbo->pixel_format >> 16, fbo->pixel_format >> 24,
-			fbo->modifier[0], fbo->flags);
-
-	list_for_each_entry_safe(curr, next, &fbo->fb_list, list) {
-		SDE_DEBUG("unregister private fb:%d\n", curr->fb->base.id);
-		drm_framebuffer_unregister_private(curr->fb);
-		drm_framebuffer_unreference(curr->fb);
-		list_del(&curr->list);
-		kfree(curr);
-	}
-
-	for (i = 0; i < fbo->layout.num_planes; i++) {
-		if (fbo->bo[i]) {
-			mutex_lock(&dev->struct_mutex);
-			drm_gem_object_unreference(fbo->bo[i]);
-			mutex_unlock(&dev->struct_mutex);
-			fbo->bo[i] = NULL;
-		}
-	}
-
-	if (fbo->dma_buf) {
-		dma_buf_put(fbo->dma_buf);
-		fbo->dma_buf = NULL;
-	}
-
-	if (sde_kms->iclient && fbo->ihandle) {
-		ion_free(sde_kms->iclient, fbo->ihandle);
-		fbo->ihandle = NULL;
-	}
-}
-
-static void sde_kms_set_gem_flags(struct msm_gem_object *msm_obj,
-		uint32_t flags)
-{
-	if (msm_obj)
-		msm_obj->flags |= flags;
-}
-
-struct sde_kms_fbo *sde_kms_fbo_alloc(struct drm_device *dev, u32 width,
-		u32 height, u32 pixel_format, u64 modifier[4], u32 flags)
-{
-	struct msm_drm_private *priv;
-	struct sde_kms *sde_kms;
-	struct sde_kms_fbo *fbo;
-	int i, ret;
-
-	if (!dev || !dev->dev_private) {
-		SDE_ERROR("invalid drm device node\n");
-		return NULL;
-	}
-	priv = dev->dev_private;
-
-	if (!priv->kms) {
-		SDE_ERROR("invalid kms handle\n");
-		return NULL;
-	}
-	sde_kms = to_sde_kms(priv->kms);
-
-	SDE_DEBUG("%dx%d@%c%c%c%c/%llx/%x\n", width, height,
-			pixel_format >> 0, pixel_format >> 8,
-			pixel_format >> 16, pixel_format >> 24,
-			modifier[0], flags);
-
-	fbo = kzalloc(sizeof(struct sde_kms_fbo), GFP_KERNEL);
-	if (!fbo)
-		return NULL;
-
-	atomic_set(&fbo->refcount, 0);
-	INIT_LIST_HEAD(&fbo->fb_list);
-	fbo->dev = dev;
-	fbo->width = width;
-	fbo->height = height;
-	fbo->pixel_format = pixel_format;
-	fbo->flags = flags;
-	for (i = 0; i < ARRAY_SIZE(fbo->modifier); i++)
-		fbo->modifier[i] = modifier[i];
-	fbo->nplane = drm_format_num_planes(fbo->pixel_format);
-	fbo->fmt = sde_get_sde_format_ext(fbo->pixel_format, fbo->modifier,
-			fbo->nplane);
-	if (!fbo->fmt) {
-		ret = -EINVAL;
-		SDE_ERROR("failed to find pixel format\n");
-		goto done;
-	}
-
-	ret = sde_format_get_plane_sizes(fbo->fmt, fbo->width, fbo->height,
-			&fbo->layout, fbo->layout.plane_pitch);
-	if (ret) {
-		SDE_ERROR("failed to get plane sizes\n");
-		goto done;
-	}
-
-	/* allocate backing buffer object */
-	if (sde_kms->iclient) {
-		u32 heap_id = fbo->flags & DRM_MODE_FB_SECURE ?
-				ION_HEAP(ION_SECURE_HEAP_ID) :
-				ION_HEAP(ION_SYSTEM_HEAP_ID);
-		u32 iflags = fbo->flags & DRM_MODE_FB_SECURE ?
-				(ION_FLAG_SECURE | ION_FLAG_CP_PIXEL) : 0;
-
-		fbo->ihandle = ion_alloc(sde_kms->iclient,
-				fbo->layout.total_size, SZ_4K, heap_id, iflags);
-		if (IS_ERR_OR_NULL(fbo->ihandle)) {
-			SDE_ERROR("failed to alloc ion memory\n");
-			ret = PTR_ERR(fbo->ihandle);
-			fbo->ihandle = NULL;
-			goto done;
-		}
-
-		fbo->dma_buf = ion_share_dma_buf(sde_kms->iclient,
-				fbo->ihandle);
-		if (IS_ERR(fbo->dma_buf)) {
-			SDE_ERROR("failed to share ion memory\n");
-			ret = -ENOMEM;
-			fbo->dma_buf = NULL;
-			goto done;
-		}
-
-		fbo->bo[0] = dev->driver->gem_prime_import(dev,
-				fbo->dma_buf);
-		if (IS_ERR(fbo->bo[0])) {
-			SDE_ERROR("failed to import ion memory\n");
-			ret = PTR_ERR(fbo->bo[0]);
-			fbo->bo[0] = NULL;
-			goto done;
-		}
-
-		/* insert extra bo flags */
-		sde_kms_set_gem_flags(to_msm_bo(fbo->bo[0]), MSM_BO_KEEPATTRS);
-	} else {
-		mutex_lock(&dev->struct_mutex);
-		fbo->bo[0] = msm_gem_new(dev, fbo->layout.total_size,
-				MSM_BO_SCANOUT | MSM_BO_WC | MSM_BO_KEEPATTRS);
-		if (IS_ERR(fbo->bo[0])) {
-			mutex_unlock(&dev->struct_mutex);
-			SDE_ERROR("failed to new gem buffer\n");
-			ret = PTR_ERR(fbo->bo[0]);
-			fbo->bo[0] = NULL;
-			goto done;
-		}
-		mutex_unlock(&dev->struct_mutex);
-	}
-
-	mutex_lock(&dev->struct_mutex);
-	for (i = 1; i < fbo->layout.num_planes; i++) {
-		fbo->bo[i] = fbo->bo[0];
-		drm_gem_object_reference(fbo->bo[i]);
-	}
-	mutex_unlock(&dev->struct_mutex);
-
-done:
-	if (ret) {
-		sde_kms_fbo_destroy(fbo);
-		kfree(fbo);
-		fbo = NULL;
-	} else {
-		sde_kms_fbo_reference(fbo);
-	}
-
-	return fbo;
-}
-
-int sde_kms_fbo_reference(struct sde_kms_fbo *fbo)
-{
-	if (!fbo) {
-		SDE_ERROR("invalid parameters\n");
-		return -EINVAL;
-	}
-
-	SDE_DEBUG("%pS refcount:%d\n", __builtin_return_address(0),
-			atomic_read(&fbo->refcount));
-
-	atomic_inc(&fbo->refcount);
-
-	return 0;
-}
-
-void sde_kms_fbo_unreference(struct sde_kms_fbo *fbo)
-{
-	if (!fbo) {
-		SDE_ERROR("invalid parameters\n");
-		return;
-	}
-
-	SDE_DEBUG("%pS refcount:%d\n", __builtin_return_address(0),
-			atomic_read(&fbo->refcount));
-
-	if (!atomic_read(&fbo->refcount)) {
-		SDE_ERROR("invalid refcount\n");
-		return;
-	} else if (atomic_dec_return(&fbo->refcount) == 0) {
-		sde_kms_fbo_destroy(fbo);
-	}
 }
 
 static int sde_kms_postinit(struct msm_kms *kms)
@@ -2061,18 +1934,12 @@ static void _sde_kms_hw_destroy(struct sde_kms *sde_kms,
 				&priv->phandle, sde_kms->power_event);
 
 	_sde_kms_release_displays(sde_kms);
-	(void)_sde_kms_release_splash_buffer(
-				sde_kms->splash_data.splash_base,
-				sde_kms->splash_data.splash_size);
+
+	_sde_kms_unmap_all_splash_regions(sde_kms, "kms-destroy", false);
 
 	/* safe to call these more than once during shutdown */
 	_sde_debugfs_destroy(sde_kms);
 	_sde_kms_mmu_destroy(sde_kms);
-
-	if (sde_kms->iclient) {
-		ion_client_destroy(sde_kms->iclient);
-		sde_kms->iclient = NULL;
-	}
 
 	if (sde_kms->catalog) {
 		for (i = 0; i < sde_kms->catalog->vbif_count; i++) {
@@ -2094,6 +1961,14 @@ static void _sde_kms_hw_destroy(struct sde_kms *sde_kms,
 	if (sde_kms->core_client)
 		sde_power_client_destroy(&priv->phandle, sde_kms->core_client);
 	sde_kms->core_client = NULL;
+
+	if (sde_kms->sid)
+		msm_iounmap(pdev, sde_kms->sid);
+	sde_kms->sid = NULL;
+
+	if (sde_kms->reg_dma)
+		msm_iounmap(pdev, sde_kms->reg_dma);
+	sde_kms->reg_dma = NULL;
 
 	if (sde_kms->vbif[VBIF_NRT])
 		msm_iounmap(pdev, sde_kms->vbif[VBIF_NRT]);
@@ -2186,13 +2061,55 @@ static void sde_kms_destroy(struct msm_kms *kms)
 
 	sde_kms = to_sde_kms(kms);
 	dev = sde_kms->dev;
-	if (!dev) {
+	if (!dev || !dev->dev) {
 		SDE_ERROR("invalid device\n");
 		return;
 	}
 
-	_sde_kms_hw_destroy(sde_kms, dev->platformdev);
+	_sde_kms_hw_destroy(sde_kms, to_platform_device(dev->dev));
 	kfree(sde_kms);
+}
+
+static int sde_kms_set_crtc_for_conn(struct drm_device *dev,
+		struct drm_encoder *enc, struct drm_atomic_state *state)
+{
+	struct drm_connector *conn = NULL;
+	struct drm_connector *tmp_conn = NULL;
+	struct drm_connector_list_iter conn_iter;
+	struct drm_crtc_state *crtc_state = NULL;
+	struct drm_connector_state *conn_state = NULL;
+	int ret = 0;
+
+	drm_connector_list_iter_begin(dev, &conn_iter);
+	drm_for_each_connector_iter(tmp_conn, &conn_iter) {
+		if (enc == tmp_conn->state->best_encoder) {
+			conn = tmp_conn;
+			break;
+		}
+	}
+	drm_connector_list_iter_end(&conn_iter);
+
+	if (!conn) {
+		SDE_ERROR("error in finding conn for enc:%d\n", DRMID(enc));
+		return -EINVAL;
+	}
+
+	crtc_state = drm_atomic_get_crtc_state(state, enc->crtc);
+	conn_state = drm_atomic_get_connector_state(state, conn);
+	if (IS_ERR(conn_state)) {
+		SDE_ERROR("error %d getting connector %d state\n",
+				ret, DRMID(conn));
+		return -EINVAL;
+	}
+
+	crtc_state->active = true;
+	ret = drm_atomic_set_crtc_for_connector(conn_state, enc->crtc);
+	if (ret)
+		SDE_ERROR("error %d setting the crtc\n", ret);
+
+	_sde_crtc_clear_dim_layers_v1(crtc_state);
+
+	return 0;
 }
 
 static void _sde_kms_plane_force_remove(struct drm_plane *plane,
@@ -2229,8 +2146,9 @@ static int _sde_kms_remove_fbs(struct sde_kms *sde_kms, struct drm_file *file,
 	struct drm_framebuffer *fb, *tfb;
 	struct list_head fbs;
 	struct drm_plane *plane;
+	struct drm_crtc *crtc = NULL;
+	unsigned int crtc_mask = 0;
 	int ret = 0;
-	u32 plane_mask = 0;
 
 	INIT_LIST_HEAD(&fbs);
 
@@ -2239,26 +2157,39 @@ static int _sde_kms_remove_fbs(struct sde_kms *sde_kms, struct drm_file *file,
 			list_move_tail(&fb->filp_head, &fbs);
 
 			drm_for_each_plane(plane, dev) {
-				if (plane->fb == fb) {
-					plane_mask |=
-						1 << drm_plane_index(plane);
+				if (plane->state &&
+					plane->state->fb == fb) {
+					if (plane->state->crtc)
+						crtc_mask |= drm_crtc_mask(
+							plane->state->crtc);
 					 _sde_kms_plane_force_remove(
 								plane, state);
 				}
 			}
 		} else {
 			list_del_init(&fb->filp_head);
-			drm_framebuffer_unreference(fb);
+			drm_framebuffer_put(fb);
 		}
 	}
 
 	if (list_empty(&fbs)) {
 		SDE_DEBUG("skip commit as no fb(s)\n");
-		drm_atomic_state_free(state);
 		return 0;
 	}
 
-	SDE_DEBUG("committing after removing all the pipes\n");
+	drm_for_each_crtc(crtc, dev) {
+		if ((crtc_mask & drm_crtc_mask(crtc)) && crtc->state->active) {
+			struct drm_encoder *drm_enc;
+
+			drm_for_each_encoder_mask(drm_enc, crtc->dev,
+					crtc->state->encoder_mask)
+				ret = sde_kms_set_crtc_for_conn(
+					dev, drm_enc, state);
+		}
+	}
+
+	SDE_EVT32(state, crtc_mask);
+	SDE_DEBUG("null commit after removing all the pipes\n");
 	ret = drm_atomic_commit(state);
 
 	if (ret) {
@@ -2277,12 +2208,10 @@ static int _sde_kms_remove_fbs(struct sde_kms *sde_kms, struct drm_file *file,
 		fb = list_first_entry(&fbs, typeof(*fb), filp_head);
 
 		list_del_init(&fb->filp_head);
-		drm_framebuffer_unreference(fb);
+		drm_framebuffer_put(fb);
 	}
 
 end:
-	drm_atomic_clean_old_fb(dev, plane_mask, ret);
-
 	return ret;
 }
 
@@ -2293,35 +2222,46 @@ static void sde_kms_preclose(struct msm_kms *kms, struct drm_file *file)
 	struct msm_drm_private *priv = dev->dev_private;
 	unsigned int i;
 	struct drm_atomic_state *state = NULL;
+	struct drm_modeset_acquire_ctx ctx;
 	int ret = 0;
 
 	/* cancel pending flip event */
 	for (i = 0; i < priv->num_crtcs; i++)
 		sde_crtc_complete_flip(priv->crtcs[i], file);
 
-	drm_modeset_lock_all(dev);
+	drm_modeset_acquire_init(&ctx, 0);
+retry:
+	ret = drm_modeset_lock_all_ctx(dev, &ctx);
+	if (ret == -EDEADLK) {
+		drm_modeset_backoff(&ctx);
+		goto retry;
+	} else if (WARN_ON(ret)) {
+		goto end;
+	}
+
 	state = drm_atomic_state_alloc(dev);
 	if (!state) {
 		ret = -ENOMEM;
 		goto end;
 	}
 
-	state->acquire_ctx = dev->mode_config.acquire_ctx;
+	state->acquire_ctx = &ctx;
 
 	for (i = 0; i < TEARDOWN_DEADLOCK_RETRY_MAX; i++) {
 		ret = _sde_kms_remove_fbs(sde_kms, file, state);
 		if (ret != -EDEADLK)
 			break;
 		drm_atomic_state_clear(state);
-		drm_atomic_legacy_backoff(state);
+		drm_modeset_backoff(&ctx);
 	}
 
 end:
-	if ((ret != 0) && state)
-		drm_atomic_state_free(state);
+	if (state)
+		drm_atomic_state_put(state);
 
 	SDE_DEBUG("sde preclose done, ret:%d\n", ret);
-	drm_modeset_unlock_all(dev);
+	drm_modeset_drop_locks(&ctx);
+	drm_modeset_acquire_fini(&ctx);
 }
 
 static int _sde_kms_helper_reset_custom_properties(struct sde_kms *sde_kms,
@@ -2334,6 +2274,7 @@ static int _sde_kms_helper_reset_custom_properties(struct sde_kms *sde_kms,
 	struct drm_crtc_state *crtc_state;
 	struct drm_connector *conn;
 	struct drm_connector_state *conn_state;
+	struct drm_connector_list_iter conn_iter;
 	int ret = 0;
 
 	drm_for_each_plane(plane, dev) {
@@ -2370,7 +2311,8 @@ static int _sde_kms_helper_reset_custom_properties(struct sde_kms *sde_kms,
 		}
 	}
 
-	drm_for_each_connector(conn, dev) {
+	drm_connector_list_iter_begin(dev, &conn_iter);
+	drm_for_each_connector_iter(conn, &conn_iter) {
 		conn_state = drm_atomic_get_connector_state(state, conn);
 		if (IS_ERR(conn_state)) {
 			ret = PTR_ERR(conn_state);
@@ -2387,11 +2329,13 @@ static int _sde_kms_helper_reset_custom_properties(struct sde_kms *sde_kms,
 			return ret;
 		}
 	}
+	drm_connector_list_iter_end(&conn_iter);
 
 	return ret;
 }
 
-static void sde_kms_lastclose(struct msm_kms *kms)
+static void sde_kms_lastclose(struct msm_kms *kms,
+		struct drm_modeset_acquire_ctx *ctx)
 {
 	struct sde_kms *sde_kms;
 	struct drm_device *dev;
@@ -2410,7 +2354,7 @@ static void sde_kms_lastclose(struct msm_kms *kms)
 	if (!state)
 		return;
 
-	state->acquire_ctx = dev->mode_config.acquire_ctx;
+	state->acquire_ctx = ctx;
 
 	for (i = 0; i < TEARDOWN_DEADLOCK_RETRY_MAX; i++) {
 		/* add reset of custom properties to the state */
@@ -2423,18 +2367,14 @@ static void sde_kms_lastclose(struct msm_kms *kms)
 			break;
 
 		drm_atomic_state_clear(state);
-		drm_atomic_legacy_backoff(state);
+		drm_modeset_backoff(ctx);
 		SDE_DEBUG("deadlock backoff on attempt %d\n", i);
 	}
 
-	if (ret) {
-		/**
-		 * on success, atomic state object ownership transfers to
-		 * framework, otherwise, free it here
-		 */
-		drm_atomic_state_free(state);
+	if (ret)
 		SDE_ERROR("failed to run last close: %d\n", ret);
-	}
+
+	drm_atomic_state_put(state);
 }
 
 static int sde_kms_check_secure_transition(struct msm_kms *kms,
@@ -2447,6 +2387,7 @@ static int sde_kms_check_secure_transition(struct msm_kms *kms,
 	struct drm_crtc_state *crtc_state;
 	int active_crtc_cnt = 0, global_active_crtc_cnt = 0;
 	bool sec_session = false, global_sec_session = false;
+	uint32_t fb_ns = 0, fb_sec = 0, fb_sec_dir = 0;
 	int i;
 
 	if (!kms || !state) {
@@ -2463,54 +2404,56 @@ static int sde_kms_check_secure_transition(struct msm_kms *kms,
 			continue;
 
 		active_crtc_cnt++;
-		if (sde_crtc_get_secure_level(crtc, crtc_state) ==
-				SDE_DRM_SEC_ONLY)
+		sde_crtc_state_find_plane_fb_modes(crtc_state, &fb_ns,
+				&fb_sec, &fb_sec_dir);
+		if (fb_sec_dir)
 			sec_session = true;
-
 		cur_crtc = crtc;
 	}
 
-	/* iterate global list for active and secure crtc */
+	/* iterate global list for active and secure/non-secure crtc */
 	list_for_each_entry(crtc, &dev->mode_config.crtc_list, head) {
 		if (!crtc->state->active)
 			continue;
 
 		global_active_crtc_cnt++;
-		if (sde_crtc_get_secure_level(crtc, crtc->state) ==
-				SDE_DRM_SEC_ONLY)
-			global_sec_session = true;
-
-		global_crtc = crtc;
+		/* update only when crtc is not the same as current crtc */
+		if (crtc != cur_crtc) {
+			fb_ns = fb_sec = fb_sec_dir = 0;
+			sde_crtc_find_plane_fb_modes(crtc, &fb_ns,
+					&fb_sec, &fb_sec_dir);
+			if (fb_sec_dir)
+				global_sec_session = true;
+			global_crtc = crtc;
+		}
 	}
 
+	if (!global_sec_session && !sec_session)
+		return 0;
+
 	/*
-	 * - fail secure crtc commit, if any other crtc session is already
-	 *   in progress
-	 * - fail non-secure crtc commit, if any secure crtc session is already
-	 *   in progress
+	 * - fail crtc commit, if secure-camera/secure-ui session is
+	 *   in-progress in any other display
+	 * - fail secure-camera/secure-ui crtc commit, if any other display
+	 *   session is in-progress
 	 */
-	if (global_sec_session || sec_session) {
-		if ((global_active_crtc_cnt >
-					MAX_ALLOWED_CRTC_CNT_DURING_SECURE) ||
+	if ((global_active_crtc_cnt > MAX_ALLOWED_CRTC_CNT_DURING_SECURE) ||
 		    (active_crtc_cnt > MAX_ALLOWED_CRTC_CNT_DURING_SECURE)) {
-			SDE_ERROR(
-			"Secure check failed global_active:%d active:%d\n",
+		SDE_ERROR(
+		    "crtc%d secure check failed global_active:%d active:%d\n",
+				cur_crtc ? cur_crtc->base.id : -1,
 				global_active_crtc_cnt, active_crtc_cnt);
-			return -EPERM;
+		return -EPERM;
 
-		/*
-		 * As only one crtc is allowed during secure session, the crtc
-		 * in this commit should match with the global crtc, if it
-		 * exists
-		 */
-		} else if (global_crtc && (global_crtc != cur_crtc)) {
-			SDE_ERROR(
-			    "crtc%d-sec%d not allowed during crtc%d-sec%d\n",
-				cur_crtc ? cur_crtc->base.id : -1, sec_session,
+	/*
+	 * As only one crtc is allowed during secure session, the crtc
+	 * in this commit should match with the global crtc
+	 */
+	} else if (global_crtc && cur_crtc && (global_crtc != cur_crtc)) {
+		SDE_ERROR("crtc%d-sec%d not allowed during crtc%d-sec%d\n",
+				cur_crtc->base.id, sec_session,
 				global_crtc->base.id, global_sec_session);
-			return -EPERM;
-		}
-
+		return -EPERM;
 	}
 
 	return 0;
@@ -2529,14 +2472,16 @@ static int sde_kms_atomic_check(struct msm_kms *kms,
 	sde_kms = to_sde_kms(kms);
 	dev = sde_kms->dev;
 
+	SDE_ATRACE_BEGIN("atomic_check");
 	if (sde_kms_is_suspend_blocked(dev)) {
 		SDE_DEBUG("suspended, skip atomic_check\n");
-		return -EBUSY;
+		ret = -EBUSY;
+		goto end;
 	}
 
 	ret = drm_atomic_helper_check(dev, state);
 	if (ret)
-		return ret;
+		goto end;
 	/*
 	 * Check if any secure transition(moving CRTC between secure and
 	 * non-secure state and vice-versa) is allowed or not. when moving
@@ -2544,7 +2489,10 @@ static int sde_kms_atomic_check(struct msm_kms *kms,
 	 * be staged on the CRTC, and only one CRTC can be active during
 	 * Secure state
 	 */
-	return sde_kms_check_secure_transition(kms, state);
+	ret = sde_kms_check_secure_transition(kms, state);
+end:
+	SDE_ATRACE_END("atomic_check");
+	return ret;
 }
 
 static struct msm_gem_address_space*
@@ -2577,6 +2525,7 @@ static void _sde_kms_post_open(struct msm_kms *kms, struct drm_file *file)
 	struct drm_device *dev = NULL;
 	struct sde_kms *sde_kms = NULL;
 	struct drm_connector *connector = NULL;
+	struct drm_connector_list_iter conn_iter;
 	struct sde_connector *sde_conn = NULL;
 
 	if (!kms) {
@@ -2596,7 +2545,8 @@ static void _sde_kms_post_open(struct msm_kms *kms, struct drm_file *file)
 		return;
 
 	mutex_lock(&dev->mode_config.mutex);
-	drm_for_each_connector(connector, dev) {
+	drm_connector_list_iter_begin(dev, &conn_iter);
+	drm_for_each_connector_iter(connector, &conn_iter) {
 		/* Only handle HPD capable connectors. */
 		if (!(connector->polled & DRM_CONNECTOR_POLL_HPD))
 			continue;
@@ -2604,10 +2554,56 @@ static void _sde_kms_post_open(struct msm_kms *kms, struct drm_file *file)
 		sde_conn = to_sde_connector(connector);
 
 		if (sde_conn->ops.post_open)
-			sde_conn->ops.post_open(sde_conn->display);
+			sde_conn->ops.post_open(&sde_conn->base,
+					sde_conn->display);
 	}
+	drm_connector_list_iter_end(&conn_iter);
 	mutex_unlock(&dev->mode_config.mutex);
 
+}
+
+static int _sde_kms_update_planes_for_cont_splash(struct sde_kms *sde_kms,
+		struct sde_splash_display *splash_display,
+		struct drm_crtc *crtc)
+{
+	struct msm_drm_private *priv;
+	struct drm_plane *plane;
+	struct sde_splash_mem *splash;
+	enum sde_sspp plane_id;
+	bool is_virtual;
+	int i, j;
+
+	if (!sde_kms || !splash_display || !crtc) {
+		SDE_ERROR("invalid input args\n");
+		return -EINVAL;
+	}
+
+	priv = sde_kms->dev->dev_private;
+	for (i = 0; i < priv->num_planes; i++) {
+		plane = priv->planes[i];
+		plane_id = sde_plane_pipe(plane);
+		is_virtual = is_sde_plane_virtual(plane);
+		splash = splash_display->splash;
+
+		for (j = 0; j < splash_display->pipe_cnt; j++) {
+			if ((plane_id != splash_display->pipes[j].sspp) ||
+					(splash_display->pipes[j].is_virtual
+					 != is_virtual))
+				continue;
+
+			if (splash && sde_plane_validate_src_addr(plane,
+						splash->splash_buf_base,
+						splash->splash_buf_size)) {
+				SDE_ERROR("invalid adr on pipe:%d crtc:%d\n",
+						plane_id, crtc->base.id);
+			}
+
+			SDE_DEBUG("set crtc:%d for plane:%d rect:%d\n",
+					crtc->base.id, plane_id, is_virtual);
+		}
+	}
+
+	return 0;
 }
 
 static int sde_kms_cont_splash_config(struct msm_kms *kms)
@@ -2622,10 +2618,10 @@ static int sde_kms_cont_splash_config(struct msm_kms *kms)
 	struct drm_device *dev;
 	struct msm_drm_private *priv;
 	struct sde_kms *sde_kms;
-	struct list_head *connector_list = NULL;
-	struct drm_connector *conn_iter = NULL;
+	struct drm_connector_list_iter conn_iter;
 	struct drm_connector *connector = NULL;
 	struct sde_connector *sde_conn = NULL;
+	struct sde_splash_display *splash_display;
 
 	if (!kms) {
 		SDE_ERROR("invalid kms\n");
@@ -2634,21 +2630,37 @@ static int sde_kms_cont_splash_config(struct msm_kms *kms)
 
 	sde_kms = to_sde_kms(kms);
 	dev = sde_kms->dev;
-	if (!dev || !dev->platformdev) {
+	if (!dev) {
 		SDE_ERROR("invalid device\n");
 		return -EINVAL;
 	}
 
-	if (!sde_kms->splash_data.cont_splash_en) {
+	if (!sde_kms->splash_data.num_splash_regions ||
+			!sde_kms->splash_data.num_splash_displays) {
 		DRM_INFO("cont_splash feature not enabled\n");
 		return rc;
 	}
 
-	/* Currently, we only support one dsi display configuration */
+	if (sde_kms->dsi_display_count !=
+			sde_kms->splash_data.num_splash_displays) {
+		SDE_ERROR("mismatch - displays:%d vs splash-displays:%d\n",
+				sde_kms->dsi_display_count,
+				sde_kms->splash_data.num_splash_displays);
+		return rc;
+	}
+
 	/* dsi */
 	for (i = 0; i < sde_kms->dsi_display_count; ++i) {
 		display = sde_kms->dsi_displays[i];
 		dsi_display = (struct dsi_display *)display;
+		splash_display = &sde_kms->splash_data.splash_display[i];
+
+		if (!splash_display->cont_splash_enabled) {
+			SDE_DEBUG("display->name = %s splash not enabled\n",
+					dsi_display->name);
+			continue;
+		}
+
 		SDE_DEBUG("display->name = %s\n", dsi_display->name);
 
 		if (dsi_display->bridge->base.encoder) {
@@ -2656,7 +2668,7 @@ static int sde_kms_cont_splash_config(struct msm_kms *kms)
 			SDE_DEBUG("encoder name = %s\n", encoder->name);
 		}
 		memset(&info, 0x0, sizeof(info));
-		rc = dsi_display_get_info(&info, display);
+		rc = dsi_display_get_info(NULL, &info, display);
 		if (rc) {
 			SDE_ERROR("dsi get_info %d failed\n", i);
 			encoder = NULL;
@@ -2666,31 +2678,22 @@ static int sde_kms_cont_splash_config(struct msm_kms *kms)
 			((info.is_connected) ? "true" : "false"),
 			((info.is_primary) ? "true" : "false"));
 
-		/**
-		 * Since we are supporting one DSI for splash, use the display
-		 * which is marked as primary.
-		 */
-		if (!info.is_primary)
-			continue;
-		else
-			break;
-	}
+		if (!encoder) {
+			SDE_ERROR("encoder not initialized\n");
+			return -EINVAL;
+		}
 
-	if (!encoder) {
-		SDE_ERROR("encoder not initialized\n");
-		return -EINVAL;
-	}
+		priv = sde_kms->dev->dev_private;
+		encoder->crtc = priv->crtcs[i];
+		crtc = encoder->crtc;
+		splash_display->encoder =  encoder;
 
-	priv = sde_kms->dev->dev_private;
-	encoder->crtc = priv->crtcs[0];
-	crtc = encoder->crtc;
-	SDE_DEBUG("crtc id = %d\n", crtc->base.id);
+		SDE_DEBUG("for dsi-display:%d crtc id = %d enc id =%d\n",
+				i, crtc->base.id, encoder->base.id);
 
-
-	mutex_lock(&dev->mode_config.mutex);
-	connector_list = &dev->mode_config.connector_list;
-	if (connector_list) {
-		list_for_each_entry(conn_iter, connector_list, head) {
+		mutex_lock(&dev->mode_config.mutex);
+		drm_connector_list_iter_begin(dev, &conn_iter);
+		drm_for_each_connector_iter(connector, &conn_iter) {
 			/**
 			 * SDE_KMS doesn't attach more than one encoder to
 			 * a DSI connector. So it is safe to check only with
@@ -2698,57 +2701,64 @@ static int sde_kms_cont_splash_config(struct msm_kms *kms)
 			 * ever have to support continuous splash for
 			 * external displays in MST configuration.
 			 */
-			if (conn_iter &&
-			  (conn_iter->encoder_ids[0] == encoder->base.id)) {
-				connector = conn_iter;
+			if (connector->encoder_ids[0] == encoder->base.id)
 				break;
-			}
+		}
+		drm_connector_list_iter_end(&conn_iter);
+
+		if (!connector) {
+			SDE_ERROR("connector not initialized\n");
+			mutex_unlock(&dev->mode_config.mutex);
+			return -EINVAL;
+		}
+
+		if (connector->funcs->fill_modes) {
+			connector->funcs->fill_modes(connector,
+					dev->mode_config.max_width,
+					dev->mode_config.max_height);
+		} else {
+			SDE_ERROR("fill_modes api not defined\n");
+			mutex_unlock(&dev->mode_config.mutex);
+			return -EINVAL;
+		}
+		mutex_unlock(&dev->mode_config.mutex);
+
+		crtc->state->encoder_mask = (1 << drm_encoder_index(encoder));
+
+		/* currently consider modes[0] as the preferred mode */
+		drm_mode = list_first_entry(&connector->modes,
+				struct drm_display_mode, head);
+		SDE_DEBUG("drm_mode->name = %s, id=%d, type=0x%x, flags=0x%x\n",
+				drm_mode->name, drm_mode->base.id,
+				drm_mode->type, drm_mode->flags);
+
+		/* Update CRTC drm structure */
+		crtc->state->active = true;
+		rc = drm_atomic_set_mode_for_crtc(crtc->state, drm_mode);
+		if (rc) {
+			SDE_ERROR("Failed: set mode for crtc. rc = %d\n", rc);
+			return rc;
+		}
+		drm_mode_copy(&crtc->state->adjusted_mode, drm_mode);
+		drm_mode_copy(&crtc->mode, drm_mode);
+
+		/* Update encoder structure */
+		sde_encoder_update_caps_for_cont_splash(encoder,
+				splash_display, true);
+
+		sde_crtc_update_cont_splash_settings(crtc);
+
+		sde_conn = to_sde_connector(connector);
+		if (sde_conn && sde_conn->ops.cont_splash_config)
+			sde_conn->ops.cont_splash_config(sde_conn->display);
+
+		rc = _sde_kms_update_planes_for_cont_splash(sde_kms,
+				splash_display, crtc);
+		if (rc) {
+			SDE_ERROR("Failed: updating plane status rc=%d\n", rc);
+			return rc;
 		}
 	}
-	if (!connector) {
-		SDE_ERROR("connector not initialized\n");
-		mutex_unlock(&dev->mode_config.mutex);
-		return -EINVAL;
-	}
-
-	if (connector->funcs->fill_modes) {
-		connector->funcs->fill_modes(connector,
-			dev->mode_config.max_width,
-			dev->mode_config.max_height);
-	} else {
-		SDE_ERROR("fill_modes api not defined\n");
-		mutex_unlock(&dev->mode_config.mutex);
-		return -EINVAL;
-	}
-	mutex_unlock(&dev->mode_config.mutex);
-
-	crtc->state->encoder_mask = (1 << drm_encoder_index(encoder));
-
-	/* currently consider modes[0] as the preferred mode */
-	drm_mode = list_first_entry(&connector->modes,
-					struct drm_display_mode, head);
-	SDE_DEBUG("drm_mode->name = %s, id=%d, type=0x%x, flags=0x%x\n",
-			drm_mode->name, drm_mode->base.id,
-			drm_mode->type, drm_mode->flags);
-
-	/* Update CRTC drm structure */
-	crtc->state->active = true;
-	rc = drm_atomic_set_mode_for_crtc(crtc->state, drm_mode);
-	if (rc) {
-		SDE_ERROR("Failed: set mode for crtc. rc = %d\n", rc);
-		return rc;
-	}
-	drm_mode_copy(&crtc->state->adjusted_mode, drm_mode);
-	drm_mode_copy(&crtc->mode, drm_mode);
-
-	/* Update encoder structure */
-	sde_encoder_update_caps_for_cont_splash(encoder);
-
-	sde_crtc_update_cont_splash_mixer_settings(crtc);
-
-	sde_conn = to_sde_connector(connector);
-	if (sde_conn && sde_conn->ops.cont_splash_config)
-		sde_conn->ops.cont_splash_config(sde_conn->display);
 
 	return rc;
 }
@@ -2763,18 +2773,68 @@ static bool sde_kms_check_for_splash(struct msm_kms *kms)
 	}
 
 	sde_kms = to_sde_kms(kms);
-	return sde_kms->splash_data.cont_splash_en;
+	return sde_kms->splash_data.num_splash_displays;
+}
+
+static int sde_kms_get_mixer_count(const struct msm_kms *kms,
+		const struct drm_display_mode *mode,
+		u32 max_mixer_width, u32 *num_lm)
+{
+	struct sde_kms *sde_kms;
+	s64 mode_clock_hz = 0;
+	s64 max_mdp_clock_hz = 0;
+	s64 mdp_fudge_factor = 0;
+	s64 temp = 0;
+	s64 htotal_fp = 0;
+	s64 vtotal_fp = 0;
+	s64 vrefresh_fp = 0;
+
+	if (!num_lm) {
+		SDE_ERROR("invalid num_lm pointer\n");
+		return -EINVAL;
+	}
+	*num_lm = 1;
+
+	if (!kms || !mode || !max_mixer_width) {
+		SDE_ERROR("invlaid input args");
+		return -EINVAL;
+	}
+
+	sde_kms = to_sde_kms(kms);
+
+	max_mdp_clock_hz = drm_fixp_from_fraction(
+			sde_kms->perf.max_core_clk_rate, 1);
+	mdp_fudge_factor = drm_fixp_from_fraction(105, 100);
+	htotal_fp = drm_fixp_from_fraction(mode->htotal, 1);
+	vtotal_fp =  drm_fixp_from_fraction(mode->vtotal, 1);
+	vrefresh_fp =  drm_fixp_from_fraction(mode->vrefresh, 1);
+
+	temp = drm_fixp_mul(htotal_fp, vtotal_fp);
+	temp = drm_fixp_mul(temp, vrefresh_fp);
+	mode_clock_hz = drm_fixp_mul(temp, mdp_fudge_factor);
+
+	if (mode_clock_hz > max_mdp_clock_hz ||
+			mode->hdisplay > max_mixer_width) {
+		*num_lm = 2;
+		if ((mode_clock_hz >> 1) > max_mdp_clock_hz) {
+			SDE_DEBUG("[%s] clock %d exceeds max_mdp_clk %d\n",
+					mode->name, mode_clock_hz,
+					max_mdp_clock_hz);
+			return -EINVAL;
+		}
+	}
+
+	SDE_DEBUG("[%s] h=%d, v=%d, fps%d, max_mdp_pclk_hz=%llu, num_lm=%d\n",
+			mode->name, mode->htotal, mode->vtotal, mode->vrefresh,
+			sde_kms->perf.max_core_clk_rate, *num_lm);
+	return 0;
 }
 
 static void _sde_kms_null_commit(struct drm_device *dev,
 		struct drm_encoder *enc)
 {
 	struct drm_modeset_acquire_ctx ctx;
-	struct drm_connector *conn = NULL;
-	struct drm_connector *tmp_conn = NULL;
 	struct drm_atomic_state *state = NULL;
-	struct drm_crtc_state *crtc_state = NULL;
-	struct drm_connector_state *conn_state = NULL;
 	int retry_cnt = 0;
 	int ret = 0;
 
@@ -2798,35 +2858,16 @@ retry:
 	}
 
 	state->acquire_ctx = &ctx;
-	drm_for_each_connector(tmp_conn, dev) {
-		if (enc == tmp_conn->state->best_encoder) {
-			conn = tmp_conn;
-			break;
-		}
-	}
 
-	if (!conn) {
-		SDE_ERROR("error in finding conn for enc:%d\n", DRMID(enc));
-		goto end;
-	}
+	ret = sde_kms_set_crtc_for_conn(dev, enc, state);
 
-	crtc_state = drm_atomic_get_crtc_state(state, enc->crtc);
-	conn_state = drm_atomic_get_connector_state(state, conn);
-	if (IS_ERR(conn_state)) {
-		SDE_ERROR("error %d getting connector %d state\n",
-				ret, DRMID(conn));
-		goto end;
-	}
-
-	crtc_state->active = true;
-	ret = drm_atomic_set_crtc_for_connector(conn_state, enc->crtc);
-
-	ret = drm_atomic_commit(state);
 	if (ret)
-		SDE_ERROR("Commit failed with %d error\n", ret);
+		goto end;
+
+	drm_atomic_commit(state);
 end:
 	if (state)
-		drm_atomic_state_free(state);
+		drm_atomic_state_put(state);
 
 	drm_modeset_drop_locks(&ctx);
 	drm_modeset_acquire_fini(&ctx);
@@ -2837,8 +2878,9 @@ static int sde_kms_pm_suspend(struct device *dev)
 	struct drm_device *ddev;
 	struct drm_modeset_acquire_ctx ctx;
 	struct drm_connector *conn;
-	struct drm_atomic_state *state;
 	struct drm_encoder *enc;
+	struct drm_connector_list_iter conn_iter;
+	struct drm_atomic_state *state = NULL;
 	struct sde_kms *sde_kms;
 	int ret = 0, num_crtcs = 0;
 
@@ -2857,7 +2899,7 @@ static int sde_kms_pm_suspend(struct device *dev)
 
 	/* if a display stuck in CS trigger a null commit to complete handoff */
 	drm_for_each_encoder(enc, ddev) {
-		if (sde_kms && sde_kms->splash_data.cont_splash_en && enc->crtc)
+		if (sde_encoder_in_cont_splash(enc) && enc->crtc)
 			_sde_kms_null_commit(ddev, enc);
 	}
 
@@ -2871,28 +2913,32 @@ retry:
 
 	/* save current state for resume */
 	if (sde_kms->suspend_state)
-		drm_atomic_state_free(sde_kms->suspend_state);
+		drm_atomic_state_put(sde_kms->suspend_state);
 	sde_kms->suspend_state = drm_atomic_helper_duplicate_state(ddev, &ctx);
 	if (IS_ERR_OR_NULL(sde_kms->suspend_state)) {
-		DRM_ERROR("failed to back up suspend state\n");
+		ret = PTR_ERR(sde_kms->suspend_state);
+		DRM_ERROR("failed to back up suspend state, %d\n", ret);
 		sde_kms->suspend_state = NULL;
 		goto unlock;
 	}
 
 	/* create atomic state to disable all CRTCs */
 	state = drm_atomic_state_alloc(ddev);
-	if (IS_ERR_OR_NULL(state)) {
-		DRM_ERROR("failed to allocate crtc disable state\n");
+	if (!state) {
+		ret = -ENOMEM;
+		DRM_ERROR("failed to allocate crtc disable state, %d\n", ret);
 		goto unlock;
 	}
 
 	state->acquire_ctx = &ctx;
-	drm_for_each_connector(conn, ddev) {
+	drm_connector_list_iter_begin(ddev, &conn_iter);
+	drm_for_each_connector_iter(conn, &conn_iter) {
 		struct drm_crtc_state *crtc_state;
 		uint64_t lp;
 
 		if (!conn->state || !conn->state->crtc ||
-				conn->dpms != DRM_MODE_DPMS_ON)
+				conn->dpms != DRM_MODE_DPMS_ON ||
+				sde_encoder_in_clone_mode(conn->encoder))
 			continue;
 
 		lp = sde_connector_get_lp(conn);
@@ -2903,7 +2949,7 @@ retry:
 			if (ret) {
 				DRM_ERROR("failed to set lp2 for conn %d\n",
 						conn->base.id);
-				drm_atomic_state_free(state);
+				drm_connector_list_iter_end(&conn_iter);
 				goto unlock;
 			}
 		}
@@ -2915,7 +2961,7 @@ retry:
 			if (IS_ERR_OR_NULL(crtc_state)) {
 				DRM_ERROR("failed to get crtc %d state\n",
 						conn->state->crtc->base.id);
-				drm_atomic_state_free(state);
+				drm_connector_list_iter_end(&conn_iter);
 				goto unlock;
 			}
 
@@ -2924,11 +2970,11 @@ retry:
 			++num_crtcs;
 		}
 	}
+	drm_connector_list_iter_end(&conn_iter);
 
 	/* check for nothing to do */
 	if (num_crtcs == 0) {
 		DRM_DEBUG("all crtcs are already in the off state\n");
-		drm_atomic_state_free(state);
 		sde_kms->suspend_block = true;
 		goto unlock;
 	}
@@ -2937,17 +2983,20 @@ retry:
 	ret = drm_atomic_commit(state);
 	if (ret < 0) {
 		DRM_ERROR("failed to disable crtcs, %d\n", ret);
-		drm_atomic_state_free(state);
 		goto unlock;
 	}
 
 	sde_kms->suspend_block = true;
 
-	drm_for_each_connector(conn, ddev) {
+	drm_connector_list_iter_begin(ddev, &conn_iter);
+	drm_for_each_connector_iter(conn, &conn_iter) {
 		uint64_t lp;
 
 		lp = sde_connector_get_lp(conn);
 		if (lp != SDE_MODE_DPMS_LP2)
+			continue;
+
+		if (sde_encoder_in_clone_mode(conn->encoder))
 			continue;
 
 		ret = sde_encoder_wait_for_event(conn->encoder,
@@ -2959,7 +3008,13 @@ retry:
 		else if (!ret)
 			sde_encoder_idle_request(conn->encoder);
 	}
+	drm_connector_list_iter_end(&conn_iter);
 unlock:
+	if (state) {
+		drm_atomic_state_put(state);
+		state = NULL;
+	}
+
 	if (ret == -EDEADLK) {
 		drm_modeset_backoff(&ctx);
 		goto retry;
@@ -2967,14 +3022,15 @@ unlock:
 	drm_modeset_drop_locks(&ctx);
 	drm_modeset_acquire_fini(&ctx);
 
-	return 0;
+	return ret;
 }
 
 static int sde_kms_pm_resume(struct device *dev)
 {
 	struct drm_device *ddev;
 	struct sde_kms *sde_kms;
-	int ret;
+	struct drm_modeset_acquire_ctx ctx;
+	int ret, i;
 
 	if (!dev)
 		return -EINVAL;
@@ -2989,21 +3045,39 @@ static int sde_kms_pm_resume(struct device *dev)
 
 	drm_mode_config_reset(ddev);
 
-	drm_modeset_lock_all(ddev);
+	drm_modeset_acquire_init(&ctx, 0);
+retry:
+	ret = drm_modeset_lock_all_ctx(ddev, &ctx);
+	if (ret == -EDEADLK) {
+		drm_modeset_backoff(&ctx);
+		goto retry;
+	} else if (WARN_ON(ret)) {
+		goto end;
+	}
 
 	sde_kms->suspend_block = false;
 
 	if (sde_kms->suspend_state) {
-		sde_kms->suspend_state->acquire_ctx =
-			ddev->mode_config.acquire_ctx;
-		ret = drm_atomic_commit(sde_kms->suspend_state);
-		if (ret < 0) {
-			DRM_ERROR("failed to restore state, %d\n", ret);
-			drm_atomic_state_free(sde_kms->suspend_state);
+		sde_kms->suspend_state->acquire_ctx = &ctx;
+		for (i = 0; i < TEARDOWN_DEADLOCK_RETRY_MAX; i++) {
+			ret = drm_atomic_helper_commit_duplicated_state(
+					sde_kms->suspend_state, &ctx);
+			if (ret != -EDEADLK)
+				break;
+
+			drm_modeset_backoff(&ctx);
 		}
+
+		if (ret < 0)
+			DRM_ERROR("failed to restore state, %d\n", ret);
+
+		drm_atomic_state_put(sde_kms->suspend_state);
 		sde_kms->suspend_state = NULL;
 	}
-	drm_modeset_unlock_all(ddev);
+
+end:
+	drm_modeset_drop_locks(&ctx);
+	drm_modeset_acquire_fini(&ctx);
 
 	/* enable hot-plug polling */
 	drm_kms_helper_poll_enable(ddev);
@@ -3040,6 +3114,7 @@ static const struct msm_kms_funcs kms_funcs = {
 	.get_address_space = _sde_kms_get_address_space,
 	.postopen = _sde_kms_post_open,
 	.check_for_splash = sde_kms_check_for_splash,
+	.get_mixer_count = sde_kms_get_mixer_count,
 };
 
 /* the caller api needs to turn on clock before calling it */
@@ -3061,7 +3136,7 @@ static int _sde_kms_mmu_destroy(struct sde_kms *sde_kms)
 
 		mmu->funcs->detach(mmu, (const char **)iommu_ports,
 				ARRAY_SIZE(iommu_ports));
-		msm_gem_address_space_destroy(sde_kms->aspace[i]);
+		msm_gem_address_space_put(sde_kms->aspace[i]);
 
 		sde_kms->aspace[i] = NULL;
 	}
@@ -3078,6 +3153,7 @@ static int _sde_kms_mmu_init(struct sde_kms *sde_kms)
 	for (i = 0; i < MSM_SMMU_DOMAIN_MAX; i++) {
 		struct msm_gem_address_space *aspace;
 
+		pr_info("RMX1901-R009: SDE MMU domain=%d create begin\n", i);
 		mmu = msm_smmu_new(sde_kms->dev->dev, i);
 		if (IS_ERR(mmu)) {
 			ret = PTR_ERR(mmu);
@@ -3112,48 +3188,95 @@ static int _sde_kms_mmu_init(struct sde_kms *sde_kms)
 
 		sde_kms->aspace[i] = aspace;
 
+		pr_info("RMX1901-R009: SDE MMU domain=%d attach begin\n", i);
 		ret = mmu->funcs->attach(mmu, (const char **)iommu_ports,
 				ARRAY_SIZE(iommu_ports));
 		if (ret) {
 			SDE_ERROR("failed to attach iommu %d: %d\n", i, ret);
-			msm_gem_address_space_destroy(aspace);
+			msm_gem_address_space_put(aspace);
 			goto fail;
 		}
 		aspace->domain_attached = true;
+		pr_info("RMX1901-R009: SDE MMU domain=%d attach complete\n", i);
 		early_map = 0;
 
 		/* Mapping splash memory block */
 		if ((i == MSM_SMMU_DOMAIN_UNSECURE) &&
-				sde_kms->splash_data.splash_base) {
-			ret = _sde_kms_splash_smmu_map(sde_kms->dev, mmu,
-					&sde_kms->splash_data);
+				sde_kms->splash_data.num_splash_regions) {
+			pr_info("RMX1901-R009: SDE MMU domain=%d splash map begin regions=%u displays=%u\n",
+				i, sde_kms->splash_data.num_splash_regions,
+				sde_kms->splash_data.num_splash_displays);
+			ret = _sde_kms_map_all_splash_regions(sde_kms);
 			if (ret) {
 				SDE_ERROR("failed to map ret:%d\n", ret);
 				goto fail;
 			}
+			pr_info("RMX1901-R009: SDE MMU domain=%d splash map complete\n",
+				i);
 		}
 
 		/*
 		 * Turning off early map after generating one to one
 		 * mapping for splash address space.
 		 */
+		pr_info("RMX1901-R009: SDE MMU domain=%d S1 enable begin\n", i);
 		ret = mmu->funcs->set_attribute(mmu, DOMAIN_ATTR_EARLY_MAP,
 			&early_map);
 		if (ret) {
 			SDE_ERROR("failed to set map att ret:%d\n", ret);
 			goto early_map_fail;
 		}
+		pr_info("RMX1901-R009: SDE MMU domain=%d S1 enable complete\n", i);
+		if (i == MSM_SMMU_DOMAIN_UNSECURE)
+			_sde_kms_log_splash_mapping(sde_kms, "after-s1-enable");
 	}
 
+	_sde_kms_log_splash_mapping(sde_kms, "after-mmu-loop");
 	return 0;
 early_map_fail:
-	mmu->funcs->one_to_one_unmap(mmu, sde_kms->splash_data.splash_base,
-					sde_kms->splash_data.splash_size);
+	_sde_kms_unmap_all_splash_regions(sde_kms,
+			"early-map-failure", false);
 fail:
 	mmu->funcs->destroy(mmu);
 	_sde_kms_mmu_destroy(sde_kms);
 
 	return ret;
+}
+
+static void sde_kms_init_shared_hw(struct sde_kms *sde_kms)
+{
+	if (!sde_kms || !sde_kms->hw_mdp || !sde_kms->catalog)
+		return;
+
+	if (sde_kms->hw_mdp->ops.intf_dp_select)
+		sde_kms->hw_mdp->ops.intf_dp_select(sde_kms->hw_mdp,
+						sde_kms->catalog);
+
+	if (sde_kms->hw_mdp->ops.reset_ubwc)
+		sde_kms->hw_mdp->ops.reset_ubwc(sde_kms->hw_mdp,
+						sde_kms->catalog);
+
+	if (sde_kms->hw_sid)
+		sde_hw_sid_rotator_set(sde_kms->hw_sid);
+}
+
+static void _sde_kms_set_lutdma_vbif_remap(struct sde_kms *sde_kms)
+{
+	struct sde_vbif_set_qos_params qos_params;
+	struct sde_mdss_cfg *catalog;
+
+	if (!sde_kms->catalog)
+		return;
+
+	catalog = sde_kms->catalog;
+
+	memset(&qos_params, 0, sizeof(qos_params));
+	qos_params.vbif_idx = catalog->dma_cfg.vbif_idx;
+	qos_params.xin_id = catalog->dma_cfg.xin_id;
+	qos_params.clk_ctrl = catalog->dma_cfg.clk_ctrl;
+	qos_params.client_type = VBIF_LUTDMA_CLIENT;
+
+	sde_vbif_set_qos_remap(sde_kms, &qos_params);
 }
 
 static void sde_kms_handle_power_event(u32 event_type, void *usr)
@@ -3171,6 +3294,8 @@ static void sde_kms_handle_power_event(u32 event_type, void *usr)
 	if (event_type == SDE_POWER_EVENT_POST_ENABLE) {
 		sde_irq_update(msm_kms, true);
 		sde_vbif_init_memtypes(sde_kms);
+		sde_kms_init_shared_hw(sde_kms);
+		_sde_kms_set_lutdma_vbif_remap(sde_kms);
 		sde_kms->first_kickoff = true;
 	} else if (event_type == SDE_POWER_EVENT_PRE_DISABLE) {
 		sde_irq_update(msm_kms, false);
@@ -3230,12 +3355,20 @@ static int sde_kms_pd_disable(struct generic_pm_domain *genpd)
 
 static int _sde_kms_get_splash_data(struct sde_splash_data *data)
 {
+	int i = 0;
 	int ret = 0;
-	struct device_node *parent, *node;
-	struct resource r;
+	struct device_node *parent, *node, *node1;
+	struct resource r, r1;
+	const char *node_name = "cont_splash_region";
+	struct sde_splash_mem *mem;
+	bool share_splash_mem = false;
+	int num_displays, num_regions;
+	struct sde_splash_display *splash_display;
 
 	if (!data)
 		return -EINVAL;
+
+	memset(data, 0, sizeof(*data));
 
 	parent = of_find_node_by_path("/reserved-memory");
 	if (!parent) {
@@ -3243,23 +3376,71 @@ static int _sde_kms_get_splash_data(struct sde_splash_data *data)
 		return -EINVAL;
 	}
 
-	node = of_find_node_by_name(parent, "cont_splash_region");
+	node = of_find_node_by_name(parent, node_name);
 	if (!node) {
-		SDE_ERROR("failed to find splash memory reservation\n");
+		SDE_ERROR("failed to find node %s\n", node_name);
 		return -EINVAL;
 	}
 
-	if (of_address_to_resource(node, 0, &r)) {
-		SDE_ERROR("failed to find data for  splash memory\n");
-		return -EINVAL;
+	node1 = of_find_node_by_name(parent, "disp_rdump_region");
+	if (!node1)
+		SDE_DEBUG("failed to find disp ramdump memory reservation\n");
+
+	/**
+	 * Support sharing a single splash memory for all the built in displays
+	 * and also independent splash region per displays. Incase of
+	 * independent splash region for each connected display, dtsi node of
+	 * cont_splash_region  should be collection of all memory regions
+	 * Ex: <r1.start r1.end r2.start r2.end  ... rn.start, rn.end>
+	 */
+	num_displays = dsi_display_get_num_of_displays();
+	num_regions = of_property_count_u64_elems(node, "reg") / 2;
+	if (!num_displays && num_regions > 0) {
+		num_displays = min(num_regions, MAX_DSI_DISPLAYS);
+		pr_warn("no DSI displays enumerated; preserving %d splash region(s)\n",
+				num_displays);
 	}
 
-	data->splash_base = (unsigned long)r.start;
-	data->splash_size = (r.end - r.start) + 1;
+	data->num_splash_displays = num_displays;
 
-	pr_info("found continuous splash base address:%lx size:%x\n",
-						data->splash_base,
-						data->splash_size);
+	pr_info("splash mem num_regions:%d\n", num_regions);
+	if (num_displays > num_regions) {
+		share_splash_mem = true;
+		pr_info(":%d displays share same splash buf\n", num_displays);
+	}
+
+	for (i = 0; i < num_displays; i++) {
+		splash_display = &data->splash_display[i];
+		if (!i || !share_splash_mem) {
+			if (of_address_to_resource(node, i, &r)) {
+				SDE_ERROR("invalid data for:%s\n", node_name);
+				return -EINVAL;
+			}
+
+			mem =  &data->splash_mem[i];
+			if (!node1 || of_address_to_resource(node1, i, &r1)) {
+				SDE_DEBUG("failed to find ramdump memory\n");
+				mem->ramdump_base = 0;
+				mem->ramdump_size = 0;
+			} else {
+				mem->ramdump_base = (unsigned long)r1.start;
+				mem->ramdump_size = (r1.end - r1.start) + 1;
+			}
+
+			mem->splash_buf_base = (unsigned long)r.start;
+			mem->splash_buf_size = (r.end - r.start) + 1;
+			mem->ref_cnt = 0;
+			splash_display->splash = mem;
+			data->num_splash_regions++;
+		} else {
+			data->splash_display[i].splash = &data->splash_mem[0];
+		}
+
+		pr_info("splash mem for disp:%d add:%lx size:%x\n", (i + 1),
+				splash_display->splash->splash_buf_base,
+				splash_display->splash->splash_buf_size);
+	}
+
 	return ret;
 }
 
@@ -3269,7 +3450,9 @@ static int sde_kms_hw_init(struct msm_kms *kms)
 	struct drm_device *dev;
 	struct msm_drm_private *priv;
 	struct sde_rm *rm = NULL;
+	struct platform_device *platformdev;
 	int i, rc = -EINVAL;
+	int splash_rc, real_dsi_count;
 
 	if (!kms) {
 		SDE_ERROR("invalid kms\n");
@@ -3278,18 +3461,19 @@ static int sde_kms_hw_init(struct msm_kms *kms)
 
 	sde_kms = to_sde_kms(kms);
 	dev = sde_kms->dev;
-	if (!dev || !dev->platformdev) {
+	if (!dev || !dev->dev) {
 		SDE_ERROR("invalid device\n");
 		goto end;
 	}
 
+	platformdev = to_platform_device(dev->dev);
 	priv = dev->dev_private;
 	if (!priv) {
 		SDE_ERROR("invalid private data\n");
 		goto end;
 	}
 
-	sde_kms->mmio = msm_ioremap(dev->platformdev, "mdp_phys", "mdp_phys");
+	sde_kms->mmio = msm_ioremap(platformdev, "mdp_phys", "mdp_phys");
 	if (IS_ERR(sde_kms->mmio)) {
 		rc = PTR_ERR(sde_kms->mmio);
 		SDE_ERROR("mdp register memory map failed: %d\n", rc);
@@ -3297,14 +3481,14 @@ static int sde_kms_hw_init(struct msm_kms *kms)
 		goto error;
 	}
 	DRM_INFO("mapped mdp address space @%pK\n", sde_kms->mmio);
-	sde_kms->mmio_len = msm_iomap_size(dev->platformdev, "mdp_phys");
+	sde_kms->mmio_len = msm_iomap_size(platformdev, "mdp_phys");
 
 	rc = sde_dbg_reg_register_base(SDE_DBG_NAME, sde_kms->mmio,
 			sde_kms->mmio_len);
 	if (rc)
 		SDE_ERROR("dbg base register kms failed: %d\n", rc);
 
-	sde_kms->vbif[VBIF_RT] = msm_ioremap(dev->platformdev, "vbif_phys",
+	sde_kms->vbif[VBIF_RT] = msm_ioremap(platformdev, "vbif_phys",
 								"vbif_phys");
 	if (IS_ERR(sde_kms->vbif[VBIF_RT])) {
 		rc = PTR_ERR(sde_kms->vbif[VBIF_RT]);
@@ -3312,20 +3496,20 @@ static int sde_kms_hw_init(struct msm_kms *kms)
 		sde_kms->vbif[VBIF_RT] = NULL;
 		goto error;
 	}
-	sde_kms->vbif_len[VBIF_RT] = msm_iomap_size(dev->platformdev,
+	sde_kms->vbif_len[VBIF_RT] = msm_iomap_size(platformdev,
 								"vbif_phys");
 	rc = sde_dbg_reg_register_base("vbif_rt", sde_kms->vbif[VBIF_RT],
 				sde_kms->vbif_len[VBIF_RT]);
 	if (rc)
 		SDE_ERROR("dbg base register vbif_rt failed: %d\n", rc);
 
-	sde_kms->vbif[VBIF_NRT] = msm_ioremap(dev->platformdev, "vbif_nrt_phys",
+	sde_kms->vbif[VBIF_NRT] = msm_ioremap(platformdev, "vbif_nrt_phys",
 								"vbif_nrt_phys");
 	if (IS_ERR(sde_kms->vbif[VBIF_NRT])) {
 		sde_kms->vbif[VBIF_NRT] = NULL;
 		SDE_DEBUG("VBIF NRT is not defined");
 	} else {
-		sde_kms->vbif_len[VBIF_NRT] = msm_iomap_size(dev->platformdev,
+		sde_kms->vbif_len[VBIF_NRT] = msm_iomap_size(platformdev,
 							"vbif_nrt_phys");
 		rc = sde_dbg_reg_register_base("vbif_nrt",
 				sde_kms->vbif[VBIF_NRT],
@@ -3335,13 +3519,13 @@ static int sde_kms_hw_init(struct msm_kms *kms)
 					rc);
 	}
 
-	sde_kms->reg_dma = msm_ioremap(dev->platformdev, "regdma_phys",
+	sde_kms->reg_dma = msm_ioremap(platformdev, "regdma_phys",
 								"regdma_phys");
 	if (IS_ERR(sde_kms->reg_dma)) {
 		sde_kms->reg_dma = NULL;
 		SDE_DEBUG("REG_DMA is not defined");
 	} else {
-		sde_kms->reg_dma_len = msm_iomap_size(dev->platformdev,
+		sde_kms->reg_dma_len = msm_iomap_size(platformdev,
 								"regdma_phys");
 		rc =  sde_dbg_reg_register_base("reg_dma",
 				sde_kms->reg_dma,
@@ -3349,6 +3533,19 @@ static int sde_kms_hw_init(struct msm_kms *kms)
 		if (rc)
 			SDE_ERROR("dbg base register reg_dma failed: %d\n",
 					rc);
+	}
+
+	sde_kms->sid = msm_ioremap(platformdev, "sid_phys",
+							"sid_phys");
+	if (IS_ERR(sde_kms->sid)) {
+		sde_kms->sid = NULL;
+		SDE_DEBUG("SID_PHYS is not defined\n");
+	} else {
+		sde_kms->sid_len = msm_iomap_size(platformdev, "sid_phys");
+		rc =  sde_dbg_reg_register_base("sid", sde_kms->sid,
+				sde_kms->sid_len);
+		if (rc)
+			SDE_ERROR("dbg base register sid failed: %d\n", rc);
 	}
 
 	sde_kms->core_client = sde_power_client_create(&priv->phandle, "core");
@@ -3400,7 +3597,31 @@ static int sde_kms_hw_init(struct msm_kms *kms)
 		goto power_error;
 	}
 
-	sde_kms->splash_data.resource_handoff_pending = true;
+	/* initialize power domain if defined */
+	if (of_find_property(dev->dev->of_node, "#power-domain-cells", NULL)) {
+		sde_kms->genpd.name = dev->unique;
+		sde_kms->genpd.power_off = sde_kms_pd_disable;
+		sde_kms->genpd.power_on = sde_kms_pd_enable;
+
+		rc = pm_genpd_init(&sde_kms->genpd, NULL, true);
+		if (rc < 0) {
+			SDE_ERROR("failed to init genpd provider %s: %d\n",
+					sde_kms->genpd.name, rc);
+			goto genpd_err;
+		}
+
+		rc = of_genpd_add_provider_simple(dev->dev->of_node,
+				&sde_kms->genpd);
+		if (rc < 0) {
+			SDE_ERROR("failed to add genpd provider %s: %d\n",
+					sde_kms->genpd.name, rc);
+			pm_genpd_remove(&sde_kms->genpd);
+			goto genpd_err;
+		}
+
+		sde_kms->genpd_init = true;
+		SDE_DEBUG("added genpd provider %s\n", sde_kms->genpd.name);
+	}
 
 	rc = _sde_kms_mmu_init(sde_kms);
 	if (rc) {
@@ -3438,12 +3659,32 @@ static int sde_kms_hw_init(struct msm_kms *kms)
 
 	/*
 	 * Attempt continuous splash handoff only if reserved
-	 * splash memory is found.
+	 * splash memory is found & release resources on any error
+	 * in finding display hw config in splash
 	 */
-	if (sde_kms->splash_data.splash_base)
-		sde_rm_cont_splash_res_init(priv, &sde_kms->rm,
-					&sde_kms->splash_data,
-					sde_kms->catalog);
+	if (sde_kms->splash_data.num_splash_regions) {
+		real_dsi_count = dsi_display_get_num_of_displays();
+		_sde_kms_log_splash_mapping(sde_kms,
+				"before-cont-splash-validation");
+		splash_rc = sde_rm_cont_splash_res_init(priv, &sde_kms->rm,
+				&sde_kms->splash_data, sde_kms->catalog);
+		_sde_kms_log_splash_mapping(sde_kms,
+				"after-cont-splash-validation");
+		pr_info("RMX1901-R010: cont-splash validation rc=%d real_dsi=%d synthetic_displays=%u regions=%u\n",
+			splash_rc, real_dsi_count,
+			sde_kms->splash_data.num_splash_displays,
+			sde_kms->splash_data.num_splash_regions);
+
+		if (splash_rc) {
+			SDE_DEBUG("preserving failed continuous splash resources\n");
+			_sde_kms_unmap_all_splash_regions(sde_kms,
+					"cont-splash-validation-failure", true);
+			pr_warn("RMX1901-R011: preserving splash metadata after failed validation real_dsi=%d; normal handoff and KMS destroy retain original cleanup semantics\n",
+				real_dsi_count);
+			_sde_kms_log_splash_mapping(sde_kms,
+					"after-cont-splash-preserve");
+		}
+	}
 
 	sde_kms->hw_mdp = sde_rm_get_mdp(&sde_kms->rm);
 	if (IS_ERR_OR_NULL(sde_kms->hw_mdp)) {
@@ -3470,13 +3711,13 @@ static int sde_kms_hw_init(struct msm_kms *kms)
 		}
 	}
 
-	sde_kms->iclient = msm_ion_client_create(dev->unique);
-	if (IS_ERR(sde_kms->iclient)) {
-		rc = PTR_ERR(sde_kms->iclient);
-		SDE_DEBUG("msm_ion_client not available: %d\n", rc);
-		sde_kms->iclient = NULL;
+	sde_kms->hw_sid = sde_hw_sid_init(sde_kms->sid,
+				sde_kms->sid_len, sde_kms->catalog);
+	if (IS_ERR(sde_kms->hw_sid)) {
+		SDE_ERROR("failed to init sid %d\n", PTR_ERR(sde_kms->hw_sid));
+		sde_kms->hw_sid = NULL;
+		goto power_error;
 	}
-
 
 	rc = sde_core_perf_init(&sde_kms->perf, dev, sde_kms->catalog,
 			&priv->phandle, priv->pclient, "core_clk");
@@ -3501,8 +3742,6 @@ static int sde_kms_hw_init(struct msm_kms *kms)
 	dev->mode_config.max_height = sde_kms->catalog->max_display_height;
 
 	mutex_init(&sde_kms->secure_transition_lock);
-	mutex_init(&sde_kms->vblank_ctl_global_lock);
-
 	atomic_set(&sde_kms->detach_sec_cb, 0);
 	atomic_set(&sde_kms->detach_all_cb, 0);
 
@@ -3520,33 +3759,7 @@ static int sde_kms_hw_init(struct msm_kms *kms)
 			SDE_POWER_EVENT_PRE_DISABLE,
 			sde_kms_handle_power_event, sde_kms, "kms");
 
-	/* initialize power domain if defined */
-	if (of_find_property(dev->dev->of_node, "#power-domain-cells", NULL)) {
-		sde_kms->genpd.name = dev->unique;
-		sde_kms->genpd.power_off = sde_kms_pd_disable;
-		sde_kms->genpd.power_on = sde_kms_pd_enable;
-
-		rc = pm_genpd_init(&sde_kms->genpd, NULL, true);
-		if (rc < 0) {
-			SDE_ERROR("failed to init genpd provider %s: %d\n",
-					sde_kms->genpd.name, rc);
-			goto genpd_err;
-		}
-
-		rc = of_genpd_add_provider_simple(dev->dev->of_node,
-				&sde_kms->genpd);
-		if (rc < 0) {
-			SDE_ERROR("failed to add genpd provider %s: %d\n",
-					sde_kms->genpd.name, rc);
-			pm_genpd_remove(&sde_kms->genpd);
-			goto genpd_err;
-		}
-
-		sde_kms->genpd_init = true;
-		SDE_DEBUG("added genpd provider %s\n", sde_kms->genpd.name);
-	}
-
-	if (sde_kms->splash_data.cont_splash_en) {
+	if (sde_kms->splash_data.num_splash_displays) {
 		SDE_DEBUG("Skipping MDP Resources disable\n");
 	} else {
 		for (i = 0; i < SDE_POWER_HANDLE_DBUS_ID_MAX; i++)
@@ -3569,7 +3782,7 @@ perf_err:
 power_error:
 	sde_power_resource_enable(&priv->phandle, sde_kms->core_client, false);
 error:
-	_sde_kms_hw_destroy(sde_kms, dev->platformdev);
+	_sde_kms_hw_destroy(sde_kms, platformdev);
 end:
 	return rc;
 }
@@ -3645,16 +3858,11 @@ void sde_kms_trigger_early_wakeup(struct sde_kms *sde_kms,
 		return;
 	}
 
-	if (!sde_kms->dev || !sde_kms->dev->dev_private) {
-		SDE_ERROR("drm device invalid\n");
-		return;
-	}
-
 	priv = sde_kms->dev->dev_private;
 
 	SDE_ATRACE_BEGIN("sde_kms_trigger_early_wakeup");
 	drm_for_each_encoder_mask(drm_enc, crtc->dev, crtc->state->encoder_mask)
-		sde_encoder_trigger_early_wakeup(drm_enc, priv);
+		sde_encoder_trigger_early_wakeup(drm_enc);
 
 	if (sde_kms->first_kickoff) {
 		sde_power_scale_reg_bus(&priv->phandle,

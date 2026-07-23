@@ -73,4 +73,3 @@ struct msm_fd_result {
 #define V4L2_CID_FD_WORK_MEMORY_FD       (V4L2_CID_PRIVATE_BASE + 6)
 
 #endif
-

@@ -225,7 +225,7 @@ struct dvb_tuner_ops {
 
 	struct dvb_tuner_info info;
 
-	int (*release)(struct dvb_frontend *fe);
+	void (*release)(struct dvb_frontend *fe);
 	int (*init)(struct dvb_frontend *fe);
 	int (*sleep)(struct dvb_frontend *fe);
 	int (*suspend)(struct dvb_frontend *fe);
@@ -323,7 +323,11 @@ struct dtv_frontend_properties;
  *
  * @info:		embedded struct dvb_tuner_info with tuner properties
  * @delsys:		Delivery systems supported by the frontend
- * @release:		callback function called when frontend is dettached.
+ * @detach:		callback function called when frontend is detached.
+ *			drivers should clean up, but not yet free the struct
+ *			dvb_frontend allocation.
+ * @release:		callback function called when frontend is ready to be
+ *			freed.
  *			drivers should free any allocated memory.
  * @release_sec:	callback function requesting that the Satelite Equipment
  *			Control (SEC) driver to release and free any memory
@@ -397,12 +401,18 @@ struct dtv_frontend_properties;
  * @search:		callback function used on some custom algo search algos.
  * @tuner_ops:		pointer to struct dvb_tuner_ops
  * @analog_ops:		pointer to struct analog_demod_ops
+ * @set_property:	callback function to allow the frontend to validade
+ *			incoming properties. Should not be used on new drivers.
+ * @get_property:	callback function to allow the frontend to override
+ *			outcoming properties. Should not be used on new drivers.
  */
 struct dvb_frontend_ops {
+
 	struct dvb_frontend_info info;
 
 	u8 delsys[MAX_DELSYS];
 
+	void (*detach)(struct dvb_frontend *fe);
 	void (*release)(struct dvb_frontend* fe);
 	void (*release_sec)(struct dvb_frontend* fe);
 
@@ -456,6 +466,9 @@ struct dvb_frontend_ops {
 
 	struct dvb_tuner_ops tuner_ops;
 	struct analog_demod_ops analog_ops;
+
+	int (*set_property)(struct dvb_frontend* fe, struct dtv_property* tvp);
+	int (*get_property)(struct dvb_frontend* fe, struct dtv_property* tvp);
 };
 
 #ifdef __DVB_CORE__
@@ -615,6 +628,11 @@ struct dtv_frontend_properties {
 	struct dtv_fe_stats	post_bit_count;
 	struct dtv_fe_stats	block_error;
 	struct dtv_fe_stats	block_count;
+
+	/* private: */
+	/* Cache State */
+	u32			state;
+
 };
 
 #define DVB_FE_NO_EXIT  0
@@ -625,6 +643,8 @@ struct dtv_frontend_properties {
 /**
  * struct dvb_frontend - Frontend structure to be used on drivers.
  *
+ * @refcount:		refcount to keep track of struct dvb_frontend
+ *			references
  * @ops:		embedded struct dvb_frontend_ops
  * @dvb:		pointer to struct dvb_adapter
  * @demodulator_priv:	demod private data
@@ -642,6 +662,7 @@ struct dtv_frontend_properties {
  */
 
 struct dvb_frontend {
+	struct kref refcount;
 	struct dvb_frontend_ops ops;
 	struct dvb_adapter *dvb;
 	void *demodulator_priv;

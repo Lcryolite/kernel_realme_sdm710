@@ -43,9 +43,9 @@
 
 #define DEBUG_SUBSYSTEM S_CLASS
 
-#include "../../include/obd_support.h"
-#include "../../include/lprocfs_status.h"
-#include "../../include/obd_class.h"
+#include <obd_support.h>
+#include <lprocfs_status.h>
+#include <obd_class.h>
 
 struct static_lustre_uintvalue_attr {
 	struct {
@@ -112,7 +112,7 @@ static ssize_t max_dirty_mb_store(struct kobject *kobj, struct attribute *attr,
 
 	val *= 1 << (20 - PAGE_SHIFT); /* convert to pages */
 
-	if (val > ((totalram_pages() / 10) * 9)) {
+	if (val > ((totalram_pages / 10) * 9)) {
 		/* Somebody wants to assign too much memory to dirty pages */
 		return -EINVAL;
 	}
@@ -151,7 +151,7 @@ static struct attribute *lustre_attrs[] = {
 	NULL,
 };
 
-static struct attribute_group lustre_attr_group = {
+static const struct attribute_group lustre_attr_group = {
 	.attrs = lustre_attrs,
 };
 

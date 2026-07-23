@@ -309,7 +309,7 @@ static int helene_write_regs(struct helene_priv *priv,
 
 	if (len + 1 > sizeof(buf)) {
 		dev_warn(&priv->i2c->dev,
-				"wr reg=%04x: len=%d vs %Zu is too big!\n",
+				"wr reg=%04x: len=%d vs %zu is too big!\n",
 				reg, len + 1, sizeof(buf));
 		return -E2BIG;
 	}
@@ -436,14 +436,13 @@ static int helene_init(struct dvb_frontend *fe)
 	return helene_leave_power_save(priv);
 }
 
-static int helene_release(struct dvb_frontend *fe)
+static void helene_release(struct dvb_frontend *fe)
 {
 	struct helene_priv *priv = fe->tuner_priv;
 
 	dev_dbg(&priv->i2c->dev, "%s()\n", __func__);
 	kfree(fe->tuner_priv);
 	fe->tuner_priv = NULL;
-	return 0;
 }
 
 static int helene_sleep(struct dvb_frontend *fe)
@@ -1008,7 +1007,7 @@ struct dvb_frontend *helene_attach_s(struct dvb_frontend *fe,
 			priv->i2c_address, priv->i2c);
 	return fe;
 }
-EXPORT_SYMBOL(helene_attach_s);
+EXPORT_SYMBOL_GPL(helene_attach_s);
 
 struct dvb_frontend *helene_attach(struct dvb_frontend *fe,
 		const struct helene_config *config,
@@ -1044,7 +1043,7 @@ struct dvb_frontend *helene_attach(struct dvb_frontend *fe,
 			priv->i2c_address, priv->i2c);
 	return fe;
 }
-EXPORT_SYMBOL(helene_attach);
+EXPORT_SYMBOL_GPL(helene_attach);
 
 MODULE_DESCRIPTION("Sony HELENE Sat/Ter tuner driver");
 MODULE_AUTHOR("Abylay Ospan <aospan@netup.ru>");

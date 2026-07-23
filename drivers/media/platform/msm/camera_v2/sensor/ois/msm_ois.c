@@ -218,8 +218,9 @@ static int32_t msm_ois_write_settings(struct msm_ois_ctrl_t *o_ctrl,
 				reg_setting->reg_data[3] = (uint8_t)
 					(settings[i].reg_data & 0x000000FF);
 				reg_setting->reg_data_size = 4;
-				rc = o_ctrl->i2c_client.i2c_func_tbl->
-					i2c_write_seq(&o_ctrl->i2c_client,
+				rc = o_ctrl->i2c_client
+					.i2c_func_tbl->i2c_write_seq(
+					&o_ctrl->i2c_client,
 					reg_setting->reg_addr,
 					reg_setting->reg_data,
 					reg_setting->reg_data_size);
@@ -352,8 +353,8 @@ static int32_t msm_ois_power_down(struct msm_ois_ctrl_t *o_ctrl)
 			gpio++) {
 			if (o_ctrl->gconf &&
 				o_ctrl->gconf->gpio_num_info &&
-				o_ctrl->gconf->
-					gpio_num_info->valid[gpio] == 1) {
+				o_ctrl->gconf->gpio_num_info->valid[gpio] ==
+				1) {
 				gpio_set_value_cansleep(
 					o_ctrl->gconf->gpio_num_info
 						->gpio_num[gpio],
@@ -362,8 +363,8 @@ static int32_t msm_ois_power_down(struct msm_ois_ctrl_t *o_ctrl)
 				if (o_ctrl->cam_pinctrl_status) {
 					rc = pinctrl_select_state(
 						o_ctrl->pinctrl_info.pinctrl,
-						o_ctrl->pinctrl_info.
-							gpio_state_suspend);
+						o_ctrl->pinctrl_info
+							.gpio_state_suspend);
 					if (rc < 0)
 						pr_err("ERR:%s:%d cannot set pin to suspend state: %d",
 							__func__, __LINE__, rc);
@@ -528,7 +529,7 @@ static int32_t msm_ois_config(struct msm_ois_ctrl_t *o_ctrl,
 			memcpy(&conf_array,
 				(void *)cdata->cfg.settings,
 				sizeof(struct msm_camera_i2c_seq_reg_setting));
-		} else
+		}
 #endif
 		if (copy_from_user(&conf_array,
 			(void __user *)cdata->cfg.settings,
@@ -563,9 +564,8 @@ static int32_t msm_ois_config(struct msm_ois_ctrl_t *o_ctrl,
 		}
 
 		conf_array.reg_setting = reg_setting;
-		rc = o_ctrl->i2c_client.i2c_func_tbl->
-			i2c_write_seq_table(&o_ctrl->i2c_client,
-			&conf_array);
+		rc = o_ctrl->i2c_client.i2c_func_tbl->i2c_write_seq_table(
+			&o_ctrl->i2c_client, &conf_array);
 		kfree(reg_setting);
 		break;
 	}
@@ -657,7 +657,8 @@ static struct msm_camera_i2c_fn_t msm_sensor_qup_func_tbl = {
 };
 
 static int msm_ois_close(struct v4l2_subdev *sd,
-	struct v4l2_subdev_fh *fh) {
+	struct v4l2_subdev_fh *fh)
+{
 	int rc = 0;
 	struct msm_ois_ctrl_t *o_ctrl =  v4l2_get_subdevdata(sd);
 
@@ -785,7 +786,7 @@ static int32_t msm_ois_i2c_probe(struct i2c_client *client,
 	CDBG("Enter\n");
 
 	if (client == NULL) {
-		pr_err("msm_ois_i2c_probe: client is null\n");
+		pr_err("%s : client is null\n", __func__);
 		return -EINVAL;
 	}
 
@@ -834,7 +835,7 @@ static int32_t msm_ois_i2c_probe(struct i2c_client *client,
 	ois_ctrl_t->msm_sd.close_seq = MSM_SD_CLOSE_2ND_CATEGORY | 0x2;
 	msm_sd_register(&ois_ctrl_t->msm_sd);
 	ois_ctrl_t->ois_state = OIS_DISABLE_STATE;
-	pr_info("msm_ois_i2c_probe: succeeded\n");
+	pr_info("%s : succeeded\n", __func__);
 	CDBG("Exit\n");
 
 probe_failure:
@@ -882,8 +883,8 @@ static long msm_ois_subdev_do_ioctl(
 			ois_data.cfg.set_info.ois_params.i2c_data_type =
 				u32->cfg.set_info.ois_params.i2c_data_type;
 			ois_data.cfg.set_info.ois_params.settings =
-				compat_ptr(u32->cfg.set_info.ois_params.
-				settings);
+				compat_ptr(u32->cfg.set_info.ois_params
+				.settings);
 			parg = &ois_data;
 			break;
 		case CFG_OIS_I2C_WRITE_SEQ_TABLE:
@@ -909,6 +910,7 @@ static long msm_ois_subdev_do_ioctl(
 				(void __user *)
 				compat_ptr(settings32.reg_setting),
 				sizeof(struct msm_camera_i2c_seq_reg_array))) {
+				kfree(settings.reg_setting);
 				pr_err("%s:%d failed\n", __func__, __LINE__);
 				return -EFAULT;
 			}
@@ -1048,6 +1050,7 @@ static int32_t msm_ois_platform_probe(struct platform_device *pdev)
 	return rc;
 release_memory:
 	kfree(msm_ois_t->oboard_info);
+	kfree(msm_ois_t->gconf);
 	kfree(msm_ois_t);
 	return rc;
 }

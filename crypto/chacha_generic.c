@@ -12,10 +12,9 @@
 
 #include <asm/unaligned.h>
 #include <crypto/algapi.h>
-#include <linux/crypto.h>
-#include <linux/kernel.h>
-#include <linux/module.h>
 #include <crypto/chacha.h>
+#include <crypto/internal/skcipher.h>
+#include <linux/module.h>
 
 static void chacha_docrypt(u32 *state, u8 *dst, const u8 *src,
 			   unsigned int bytes, int nrounds)
@@ -38,31 +37,26 @@ static void chacha_docrypt(u32 *state, u8 *dst, const u8 *src,
 	}
 }
 
-static int chacha_stream_xor(struct blkcipher_desc *desc, struct scatterlist *dst,
-			     struct scatterlist *src, unsigned int nbytes,
+static int chacha_stream_xor(struct skcipher_request *req,
 			     struct chacha_ctx *ctx, u8 *iv)
 {
-	struct blkcipher_walk walk;
+	struct skcipher_walk walk;
 	u32 state[16];
 	int err;
 
-	blkcipher_walk_init(&walk, dst, src, nbytes);
-	err = blkcipher_walk_virt_block(desc, &walk, CHACHA_BLOCK_SIZE);
+	err = skcipher_walk_virt(&walk, req, false);
 
 	crypto_chacha_init(state, ctx, iv);
 
-	while (walk.nbytes >= CHACHA_BLOCK_SIZE) {
-		chacha_docrypt(state, walk.dst.virt.addr, walk.src.virt.addr,
-			       rounddown(walk.nbytes, CHACHA_BLOCK_SIZE),
-			       ctx->nrounds);
-		err = blkcipher_walk_done(desc, &walk,
-					  walk.nbytes % CHACHA_BLOCK_SIZE);
-	}
+	while (walk.nbytes > 0) {
+		unsigned int nbytes = walk.nbytes;
 
-	if (walk.nbytes) {
+		if (nbytes < walk.total)
+			nbytes = round_down(nbytes, walk.stride);
+
 		chacha_docrypt(state, walk.dst.virt.addr, walk.src.virt.addr,
-			       walk.nbytes, ctx->nrounds);
-		err = blkcipher_walk_done(desc, &walk, 0);
+			       nbytes, ctx->nrounds);
+		err = skcipher_walk_done(&walk, walk.nbytes - nbytes);
 	}
 
 	return err;
@@ -89,10 +83,10 @@ void crypto_chacha_init(u32 *state, struct chacha_ctx *ctx, u8 *iv)
 }
 EXPORT_SYMBOL_GPL(crypto_chacha_init);
 
-static int chacha_setkey(struct crypto_tfm *tfm, const u8 *key,
+static int chacha_setkey(struct crypto_skcipher *tfm, const u8 *key,
 			 unsigned int keysize, int nrounds)
 {
-	struct chacha_ctx *ctx = crypto_tfm_ctx(tfm);
+	struct chacha_ctx *ctx = crypto_skcipher_ctx(tfm);
 	int i;
 
 	if (keysize != CHACHA_KEY_SIZE)
@@ -105,128 +99,108 @@ static int chacha_setkey(struct crypto_tfm *tfm, const u8 *key,
 	return 0;
 }
 
-int crypto_chacha20_setkey(struct crypto_tfm *tfm, const u8 *key,
+int crypto_chacha20_setkey(struct crypto_skcipher *tfm, const u8 *key,
 			   unsigned int keysize)
 {
 	return chacha_setkey(tfm, key, keysize, 20);
 }
 EXPORT_SYMBOL_GPL(crypto_chacha20_setkey);
 
-int crypto_chacha12_setkey(struct crypto_tfm *tfm, const u8 *key,
+int crypto_chacha12_setkey(struct crypto_skcipher *tfm, const u8 *key,
 			   unsigned int keysize)
 {
 	return chacha_setkey(tfm, key, keysize, 12);
 }
 EXPORT_SYMBOL_GPL(crypto_chacha12_setkey);
 
-int crypto_chacha_crypt(struct blkcipher_desc *desc, struct scatterlist *dst,
-			struct scatterlist *src, unsigned int nbytes)
+int crypto_chacha_crypt(struct skcipher_request *req)
 {
-	struct chacha_ctx *ctx = crypto_blkcipher_ctx(desc->tfm);
-	u8 *iv = desc->info;
+	struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(req);
+	struct chacha_ctx *ctx = crypto_skcipher_ctx(tfm);
 
-	return chacha_stream_xor(desc, dst, src, nbytes, ctx, iv);
+	return chacha_stream_xor(req, ctx, req->iv);
 }
 EXPORT_SYMBOL_GPL(crypto_chacha_crypt);
 
-int crypto_xchacha_crypt(struct blkcipher_desc *desc, struct scatterlist *dst,
-			 struct scatterlist *src, unsigned int nbytes)
+int crypto_xchacha_crypt(struct skcipher_request *req)
 {
-	struct chacha_ctx *ctx = crypto_blkcipher_ctx(desc->tfm);
-	u8 *iv = desc->info;
+	struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(req);
+	struct chacha_ctx *ctx = crypto_skcipher_ctx(tfm);
 	struct chacha_ctx subctx;
 	u32 state[16];
 	u8 real_iv[16];
 
 	/* Compute the subkey given the original key and first 128 nonce bits */
-	crypto_chacha_init(state, ctx, iv);
+	crypto_chacha_init(state, ctx, req->iv);
 	hchacha_block(state, subctx.key, ctx->nrounds);
 	subctx.nrounds = ctx->nrounds;
 
 	/* Build the real IV */
-	memcpy(&real_iv[0], iv + 24, 8); /* stream position */
-	memcpy(&real_iv[8], iv + 16, 8); /* remaining 64 nonce bits */
+	memcpy(&real_iv[0], req->iv + 24, 8); /* stream position */
+	memcpy(&real_iv[8], req->iv + 16, 8); /* remaining 64 nonce bits */
 
 	/* Generate the stream and XOR it with the data */
-	return chacha_stream_xor(desc, dst, src, nbytes, &subctx, real_iv);
+	return chacha_stream_xor(req, &subctx, real_iv);
 }
 EXPORT_SYMBOL_GPL(crypto_xchacha_crypt);
 
-static struct crypto_alg algs[] = {
+static struct skcipher_alg algs[] = {
 	{
-		.cra_name		= "chacha20",
-		.cra_driver_name	= "chacha20-generic",
-		.cra_priority		= 100,
-		.cra_flags		= CRYPTO_ALG_TYPE_BLKCIPHER,
-		.cra_blocksize		= 1,
-		.cra_type		= &crypto_blkcipher_type,
-		.cra_ctxsize		= sizeof(struct chacha_ctx),
-		.cra_alignmask		= sizeof(u32) - 1,
-		.cra_module		= THIS_MODULE,
-		.cra_u			= {
-			.blkcipher = {
-				.min_keysize	= CHACHA_KEY_SIZE,
-				.max_keysize	= CHACHA_KEY_SIZE,
-				.ivsize		= CHACHA_IV_SIZE,
-				.geniv		= "seqiv",
-				.setkey		= crypto_chacha20_setkey,
-				.encrypt	= crypto_chacha_crypt,
-				.decrypt	= crypto_chacha_crypt,
-			},
-		},
+		.base.cra_name		= "chacha20",
+		.base.cra_driver_name	= "chacha20-generic",
+		.base.cra_priority	= 100,
+		.base.cra_blocksize	= 1,
+		.base.cra_ctxsize	= sizeof(struct chacha_ctx),
+		.base.cra_module	= THIS_MODULE,
+
+		.min_keysize		= CHACHA_KEY_SIZE,
+		.max_keysize		= CHACHA_KEY_SIZE,
+		.ivsize			= CHACHA_IV_SIZE,
+		.chunksize		= CHACHA_BLOCK_SIZE,
+		.setkey			= crypto_chacha20_setkey,
+		.encrypt		= crypto_chacha_crypt,
+		.decrypt		= crypto_chacha_crypt,
 	}, {
-		.cra_name		= "xchacha20",
-		.cra_driver_name	= "xchacha20-generic",
-		.cra_priority		= 100,
-		.cra_flags		= CRYPTO_ALG_TYPE_BLKCIPHER,
-		.cra_blocksize		= 1,
-		.cra_type		= &crypto_blkcipher_type,
-		.cra_ctxsize		= sizeof(struct chacha_ctx),
-		.cra_alignmask		= sizeof(u32) - 1,
-		.cra_module		= THIS_MODULE,
-		.cra_u			= {
-			.blkcipher = {
-				.min_keysize	= CHACHA_KEY_SIZE,
-				.max_keysize	= CHACHA_KEY_SIZE,
-				.ivsize		= XCHACHA_IV_SIZE,
-				.geniv		= "seqiv",
-				.setkey		= crypto_chacha20_setkey,
-				.encrypt	= crypto_xchacha_crypt,
-				.decrypt	= crypto_xchacha_crypt,
-			},
-		},
+		.base.cra_name		= "xchacha20",
+		.base.cra_driver_name	= "xchacha20-generic",
+		.base.cra_priority	= 100,
+		.base.cra_blocksize	= 1,
+		.base.cra_ctxsize	= sizeof(struct chacha_ctx),
+		.base.cra_module	= THIS_MODULE,
+
+		.min_keysize		= CHACHA_KEY_SIZE,
+		.max_keysize		= CHACHA_KEY_SIZE,
+		.ivsize			= XCHACHA_IV_SIZE,
+		.chunksize		= CHACHA_BLOCK_SIZE,
+		.setkey			= crypto_chacha20_setkey,
+		.encrypt		= crypto_xchacha_crypt,
+		.decrypt		= crypto_xchacha_crypt,
 	}, {
-		.cra_name		= "xchacha12",
-		.cra_driver_name	= "xchacha12-generic",
-		.cra_priority		= 100,
-		.cra_flags		= CRYPTO_ALG_TYPE_BLKCIPHER,
-		.cra_blocksize		= 1,
-		.cra_type		= &crypto_blkcipher_type,
-		.cra_ctxsize		= sizeof(struct chacha_ctx),
-		.cra_alignmask		= sizeof(u32) - 1,
-		.cra_module		= THIS_MODULE,
-		.cra_u			= {
-			.blkcipher = {
-				.min_keysize	= CHACHA_KEY_SIZE,
-				.max_keysize	= CHACHA_KEY_SIZE,
-				.ivsize		= XCHACHA_IV_SIZE,
-				.geniv		= "seqiv",
-				.setkey		= crypto_chacha12_setkey,
-				.encrypt	= crypto_xchacha_crypt,
-				.decrypt	= crypto_xchacha_crypt,
-			},
-		},
-	},
+		.base.cra_name		= "xchacha12",
+		.base.cra_driver_name	= "xchacha12-generic",
+		.base.cra_priority	= 100,
+		.base.cra_blocksize	= 1,
+		.base.cra_ctxsize	= sizeof(struct chacha_ctx),
+		.base.cra_module	= THIS_MODULE,
+
+		.min_keysize		= CHACHA_KEY_SIZE,
+		.max_keysize		= CHACHA_KEY_SIZE,
+		.ivsize			= XCHACHA_IV_SIZE,
+		.chunksize		= CHACHA_BLOCK_SIZE,
+		.setkey			= crypto_chacha12_setkey,
+		.encrypt		= crypto_xchacha_crypt,
+		.decrypt		= crypto_xchacha_crypt,
+	}
 };
 
 static int __init chacha_generic_mod_init(void)
 {
-	return crypto_register_algs(algs, ARRAY_SIZE(algs));
+	return crypto_register_skciphers(algs, ARRAY_SIZE(algs));
 }
 
 static void __exit chacha_generic_mod_fini(void)
 {
-	crypto_unregister_algs(algs, ARRAY_SIZE(algs));
+	crypto_unregister_skciphers(algs, ARRAY_SIZE(algs));
 }
 
 module_init(chacha_generic_mod_init);

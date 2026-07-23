@@ -41,11 +41,10 @@ struct tda826x_priv {
 	u32 frequency;
 };
 
-static int tda826x_release(struct dvb_frontend *fe)
+static void tda826x_release(struct dvb_frontend *fe)
 {
 	kfree(fe->tuner_priv);
 	fe->tuner_priv = NULL;
-	return 0;
 }
 
 static int tda826x_sleep(struct dvb_frontend *fe)
@@ -178,7 +177,7 @@ struct dvb_frontend *tda826x_attach(struct dvb_frontend *fe, int addr, struct i2
 
 	return fe;
 }
-EXPORT_SYMBOL(tda826x_attach);
+EXPORT_SYMBOL_GPL(tda826x_attach);
 
 module_param(debug, int, 0644);
 MODULE_PARM_DESC(debug, "Turn on/off frontend debugging (default:off).");

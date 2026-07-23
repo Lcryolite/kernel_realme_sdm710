@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -17,8 +17,6 @@
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/regulator/consumer.h>
-#include <linux/ion.h>
-#include <linux/msm_ion.h>
 #include <linux/delay.h>
 #include <linux/wait.h>
 #include <linux/of.h>
@@ -293,8 +291,8 @@ static int sde_rotator_queue_setup(struct vb2_queue *q,
 	case V4L2_BUF_TYPE_VIDEO_OUTPUT:
 		ctx->nbuf_out = *num_buffers;
 		kfree(ctx->vbinfo_out);
-		ctx->vbinfo_out = kzalloc(sizeof(struct sde_rotator_vbinfo) *
-					ctx->nbuf_out, GFP_KERNEL);
+		ctx->vbinfo_out = kcalloc(ctx->nbuf_out,
+				sizeof(struct sde_rotator_vbinfo), GFP_KERNEL);
 		if (!ctx->vbinfo_out)
 			return -ENOMEM;
 		for (i = 0; i < ctx->nbuf_out; i++) {
@@ -306,8 +304,8 @@ static int sde_rotator_queue_setup(struct vb2_queue *q,
 	case V4L2_BUF_TYPE_VIDEO_CAPTURE:
 		ctx->nbuf_cap = *num_buffers;
 		kfree(ctx->vbinfo_cap);
-		ctx->vbinfo_cap = kzalloc(sizeof(struct sde_rotator_vbinfo) *
-					ctx->nbuf_cap, GFP_KERNEL);
+		ctx->vbinfo_cap = kcalloc(ctx->nbuf_cap,
+				sizeof(struct sde_rotator_vbinfo), GFP_KERNEL);
 		if (!ctx->vbinfo_cap)
 			return -ENOMEM;
 		for (i = 0; i < ctx->nbuf_cap; i++) {
@@ -438,6 +436,33 @@ static int sde_rotator_start_streaming(struct vb2_queue *q, unsigned int count)
 }
 
 /*
+ * Check if done handler is submitted before continuing with
+ * the stop streaming request so that mismatch between
+ * hardware and software timestamps can be avoided.
+ */
+static bool sde_rot_check_for_flush_ts(struct sde_rot_mgr *mgr,
+	struct sde_rot_file_private *private)
+{
+	struct sde_rot_entry_container *req, *req_next;
+	struct sde_rot_entry *entry;
+	ktime_t current_ts;
+	int i;
+
+	current_ts = ktime_get();
+	list_for_each_entry_safe(req, req_next, &private->req_list, list)
+		for (i = 0; i < req->count; i++) {
+			entry = req->entries + i;
+			if ((entry->item.ts) &&
+				ktime_to_ms(ktime_sub(current_ts,
+				entry->item.ts[SDE_ROTATOR_TS_FLUSH])) <
+				SDE_ROTATOR_STREAM_OFF_TIMEOUT)
+				return false;
+		}
+
+	return true;
+}
+
+/*
  * sde_rotator_stop_streaming - vb2_ops stop_streaming callback.
  * @q: Pointer to vb2 queue struct.
  *
@@ -457,6 +482,8 @@ static void sde_rotator_stop_streaming(struct vb2_queue *q)
 			ctx->session_id, q->type,
 			!list_empty(&ctx->pending_list));
 	ctx->abort_pending = 1;
+
+wait_for_completion:
 	mutex_unlock(q->lock);
 	ret = wait_event_timeout(ctx->wait_queue,
 			list_empty(&ctx->pending_list),
@@ -471,6 +498,13 @@ static void sde_rotator_stop_streaming(struct vb2_queue *q)
 				!list_empty(&ctx->pending_list),
 				SDE_ROT_EVTLOG_ERROR);
 		sde_rot_mgr_lock(rot_dev->mgr);
+		ret = sde_rot_check_for_flush_ts(rot_dev->mgr, ctx->private);
+		if (!ret) {
+			sde_rot_mgr_unlock(rot_dev->mgr);
+			SDEDEV_ERR(rot_dev->dev, "wait again for %d ms\n",
+				rot_dev->streamoff_timeout);
+			goto wait_for_completion;
+		}
 		sde_rotator_cancel_all_requests(rot_dev->mgr, ctx->private);
 		sde_rot_mgr_unlock(rot_dev->mgr);
 		list_for_each_safe(curr, next, &ctx->pending_list) {
@@ -551,7 +585,6 @@ static void *sde_rotator_get_userptr(struct device *dev,
 	struct sde_rotator_ctx *ctx = (struct sde_rotator_ctx *)dev;
 	struct sde_rotator_device *rot_dev = ctx->rot_dev;
 	struct sde_rotator_buf_handle *buf;
-	struct ion_client *iclient = rot_dev->mdata->iclient;
 
 	buf = kzalloc(sizeof(*buf), GFP_KERNEL);
 	if (!buf)
@@ -561,32 +594,18 @@ static void *sde_rotator_get_userptr(struct device *dev,
 	buf->secure = ctx->secure || ctx->secure_camera;
 	buf->ctx = ctx;
 	buf->rot_dev = rot_dev;
-	if (ctx->secure_camera) {
-		buf->handle = ion_import_dma_buf_fd(iclient,
-				buf->fd);
-		if (IS_ERR_OR_NULL(buf->handle)) {
-			SDEDEV_ERR(rot_dev->dev,
-				"fail get ion_handler fd:%d r:%ld\n",
-				buf->fd, PTR_ERR(buf->buffer));
-			goto error_buf_get;
-		}
-		SDEDEV_DBG(rot_dev->dev,
-				"get ion_handle s:%d fd:%d buf:%pad\n",
-				buf->ctx->session_id,
-				buf->fd, &buf->handle);
-	} else {
-		buf->buffer = dma_buf_get(buf->fd);
-		if (IS_ERR_OR_NULL(buf->buffer)) {
-			SDEDEV_ERR(rot_dev->dev,
-				"fail get dmabuf fd:%d r:%ld\n",
-				buf->fd, PTR_ERR(buf->buffer));
-			goto error_buf_get;
-		}
-		SDEDEV_DBG(rot_dev->dev,
-				"get dmabuf s:%d fd:%d buf:%pad\n",
-				buf->ctx->session_id,
-				buf->fd, &buf->buffer);
+	buf->size = size;
+	buf->buffer = dma_buf_get(buf->fd);
+	if (IS_ERR_OR_NULL(buf->buffer)) {
+		SDEDEV_ERR(rot_dev->dev,
+			"fail get dmabuf fd:%d r:%ld\n",
+			buf->fd, PTR_ERR(buf->buffer));
+		goto error_buf_get;
 	}
+	SDEDEV_DBG(rot_dev->dev,
+			"get dmabuf s:%d fd:%d buf:%pad\n",
+			buf->ctx->session_id,
+			buf->fd, &buf->buffer);
 
 	return buf;
 error_buf_get:
@@ -1662,6 +1681,7 @@ int sde_rotator_inline_commit(void *handle, struct sde_rotator_inline_cmd *cmd,
 	struct sde_rotator_request *request = NULL;
 	struct sde_rot_entry_container *req = NULL;
 	struct sde_rotation_config rotcfg;
+	struct sde_rot_trace_entry rot_trace;
 	ktime_t *ts;
 	u32 flags = 0;
 	int i, ret = 0;
@@ -1862,6 +1882,28 @@ int sde_rotator_inline_commit(void *handle, struct sde_rotator_inline_cmd *cmd,
 		}
 		req->retire_kw = ctx->work_queue.rot_kw;
 		req->retire_work = &request->retire_work;
+
+		/* Set values to pass to trace */
+		rot_trace.wb_idx = req->entries[0].item.wb_idx;
+		rot_trace.flags = req->entries[0].item.flags;
+		rot_trace.input_format = req->entries[0].item.input.format;
+		rot_trace.input_width = req->entries[0].item.input.width;
+		rot_trace.input_height = req->entries[0].item.input.height;
+		rot_trace.src_x = req->entries[0].item.src_rect.x;
+		rot_trace.src_y = req->entries[0].item.src_rect.y;
+		rot_trace.src_w = req->entries[0].item.src_rect.w;
+		rot_trace.src_h = req->entries[0].item.src_rect.h;
+		rot_trace.output_format = req->entries[0].item.output.format;
+		rot_trace.output_width = req->entries[0].item.output.width;
+		rot_trace.output_height = req->entries[0].item.output.height;
+		rot_trace.dst_x = req->entries[0].item.dst_rect.x;
+		rot_trace.dst_y = req->entries[0].item.dst_rect.y;
+		rot_trace.dst_w = req->entries[0].item.dst_rect.w;
+		rot_trace.dst_h = req->entries[0].item.dst_rect.h;
+
+
+		trace_rot_entry_fence(
+			ctx->session_id, cmd->sequence_id, &rot_trace);
 
 		ret = sde_rotator_handle_request_common(
 				rot_dev->mgr, ctx->private, req);
@@ -2361,7 +2403,7 @@ static int sde_rotator_qbuf(struct file *file, void *fh,
 		ctx->vbinfo_cap[idx].qbuf_ts = ktime_get();
 		ctx->vbinfo_cap[idx].dqbuf_ts = NULL;
 		SDEDEV_DBG(ctx->rot_dev->dev,
-				"create buffer fence s:%d.%u i:%d f:%p\n",
+				"create buffer fence s:%d.%u i:%d f:%pK\n",
 				ctx->session_id,
 				ctx->vbinfo_cap[idx].fence_ts,
 				idx,
@@ -3050,7 +3092,7 @@ static void sde_rotator_retire_handler(struct kthread_work *work)
 
 		if (!src_buf || !dst_buf) {
 			SDEDEV_ERR(rot_dev->dev,
-				"null buffer in retire s:%d sb:%p db:%p\n",
+				"null buffer in retire s:%d sb:%pK db:%pK\n",
 				ctx->session_id,
 				src_buf, dst_buf);
 		}
@@ -3083,6 +3125,7 @@ static int sde_rotator_process_buffers(struct sde_rotator_ctx *ctx,
 	struct sde_rotator_statistics *stats = &rot_dev->stats;
 	struct sde_rotator_vbinfo *vbinfo_out;
 	struct sde_rotator_vbinfo *vbinfo_cap;
+	struct sde_rot_trace_entry rot_trace;
 	ktime_t *ts;
 	int ret;
 
@@ -3124,6 +3167,28 @@ static int sde_rotator_process_buffers(struct sde_rotator_ctx *ctx,
 
 	ts[SDE_ROTATOR_TS_FENCE] = ktime_get();
 
+	/* Set values to pass to trace */
+	rot_trace.wb_idx = ctx->fh.prio;
+	rot_trace.flags = (ctx->rotate << 0) | (ctx->hflip << 8) |
+			(ctx->hflip << 9) | (ctx->secure << 10);
+	rot_trace.input_format = ctx->format_out.fmt.pix.pixelformat;
+	rot_trace.input_width = ctx->format_out.fmt.pix.width;
+	rot_trace.input_height = ctx->format_out.fmt.pix.height;
+	rot_trace.src_x = ctx->crop_out.left;
+	rot_trace.src_y = ctx->crop_out.top;
+	rot_trace.src_w = ctx->crop_out.width;
+	rot_trace.src_h = ctx->crop_out.height;
+	rot_trace.output_format = ctx->format_cap.fmt.pix.pixelformat;
+	rot_trace.output_width = ctx->format_cap.fmt.pix.width;
+	rot_trace.output_height = ctx->format_cap.fmt.pix.height;
+	rot_trace.dst_x = ctx->crop_cap.left;
+	rot_trace.dst_y = ctx->crop_cap.top;
+	rot_trace.dst_w = ctx->crop_cap.width;
+	rot_trace.dst_h = ctx->crop_cap.height;
+
+	trace_rot_entry_fence(
+		ctx->session_id, vbinfo_cap->fence_ts, &rot_trace);
+
 	if (vbinfo_out->fence) {
 		sde_rot_mgr_unlock(rot_dev->mgr);
 		mutex_unlock(&rot_dev->lock);
@@ -3154,15 +3219,15 @@ static int sde_rotator_process_buffers(struct sde_rotator_ctx *ctx,
 	/* fill in item work structure */
 	sde_rotator_get_item_from_ctx(ctx, &item);
 	item.flags |= SDE_ROTATION_EXT_DMA_BUF;
+	item.input.planes[0].fd = src_handle->fd;
 	item.input.planes[0].buffer = src_handle->buffer;
-	item.input.planes[0].handle = src_handle->handle;
 	item.input.planes[0].offset = src_handle->addr;
 	item.input.planes[0].stride = ctx->format_out.fmt.pix.bytesperline;
 	item.input.plane_count = 1;
 	item.input.fence = NULL;
 	item.input.comp_ratio = vbinfo_out->comp_ratio;
+	item.output.planes[0].fd = dst_handle->fd;
 	item.output.planes[0].buffer = dst_handle->buffer;
-	item.output.planes[0].handle = dst_handle->handle;
 	item.output.planes[0].offset = dst_handle->addr;
 	item.output.planes[0].stride = ctx->format_cap.fmt.pix.bytesperline;
 	item.output.plane_count = 1;
@@ -3323,7 +3388,7 @@ static void sde_rotator_device_run(void *priv)
 			dst_buf = v4l2_m2m_dst_buf_remove(ctx->fh.m2m_ctx);
 			if (!src_buf || !dst_buf) {
 				SDEDEV_ERR(rot_dev->dev,
-					"null buffer in device run s:%d sb:%p db:%p\n",
+					"null buffer in device run s:%d sb:%pK db:%pK\n",
 					ctx->session_id,
 					src_buf, dst_buf);
 				goto error_process_buffers;

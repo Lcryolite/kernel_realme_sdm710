@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2019 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -652,7 +652,7 @@ int msm_camera_get_dt_power_setting_data(struct device_node *of_node,
 		need_reverse = 1;
 
 	power_info->power_down_setting =
-		kzalloc(sizeof(*ps) * size, GFP_KERNEL);
+		kcalloc(size, sizeof(*ps), GFP_KERNEL);
 
 	if (!power_info->power_down_setting) {
 		pr_err("%s failed %d\n", __func__, __LINE__);
@@ -1276,8 +1276,8 @@ static int msm_camera_disable_i2c_mux(struct msm_camera_i2c_conf *i2c_conf)
 }
 
 int msm_camera_pinctrl_init(
-	struct msm_pinctrl_info *sensor_pctrl, struct device *dev) {
-
+	struct msm_pinctrl_info *sensor_pctrl, struct device *dev)
+{
 	sensor_pctrl->pinctrl = devm_pinctrl_get(dev);
 	if (IS_ERR_OR_NULL(sensor_pctrl->pinctrl)) {
 		pr_err("%s:%d Getting pinctrl handle failed\n",
@@ -1304,8 +1304,8 @@ int msm_camera_pinctrl_init(
 }
 
 static int msm_cam_sensor_handle_reg_gpio(int seq_val,
-	struct msm_camera_gpio_conf *gconf, int val) {
-
+	struct msm_camera_gpio_conf *gconf, int val)
+{
 	int gpio_offset = -1;
 
 	if (!gconf) {
@@ -1349,7 +1349,7 @@ static int msm_cam_sensor_handle_reg_gpio(int seq_val,
 	CDBG("%s: %d GPIO offset: %d, seq_val: %d\n", __func__, __LINE__,
 		gpio_offset, seq_val);
 
-	if ((gconf->gpio_num_info->valid[gpio_offset] == 1)) {
+	if (gconf->gpio_num_info->valid[gpio_offset] == 1) {
 		gpio_set_value_cansleep(
 			gconf->gpio_num_info->gpio_num
 			[gpio_offset], val);
@@ -1460,20 +1460,21 @@ int msm_camera_power_up(struct msm_camera_power_ctrl_t *ctrl,
 		switch (power_setting->seq_type) {
 		case SENSOR_CLK:
 			if (power_setting->seq_val >= ctrl->clk_info_size) {
-				pr_err_ratelimited("%s clk index %d >= max %zu\n",
-				  __func__, power_setting->seq_val,
-				ctrl->clk_info_size);
+				pr_err_ratelimited("%s clk %d >=max %zu\n"
+					, __func__,
+					power_setting->seq_val,
+					ctrl->clk_info_size);
 				goto power_up_failed;
 			}
 			if (power_setting->config_val)
-				ctrl->clk_info[power_setting->seq_val].
-					clk_rate = power_setting->config_val;
+				ctrl->clk_info[power_setting->seq_val]
+					.clk_rate = power_setting->config_val;
 			rc = msm_camera_clk_enable(ctrl->dev,
 				ctrl->clk_info, ctrl->clk_ptr,
 				ctrl->clk_info_size, true);
 			if (rc < 0) {
 				pr_err_ratelimited("%s: clk enable failed\n",
-				 __func__);
+					__func__);
 				goto power_up_failed;
 			}
 			break;
@@ -1752,4 +1753,3 @@ int msm_camera_power_down(struct msm_camera_power_ctrl_t *ctrl,
 	CDBG("%s exit\n", __func__);
 	return 0;
 }
-

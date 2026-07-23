@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Regression1
  * Description:
@@ -193,11 +194,11 @@ void regression1_test(void)
 	long arg;
 
 	/* Regression #1 */
-	printf("running regression test 1, should finish in under a minute\n");
+	printv(1, "running regression test 1, should finish in under a minute\n");
 	nr_threads = 2;
 	pthread_barrier_init(&worker_barrier, NULL, nr_threads);
 
-	threads = malloc(nr_threads * sizeof(pthread_t *));
+	threads = malloc(nr_threads * sizeof(*threads));
 
 	for (i = 0; i < nr_threads; i++) {
 		arg = i;
@@ -216,5 +217,5 @@ void regression1_test(void)
 
 	free(threads);
 
-	printf("regression test 1, done\n");
+	printv(1, "regression test 1, done\n");
 }

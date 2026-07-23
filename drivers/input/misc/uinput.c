@@ -43,6 +43,8 @@
 #include <linux/input/mt.h>
 #include "../input-compat.h"
 
+static DEFINE_MUTEX(uinput_glb_mutex);
+
 static int uinput_dev_event(struct input_dev *dev,
 			    unsigned int type, unsigned int code, int value)
 {
@@ -99,14 +101,15 @@ static int uinput_request_reserve_slot(struct uinput_device *udev,
 					uinput_request_alloc_id(udev, request));
 }
 
-static void uinput_request_done(struct uinput_device *udev,
-				struct uinput_request *request)
+static void uinput_request_release_slot(struct uinput_device *udev,
+					unsigned int id)
 {
 	/* Mark slot as available */
-	udev->requests[request->id] = NULL;
-	wake_up(&udev->requests_waitq);
+	spin_lock(&udev->requests_lock);
+	udev->requests[id] = NULL;
+	spin_unlock(&udev->requests_lock);
 
-	complete(&request->done);
+	wake_up(&udev->requests_waitq);
 }
 
 static int uinput_request_send(struct uinput_device *udev,
@@ -139,20 +142,22 @@ static int uinput_request_send(struct uinput_device *udev,
 static int uinput_request_submit(struct uinput_device *udev,
 				 struct uinput_request *request)
 {
-	int error;
+	int retval;
 
-	error = uinput_request_reserve_slot(udev, request);
-	if (error)
-		return error;
+	retval = uinput_request_reserve_slot(udev, request);
+	if (retval)
+		return retval;
 
-	error = uinput_request_send(udev, request);
-	if (error) {
-		uinput_request_done(udev, request);
-		return error;
-	}
+	retval = uinput_request_send(udev, request);
+	if (retval)
+		goto out;
 
 	wait_for_completion(&request->done);
-	return request->retval;
+	retval = request->retval;
+
+ out:
+	uinput_request_release_slot(udev, request->id);
+	return retval;
 }
 
 /*
@@ -170,7 +175,7 @@ static void uinput_flush_requests(struct uinput_device *udev)
 		request = udev->requests[i];
 		if (request) {
 			request->retval = -ENODEV;
-			uinput_request_done(udev, request);
+			complete(&request->done);
 		}
 	}
 
@@ -687,9 +692,17 @@ static unsigned int uinput_poll(struct file *file, poll_table *wait)
 static int uinput_release(struct inode *inode, struct file *file)
 {
 	struct uinput_device *udev = file->private_data;
+	int retval;
+
+	retval = mutex_lock_interruptible(&uinput_glb_mutex);
+	if (retval)
+		return retval;
 
 	uinput_destroy_device(udev);
+	file->private_data = NULL;
 	kfree(udev);
+
+	mutex_unlock(&uinput_glb_mutex);
 
 	return 0;
 }
@@ -708,7 +721,6 @@ static int uinput_ff_upload_to_user(char __user *buffer,
 	if (in_compat_syscall()) {
 		struct uinput_ff_upload_compat ff_up_compat;
 
-		memset(&ff_up_compat, 0, sizeof(ff_up_compat));
 		ff_up_compat.request_id = ff_up->request_id;
 		ff_up_compat.retval = ff_up->retval;
 		/*
@@ -822,7 +834,7 @@ static long uinput_ioctl_handler(struct file *file, unsigned int cmd,
 				 unsigned long arg, void __user *p)
 {
 	int			retval;
-	struct uinput_device	*udev = file->private_data;
+	struct uinput_device	*udev;
 	struct uinput_ff_upload ff_up;
 	struct uinput_ff_erase  ff_erase;
 	struct uinput_request   *req;
@@ -830,9 +842,19 @@ static long uinput_ioctl_handler(struct file *file, unsigned int cmd,
 	const char		*name;
 	unsigned int		size;
 
-	retval = mutex_lock_interruptible(&udev->mutex);
+	retval = mutex_lock_interruptible(&uinput_glb_mutex);
 	if (retval)
 		return retval;
+
+	udev = file->private_data;
+	if (!udev) {
+		retval = -EINVAL;
+		goto unlock_glb_mutex;
+	}
+
+	retval = mutex_lock_interruptible(&udev->mutex);
+	if (retval)
+		goto unlock_glb_mutex;
 
 	if (!udev->dev) {
 		retval = uinput_allocate_device(udev);
@@ -973,7 +995,7 @@ static long uinput_ioctl_handler(struct file *file, unsigned int cmd,
 			}
 
 			req->retval = ff_up.retval;
-			uinput_request_done(udev, req);
+			complete(&req->done);
 			goto out;
 
 		case UI_END_FF_ERASE:
@@ -989,7 +1011,7 @@ static long uinput_ioctl_handler(struct file *file, unsigned int cmd,
 			}
 
 			req->retval = ff_erase.retval;
-			uinput_request_done(udev, req);
+			complete(&req->done);
 			goto out;
 	}
 
@@ -1012,8 +1034,12 @@ static long uinput_ioctl_handler(struct file *file, unsigned int cmd,
 	}
 
 	retval = -EINVAL;
+
  out:
 	mutex_unlock(&udev->mutex);
+
+ unlock_glb_mutex:
+	mutex_unlock(&uinput_glb_mutex);
 	return retval;
 }
 

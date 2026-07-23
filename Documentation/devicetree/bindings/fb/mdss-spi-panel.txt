@@ -1,6 +1,6 @@
 Qualcomm Technologies, Inc. mdss-spi-panel
 
-mdss-spi-panel is a SPI panel device which supports panels that
+mdss-spi-panel is a spi panel device which supports panels that
 are compatible with display serial interface specification.
 
 Required properties:
@@ -59,22 +59,21 @@ Optional properties:
 - qcom,mdss-spi-bl-max-level:		Specifies the max backlight level supported by the panel.
 					255 = default value.
 - qcom,mdss-spi-panel-framerate:	Specifies the frame rate for the panel.
+- qcom,mdss-spi-panel-vsync-per-te:	Specifies the number of how many TE will trigger a VSYNC.
 - qcom,esd-check-enabled:		Boolean used to enable ESD recovery feature.
 - qcom,mdss-spi-panel-status-check-mode:Specifies the panel status check method for ESD recovery.
-					"send_init_command" = send init code to recover panel status.
-					"reg_read" = Read register value to check the panel status.
-- qcom,mdss-spi-panel-status-reg:Unsigned 8bits integer value to specifies the value
-					of panel status register address.
-- qcom,mdss-spi-panel-status-read-length:Unsigned 8bits integer value that specifies
-					the expected read-back length of the panel register.
-- qcom,mdss-spi-panel-status-value:An unsigned 8bits integer araray that specifies the
-					values of the panel status register which is used to
-					check the panel status.
-					The size of this array is specified by
-					qcom,mdss-dsi-panel-status-read-length.
-
+					"send_init_command" = Regardless of panel status, direct send the panel
+					initial code to recover panel status
+					"reg_read" = Reads panel status register to check the panel status
+- qcom,mdss-spi-panel-status-reg:	Unsigned 8bits integer value that specifies the value of panel status register address.
+- qcom,mdss-spi-panel-status-read-length:
+					Unsigned 8bits integer value that specifies the expected read-back length of the
+					panel register.
+- qcom,mdss-spi-panel-status-value:	An unsigned 8bits integer araray that specifies the values of the panel status register
+					which is used to check the panel status. The size of this array
+					is specified by qcom,mdss-dsi-panel-status-read-length.
 Example:
-&mdss_mdp {
+&mdss_spi_display {
 	spi_gc9305_qvga_cmd: qcom,mdss_spi_gc9305_qvga_cmd {
 		qcom,mdss-spi-panel-name = "gc9305 qvga command mode spi panel";
 		qcom,mdss-spi-panel-destination = "display_1";
@@ -136,27 +135,29 @@ Example:
 	};
 };
 
-mdss-spi-display is a spi interface display which support send frame
-data and command to panel, compatible with SPI interface specification.
+mdss-spi-panel is a SPI interface panel which uses SPI protocol for data
+receive and send.
 
 Required properties:
-- compatible:	This property applies to SPI panels only.
-			compatible = "qcom,mdss-spi-display".
-- vdd-supply:	Phandle for vdd regulator device node.
-- vddio-supply:	Phandle for vdd-io regulator device node.
-- qcom,mdss-fb-map:	pHandle that specifies the framebuffer to which the interface is mapped.
-- qcom,mdss-mdp:	pHandle that specifies the mdss-mdp device.
-- qcom,panel-supply-entries:	A node that lists the elements of the supply used to
-				power the DSI panel. There can be more than one instance
-				of this binding, in which case the entry would be appended
-				with the supply entry index. For a detailed description
-				fields in the supply entry, refer to the qcom,ctrl-supply-entries
-				binding above.
-- qcom,platform-spi-dc-gpio: 	Pull down this gpio indicate current package is command,
-				Pull up this gpio indicate current package is parameter or pixels.
+- compatible: Must be "qcom,mdss-spi-panel"
+- vdd-supply: Phandle for vdd regulator device node.
+- vddio-supply: Phandle for vdd-io regulator device node.
+- qcom,panel-supply-entries: A node that lists the elements of the supply used to
+			    power the DSI panel. There can be more than one instance
+			    of this binding, in which case the entry would be appended
+			    with the supply entry index. For a detailed description of
+			    fields in the supply entry, refer to the qcom,ctrl-supply-entries
+			    binding above.
 
 Optional properties:
-- label:A string used to describe the controller used.
+- pwms:
+    Value type: <prop-encoded-array>
+    Definition: The PWM device (phandle) used for controlling backlight.
+- qcom,platform-spi-dc-gpio: Pull down this gpio indicate current package is command,
+        Pull up this gpio indicate current package is parameter or pixels.
+- qcom,platform-reset-gpio:             Specifies the panel reset gpio.
+- qcom,platform-te-gpio:                Specifies the gpio used for TE.
+- label: A string used to describe the controller used.
 	-- qcom,supply-name: name of the supply (vdd/vdda/vddio)
 	-- qcom,supply-min-voltage: minimum voltage level (uV)
 	-- qcom,supply-max-voltage: maximum voltage level (uV)
@@ -166,17 +167,17 @@ Optional properties:
 	-- qcom,supply-post-on-sleep: time to sleep (ms) after turning on
 	-- qcom,supply-pre-off-sleep: time to sleep (ms) before turning off
 	-- qcom,supply-post-off-sleep: time to sleep (ms) after turning off
-
 Example:
-	mdss_spi: qcom,mdss_spi {
-		compatible = "qcom,mdss-spi-display";
+	mdss_spi_panel: qcom,mdss_spi_panel {
+		compatible = "qcom,mdss-spi-panel";
 		label = "mdss spi panel";
 
-		qcom,mdss-fb-map = <&mdss_fb0>;
-		qcom,mdss-mdp = <&mdss_mdp>;
-		vdd-supply = <&pm8909_l17>;
-		vddio-supply = <&pm8909_l6>;
-		qcom,platform-spi-dc-gpio = <&msm_gpio 110 0>;
+		vdd-supply = <&pms405_l1>;
+		vddio-supply = <&pms405_l6>;
+		qcom,platform-te-gpio = <&tlmm 57 0>;
+		qcom,platform-reset-gpio = <&tlmm 42 0>;
+		qcom,platform-spi-dc-gpio = <&tlmm 39 0>;
+		pwms = <&pms405_l1 0 1000000>;
 
 		qcom,panel-supply-entries {
 			#address-cells = <1>;

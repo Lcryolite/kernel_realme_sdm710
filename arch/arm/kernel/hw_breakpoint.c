@@ -226,6 +226,18 @@ static int get_num_brps(void)
 	return core_has_mismatch_brps() ? brps - 1 : brps;
 }
 
+/* Determine if halting mode is enabled */
+static int halting_mode_enabled(void)
+{
+	u32 dscr;
+
+	ARM_DBG_READ(c0, c1, 0, dscr);
+	WARN_ONCE(dscr & ARM_DSCR_HDBGEN,
+	  "halting debug mode enabled. Unable to access hardware resources.\n");
+
+	return !!(dscr & ARM_DSCR_HDBGEN);
+}
+
 /*
  * In order to access the breakpoint/watchpoint control registers,
  * we must be running in debug monitor mode. Unfortunately, we can
@@ -631,7 +643,7 @@ int arch_validate_hwbkpt_settings(struct perf_event *bp)
 	info->address &= ~alignment_mask;
 	info->ctrl.len <<= offset;
 
-	if (is_default_overflow_handler(bp)) {
+	if (uses_default_overflow_handler(bp)) {
 		/*
 		 * Mismatch breakpoints are required for single-stepping
 		 * breakpoints.
@@ -803,7 +815,7 @@ static void watchpoint_handler(unsigned long addr, unsigned int fsr,
 		 * Otherwise, insert a temporary mismatch breakpoint so that
 		 * we can single-step over the watchpoint trigger.
 		 */
-		if (!is_default_overflow_handler(wp))
+		if (!uses_default_overflow_handler(wp))
 			continue;
 step:
 		enable_single_step(wp, instruction_pointer(regs));
@@ -816,7 +828,7 @@ step:
 		info->trigger = addr;
 		pr_debug("watchpoint fired: address = 0x%x\n", info->trigger);
 		perf_bp_event(wp, regs);
-		if (is_default_overflow_handler(wp))
+		if (uses_default_overflow_handler(wp))
 			enable_single_step(wp, instruction_pointer(regs));
 	}
 
@@ -891,7 +903,7 @@ static void breakpoint_handler(unsigned long unknown, struct pt_regs *regs)
 			info->trigger = addr;
 			pr_debug("breakpoint fired: address = 0x%x\n", addr);
 			perf_bp_event(bp, regs);
-			if (is_default_overflow_handler(bp))
+			if (uses_default_overflow_handler(bp))
 				enable_single_step(bp, addr);
 			goto unlock;
 		}
@@ -986,10 +998,21 @@ static bool core_has_os_save_restore(void)
 	}
 }
 
-static void reset_ctrl_regs(void *unused)
+static void reset_ctrl_regs(unsigned int cpu)
 {
-	int i, raw_num_brps, err = 0, cpu = smp_processor_id();
+	int i, raw_num_brps, err = 0;
 	u32 val;
+
+	/*
+	 * Bail out without clearing the breakpoint registers if halting
+	 * debug mode or monitor debug mode is enabled. Checking for monitor
+	 * debug mode here ensures we don't clear the breakpoint registers
+	 * across power collapse if save and restore code has already
+	 * preserved the debug register values or they weren't lost and
+	 * monitor mode was already enabled earlier.
+	 */
+	if (halting_mode_enabled() || monitor_mode_enabled())
+		return;
 
 	/*
 	 * v7 debug contains save and restore registers so that debug state
@@ -1081,25 +1104,20 @@ out_mdbgen:
 		cpumask_or(&debug_err_mask, &debug_err_mask, cpumask_of(cpu));
 }
 
-static int dbg_reset_notify(struct notifier_block *self,
-				      unsigned long action, void *cpu)
+static int dbg_reset_online(unsigned int cpu)
 {
-	if ((action & ~CPU_TASKS_FROZEN) == CPU_ONLINE)
-		smp_call_function_single((int)cpu, reset_ctrl_regs, NULL, 1);
-
-	return NOTIFY_OK;
+	local_irq_disable();
+	reset_ctrl_regs(cpu);
+	local_irq_enable();
+	return 0;
 }
-
-static struct notifier_block dbg_reset_nb = {
-	.notifier_call = dbg_reset_notify,
-};
 
 #ifdef CONFIG_CPU_PM
 static int dbg_cpu_pm_notify(struct notifier_block *self, unsigned long action,
 			     void *v)
 {
 	if (action == CPU_PM_EXIT)
-		reset_ctrl_regs(NULL);
+		reset_ctrl_regs(smp_processor_id());
 
 	return NOTIFY_OK;
 }
@@ -1120,6 +1138,8 @@ static inline void pm_init(void)
 
 static int __init arch_hw_breakpoint_init(void)
 {
+	int ret;
+
 	debug_arch = get_debug_arch();
 
 	if (!debug_arch_supported()) {
@@ -1149,25 +1169,29 @@ static int __init arch_hw_breakpoint_init(void)
 	core_num_brps = get_num_brps();
 	core_num_wrps = get_num_wrps();
 
-	cpu_notifier_register_begin();
-
 	/*
 	 * We need to tread carefully here because DBGSWENABLE may be
 	 * driven low on this core and there isn't an architected way to
 	 * determine that.
 	 */
+	cpus_read_lock();
 	register_undef_hook(&debug_reg_hook);
 
 	/*
-	 * Reset the breakpoint resources. We assume that a halting
-	 * debugger will leave the world in a nice state for us.
+	 * Register CPU notifier which resets the breakpoint resources. We
+	 * assume that a halting debugger will leave the world in a nice state
+	 * for us.
 	 */
-	on_each_cpu(reset_ctrl_regs, NULL, 1);
+	ret = cpuhp_setup_state_cpuslocked(CPUHP_AP_ONLINE_DYN,
+					   "arm/hw_breakpoint:online",
+					   dbg_reset_online, NULL);
 	unregister_undef_hook(&debug_reg_hook);
-	if (!cpumask_empty(&debug_err_mask)) {
+	if (WARN_ON(ret < 0) || !cpumask_empty(&debug_err_mask)) {
 		core_num_brps = 0;
 		core_num_wrps = 0;
-		cpu_notifier_register_done();
+		if (ret > 0)
+			cpuhp_remove_state_nocalls_cpuslocked(ret);
+		cpus_read_unlock();
 		return 0;
 	}
 
@@ -1185,12 +1209,9 @@ static int __init arch_hw_breakpoint_init(void)
 			TRAP_HWBKPT, "watchpoint debug exception");
 	hook_ifault_code(FAULT_CODE_DEBUG, hw_breakpoint_pending, SIGTRAP,
 			TRAP_HWBKPT, "breakpoint debug exception");
+	cpus_read_unlock();
 
-	/* Register hotplug and PM notifiers. */
-	__register_cpu_notifier(&dbg_reset_nb);
-
-	cpu_notifier_register_done();
-
+	/* Register PM notifiers. */
 	pm_init();
 	return 0;
 }

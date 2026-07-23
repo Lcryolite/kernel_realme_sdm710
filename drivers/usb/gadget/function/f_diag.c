@@ -2,7 +2,7 @@
  * Diag Function Device - Route ARM9 and ARM11 DIAG messages
  * between HOST and DEVICE.
  * Copyright (C) 2007 Google, Inc.
- * Copyright (c) 2008-2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2008-2018, 2020, The Linux Foundation. All rights reserved.
  * Author: Brian Swetland <swetland@google.com>
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -68,8 +68,8 @@ static struct usb_interface_descriptor intf_desc = {
 	.bLength            =	sizeof(intf_desc),
 	.bDescriptorType    =	USB_DT_INTERFACE,
 	.bNumEndpoints      =	2,
-	.bInterfaceClass    =	0xFF,
-	.bInterfaceSubClass =	0xFF,
+	.bInterfaceClass    =	USB_CLASS_VENDOR_SPEC,
+	.bInterfaceSubClass =	USB_SUBCLASS_VENDOR_SPEC,
 	.bInterfaceProtocol =	0x30,
 };
 
@@ -206,39 +206,7 @@ static inline struct diag_context *func_to_diag(struct usb_function *f)
 	return container_of(f, struct diag_context, function);
 }
 
-/**
- * kref_put_spinlock_irqsave - decrement refcount for object.
- * @kref: object.
- * @release: pointer to the function that will clean up the object when the
- *	     last reference to the object is released.
- *	     This pointer is required, and it is not acceptable to pass kfree
- *	     in as this function.
- * @lock: lock to take in release case
- *
- * Behaves identical to kref_put with one exception.  If the reference count
- * drops to zero, the lock will be taken atomically wrt dropping the reference
- * count.  The release function has to call spin_unlock() without _irqrestore.
- */
-static inline int kref_put_spinlock_irqsave(struct kref *kref,
-		void (*release)(struct kref *kref),
-		spinlock_t *lock)
-{
-	unsigned long flags;
-
-	WARN_ON(release == NULL);
-	if (atomic_add_unless(&kref->refcount, -1, 1))
-		return 0;
-	spin_lock_irqsave(lock, flags);
-	if (atomic_dec_and_test(&kref->refcount)) {
-		release(kref);
-		local_irq_restore(flags);
-		return 1;
-	}
-	spin_unlock_irqrestore(lock, flags);
-	return 0;
-}
-
-/* Called with ctxt->lock held; i.e. only use with kref_put_spinlock_irqsave */
+/* Called with ctxt->lock held; i.e. only use with kref_put_lock() */
 static void diag_context_release(struct kref *kref)
 {
 	struct diag_context *ctxt =
@@ -321,8 +289,7 @@ static void diag_write_complete(struct usb_ep *ep,
 	if (ctxt->ch && ctxt->ch->notify)
 		ctxt->ch->notify(ctxt->ch->priv, USB_DIAG_WRITE_DONE, d_req);
 
-	kref_put_spinlock_irqsave(&ctxt->kref, diag_context_release,
-			&ctxt->lock);
+	kref_put_lock(&ctxt->kref, diag_context_release, &ctxt->lock);
 }
 
 static void diag_read_complete(struct usb_ep *ep,
@@ -344,8 +311,7 @@ static void diag_read_complete(struct usb_ep *ep,
 	if (ctxt->ch && ctxt->ch->notify)
 		ctxt->ch->notify(ctxt->ch->priv, USB_DIAG_READ_DONE, d_req);
 
-	kref_put_spinlock_irqsave(&ctxt->kref, diag_context_release,
-			&ctxt->lock);
+	kref_put_lock(&ctxt->kref, diag_context_release, &ctxt->lock);
 }
 
 /**
@@ -365,6 +331,8 @@ struct usb_diag_ch *usb_diag_open(const char *name, void *priv,
 	struct usb_diag_ch *ch;
 	unsigned long flags;
 	int found = 0;
+	bool connected = false;
+	struct diag_context  *dev;
 
 	spin_lock_irqsave(&ch_lock, flags);
 	/* Check if we already have a channel with this name */
@@ -391,6 +359,16 @@ struct usb_diag_ch *usb_diag_open(const char *name, void *priv,
 		list_add_tail(&ch->list, &usb_diag_ch_list);
 		spin_unlock_irqrestore(&ch_lock, flags);
 	}
+
+	if (ch->priv_usb) {
+		dev = ch->priv_usb;
+		spin_lock_irqsave(&dev->lock, flags);
+		connected = dev->configured;
+		spin_unlock_irqrestore(&dev->lock, flags);
+	}
+
+	if (ch->notify && connected)
+		ch->notify(priv, USB_DIAG_CONNECT, NULL);
 
 	return ch;
 }
@@ -492,7 +470,6 @@ fail:
 }
 EXPORT_SYMBOL(usb_diag_alloc_req);
 #define DWC3_MAX_REQUEST_SIZE (16 * 1024 * 1024)
-#define CI_MAX_REQUEST_SIZE   (16 * 1024)
 /**
  * usb_diag_request_size - Max request size for controller
  * @ch: Channel handler
@@ -502,12 +479,6 @@ EXPORT_SYMBOL(usb_diag_alloc_req);
  */
 int usb_diag_request_size(struct usb_diag_ch *ch)
 {
-	struct diag_context *ctxt = ch->priv_usb;
-	struct usb_composite_dev *cdev = ctxt->cdev;
-
-	if (cdev->gadget->is_chipidea)
-		return CI_MAX_REQUEST_SIZE;
-
 	return DWC3_MAX_REQUEST_SIZE;
 }
 EXPORT_SYMBOL(usb_diag_request_size);
@@ -563,8 +534,7 @@ int usb_diag_read(struct usb_diag_ch *ch, struct diag_request *d_req)
 	/* make sure context is still valid after releasing lock */
 	if (ctxt != ch->priv_usb) {
 		usb_ep_free_request(out, req);
-		kref_put_spinlock_irqsave(&ctxt->kref, diag_context_release,
-				&ctxt->lock);
+		kref_put_lock(&ctxt->kref, diag_context_release, &ctxt->lock);
 		return -EIO;
 	}
 
@@ -640,8 +610,7 @@ int usb_diag_write(struct usb_diag_ch *ch, struct diag_request *d_req)
 	/* make sure context is still valid after releasing lock */
 	if (ctxt != ch->priv_usb) {
 		usb_ep_free_request(in, req);
-		kref_put_spinlock_irqsave(&ctxt->kref, diag_context_release,
-				&ctxt->lock);
+		kref_put_lock(&ctxt->kref, diag_context_release, &ctxt->lock);
 		return -EIO;
 	}
 
@@ -679,7 +648,7 @@ static void diag_function_disable(struct usb_function *f)
 	struct diag_context  *dev = func_to_diag(f);
 	unsigned long flags;
 
-	DBG(dev->cdev, "diag_function_disable\n");
+	DBG(dev->cdev, "%s\n", __func__);
 
 	spin_lock_irqsave(&dev->lock, flags);
 	dev->configured = 0;
@@ -771,12 +740,7 @@ static void diag_function_unbind(struct usb_configuration *c,
 	struct diag_context *ctxt = func_to_diag(f);
 	unsigned long flags;
 
-	if (gadget_is_superspeed(c->cdev->gadget))
-		usb_free_descriptors(f->ss_descriptors);
-	if (gadget_is_dualspeed(c->cdev->gadget))
-		usb_free_descriptors(f->hs_descriptors);
-
-	usb_free_descriptors(f->fs_descriptors);
+	usb_free_all_descriptors(f);
 
 	/*
 	 * Channel priv_usb may point to other diag function.
@@ -816,35 +780,19 @@ static int diag_function_bind(struct usb_configuration *c,
 	ctxt->out = ep;
 	ep->driver_data = ctxt;
 
-	status = -ENOMEM;
-	/* copy descriptors, and track endpoint copies */
-	f->fs_descriptors = usb_copy_descriptors(fs_diag_desc);
-	if (!f->fs_descriptors)
+	hs_bulk_in_desc.bEndpointAddress =
+			fs_bulk_in_desc.bEndpointAddress;
+	hs_bulk_out_desc.bEndpointAddress =
+			fs_bulk_out_desc.bEndpointAddress;
+	ss_bulk_in_desc.bEndpointAddress =
+			fs_bulk_in_desc.bEndpointAddress;
+	ss_bulk_out_desc.bEndpointAddress =
+			fs_bulk_out_desc.bEndpointAddress;
+
+	status = usb_assign_descriptors(f, fs_diag_desc, hs_diag_desc,
+				ss_diag_desc, ss_diag_desc);
+	if (status)
 		goto fail;
-
-	if (gadget_is_dualspeed(c->cdev->gadget)) {
-		hs_bulk_in_desc.bEndpointAddress =
-				fs_bulk_in_desc.bEndpointAddress;
-		hs_bulk_out_desc.bEndpointAddress =
-				fs_bulk_out_desc.bEndpointAddress;
-
-		/* copy descriptors, and track endpoint copies */
-		f->hs_descriptors = usb_copy_descriptors(hs_diag_desc);
-		if (!f->hs_descriptors)
-			goto fail;
-	}
-
-	if (gadget_is_superspeed(c->cdev->gadget)) {
-		ss_bulk_in_desc.bEndpointAddress =
-				fs_bulk_in_desc.bEndpointAddress;
-		ss_bulk_out_desc.bEndpointAddress =
-				fs_bulk_out_desc.bEndpointAddress;
-
-		/* copy descriptors, and track endpoint copies */
-		f->ss_descriptors = usb_copy_descriptors(ss_diag_desc);
-		if (!f->ss_descriptors)
-			goto fail;
-	}
 
 	/* Allow only first diag channel to update pid and serial no */
 	if (ctxt == list_first_entry(&diag_dev_list,
@@ -853,12 +801,6 @@ static int diag_function_bind(struct usb_configuration *c,
 
 	return 0;
 fail:
-	if (f->ss_descriptors)
-		usb_free_descriptors(f->ss_descriptors);
-	if (f->hs_descriptors)
-		usb_free_descriptors(f->hs_descriptors);
-	if (f->fs_descriptors)
-		usb_free_descriptors(f->fs_descriptors);
 	if (ctxt->out)
 		ctxt->out->driver_data = NULL;
 	if (ctxt->in)
@@ -912,8 +854,6 @@ static struct diag_context *diag_context_init(const char *name)
 	dev->ch = _ch;
 
 	dev->function.name = _ch->name;
-	dev->function.fs_descriptors = fs_diag_desc;
-	dev->function.hs_descriptors = hs_diag_desc;
 	dev->function.bind = diag_function_bind;
 	dev->function.unbind = diag_function_unbind;
 	dev->function.set_alt = diag_function_set_alt;

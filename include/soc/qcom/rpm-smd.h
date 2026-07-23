@@ -1,4 +1,4 @@
-/* Copyright (c) 2012, 2014-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012, 2014-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -10,6 +10,8 @@
  * GNU General Public License for more details.
  *
  */
+
+#include <linux/platform_device.h>
 
 #ifndef __ARCH_ARM_MACH_MSM_RPM_SMD_H
 #define __ARCH_ARM_MACH_MSM_RPM_SMD_H
@@ -214,14 +216,6 @@ void *msm_rpm_send_message_noack(enum msm_rpm_set set, uint32_t rsc_type,
 int msm_rpm_send_message_noirq(enum msm_rpm_set set, uint32_t rsc_type,
 		uint32_t rsc_id, struct msm_rpm_kvp *kvp, int nelems);
 
-/**
- * msm_rpm_driver_init() - Initialization function that registers for a
- * rpm platform driver.
- *
- * returns 0 on success.
- */
-int __init msm_rpm_driver_init(void);
-
 #else
 
 static inline struct msm_rpm_request *msm_rpm_create_request(
@@ -295,14 +289,12 @@ static inline int msm_rpm_wait_for_ack(uint32_t msg_id)
 	return 0;
 
 }
+
 static inline int msm_rpm_wait_for_ack_noirq(uint32_t msg_id)
 {
 	return 0;
 }
 
-static inline int __init msm_rpm_driver_init(void)
-{
-	return 0;
-}
 #endif
+
 #endif /*__ARCH_ARM_MACH_MSM_RPM_SMD_H*/

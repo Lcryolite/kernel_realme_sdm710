@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2018, 2020 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -19,9 +19,6 @@
  * These values were determined empirically and shows good E2E bi-
  * directional throughputs
  */
-#define IPA_HOLB_TMR_EN 0x1
-#define IPA_HOLB_TMR_DIS 0x0
-#define IPA_HOLB_TMR_DEFAULT_VAL 0x1ff
 #define IPA_POLL_AGGR_STATE_RETRIES_NUM 3
 #define IPA_POLL_AGGR_STATE_SLEEP_MSEC 1
 
@@ -37,6 +34,7 @@
 
 static int ipa3_is_xdci_channel_empty(struct ipa3_ep_context *ep,
 	bool *is_empty);
+static void ipa3_start_gsi_debug_monitor(u32 clnt_hdl);
 
 int ipa3_enable_data_path(u32 clnt_hdl)
 {
@@ -69,11 +67,22 @@ int ipa3_enable_data_path(u32 clnt_hdl)
 		 * on other end from IPA hw.
 		 */
 		if ((ep->client == IPA_CLIENT_USB_DPL_CONS) ||
-				(ep->client == IPA_CLIENT_MHI_DPL_CONS))
+				(ep->client == IPA_CLIENT_MHI_DPL_CONS) ||
+				(ep->client == IPA_CLIENT_MHI_QDSS_CONS)) {
+			holb_cfg.tmr_val = 0;
 			holb_cfg.en = IPA_HOLB_TMR_EN;
-		else
+		} else if ((ipa3_ctx->ipa_hw_type == IPA_HW_v4_2) &&
+			(ep->client == IPA_CLIENT_WLAN1_CONS ||
+				ep->client == IPA_CLIENT_USB_CONS)) {
+			holb_cfg.en = IPA_HOLB_TMR_EN;
+			if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5)
+				holb_cfg.tmr_val = IPA_HOLB_TMR_VAL;
+			else
+				holb_cfg.tmr_val = IPA_HOLB_TMR_VAL_4_5;
+		} else {
 			holb_cfg.en = IPA_HOLB_TMR_DIS;
-		holb_cfg.tmr_val = 0;
+			holb_cfg.tmr_val = 0;
+		}
 		res = ipa3_cfg_ep_holb(clnt_hdl, &holb_cfg);
 	}
 
@@ -115,19 +124,6 @@ int ipa3_disable_data_path(u32 clnt_hdl)
 	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_0) {
 		/* Suspend the pipe */
 		if (IPA_CLIENT_IS_CONS(ep->client)) {
-			/*
-			 * for RG10 workaround uC needs to be loaded before
-			 * pipe can be suspended in this case.
-			 */
-			if (ipa3_ctx->apply_rg10_wa && ipa3_uc_state_check()) {
-				IPADBG("uC is not loaded yet, waiting...\n");
-				res = wait_for_completion_timeout(
-					&ipa3_ctx->uc_loaded_completion_obj,
-					60 * HZ);
-				if (res == 0)
-					IPADBG("timeout waiting for uC load\n");
-			}
-
 			memset(&ep_cfg_ctrl, 0, sizeof(struct ipa_ep_cfg_ctrl));
 			ep_cfg_ctrl.ipa_ep_suspend = true;
 			res = ipa3_cfg_ep_ctrl(clnt_hdl, &ep_cfg_ctrl);
@@ -149,259 +145,18 @@ int ipa3_disable_data_path(u32 clnt_hdl)
 	return res;
 }
 
-static void ipa_chan_err_cb(struct gsi_chan_err_notify *notify)
-{
-	if (notify) {
-		switch (notify->evt_id) {
-		case GSI_CHAN_INVALID_TRE_ERR:
-			IPAERR("Received GSI_CHAN_INVALID_TRE_ERR\n");
-			break;
-		case GSI_CHAN_NON_ALLOCATED_EVT_ACCESS_ERR:
-			IPAERR("Received GSI_CHAN_NON_ALLOC_EVT_ACCESS_ERR\n");
-			break;
-		case GSI_CHAN_OUT_OF_BUFFERS_ERR:
-			IPAERR("Received GSI_CHAN_OUT_OF_BUFFERS_ERR\n");
-			break;
-		case GSI_CHAN_OUT_OF_RESOURCES_ERR:
-			IPAERR("Received GSI_CHAN_OUT_OF_RESOURCES_ERR\n");
-			break;
-		case GSI_CHAN_UNSUPPORTED_INTER_EE_OP_ERR:
-			IPAERR("Received GSI_CHAN_UNSUPP_INTER_EE_OP_ERR\n");
-			break;
-		case GSI_CHAN_HWO_1_ERR:
-			IPAERR("Received GSI_CHAN_HWO_1_ERR\n");
-			break;
-		default:
-			IPAERR("Unexpected err evt: %d\n", notify->evt_id);
-		}
-		BUG();
-	}
-}
-
-static void ipa_xfer_cb(struct gsi_chan_xfer_notify *notify)
-{
-}
-
-static int ipa3_reconfigure_channel_to_gpi(struct ipa3_ep_context *ep,
-	struct gsi_chan_props *orig_chan_props,
-	struct ipa_mem_buffer *chan_dma)
-{
-	struct gsi_chan_props chan_props;
-	enum gsi_status gsi_res;
-	dma_addr_t chan_dma_addr;
-	int result;
-
-	/* Set up channel properties */
-	memset(&chan_props, 0, sizeof(struct gsi_chan_props));
-	chan_props.prot = GSI_CHAN_PROT_GPI;
-	chan_props.dir = GSI_CHAN_DIR_FROM_GSI;
-	chan_props.ch_id = orig_chan_props->ch_id;
-	chan_props.evt_ring_hdl = orig_chan_props->evt_ring_hdl;
-	chan_props.re_size = GSI_CHAN_RE_SIZE_16B;
-	chan_props.ring_len = 2 * GSI_CHAN_RE_SIZE_16B;
-	chan_props.ring_base_vaddr =
-		dma_alloc_coherent(ipa3_ctx->pdev, chan_props.ring_len,
-		&chan_dma_addr, GFP_ATOMIC);
-	chan_props.ring_base_addr = chan_dma_addr;
-	chan_dma->base = chan_props.ring_base_vaddr;
-	chan_dma->phys_base = chan_props.ring_base_addr;
-	chan_dma->size = chan_props.ring_len;
-	chan_props.use_db_eng = GSI_CHAN_DIRECT_MODE;
-	chan_props.max_prefetch = GSI_ONE_PREFETCH_SEG;
-	chan_props.low_weight = 1;
-	chan_props.chan_user_data = NULL;
-	chan_props.err_cb = ipa_chan_err_cb;
-	chan_props.xfer_cb = ipa_xfer_cb;
-
-	gsi_res = gsi_set_channel_cfg(ep->gsi_chan_hdl, &chan_props, NULL);
-	if (gsi_res != GSI_STATUS_SUCCESS) {
-		IPAERR("Error setting channel properties\n");
-		result = -EFAULT;
-		goto set_chan_cfg_fail;
-	}
-
-	return 0;
-
-set_chan_cfg_fail:
-	dma_free_coherent(ipa3_ctx->pdev, chan_dma->size,
-		chan_dma->base, chan_dma->phys_base);
-	return result;
-
-}
-
-static int ipa3_restore_channel_properties(struct ipa3_ep_context *ep,
-	struct gsi_chan_props *chan_props,
-	union gsi_channel_scratch *chan_scratch)
-{
-	enum gsi_status gsi_res;
-
-	gsi_res = gsi_set_channel_cfg(ep->gsi_chan_hdl, chan_props,
-		chan_scratch);
-	if (gsi_res != GSI_STATUS_SUCCESS) {
-		IPAERR("Error restoring channel properties\n");
-		return -EFAULT;
-	}
-
-	return 0;
-}
-
-static int ipa3_reset_with_open_aggr_frame_wa(u32 clnt_hdl,
-	struct ipa3_ep_context *ep)
-{
-	int result = -EFAULT;
-	enum gsi_status gsi_res;
-	struct gsi_chan_props orig_chan_props;
-	union gsi_channel_scratch orig_chan_scratch;
-	struct ipa_mem_buffer chan_dma;
-	void *buff;
-	dma_addr_t dma_addr;
-	struct gsi_xfer_elem xfer_elem;
-	int i;
-	int aggr_active_bitmap = 0;
-	bool pipe_suspended = false;
-	struct ipa_ep_cfg_ctrl ctrl;
-
-	IPADBG("Applying reset channel with open aggregation frame WA\n");
-	ipahal_write_reg(IPA_AGGR_FORCE_CLOSE, (1 << clnt_hdl));
-
-	/* Reset channel */
-	gsi_res = gsi_reset_channel(ep->gsi_chan_hdl);
-	if (gsi_res != GSI_STATUS_SUCCESS) {
-		IPAERR("Error resetting channel: %d\n", gsi_res);
-		return -EFAULT;
-	}
-
-	/* Reconfigure channel to dummy GPI channel */
-	memset(&orig_chan_props, 0, sizeof(struct gsi_chan_props));
-	memset(&orig_chan_scratch, 0, sizeof(union gsi_channel_scratch));
-	gsi_res = gsi_get_channel_cfg(ep->gsi_chan_hdl, &orig_chan_props,
-		&orig_chan_scratch);
-	if (gsi_res != GSI_STATUS_SUCCESS) {
-		IPAERR("Error getting channel properties: %d\n", gsi_res);
-		return -EFAULT;
-	}
-	memset(&chan_dma, 0, sizeof(struct ipa_mem_buffer));
-	result = ipa3_reconfigure_channel_to_gpi(ep, &orig_chan_props,
-		&chan_dma);
-	if (result)
-		return -EFAULT;
-
-	ipahal_read_reg_n_fields(IPA_ENDP_INIT_CTRL_n, clnt_hdl, &ctrl);
-	if (ctrl.ipa_ep_suspend) {
-		IPADBG("pipe is suspended, remove suspend\n");
-		pipe_suspended = true;
-		ctrl.ipa_ep_suspend = false;
-		ipahal_write_reg_n_fields(IPA_ENDP_INIT_CTRL_n,
-			clnt_hdl, &ctrl);
-	}
-
-	/* Start channel and put 1 Byte descriptor on it */
-	gsi_res = gsi_start_channel(ep->gsi_chan_hdl);
-	if (gsi_res != GSI_STATUS_SUCCESS) {
-		IPAERR("Error starting channel: %d\n", gsi_res);
-		goto start_chan_fail;
-	}
-
-	memset(&xfer_elem, 0, sizeof(struct gsi_xfer_elem));
-	buff = dma_alloc_coherent(ipa3_ctx->pdev, 1, &dma_addr,
-		GFP_ATOMIC);
-	xfer_elem.addr = dma_addr;
-	xfer_elem.len = 1;
-	xfer_elem.flags = GSI_XFER_FLAG_EOT;
-	xfer_elem.type = GSI_XFER_ELEM_DATA;
-
-	gsi_res = gsi_queue_xfer(ep->gsi_chan_hdl, 1, &xfer_elem,
-		true);
-	if (gsi_res != GSI_STATUS_SUCCESS) {
-		IPAERR("Error queueing xfer: %d\n", gsi_res);
-		result = -EFAULT;
-		goto queue_xfer_fail;
-	}
-
-	/* Wait for aggregation frame to be closed and stop channel*/
-	for (i = 0; i < IPA_POLL_AGGR_STATE_RETRIES_NUM; i++) {
-		aggr_active_bitmap = ipahal_read_reg(IPA_STATE_AGGR_ACTIVE);
-		if (!(aggr_active_bitmap & (1 << clnt_hdl)))
-			break;
-		msleep(IPA_POLL_AGGR_STATE_SLEEP_MSEC);
-	}
-
-	if (aggr_active_bitmap & (1 << clnt_hdl)) {
-		IPAERR("Failed closing aggr frame for client: %d\n",
-			clnt_hdl);
-		BUG();
-	}
-
-	dma_free_coherent(ipa3_ctx->pdev, 1, buff, dma_addr);
-
-	result = ipa3_stop_gsi_channel(clnt_hdl);
-	if (result) {
-		IPAERR("Error stopping channel: %d\n", result);
-		goto start_chan_fail;
-	}
-
-	/* Reset channel */
-	gsi_res = gsi_reset_channel(ep->gsi_chan_hdl);
-	if (gsi_res != GSI_STATUS_SUCCESS) {
-		IPAERR("Error resetting channel: %d\n", gsi_res);
-		result = -EFAULT;
-		goto start_chan_fail;
-	}
-
-	/*
-	 * Need to sleep for 1ms as required by H/W verified
-	 * sequence for resetting GSI channel
-	 */
-	msleep(IPA_POLL_AGGR_STATE_SLEEP_MSEC);
-
-	if (pipe_suspended) {
-		IPADBG("suspend the pipe again\n");
-		ctrl.ipa_ep_suspend = true;
-		ipahal_write_reg_n_fields(IPA_ENDP_INIT_CTRL_n,
-			clnt_hdl, &ctrl);
-	}
-
-	/* Restore channels properties */
-	result = ipa3_restore_channel_properties(ep, &orig_chan_props,
-		&orig_chan_scratch);
-	if (result)
-		goto restore_props_fail;
-	dma_free_coherent(ipa3_ctx->pdev, chan_dma.size,
-		chan_dma.base, chan_dma.phys_base);
-
-	return 0;
-
-queue_xfer_fail:
-	ipa3_stop_gsi_channel(clnt_hdl);
-	dma_free_coherent(ipa3_ctx->pdev, 1, buff, dma_addr);
-start_chan_fail:
-	if (pipe_suspended) {
-		IPADBG("suspend the pipe again\n");
-		ctrl.ipa_ep_suspend = true;
-		ipahal_write_reg_n_fields(IPA_ENDP_INIT_CTRL_n,
-			clnt_hdl, &ctrl);
-	}
-	ipa3_restore_channel_properties(ep, &orig_chan_props,
-		&orig_chan_scratch);
-restore_props_fail:
-	dma_free_coherent(ipa3_ctx->pdev, chan_dma.size,
-		chan_dma.base, chan_dma.phys_base);
-	return result;
-}
-
 int ipa3_reset_gsi_channel(u32 clnt_hdl)
 {
 	struct ipa3_ep_context *ep;
 	int result = -EFAULT;
 	enum gsi_status gsi_res;
-	int aggr_active_bitmap = 0;
 	bool undo_aggr_value = false;
 	struct ipahal_reg_clkon_cfg fields;
 
 	IPADBG("entry\n");
 	if (clnt_hdl >= ipa3_ctx->ipa_num_pipes ||
 		ipa3_ctx->ep[clnt_hdl].valid == 0) {
-		IPAERR("Bad parameter.\n");
+		IPAERR("Bad parameter\n");
 		return -EINVAL;
 	}
 
@@ -429,21 +184,6 @@ int ipa3_reset_gsi_channel(u32 clnt_hdl)
 	}
 
 	/*
-	 * Check for open aggregation frame on Consumer EP -
-	 * reset with open aggregation frame WA
-	 */
-	if (IPA_CLIENT_IS_CONS(ep->client)) {
-		aggr_active_bitmap = ipahal_read_reg(IPA_STATE_AGGR_ACTIVE);
-		if (aggr_active_bitmap & (1 << clnt_hdl)) {
-			result = ipa3_reset_with_open_aggr_frame_wa(clnt_hdl,
-				ep);
-			if (result)
-				goto reset_chan_fail;
-			goto finish_reset;
-		}
-	}
-
-	/*
 	 * Reset channel
 	 * If the reset called after stop, need to wait 1ms
 	 */
@@ -455,15 +195,14 @@ int ipa3_reset_gsi_channel(u32 clnt_hdl)
 		goto reset_chan_fail;
 	}
 
-finish_reset:
-	if (!ep->keep_ipa_awake)
-		IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
-
 	/* undo the aggr value if flag was set above*/
 	if (undo_aggr_value) {
 		fields.open_aggr_wrapper = false;
 		ipahal_write_reg_fields(IPA_CLKON_CFG, &fields);
 	}
+
+	if (!ep->keep_ipa_awake)
+		IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	IPADBG("exit\n");
 	return 0;
@@ -523,6 +262,70 @@ static bool ipa3_is_legal_params(struct ipa_request_gsi_channel_params *params)
 		return false;
 	else
 		return true;
+}
+
+static void ipa3_start_gsi_debug_monitor(u32 clnt_hdl)
+{
+	struct IpaHwOffloadStatsAllocCmdData_t *gsi_info;
+	struct ipa3_ep_context *ep;
+	enum ipa_client_type client_type;
+
+	IPADBG("entry\n");
+	if (clnt_hdl >= ipa3_ctx->ipa_num_pipes ||
+		ipa3_ctx->ep[clnt_hdl].valid == 0) {
+		IPAERR("Bad parameters.\n");
+		return;
+	}
+
+	ep = &ipa3_ctx->ep[clnt_hdl];
+	client_type = ipa3_get_client_mapping(clnt_hdl);
+
+	/* start uC gsi dbg stats monitor */
+	if (ipa3_ctx->ipa_hw_type >= IPA_HW_v4_5 ||
+		(ipa3_ctx->ipa_hw_type == IPA_HW_v4_1 &&
+		ipa3_ctx->platform_type == IPA_PLAT_TYPE_APQ)) {
+		switch (client_type) {
+		case IPA_CLIENT_MHI_PRIME_TETH_PROD:
+			gsi_info = &ipa3_ctx->gsi_info[IPA_HW_PROTOCOL_MHIP];
+			gsi_info->ch_id_info[0].ch_id = ep->gsi_chan_hdl;
+			gsi_info->ch_id_info[0].dir = DIR_PRODUCER;
+			ipa3_uc_debug_stats_alloc(*gsi_info);
+			break;
+		case IPA_CLIENT_MHI_PRIME_TETH_CONS:
+			gsi_info = &ipa3_ctx->gsi_info[IPA_HW_PROTOCOL_MHIP];
+			gsi_info->ch_id_info[1].ch_id = ep->gsi_chan_hdl;
+			gsi_info->ch_id_info[1].dir = DIR_CONSUMER;
+			ipa3_uc_debug_stats_alloc(*gsi_info);
+			break;
+		case IPA_CLIENT_MHI_PRIME_RMNET_PROD:
+			gsi_info = &ipa3_ctx->gsi_info[IPA_HW_PROTOCOL_MHIP];
+			gsi_info->ch_id_info[2].ch_id = ep->gsi_chan_hdl;
+			gsi_info->ch_id_info[2].dir = DIR_PRODUCER;
+			ipa3_uc_debug_stats_alloc(*gsi_info);
+			break;
+		case IPA_CLIENT_MHI_PRIME_RMNET_CONS:
+			gsi_info = &ipa3_ctx->gsi_info[IPA_HW_PROTOCOL_MHIP];
+			gsi_info->ch_id_info[3].ch_id = ep->gsi_chan_hdl;
+			gsi_info->ch_id_info[3].dir = DIR_CONSUMER;
+			ipa3_uc_debug_stats_alloc(*gsi_info);
+			break;
+		case IPA_CLIENT_USB_PROD:
+			gsi_info = &ipa3_ctx->gsi_info[IPA_HW_PROTOCOL_USB];
+			gsi_info->ch_id_info[0].ch_id = ep->gsi_chan_hdl;
+			gsi_info->ch_id_info[0].dir = DIR_PRODUCER;
+			ipa3_uc_debug_stats_alloc(*gsi_info);
+			break;
+		case IPA_CLIENT_USB_CONS:
+			gsi_info = &ipa3_ctx->gsi_info[IPA_HW_PROTOCOL_USB];
+			gsi_info->ch_id_info[1].ch_id = ep->gsi_chan_hdl;
+			gsi_info->ch_id_info[1].dir = DIR_CONSUMER;
+			ipa3_uc_debug_stats_alloc(*gsi_info);
+			break;
+		default:
+			IPADBG("client_type %d not supported\n",
+				client_type);
+		}
+	}
 }
 
 int ipa3_smmu_map_peer_reg(phys_addr_t phys_addr, bool map,
@@ -630,14 +433,33 @@ int ipa3_smmu_map_peer_buff(u64 iova, u32 size, bool map, struct sg_table *sgt,
 			}
 		}
 	} else {
-		res = iommu_unmap(smmu_domain,
-		rounddown(iova, PAGE_SIZE),
-		roundup(size + iova - rounddown(iova, PAGE_SIZE),
-		PAGE_SIZE));
-		if (res != roundup(size + iova - rounddown(iova, PAGE_SIZE),
-			PAGE_SIZE)) {
-			IPAERR("Fail to unmap 0x%llx\n", iova);
-			return -EINVAL;
+		if (sgt != NULL) {
+			va = rounddown(iova, PAGE_SIZE);
+			len = 0;
+			for_each_sg(sgt->sgl, sg, sgt->nents, i) {
+				len = PAGE_ALIGN(sg->offset + sg->length);
+				res = iommu_unmap(smmu_domain, va,
+						roundup(len, PAGE_SIZE));
+				if (res !=
+					roundup(len, PAGE_SIZE)) {
+					IPAERR("Fail to unmap iova=%llx\n",
+									iova);
+					return -EINVAL;
+				}
+				va += len;
+				count++;
+			}
+		} else {
+			res = iommu_unmap(smmu_domain,
+					rounddown(iova, PAGE_SIZE),
+					roundup(size + iova -
+						rounddown(iova, PAGE_SIZE),
+						PAGE_SIZE));
+			if (res != roundup(size + iova -
+				rounddown(iova, PAGE_SIZE), PAGE_SIZE)) {
+				IPAERR("Fail to unmap 0x%llx\n", iova);
+				return -EINVAL;
+			}
 		}
 	}
 	IPADBG("Peer buff %s 0x%llx\n", map ? "map" : "unmap", iova);
@@ -683,7 +505,6 @@ void ipa3_register_client_callback(int (*client_cb)(bool is_lock),
 
 	if (!ipa3_ctx->client_lock_unlock[client])
 		ipa3_ctx->client_lock_unlock[client] = client_cb;
-
 	if (!ipa3_ctx->get_teth_port_state[client])
 		ipa3_ctx->get_teth_port_state[client] = teth_port_state;
 	IPADBG("exit\n");
@@ -700,7 +521,7 @@ void ipa3_deregister_client_callback(enum ipa_client_type client_type)
 		return;
 
 	if (ipa3_ctx->client_lock_unlock[client_cb] == NULL &&
-			ipa3_ctx->get_teth_port_state[client_cb] == NULL) {
+		ipa3_ctx->get_teth_port_state[client_cb] == NULL) {
 		IPAERR("client_lock_unlock is already NULL");
 		return;
 	}
@@ -774,13 +595,12 @@ int ipa3_request_gsi_channel(struct ipa_request_gsi_channel_params *params,
 		if (ipa_ep_idx >= ipa3_ctx->ipa_num_pipes ||
 			ipa3_ctx->ep[ipa_ep_idx].valid == 0) {
 			IPAERR("bad parm.\n");
-			result = -EINVAL;
-			goto ipa_cfg_ep_fail;
+			return -EINVAL;
 		}
 		result = ipa3_cfg_ep_cfg(ipa_ep_idx, &params->ipa_ep_cfg.cfg);
 		if (result) {
 			IPAERR("fail to configure QMB.\n");
-			goto ipa_cfg_ep_fail;
+			return result;
 		}
 	}
 
@@ -799,12 +619,14 @@ int ipa3_request_gsi_channel(struct ipa_request_gsi_channel_params *params,
 	} else {
 		IPADBG("Skipping endpoint configuration.\n");
 		if (IPA_CLIENT_IS_PROD(ipa3_ctx->ep[ipa_ep_idx].client) &&
-			ipa3_ctx->ep[ipa_ep_idx].client == IPA_CLIENT_USB_PROD)
+			ipa3_ctx->ep[ipa_ep_idx].client == IPA_CLIENT_USB_PROD
+			&& !ipa3_is_mhip_offload_enabled()) {
 			if (ipa3_cfg_ep_seq(ipa_ep_idx,
 						&params->ipa_ep_cfg.seq)) {
 				IPAERR("fail to configure USB pipe seq\n");
 				goto ipa_cfg_ep_fail;
 			}
+		}
 	}
 
 	out_params->clnt_hdl = ipa_ep_idx;
@@ -842,6 +664,9 @@ int ipa3_request_gsi_channel(struct ipa_request_gsi_channel_params *params,
 
 	params->chan_params.evt_ring_hdl = ep->gsi_evt_ring_hdl;
 	params->chan_params.ch_id = gsi_ep_cfg_ptr->ipa_gsi_chan_num;
+	params->chan_params.prefetch_mode = gsi_ep_cfg_ptr->prefetch_mode;
+	params->chan_params.empty_lvl_threshold =
+		gsi_ep_cfg_ptr->prefetch_threshold;
 	gsi_res = gsi_alloc_channel(&params->chan_params, gsi_dev_hdl,
 		&ep->gsi_chan_hdl);
 	if (gsi_res != GSI_STATUS_SUCCESS) {
@@ -852,12 +677,18 @@ int ipa3_request_gsi_channel(struct ipa_request_gsi_channel_params *params,
 	}
 
 	memcpy(&ep->chan_scratch, &params->chan_scratch,
-		sizeof(union __packed gsi_channel_scratch));
-	ep->chan_scratch.xdci.max_outstanding_tre =
-		params->chan_params.re_size * gsi_ep_cfg_ptr->ipa_if_tlv;
+		sizeof(union gsi_channel_scratch));
 
-	if (ipa3_ctx->ipa_hw_type >= IPA_HW_v4_0)
-		ep->chan_scratch.xdci.max_outstanding_tre = 0;
+	/*
+	 * Update scratch for MCS smart prefetch:
+	 * Starting IPA4.5, smart prefetch implemented by H/W.
+	 * At IPA 4.0/4.1/4.2, we do not use MCS smart prefetch
+	 *  so keep the fields zero.
+	 */
+	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_0) {
+		ep->chan_scratch.xdci.max_outstanding_tre =
+		params->chan_params.re_size * gsi_ep_cfg_ptr->ipa_if_tlv;
+	}
 
 	gsi_res = gsi_write_channel_scratch(ep->gsi_chan_hdl,
 		params->chan_scratch);
@@ -929,7 +760,6 @@ int ipa3_set_usb_max_packet_size(
 		&dev_scratch);
 	if (gsi_res != GSI_STATUS_SUCCESS) {
 		IPAERR("Error writing device scratch: %d\n", gsi_res);
-		IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 		return -EFAULT;
 	}
 	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
@@ -986,11 +816,12 @@ int ipa3_xdci_start(u32 clnt_hdl, u8 xferrscidx, bool xferrscidx_valid)
 	int result = -EFAULT;
 	enum gsi_status gsi_res;
 	struct ipa_ep_cfg_ctrl ep_cfg_ctrl;
+	int code = 0;
 
 	IPADBG("entry\n");
 	if (clnt_hdl >= ipa3_ctx->ipa_num_pipes  ||
 		ipa3_ctx->ep[clnt_hdl].valid == 0 ||
-		xferrscidx < 0 || xferrscidx > IPA_XFER_RSC_IDX_MAX) {
+		xferrscidx > IPA_XFER_RSC_IDX_MAX) {
 		IPAERR("Bad parameters.\n");
 		return -EINVAL;
 	}
@@ -1028,6 +859,21 @@ int ipa3_xdci_start(u32 clnt_hdl, u8 xferrscidx, bool xferrscidx_valid)
 		IPAERR("Error starting channel: %d\n", gsi_res);
 		goto write_chan_scratch_fail;
 	}
+
+	if (IPA_CLIENT_IS_PROD(ep->client) && ep->skip_ep_cfg &&
+			ipa3_ctx->ipa_endp_delay_wa &&
+			!ipa3_is_mhip_offload_enabled()) {
+		gsi_res = gsi_enable_flow_control_ee(ep->gsi_chan_hdl, 0,
+									&code);
+		if (gsi_res == GSI_STATUS_SUCCESS) {
+			IPADBG("flow control sussess gsi ch %lu with code %d\n",
+					ep->gsi_chan_hdl, code);
+		} else {
+			IPADBG("failed to flow control gsi ch %lu code %d\n",
+					ep->gsi_chan_hdl, code);
+		}
+	}
+	ipa3_start_gsi_debug_monitor(clnt_hdl);
 	if (!ep->keep_ipa_awake)
 		IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 
@@ -1039,7 +885,7 @@ write_chan_scratch_fail:
 	return result;
 }
 
-static int ipa3_get_gsi_chan_info(struct gsi_chan_info *gsi_chan_info,
+int ipa3_get_gsi_chan_info(struct gsi_chan_info *gsi_chan_info,
 	unsigned long chan_hdl)
 {
 	enum gsi_status gsi_res;
@@ -1115,6 +961,11 @@ int ipa3_enable_force_clear(u32 request_id, bool throttle_source,
 	struct ipa_enable_force_clear_datapath_req_msg_v01 req;
 	int result;
 
+	if (ipa3_ctx->platform_type == IPA_PLAT_TYPE_APQ) {
+		IPADBG("APQ platform - ignore force clear\n");
+		return 0;
+	}
+
 	memset(&req, 0, sizeof(req));
 	req.request_id = request_id;
 	req.source_pipe_bitmask = source_pipe_bitmask;
@@ -1136,6 +987,11 @@ int ipa3_disable_force_clear(u32 request_id)
 {
 	struct ipa_disable_force_clear_datapath_req_msg_v01 req;
 	int result;
+
+	if (ipa3_ctx->platform_type == IPA_PLAT_TYPE_APQ) {
+		IPADBG("APQ platform - ignore force clear\n");
+		return 0;
+	}
 
 	memset(&req, 0, sizeof(req));
 	req.request_id = request_id;
@@ -1237,6 +1093,7 @@ static int ipa3_stop_ul_chan_with_data_drain(u32 qmi_req_id,
 	bool stop_in_proc;
 	struct ipa3_ep_context *ep;
 	struct ipa_ep_cfg_ctrl ep_cfg_ctrl;
+
 	IPADBG("entry\n");
 
 	if (clnt_hdl >= ipa3_ctx->ipa_num_pipes ||
@@ -1360,7 +1217,7 @@ exit:
 }
 
 /*
- * Set reset ep_delay for CLEINT PROD pipe
+ * Set reset ep_delay for CLIENT PROD pipe
  * Clocks, should be voted before calling this API
  * locks should be taken before calling this API
  */
@@ -1405,6 +1262,63 @@ int ipa3_set_reset_client_prod_pipe_delay(bool set_reset,
 	return result;
 }
 
+static bool ipa3_get_teth_port_status(enum ipa_client_type client)
+{
+	enum ipa_client_cb_type client_cb;
+
+	client_cb = ipa_get_client_cb_type(client);
+	if (client_cb == IPA_MAX_CLNT)
+		return false;
+	if (ipa3_ctx->get_teth_port_state[client_cb])
+		return ipa3_ctx->get_teth_port_state[client_cb]();
+	return false;
+}
+
+/*
+ * Start/stop the CLIENT PROD pipes in SSR scenarios
+ */
+
+int ipa3_start_stop_client_prod_gsi_chnl(enum ipa_client_type client,
+		bool start_chnl)
+{
+	int result = 0;
+	int pipe_idx;
+	struct ipa3_ep_context *ep;
+	int code = 0;
+
+	if (IPA_CLIENT_IS_CONS(client)) {
+		IPAERR("client (%d) not PROD\n", client);
+		return -EINVAL;
+	}
+
+	pipe_idx = ipa3_get_ep_mapping(client);
+
+	if (pipe_idx == IPA_EP_NOT_ALLOCATED) {
+		IPAERR("client (%d) not valid\n", client);
+		return -EINVAL;
+	}
+
+	client_lock_unlock_cb(client, true);
+	ep = &ipa3_ctx->ep[pipe_idx];
+	if (ep->valid && ep->skip_ep_cfg && ipa3_get_teth_port_status(client)
+		&& !ipa3_is_mhip_offload_enabled()) {
+		if (start_chnl) {
+			result = ipa3_start_gsi_channel(pipe_idx);
+			result = gsi_enable_flow_control_ee(ep->gsi_chan_hdl,
+								0, &code);
+			if (result == GSI_STATUS_SUCCESS) {
+				IPADBG("flow control sussess ch %lu code %d\n",
+						ep->gsi_chan_hdl, code);
+			} else {
+				IPADBG("failed to flow control ch %lu code %d\n",
+						ep->gsi_chan_hdl, code);
+			}
+		} else
+			result = ipa3_stop_gsi_channel(pipe_idx);
+	}
+	client_lock_unlock_cb(client, false);
+	return result;
+}
 int ipa3_set_reset_client_cons_pipe_sus_holb(bool set_reset,
 		enum ipa_client_type client)
 {
@@ -1452,6 +1366,12 @@ int ipa3_set_reset_client_cons_pipe_sus_holb(bool set_reset,
 		ipahal_write_reg_n_fields(
 			IPA_ENDP_INIT_HOL_BLOCK_EN_n,
 			pipe_idx, &ep_holb);
+
+		/* IPA4.5 issue requires HOLB_EN to be written twice */
+		if (ipa3_ctx->ipa_hw_type >= IPA_HW_v4_5)
+			ipahal_write_reg_n_fields(
+				IPA_ENDP_INIT_HOL_BLOCK_EN_n,
+				pipe_idx, &ep_holb);
 	}
 	client_lock_unlock_cb(client, false);
 	return 0;
@@ -1517,8 +1437,6 @@ int ipa3_xdci_disconnect(u32 clnt_hdl, bool should_force_clear, u32 qmi_req_id)
 	if (!ep->keep_ipa_awake)
 		IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 
-	ipa3_disable_data_path(clnt_hdl);
-
 	if (!IPA_CLIENT_IS_CONS(ep->client)) {
 		IPADBG("Stopping PROD channel - hdl=%d clnt=%d\n",
 			clnt_hdl, ep->client);
@@ -1542,6 +1460,9 @@ int ipa3_xdci_disconnect(u32 clnt_hdl, bool should_force_clear, u32 qmi_req_id)
 			goto stop_chan_fail;
 		}
 	}
+
+	ipa3_disable_data_path(clnt_hdl);
+
 	IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	IPADBG("exit\n");
@@ -1570,6 +1491,9 @@ int ipa3_release_gsi_channel(u32 clnt_hdl)
 
 	if (!ep->keep_ipa_awake)
 		IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
+
+	/* Set the disconnect in progress flag to avoid calling cb.*/
+	atomic_set(&ep->disconnect_in_progress, 1);
 
 	gsi_res = gsi_dealloc_channel(ep->gsi_chan_hdl);
 	if (gsi_res != GSI_STATUS_SUCCESS) {
@@ -1727,6 +1651,7 @@ int ipa3_xdci_suspend(u32 ul_clnt_hdl, u32 dl_clnt_hdl,
 
 start_dl_and_exit:
 	gsi_start_channel(dl_ep->gsi_chan_hdl);
+	ipa3_start_gsi_debug_monitor(dl_clnt_hdl);
 unsuspend_dl_and_exit:
 	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_0) {
 		/* Unsuspend the DL EP */
@@ -1744,6 +1669,7 @@ int ipa3_start_gsi_channel(u32 clnt_hdl)
 	struct ipa3_ep_context *ep;
 	int result = -EFAULT;
 	enum gsi_status gsi_res;
+	enum ipa_client_type client_type;
 
 	IPADBG("entry\n");
 	if (clnt_hdl >= ipa3_ctx->ipa_num_pipes  ||
@@ -1753,18 +1679,19 @@ int ipa3_start_gsi_channel(u32 clnt_hdl)
 	}
 
 	ep = &ipa3_ctx->ep[clnt_hdl];
-
+	client_type = ipa3_get_client_mapping(clnt_hdl);
 	if (!ep->keep_ipa_awake)
-		IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
+		IPA_ACTIVE_CLIENTS_INC_EP(client_type);
 
 	gsi_res = gsi_start_channel(ep->gsi_chan_hdl);
 	if (gsi_res != GSI_STATUS_SUCCESS) {
 		IPAERR("Error starting channel: %d\n", gsi_res);
 		goto start_chan_fail;
 	}
+	ipa3_start_gsi_debug_monitor(clnt_hdl);
 
 	if (!ep->keep_ipa_awake)
-		IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
+		IPA_ACTIVE_CLIENTS_DEC_EP(client_type);
 
 	IPADBG("exit\n");
 	return 0;
@@ -1809,12 +1736,14 @@ int ipa3_xdci_resume(u32 ul_clnt_hdl, u32 dl_clnt_hdl, bool is_dpl)
 	gsi_res = gsi_start_channel(dl_ep->gsi_chan_hdl);
 	if (gsi_res != GSI_STATUS_SUCCESS)
 		IPAERR("Error starting DL channel: %d\n", gsi_res);
+	ipa3_start_gsi_debug_monitor(dl_clnt_hdl);
 
 	/* Start UL channel */
 	if (!is_dpl) {
 		gsi_res = gsi_start_channel(ul_ep->gsi_chan_hdl);
 		if (gsi_res != GSI_STATUS_SUCCESS)
 			IPAERR("Error starting UL channel: %d\n", gsi_res);
+		ipa3_start_gsi_debug_monitor(ul_clnt_hdl);
 	}
 
 	IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(dl_clnt_hdl));
@@ -1883,6 +1812,52 @@ int ipa3_clear_endpoint_delay(u32 clnt_hdl)
 	IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	IPADBG("client (ep: %d) removed ep delay\n", clnt_hdl);
+
+	return 0;
+}
+
+/**
+ * ipa3_get_aqc_gsi_stats() - Query AQC gsi stats from uc
+ * @stats:	[inout] stats blob from client populated by driver
+ *
+ * Returns:	0 on success, negative on failure
+ *
+ * @note Cannot be called from atomic context
+ *
+ */
+int ipa3_get_aqc_gsi_stats(struct ipa_uc_dbg_ring_stats *stats)
+{
+	int i;
+
+	if (!ipa3_ctx->aqc_ctx.dbg_stats.uc_dbg_stats_mmio) {
+		IPAERR("bad parms NULL aqc_gsi_stats_mmio\n");
+		return -EINVAL;
+	}
+	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
+	for (i = 0; i < MAX_AQC_CHANNELS; i++) {
+		stats->ring[i].ringFull = ioread32(
+			ipa3_ctx->aqc_ctx.dbg_stats.uc_dbg_stats_mmio
+			+ i * IPA3_UC_DEBUG_STATS_OFF +
+			IPA3_UC_DEBUG_STATS_RINGFULL_OFF);
+		stats->ring[i].ringEmpty = ioread32(
+			ipa3_ctx->aqc_ctx.dbg_stats.uc_dbg_stats_mmio
+			+ i * IPA3_UC_DEBUG_STATS_OFF +
+			IPA3_UC_DEBUG_STATS_RINGEMPTY_OFF);
+		stats->ring[i].ringUsageHigh = ioread32(
+			ipa3_ctx->aqc_ctx.dbg_stats.uc_dbg_stats_mmio
+			+ i * IPA3_UC_DEBUG_STATS_OFF +
+			IPA3_UC_DEBUG_STATS_RINGUSAGEHIGH_OFF);
+		stats->ring[i].ringUsageLow = ioread32(
+			ipa3_ctx->aqc_ctx.dbg_stats.uc_dbg_stats_mmio
+			+ i * IPA3_UC_DEBUG_STATS_OFF +
+			IPA3_UC_DEBUG_STATS_RINGUSAGELOW_OFF);
+		stats->ring[i].RingUtilCount = ioread32(
+			ipa3_ctx->aqc_ctx.dbg_stats.uc_dbg_stats_mmio
+			+ i * IPA3_UC_DEBUG_STATS_OFF +
+			IPA3_UC_DEBUG_STATS_RINGUTILCOUNT_OFF);
+	}
+	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
+
 
 	return 0;
 }

@@ -28,8 +28,8 @@ struct msm_bus_node_device_type;
 struct link_node {
 	uint64_t lnode_ib[NUM_CTX];
 	uint64_t lnode_ab[NUM_CTX];
-	uint64_t lnode_query_ib[NUM_CTX];
-	uint64_t lnode_query_ab[NUM_CTX];
+	uint64_t query_ib[NUM_CTX];
+	uint64_t query_ab[NUM_CTX];
 	uint64_t alc_idx[NUM_CTX];
 	int next;
 	struct device *next_dev;
@@ -42,7 +42,6 @@ struct link_node {
 /* New types introduced for adhoc topology */
 struct msm_bus_noc_ops {
 	int (*qos_init)(struct msm_bus_node_device_type *dev,
-			struct msm_bus_node_device_type *fabdev,
 			void __iomem *qos_base, uint32_t qos_off,
 			uint32_t qos_delta, uint32_t qos_freq);
 	int (*set_bw)(struct msm_bus_node_device_type *dev,
@@ -53,6 +52,9 @@ struct msm_bus_noc_ops {
 			uint32_t qos_delta, uint32_t qos_freq, int enable_lim,
 			uint64_t lim_bw);
 	bool (*update_bw_reg)(int mode);
+	int (*sbm_config)(struct msm_bus_node_device_type *node_dev,
+			void __iomem *noc_base, uint32_t sbm_offset,
+			bool enable);
 };
 
 struct nodebw {
@@ -75,6 +77,11 @@ struct nodevector {
 	uint64_t vec_b;
 	uint64_t query_vec_a;
 	uint64_t query_vec_b;
+};
+
+struct node_regulator {
+	char name[MAX_REG_NAME];
+	struct regulator *reg;
 };
 
 struct qos_bcm_type {
@@ -112,6 +119,7 @@ struct msm_bus_fab_device_type {
 	uint32_t base_offset;
 	uint32_t qos_freq;
 	uint32_t qos_off;
+	uint32_t sbm_offset;
 	struct msm_bus_noc_ops noc_ops;
 	enum msm_bus_hw_sel bus_type;
 	bool bypass_qos_prg;
@@ -177,7 +185,7 @@ struct msm_bus_node_info_type {
 	bool is_rsc_dev;
 	bool is_traversed;
 	unsigned int *connections;
-	unsigned int *black_listed_connections;
+	unsigned int *bl_cons;
 	unsigned int *bcm_dev_ids;
 	unsigned int *rsc_dev_ids;
 	struct device **dev_connections;
@@ -190,6 +198,8 @@ struct msm_bus_node_info_type {
 	struct rule_update_path_info rule;
 	uint64_t lim_bw;
 	bool defer_qos;
+	uint32_t *disable_ports;
+	int num_disable_ports;
 	struct node_agg_params_type agg_params;
 };
 
@@ -204,12 +214,15 @@ struct msm_bus_node_device_type {
 	struct nodevector node_vec[NUM_CTX];
 	struct list_head link;
 	struct list_head query_link;
+	struct list_head dbg_link;
 	struct nodeclk clk[NUM_CTX];
 	struct nodeclk bus_qos_clk;
 	uint32_t num_node_qos_clks;
 	struct nodeclk *node_qos_clks;
 	uint32_t num_qos_bcms;
 	struct qos_bcm_type *qos_bcms;
+	uint32_t num_regs;
+	struct node_regulator *node_regs;
 	unsigned int ap_owned;
 	struct device_node *of_node;
 	struct device dev;
@@ -218,6 +231,7 @@ struct msm_bus_node_device_type {
 	bool query_dirty;
 	struct list_head dev_link;
 	struct list_head devlist;
+	bool is_connected;
 };
 
 static inline struct msm_bus_node_device_type *to_msm_bus_node(struct device *d)

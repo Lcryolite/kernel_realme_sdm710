@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -15,7 +15,9 @@
 #include <linux/kthread.h>
 #include <linux/vmalloc.h>
 #include <linux/dma-buf.h>
+#include <linux/ion_kernel.h>
 #include <linux/qcom_tspp.h>
+#include <linux/platform_device.h>
 #include "mpq_dvb_debug.h"
 #include "mpq_dmx_plugin_common.h"
 
@@ -126,7 +128,7 @@ static struct
 		void *ch_mem_heap_virt_base;
 
 		/* TSPP data buffer heap physical base address */
-		ion_phys_addr_t ch_mem_heap_phys_base;
+		phys_addr_t ch_mem_heap_phys_base;
 
 		/* Buffer allocation index */
 		int buff_index;
@@ -217,10 +219,6 @@ static void *tspp_mem_allocator(int channel_id, u32 size,
 
 	*phys_base =
 		(mpq_dmx_tspp_info.tsif[i].ch_mem_heap_phys_base +
-		(mpq_dmx_tspp_info.tsif[i].buff_index * size));
-
-	*dma_base =
-		(mpq_dmx_tspp_info.tsif[i].ch_ion_dma_buf.dma_map_base +
 		(mpq_dmx_tspp_info.tsif[i].buff_index * size));
 
 	mpq_dmx_tspp_info.tsif[i].buff_index++;
@@ -469,8 +467,8 @@ static int mpq_dmx_tspp_thread(void *arg)
 			 * and perform demuxing on them
 			 */
 			do {
-				if (atomic_read(&mpq_dmx_tspp_info.tsif[tsif].
-						control_op)) {
+				if (atomic_read(
+				  &mpq_dmx_tspp_info.tsif[tsif].control_op)) {
 					/* restore for next iteration */
 					atomic_inc(data_cnt);
 					break;
@@ -532,26 +530,19 @@ static void mpq_tspp_callback(int channel_id, void *user)
  */
 static void mpq_dmx_channel_mem_free(int tsif)
 {
-	MPQ_DVB_DBG_PRINT("%s(%d)\n", __func__, tsif);
+	int size = 0;
+
+	size = (mpq_dmx_tspp_info.tsif[tsif].buffer_count * tspp_desc_size);
+	size = ALIGN(size, SZ_4K);
+
+
+	tspp_free_dma_buffer(0, size,
+	    (void *)mpq_dmx_tspp_info.tsif[tsif].ch_mem_heap_virt_base,
+	    (dma_addr_t)mpq_dmx_tspp_info.tsif[tsif].ch_mem_heap_phys_base);
 
 	mpq_dmx_tspp_info.tsif[tsif].ch_mem_heap_phys_base = 0;
-
-	if (!IS_ERR_OR_NULL(mpq_dmx_tspp_info.tsif[tsif].ch_mem_heap_handle)) {
-		if (!IS_ERR_OR_NULL(mpq_dmx_tspp_info.tsif[tsif].
-				ch_mem_heap_virt_base))
-			ion_unmap_kernel(mpq_dmx_tspp_info.ion_client,
-				mpq_dmx_tspp_info.tsif[tsif].
-					ch_mem_heap_handle);
-
-		ion_free(mpq_dmx_tspp_info.ion_client,
-			mpq_dmx_tspp_info.tsif[tsif].ch_mem_heap_handle);
-	}
-
 	mpq_dmx_tspp_info.tsif[tsif].ch_mem_heap_virt_base = NULL;
 	mpq_dmx_tspp_info.tsif[tsif].ch_mem_heap_handle = NULL;
-
-	tspp_detach_ion_dma_buff(0,
-		&mpq_dmx_tspp_info.tsif[tsif].ch_ion_dma_buf);
 }
 
 /**
@@ -563,63 +554,22 @@ static void mpq_dmx_channel_mem_free(int tsif)
  */
 static int mpq_dmx_channel_mem_alloc(int tsif)
 {
-	int result;
-	size_t len;
+	int size = 0;
 
-	MPQ_DVB_DBG_PRINT("%s(%d)\n", __func__, tsif);
+	size = (mpq_dmx_tspp_info.tsif[tsif].buffer_count * tspp_desc_size);
 
-	mpq_dmx_tspp_info.tsif[tsif].ch_mem_heap_handle =
-		ion_alloc(mpq_dmx_tspp_info.ion_client,
-		 (mpq_dmx_tspp_info.tsif[tsif].buffer_count * tspp_desc_size),
-		 SZ_4K,
-		 ION_HEAP(tspp_out_ion_heap),
-		 0); /* non-cached */
+	size = ALIGN(size, SZ_4K);
 
-	if (IS_ERR_OR_NULL(mpq_dmx_tspp_info.tsif[tsif].ch_mem_heap_handle)) {
-		MPQ_DVB_ERR_PRINT("%s: ion_alloc() failed\n", __func__);
-		mpq_dmx_channel_mem_free(tsif);
-		return -ENOMEM;
-	}
+	mpq_dmx_tspp_info.tsif[tsif].ch_mem_heap_virt_base
+		= tspp_allocate_dma_buffer(0, size,
+			&mpq_dmx_tspp_info.tsif[tsif].ch_mem_heap_phys_base);
 
-	/* save virtual base address of heap */
-	mpq_dmx_tspp_info.tsif[tsif].ch_mem_heap_virt_base =
-		ion_map_kernel(mpq_dmx_tspp_info.ion_client,
-			mpq_dmx_tspp_info.tsif[tsif].ch_mem_heap_handle);
-	if (IS_ERR_OR_NULL(mpq_dmx_tspp_info.tsif[tsif].
-				ch_mem_heap_virt_base)) {
+	if (IS_ERR_OR_NULL(
+	     mpq_dmx_tspp_info.tsif[tsif].ch_mem_heap_virt_base)) {
 		MPQ_DVB_ERR_PRINT("%s: ion_map_kernel() failed\n", __func__);
 		mpq_dmx_channel_mem_free(tsif);
 		return -ENOMEM;
 	}
-
-	/* save physical base address of heap */
-	result = ion_phys(mpq_dmx_tspp_info.ion_client,
-		mpq_dmx_tspp_info.tsif[tsif].ch_mem_heap_handle,
-		&(mpq_dmx_tspp_info.tsif[tsif].ch_mem_heap_phys_base), &len);
-	if (result < 0) {
-		MPQ_DVB_ERR_PRINT("%s: ion_phys() failed\n", __func__);
-		mpq_dmx_channel_mem_free(tsif);
-		return -ENOMEM;
-	}
-
-	mpq_dmx_tspp_info.tsif[tsif].ch_ion_dma_buf.dbuf = ion_share_dma_buf(
-			mpq_dmx_tspp_info.ion_client,
-			mpq_dmx_tspp_info.tsif[tsif].ch_mem_heap_handle);
-	if (IS_ERR_OR_NULL(mpq_dmx_tspp_info.tsif[tsif].ch_ion_dma_buf.dbuf)) {
-		MPQ_DVB_ERR_PRINT("%s: ion_share_dma_buf failed\n", __func__);
-		mpq_dmx_channel_mem_free(tsif);
-		return -ENOMEM;
-	}
-
-	result = tspp_attach_ion_dma_buff(0,
-				&mpq_dmx_tspp_info.tsif[tsif].ch_ion_dma_buf);
-	if (result) {
-		MPQ_DVB_ERR_PRINT("%s: tspp_attach_ion_dma_buff failed\n",
-					 __func__);
-		mpq_dmx_channel_mem_free(tsif);
-		return result;
-	}
-
 	return 0;
 }
 
@@ -1456,8 +1406,7 @@ static int mpq_tspp_dmx_remove_channel(struct dvb_demux_feed *feed)
 		/* Crossing the threshold - from SW to HW filtering mode */
 
 		accept_all_filter_existed =
-			mpq_dmx_tspp_info.tsif[tsif].
-				accept_all_filter_exists_flag;
+		   mpq_dmx_tspp_info.tsif[tsif].accept_all_filter_exists_flag;
 
 		/* Add a temporary filter to accept all packets */
 		ret = mpq_tspp_add_accept_all_filter(channel_id,
@@ -1665,9 +1614,6 @@ static int mpq_tspp_dmx_write_to_decoder(
 	if (dvb_dmx_is_video_feed(feed))
 		return mpq_dmx_process_video_packet(feed, buf);
 
-	if (dvb_dmx_is_audio_feed(feed))
-		return mpq_dmx_process_audio_packet(feed, buf);
-
 	if (dvb_dmx_is_pcr_feed(feed))
 		return mpq_dmx_process_pcr_packet(feed, buf);
 
@@ -1697,7 +1643,7 @@ static int mpq_tspp_dmx_get_caps(struct dmx_demux *demux,
 
 	caps->caps = DMX_CAP_PULL_MODE | DMX_CAP_VIDEO_DECODER_DATA |
 		DMX_CAP_TS_INSERTION | DMX_CAP_VIDEO_INDEXING |
-		DMX_CAP_AUDIO_DECODER_DATA | DMX_CAP_AUTO_BUFFER_FLUSH;
+		DMX_CAP_AUTO_BUFFER_FLUSH;
 	caps->recording_max_video_pids_indexed = 0;
 	caps->num_decoders = MPQ_ADAPTER_MAX_NUM_OF_INTERFACES;
 	caps->num_demux_devices = CONFIG_DVB_MPQ_NUM_DMX_DEVICES;
@@ -1834,8 +1780,6 @@ static int mpq_tspp_dmx_init(
 		DMX_CRC_CHECKING			|
 		DMX_TS_DESCRAMBLING;
 
-	mpq_demux->decoder_alloc_flags = ION_FLAG_CACHED;
-
 	/* Set dvb-demux "virtual" function pointers */
 	mpq_demux->demux.priv = (void *)mpq_demux;
 	mpq_demux->demux.filternum = TSPP_MAX_SECTION_FILTER_NUM;
@@ -1895,7 +1839,7 @@ init_failed:
 	return result;
 }
 
-static int __init mpq_dmx_tspp_plugin_init(void)
+static int mpq_dmx_tspp_plugin_probe(struct platform_device *pdev)
 {
 	int i;
 	int j;
@@ -1954,7 +1898,7 @@ static int __init mpq_dmx_tspp_plugin_init(void)
 		mutex_init(&mpq_dmx_tspp_info.tsif[i].mutex);
 	}
 
-	ret = mpq_dmx_plugin_init(mpq_tspp_dmx_init);
+	ret = mpq_dmx_plugin_init(mpq_tspp_dmx_init, pdev);
 
 	if (ret < 0) {
 		MPQ_DVB_ERR_PRINT(
@@ -1971,7 +1915,7 @@ static int __init mpq_dmx_tspp_plugin_init(void)
 	return ret;
 }
 
-static void __exit mpq_dmx_tspp_plugin_exit(void)
+static int mpq_dmx_tspp_plugin_remove(struct platform_device *pdev)
 {
 	int i;
 
@@ -2005,6 +1949,41 @@ static void __exit mpq_dmx_tspp_plugin_exit(void)
 	}
 
 	mpq_dmx_plugin_exit();
+	return 0;
+}
+
+static const struct of_device_id msm_match_table[] = {
+	{.compatible = "qcom,demux"},
+	{}
+};
+
+static struct platform_driver mpq_dmx_tspp_plugin_driver = {
+	.probe          = mpq_dmx_tspp_plugin_probe,
+	.remove         = mpq_dmx_tspp_plugin_remove,
+	.driver         = {
+		.name   = "demux",
+		.of_match_table = msm_match_table,
+	},
+};
+
+
+static int __init mpq_dmx_tspp_plugin_init(void)
+{
+	int rc;
+
+	/* register the driver, and check hardware */
+	rc = platform_driver_register(&mpq_dmx_tspp_plugin_driver);
+	if (rc)
+		pr_err("%s: platform_driver_register failed: %d\n",
+			__func__, rc);
+
+	return rc;
+}
+
+static void __exit mpq_dmx_tspp_plugin_exit(void)
+{
+	/* delete low level driver */
+	platform_driver_unregister(&mpq_dmx_tspp_plugin_driver);
 }
 
 

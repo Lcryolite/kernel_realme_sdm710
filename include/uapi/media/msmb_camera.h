@@ -231,4 +231,3 @@ struct msm_camera_private_ioctl_arg {
 	_IOWR('V', BASE_VIDIOC_PRIVATE, struct msm_camera_private_ioctl_arg)
 
 #endif
-

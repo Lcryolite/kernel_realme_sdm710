@@ -49,6 +49,7 @@
 #include <linux/init.h>
 #include <linux/kgdb.h>
 #include <linux/kdb.h>
+#include <linux/nmi.h>
 #include <linux/pid.h>
 #include <linux/smp.h>
 #include <linux/mm.h>
@@ -224,9 +225,9 @@ static void kgdb_flush_swbreak_addr(unsigned long addr)
 		int i;
 
 		for (i = 0; i < VMACACHE_SIZE; i++) {
-			if (!current->vmacache[i])
+			if (!current->vmacache.vmas[i])
 				continue;
-			flush_cache_range(current->vmacache[i],
+			flush_cache_range(current->vmacache.vmas[i],
 					  addr, addr + BREAK_INSTR_SIZE);
 		}
 	}
@@ -528,6 +529,8 @@ return_normal:
 				arch_kgdb_ops.correct_hw_break();
 			if (trace_on)
 				tracing_on();
+			kgdb_info[cpu].debuggerinfo = NULL;
+			kgdb_info[cpu].task = NULL;
 			kgdb_info[cpu].exception_state &=
 				~(DCPU_WANT_MASTER | DCPU_IS_SLAVE);
 			kgdb_info[cpu].enter_kgdb--;
@@ -662,6 +665,8 @@ kgdb_restore:
 	if (trace_on)
 		tracing_on();
 
+	kgdb_info[cpu].debuggerinfo = NULL;
+	kgdb_info[cpu].task = NULL;
 	kgdb_info[cpu].exception_state &=
 		~(DCPU_WANT_MASTER | DCPU_IS_SLAVE);
 	kgdb_info[cpu].enter_kgdb--;

@@ -71,14 +71,14 @@
  */
 
 static unsigned int rndis_dl_max_pkt_per_xfer = 3;
-module_param(rndis_dl_max_pkt_per_xfer, uint, S_IRUGO | S_IWUSR);
+module_param(rndis_dl_max_pkt_per_xfer, uint, 0644);
 MODULE_PARM_DESC(rndis_dl_max_pkt_per_xfer,
 	"Maximum packets per transfer for DL aggregation");
 
 static unsigned int rndis_ul_max_pkt_per_xfer = 3;
-module_param(rndis_ul_max_pkt_per_xfer, uint, S_IRUGO | S_IWUSR);
+module_param(rndis_ul_max_pkt_per_xfer, uint, 0644);
 MODULE_PARM_DESC(rndis_ul_max_pkt_per_xfer,
-       "Maximum packets per transfer for UL aggregation");
+	"Maximum packets per transfer for UL aggregation");
 
 struct f_rndis {
 	struct gether			port;
@@ -121,7 +121,7 @@ static unsigned int bitrate(struct usb_gadget *g)
 
 #define RNDIS_STATUS_INTERVAL_MS	32
 #define STATUS_BYTECOUNT		8	/* 8 bytes data */
-
+#define MAX_TRANSFER_SIZE		0x800
 
 /* interface descriptor: */
 
@@ -496,6 +496,7 @@ static void rndis_response_complete(struct usb_ep *ep, struct usb_request *req)
 			DBG(cdev, "notify/1 --> %d\n", status);
 			spin_unlock(&_rndis_lock);
 		}
+
 	}
 
 	return;
@@ -534,8 +535,8 @@ static void rndis_command_complete(struct usb_ep *ep, struct usb_request *req)
 
 	buf = (rndis_init_msg_type *)req->buf;
 
-	if (buf->MessageType == RNDIS_MSG_INIT) {
-		if (buf->MaxTransferSize > 2048)
+	if (buf->MessageType == cpu_to_le32(RNDIS_MSG_INIT)) {
+		if (le32_to_cpu(buf->MaxTransferSize) > MAX_TRANSFER_SIZE)
 			rndis->port.multi_pkt_xfer = 1;
 		else
 			rndis->port.multi_pkt_xfer = 0;
@@ -782,6 +783,10 @@ rndis_bind(struct usb_configuration *c, struct usb_function *f)
 		f->os_desc_table[0].os_desc = &rndis_opts->rndis_os_desc;
 	}
 
+	rndis_iad_descriptor.bFunctionClass = rndis_opts->class;
+	rndis_iad_descriptor.bFunctionSubClass = rndis_opts->subclass;
+	rndis_iad_descriptor.bFunctionProtocol = rndis_opts->protocol;
+
 	/*
 	 * in drivers/usb/gadget/configfs.c:configfs_composite_bind()
 	 * configurations are bound in sequence with list_for_each_entry,
@@ -995,6 +1000,15 @@ USB_ETHERNET_CONFIGFS_ITEM_ATTR_QMULT(rndis);
 /* f_rndis_opts_ifname */
 USB_ETHERNET_CONFIGFS_ITEM_ATTR_IFNAME(rndis);
 
+/* f_rndis_opts_class */
+USB_ETHER_CONFIGFS_ITEM_ATTR_U8_RW(rndis, class);
+
+/* f_rndis_opts_subclass */
+USB_ETHER_CONFIGFS_ITEM_ATTR_U8_RW(rndis, subclass);
+
+/* f_rndis_opts_protocol */
+USB_ETHER_CONFIGFS_ITEM_ATTR_U8_RW(rndis, protocol);
+
 /* f_rndis_opts_wceis */
 USB_ETHERNET_CONFIGFS_ITEM_ATTR_WCEIS(rndis);
 
@@ -1003,6 +1017,9 @@ static struct configfs_attribute *rndis_attrs[] = {
 	&rndis_opts_attr_host_addr,
 	&rndis_opts_attr_qmult,
 	&rndis_opts_attr_ifname,
+	&rndis_opts_attr_class,
+	&rndis_opts_attr_subclass,
+	&rndis_opts_attr_protocol,
 	&rndis_opts_attr_wceis,
 	NULL,
 };
@@ -1044,6 +1061,10 @@ static struct usb_function_instance *rndis_alloc_inst(void)
 	opts->func_inst.free_func_inst = rndis_free_inst;
 	INIT_LIST_HEAD(&opts->rndis_os_desc.ext_prop);
 
+	opts->class = rndis_iad_descriptor.bFunctionClass;
+	opts->subclass = rndis_iad_descriptor.bFunctionSubClass;
+	opts->protocol = rndis_iad_descriptor.bFunctionProtocol;
+
 	descs[0] = &opts->rndis_os_desc;
 	names[0] = "rndis";
 	config_group_init_type_name(&opts->func_inst.group, "",
@@ -1067,7 +1088,7 @@ static void rndis_free(struct usb_function *f)
 {
 	struct f_rndis *rndis;
 	struct f_rndis_opts *opts;
-	unsigned long flags;
+	unsigned long int flags;
 
 	rndis = func_to_rndis(f);
 	rndis_deregister(rndis->params);

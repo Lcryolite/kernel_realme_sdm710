@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "milestone": "M1-donor-control",
+  "status": "PASS",
+  "source": {
+    "remote": "https://github.com/LineageOS/android_kernel_qcom_sm8150.git",
+    "branch_at_selection": "lineage-20",
+    "commit": "dbc6d0dab1093092d15c64ffd79a713ba214c107",
+    "kernel_release": "4.14.357-openela-perf-gdbc6d0dab109",
+    "defconfig": "vendor/sm8150-perf_defconfig"
+  },
+  "toolchain": {
+    "clang": "Android (6443078 based on r383902) clang 11.0.1",
+    "lld": "LLD 11.0.1",
+    "clang_archive_sha256": "2b919802aae65dfc4fabfd2a88f899e80ea1f8e43b772acdf30fc280854fcdb7",
+    "aarch64_binutils_archive_sha256": "68bd35d11795fb9237639dbc3eeccbaaedc44da9e094e902133ffb5535fe28e6",
+    "arm_binutils_archive_sha256": "602904ecd94a59d103d546311823505733e8a91834b66e0dba79d4b629de957b",
+    "dtc": "DTC 1.8.1",
+    "dtc_sha256": "223c2f97f431b1ef64c206e15375c063a180287cf29acdbdbf1d0dc3cdeee7b4"
+  },
+  "reproducibility": {
+    "source_date_epoch": 1784042363,
+    "build_user": "rmx1901",
+    "build_host": "bringup",
+    "build_version": 1,
+    "timestamp": "Tue Jul 14 15:19:23 UTC 2026",
+    "tar_metadata_fixed": true,
+    "same_test_certificate_required_for_byte_identity": true,
+    "same_test_certificate_was_used": true,
+    "normalized_core_artifacts_byte_identical": true,
+    "test_certificate_x509_sha256": "e4db0c74f32306baf093f81e1f87c6d8d541d5dde2669f39f21a7343c2cc4dbe",
+    "private_key_committed": false
+  },
+  "configuration": {
+    "dot_config_sha256": "ed1fa5893c41b9df54fe9c18973549f5dcf4601db7651b4e4e1476796c9dcfca",
+    "savedefconfig_sha256": "ca06cfc9fdbd914d9ba3d37d4a3a1c9d3820919a877c53c5039b9fac99a1c248",
+    "listnewconfig_entries": 0
+  },
+  "artifacts": {
+    "Image": {
+      "bytes": 44298240,
+      "sha256": "dbc034c0f8d770e34c007d3cc948464b44a21dc84b415e7eb8514ec8ee12bb82"
+    },
+    "Image.gz": {
+      "bytes": 17747762,
+      "sha256": "8b5e329ef7445b456127fbc9966c5cd37875fd0c356119e192a58f65d62090e6"
+    },
+    "vmlinux_sha256": "a5c80401f0d27a71639d30945794c1cf4b93c25de0c0bbf832e3ee5ea4d5dafc",
+    "System.map_sha256": "aadaffbeaa4c10f57df2825d044a439a99595d0b1977f94296a216fcc975530c",
+    "dtb_count": 15,
+    "dtbo_count": 23,
+    "module_count": 3
+  },
+  "diagnostics": {
+    "errors": 0,
+    "baseline_warning_lines": 10,
+    "baseline_file": "bringup/baselines/M1-warnings.txt"
+  },
+  "flashable": false
+}

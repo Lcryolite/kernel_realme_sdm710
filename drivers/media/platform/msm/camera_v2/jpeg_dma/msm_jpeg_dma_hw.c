@@ -1665,7 +1665,7 @@ int msm_jpegdma_hw_get(struct msm_jpegdma_device *dma)
 	mutex_lock(&dma->lock);
 	if (dma->ref_count == 0) {
 
-		dev_dbg(dma->dev, "msm_jpegdma_hw_get E\n");
+		dev_dbg(dma->dev, "%s : E\n", __func__);
 		/* enable all the regulators */
 		ret = msm_camera_regulator_enable(dma->dma_vdd,
 				dma->num_reg, true);
@@ -1703,7 +1703,7 @@ int msm_jpegdma_hw_get(struct msm_jpegdma_device *dma)
 		msm_jpegdma_hw_enable_irq(dma);
 	}
 	dma->ref_count++;
-	dev_dbg(dma->dev, "msm_jpegdma_hw_get X\n");
+	dev_dbg(dma->dev, "%s : X\n", __func__);
 	mutex_unlock(&dma->lock);
 
 	return 0;

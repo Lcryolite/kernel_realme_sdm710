@@ -13,13 +13,6 @@
 #if !defined(_IPA_EMULATION_STUBS_H_)
 # define _IPA_EMULATION_STUBS_H_
 
-# define clk_get(x, y) ((struct clk *) -(MAX_ERRNO+1))
-# define clk_put(x)                do { } while (0)
-# define clk_prepare(x)            do { } while (0)
-# define clk_enable(x)             do { } while (0)
-# define clk_set_rate(x, y)        do { } while (0)
-# define clk_disable_unprepare(x)  do { } while (0)
-
 # define outer_flush_range(x, y)
 # define __flush_dcache_area(x, y)
 # define __cpuc_flush_dcache_area(x, y) __flush_dcache_area(x, y)
@@ -121,5 +114,15 @@ int emulator_of_property_read_variable_u32_array(
 
 resource_size_t emulator_resource_size(
 	const struct resource *res);
+
+static inline bool is_device_dma_coherent(struct device *dev)
+{
+	return false;
+}
+
+static inline phys_addr_t qcom_smem_virt_to_phys(void *addr)
+{
+	return 0;
+}
 
 #endif /* #if !defined(_IPA_EMULATION_STUBS_H_) */

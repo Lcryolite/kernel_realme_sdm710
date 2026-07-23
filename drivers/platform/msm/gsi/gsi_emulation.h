@@ -1,4 +1,4 @@
-/* Copyright (c) 2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -18,7 +18,7 @@
 # include "gsi_reg.h"
 # include "gsi_emulation_stubs.h"
 
-# define gsi_emu_readl(c)     ({ u32 __v = readl_relaxed(c); __iormb(); __v; })
+# define gsi_emu_readl(c)     (readl(c))
 # define gsi_emu_writel(v, c) ({ __iowmb(); writel_relaxed((v), (c)); })
 
 # define CNTRLR_BASE 0
@@ -135,7 +135,7 @@
 # define DEO_IC_INT_CTL_VER_MIN          0x0102
 
 
-#if IPA_EMULATION_COMPILE == 1 /* declarations to follow */
+#if defined(CONFIG_IPA_EMULATION) /* declarations to follow */
 
 /*
  * *****************************************************************************
@@ -164,7 +164,7 @@ irqreturn_t emulator_soft_irq_isr(
 	int   irq,
 	void *ctxt);
 
-# else /* #if IPA_EMULATION_COMPILE != 1, then definitions to follow */
+# else /* #if !defined(CONFIG_IPA_EMULATION) then definitions to follow */
 
 static inline int setup_emulator_cntrlr(
 	void __iomem *intcntrlr_base,
@@ -187,6 +187,6 @@ static inline irqreturn_t emulator_soft_irq_isr(
 	return IRQ_HANDLED;
 }
 
-# endif /* #if IPA_EMULATION_COMPILE == 1 */
+# endif /* #if defined(CONFIG_IPA_EMULATION) */
 
 #endif /* #if !defined(_GSI_EMULATION_H_) */

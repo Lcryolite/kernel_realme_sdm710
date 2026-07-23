@@ -456,7 +456,7 @@ __SYSCALL(__NR_setfsuid32, sys_setfsuid)
 #define __NR_setfsgid32 216
 __SYSCALL(__NR_setfsgid32, sys_setfsgid)
 #define __NR_getdents64 217
-__SYSCALL(__NR_getdents64, compat_sys_getdents64)
+__SYSCALL(__NR_getdents64, sys_getdents64)
 #define __NR_pivot_root 218
 __SYSCALL(__NR_pivot_root, sys_pivot_root)
 #define __NR_mincore 219
@@ -819,8 +819,6 @@ __SYSCALL(__NR_pkey_free, sys_pkey_free)
 __SYSCALL(__NR_statx, sys_statx)
 #define __NR_pidfd_send_signal 424
 __SYSCALL(__NR_pidfd_send_signal, sys_pidfd_send_signal)
-#define __NR_move_mount 429
-__SYSCALL(__NR_move_mount, sys_move_mount)
 #define __NR_pidfd_open 434
 __SYSCALL(__NR_pidfd_open, sys_pidfd_open)
 #define __NR_close_range 436

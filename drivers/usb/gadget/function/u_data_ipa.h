@@ -1,4 +1,4 @@
-/* Copyright (c) 2014,2016 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014,2016,2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -71,6 +71,7 @@ struct f_rmnet_opts {
 	int refcnt;
 };
 
+#ifdef CONFIG_USB_F_QCRNDIS
 void ipa_data_port_select(enum ipa_func_type func);
 void ipa_data_disconnect(struct data_port *gp, enum ipa_func_type func);
 int ipa_data_connect(struct data_port *gp, enum ipa_func_type func,
@@ -95,6 +96,39 @@ void ipa_data_start_rx_tx(enum ipa_func_type func);
 void ipa_data_start_rndis_ipa(enum ipa_func_type func);
 
 void ipa_data_stop_rndis_ipa(enum ipa_func_type func);
+#else
+static inline void ipa_data_port_select(enum ipa_func_type func)
+{
+}
+static inline void ipa_data_disconnect(struct data_port *gp,
+				enum ipa_func_type func)
+{
+}
+static inline int ipa_data_connect(struct data_port *gp,
+			enum ipa_func_type func, u8 src_connection_idx,
+			u8 dst_connection_idx)
+{
+	return 0;
+}
+static inline int ipa_data_setup(enum ipa_func_type func)
+{
+	return 0;
+}
+static inline void ipa_data_free(enum ipa_func_type func)
+{
+}
+void ipa_data_flush_workqueue(void)
+{
+}
+static inline void ipa_data_resume(struct data_port *gp,
+		enum ipa_func_type func, bool remote_wakeup_enabled)
+{
+}
+static inline void ipa_data_suspend(struct data_port *gp,
+		enum ipa_func_type func, bool remote_wakeup_enabled)
+{
+}
+#endif /* CONFIG_USB_F_QCRNDIS */
 
 #ifdef CONFIG_USB_F_QCRNDIS
 void *rndis_qc_get_ipa_priv(void);

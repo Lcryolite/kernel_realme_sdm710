@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -67,6 +67,7 @@ int dsi_phy_timing_calc_init(struct dsi_phy_hw *phy,
  * @host:       DSI host configuration.
  * @timing:     DSI phy lane configurations.
  * @use_mode_bit_clk: Boolean to indicate whether to recalculate bit clk.
+ * @is_cphy:	Boolean to indicate whether cphy mode.
  *
  * This function setups the catalog information in the dsi_phy_hw object.
  *
@@ -76,7 +77,7 @@ int dsi_phy_hw_calculate_timing_params(struct dsi_phy_hw *phy,
 				       struct dsi_mode_info *mode,
 				       struct dsi_host_common_cfg *host,
 				       struct dsi_phy_per_lane_cfgs *timing,
-				       bool use_mode_bit_clk);
+				       bool use_mode_bit_clk, bool is_cphy);
 
 /* Definitions for 14nm PHY hardware driver */
 void dsi_phy_hw_v2_0_regulator_enable(struct dsi_phy_hw *phy,
@@ -88,6 +89,14 @@ void dsi_phy_hw_v2_0_idle_on(struct dsi_phy_hw *phy, struct dsi_phy_cfg *cfg);
 void dsi_phy_hw_v2_0_idle_off(struct dsi_phy_hw *phy);
 int dsi_phy_hw_timing_val_v2_0(struct dsi_phy_per_lane_cfgs *timing_cfg,
 		u32 *timing_val, u32 size);
+void dsi_phy_hw_v2_0_clamp_ctrl(struct dsi_phy_hw *phy, bool enable);
+void dsi_phy_hw_v2_0_dyn_refresh_helper(struct dsi_phy_hw *phy, u32 offset);
+void dsi_phy_hw_v2_0_dyn_refresh_config(struct dsi_phy_hw *phy,
+		struct dsi_phy_cfg *cfg, bool is_master, bool is_cphy);
+void dsi_phy_hw_v2_0_dyn_refresh_pipe_delay(struct dsi_phy_hw *phy,
+		struct dsi_dyn_clk_delay *delay);
+int dsi_phy_hw_v2_0_cache_phy_timings(struct dsi_phy_per_lane_cfgs *timings,
+		u32 *dst, u32 size);
 
 /* Definitions for 10nm PHY hardware driver */
 void dsi_phy_hw_v3_0_regulator_enable(struct dsi_phy_hw *phy,
@@ -107,6 +116,23 @@ int dsi_phy_hw_timing_val_v3_0(struct dsi_phy_per_lane_cfgs *timing_cfg,
 void dsi_phy_hw_v3_0_clamp_ctrl(struct dsi_phy_hw *phy, bool enable);
 int dsi_phy_hw_v3_0_lane_reset(struct dsi_phy_hw *phy);
 void dsi_phy_hw_v3_0_toggle_resync_fifo(struct dsi_phy_hw *phy);
+
+/* Definitions for 7nm PHY hardware driver */
+void dsi_phy_hw_v4_0_enable(struct dsi_phy_hw *phy, struct dsi_phy_cfg *cfg);
+void dsi_phy_hw_v4_0_disable(struct dsi_phy_hw *phy, struct dsi_phy_cfg *cfg);
+int dsi_phy_hw_v4_0_wait_for_lane_idle(struct dsi_phy_hw *phy, u32 lanes);
+void dsi_phy_hw_v4_0_ulps_request(struct dsi_phy_hw *phy,
+		struct dsi_phy_cfg *cfg, u32 lanes);
+void dsi_phy_hw_v4_0_ulps_exit(struct dsi_phy_hw *phy,
+			struct dsi_phy_cfg *cfg, u32 lanes);
+u32 dsi_phy_hw_v4_0_get_lanes_in_ulps(struct dsi_phy_hw *phy);
+bool dsi_phy_hw_v4_0_is_lanes_in_ulps(u32 lanes, u32 ulps_lanes);
+int dsi_phy_hw_timing_val_v4_0(struct dsi_phy_per_lane_cfgs *timing_cfg,
+		u32 *timing_val, u32 size);
+int dsi_phy_hw_v4_0_lane_reset(struct dsi_phy_hw *phy);
+void dsi_phy_hw_v4_0_toggle_resync_fifo(struct dsi_phy_hw *phy);
+void dsi_phy_hw_v4_0_reset_clk_en_sel(struct dsi_phy_hw *phy);
+void dsi_phy_hw_v4_0_set_continuous_clk(struct dsi_phy_hw *phy, bool enable);
 
 /* DSI controller common ops */
 u32 dsi_ctrl_hw_cmn_get_interrupt_status(struct dsi_ctrl_hw *ctrl);
@@ -138,6 +164,9 @@ void dsi_ctrl_hw_cmn_video_engine_en(struct dsi_ctrl_hw *ctrl, bool on);
 void dsi_ctrl_hw_cmn_video_engine_setup(struct dsi_ctrl_hw *ctrl,
 				       struct dsi_host_common_cfg *common_cfg,
 				       struct dsi_video_engine_cfg *cfg);
+
+void dsi_ctrl_hw_cmn_setup_avr(struct dsi_ctrl_hw *ctrl, bool enable);
+
 void dsi_ctrl_hw_cmn_set_video_timing(struct dsi_ctrl_hw *ctrl,
 			 struct dsi_mode_info *mode);
 void dsi_ctrl_hw_cmn_set_timing_db(struct dsi_ctrl_hw *ctrl,
@@ -197,9 +226,9 @@ int dsi_ctrl_hw_cmn_wait_for_cmd_mode_mdp_idle(struct dsi_ctrl_hw *ctrl);
 int dsi_ctrl_hw_14_wait_for_lane_idle(struct dsi_ctrl_hw *ctrl, u32 lanes);
 void dsi_ctrl_hw_14_setup_lane_map(struct dsi_ctrl_hw *ctrl,
 		       struct dsi_lane_map *lane_map);
-void dsi_ctrl_hw_14_ulps_request(struct dsi_ctrl_hw *ctrl, u32 lanes);
-void dsi_ctrl_hw_14_ulps_exit(struct dsi_ctrl_hw *ctrl, u32 lanes);
-u32 dsi_ctrl_hw_14_get_lanes_in_ulps(struct dsi_ctrl_hw *ctrl);
+void dsi_ctrl_hw_cmn_ulps_request(struct dsi_ctrl_hw *ctrl, u32 lanes);
+void dsi_ctrl_hw_cmn_ulps_exit(struct dsi_ctrl_hw *ctrl, u32 lanes);
+u32 dsi_ctrl_hw_cmn_get_lanes_in_ulps(struct dsi_ctrl_hw *ctrl);
 
 void dsi_ctrl_hw_14_clamp_enable(struct dsi_ctrl_hw *ctrl,
 				 u32 lanes,
@@ -225,13 +254,16 @@ void dsi_ctrl_hw_kickoff_non_embedded_mode(struct dsi_ctrl_hw *ctrl,
 
 /* Definitions specific to 2.2 DSI controller hardware */
 bool dsi_ctrl_hw_22_get_cont_splash_status(struct dsi_ctrl_hw *ctrl);
+void dsi_ctrl_hw_22_config_clk_gating(struct dsi_ctrl_hw *ctrl, bool enable,
+		enum dsi_clk_gate_type clk_selection);
 
 void dsi_ctrl_hw_cmn_set_continuous_clk(struct dsi_ctrl_hw *ctrl, bool enable);
+void dsi_ctrl_hw_cmn_hs_req_sel(struct dsi_ctrl_hw *ctrl, bool sel_phy);
 
 /* dynamic refresh specific functions */
 void dsi_phy_hw_v3_0_dyn_refresh_helper(struct dsi_phy_hw *phy, u32 offset);
 void dsi_phy_hw_v3_0_dyn_refresh_config(struct dsi_phy_hw *phy,
-				struct dsi_phy_cfg *cfg, bool is_master);
+		struct dsi_phy_cfg *cfg, bool is_master, bool is_cphy);
 void dsi_phy_hw_v3_0_dyn_refresh_pipe_delay(struct dsi_phy_hw *phy,
 					    struct dsi_dyn_clk_delay *delay);
 

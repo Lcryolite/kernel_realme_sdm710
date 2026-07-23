@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0
 #
 # USB peripheral controller drivers
 #
@@ -33,13 +34,15 @@ usb_f_mass_storage-y		:= f_mass_storage.o storage_common.o
 obj-$(CONFIG_USB_F_MASS_STORAGE)+= usb_f_mass_storage.o
 usb_f_fs-y			:= f_fs.o
 obj-$(CONFIG_USB_F_FS)		+= usb_f_fs.o
-usb_f_uac1-y			:= f_uac1.o u_uac1.o
+obj-$(CONFIG_USB_U_AUDIO)	+= u_audio.o
+usb_f_uac1-y			:= f_uac1.o
 obj-$(CONFIG_USB_F_UAC1)	+= usb_f_uac1.o
+usb_f_uac1_legacy-y		:= f_uac1_legacy.o u_uac1_legacy.o
+obj-$(CONFIG_USB_F_UAC1_LEGACY)	+= usb_f_uac1_legacy.o
 usb_f_uac2-y			:= f_uac2.o
 obj-$(CONFIG_USB_F_UAC2)	+= usb_f_uac2.o
-#usb_f_uvc-y			:= f_uvc.o uvc_queue.o uvc_v4l2.o uvc_video.o uvc_configfs.o
-#obj-$(CONFIG_USB_F_UVC)		+= usb_f_uvc.o
-obj-$(CONFIG_USB_F_UVC)		+= uvc-new/
+usb_f_uvc-y			:= f_uvc.o uvc_queue.o uvc_v4l2.o uvc_video.o uvc_configfs.o
+obj-$(CONFIG_USB_F_UVC)		+= usb_f_uvc.o
 usb_f_midi-y			:= f_midi.o
 obj-$(CONFIG_USB_F_MIDI)	+= usb_f_midi.o
 usb_f_hid-y			:= f_hid.o
@@ -61,14 +64,18 @@ obj-$(CONFIG_USB_F_DIAG)	+= usb_f_diag.o
 usb_f_cdev-y			:= f_cdev.o
 obj-$(CONFIG_USB_F_CDEV)	+= usb_f_cdev.o
 usb_f_ccid-y			:= f_ccid.o
-obj-$(CONFIG_USB_F_CCID)   	+= usb_f_ccid.o
+obj-$(CONFIG_USB_F_CCID)	+= usb_f_ccid.o
 usb_f_gsi-y			:= f_gsi.o
-obj-$(CONFIG_USB_F_GSI)         += usb_f_gsi.o
+obj-$(CONFIG_USB_F_GSI)		+= usb_f_gsi.o
 usb_f_qdss-y			:= f_qdss.o u_qdss.o
-obj-$(CONFIG_USB_F_QDSS)        += usb_f_qdss.o
-usb_f_qcrndis-y			:= f_qc_rndis.o
-obj-$(CONFIG_USB_F_QCRNDIS)	+= usb_f_qcrndis.o
-usb_f_rmnet_bam-y		:= f_rmnet.o u_ctrl_qti.o u_bam_dmux.o u_data_ipa.o
-obj-$(CONFIG_USB_F_RMNET_BAM)	+= usb_f_rmnet_bam.o
+obj-$(CONFIG_USB_F_QDSS)	+= usb_f_qdss.o
 usb_f_ipc-y			:= f_ipc.o
 obj-$(CONFIG_USB_F_IPC)		+= usb_f_ipc.o
+usb_f_mdm_data-y		:= f_mdm_data.o
+obj-$(CONFIG_USB_F_MDM_DATA)	+= usb_f_mdm_data.o
+usb_f_qcrndis-y			:= f_qc_rndis.o u_data_ipa.o
+obj-$(CONFIG_USB_F_QCRNDIS)	+= usb_f_qcrndis.o
+usb_f_rmnet_bam-y		:= f_rmnet.o u_ctrl_qti.o u_bam_dmux.o
+obj-$(CONFIG_USB_F_RMNET_BAM)   += usb_f_rmnet_bam.o
+usb_f_mbim-y               	:= f_mbim.o
+obj-$(CONFIG_USB_F_MBIM_BAM)	+= usb_f_mbim.o

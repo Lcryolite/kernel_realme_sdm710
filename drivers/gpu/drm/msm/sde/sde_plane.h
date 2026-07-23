@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
  * Copyright (C) 2013 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
  *
@@ -53,8 +53,7 @@
  * @out_fb_flags: output framebuffer flags of rotator stage
  * @out_sbuf: true if output streaming buffer is required
  * @out_fb_format: Pointer to output framebuffer format of rotator stage
- * @out_fb: Pointer to output drm framebuffer of rotator stage
- * @out_fbo: framebuffer object of output streaming buffer
+ * @out_fb: Pointer to output framebuffer of rotator stage
  * @out_xpos: relative horizontal position of the plane (0 - leftmost)
  */
 struct sde_plane_rot_state {
@@ -85,7 +84,6 @@ struct sde_plane_rot_state {
 	bool out_sbuf;
 	const struct sde_format *out_fb_format;
 	struct drm_framebuffer *out_fb;
-	struct sde_kms_fbo *out_fbo;
 	int out_xpos;
 };
 
@@ -95,8 +93,14 @@ struct sde_plane_rot_state {
 #define SDE_PLANE_DIRTY_SHARPEN	0x4
 #define SDE_PLANE_DIRTY_PERF	0x8
 #define SDE_PLANE_DIRTY_FB_TRANSLATION_MODE	0x10
-#define SDE_PLANE_DIRTY_ALL	0xFFFFFFFF
-#define SDE_PLANE_DIRTY_QOS     0x200
+#define SDE_PLANE_DIRTY_VIG_GAMUT 0x20
+#define SDE_PLANE_DIRTY_VIG_IGC 0x40
+#define SDE_PLANE_DIRTY_DMA_IGC 0x80
+#define SDE_PLANE_DIRTY_DMA_GC 0x100
+#define SDE_PLANE_DIRTY_CP (SDE_PLANE_DIRTY_VIG_GAMUT |\
+		SDE_PLANE_DIRTY_VIG_IGC | SDE_PLANE_DIRTY_DMA_IGC |\
+		SDE_PLANE_DIRTY_DMA_GC)
+#define SDE_PLANE_DIRTY_ALL	(0xFFFFFFFF & ~(SDE_PLANE_DIRTY_CP))
 
 /**
  * enum sde_plane_sclcheck_state - User scaler data status
@@ -132,10 +136,13 @@ enum sde_plane_sclcheck_state {
  * @const_alpha_en: const alpha channel is enabled for this HW pipe
  * @pending:	whether the current update is still pending
  * @defer_prepare_fb:	indicate if prepare_fb call was deferred
+ * @pipe_order_flags: contains pipe order flags:
+ *			SDE_SSPP_RIGHT - right pipe in source split pair
  * @scaler3_cfg: configuration data for scaler3
  * @pixel_ext: configuration data for pixel extensions
  * @scaler_check_state: indicates status of user provided pixel extension data
  * @cdp_cfg:	CDP configuration
+ * @line_insertion_cfg: line insertion configuration
  */
 struct sde_plane_state {
 	struct drm_plane_state base;
@@ -151,6 +158,7 @@ struct sde_plane_state {
 	bool const_alpha_en;
 	bool pending;
 	bool defer_prepare_fb;
+	uint32_t pipe_order_flags;
 
 	/* scaler configuration */
 	struct sde_hw_scaler3_cfg scaler3_cfg;
@@ -162,6 +170,7 @@ struct sde_plane_state {
 	struct sde_plane_rot_state rot;
 
 	struct sde_hw_pipe_cdp_cfg cdp_cfg;
+	struct sde_hw_pipe_line_insertion_cfg line_insertion_cfg;
 };
 
 /**
@@ -213,14 +222,13 @@ int sde_plane_confirm_hw_rsvps(struct drm_plane *plane,
 		struct drm_crtc_state *cstate);
 
 /**
- * sde_plane_get_ctl_flush - get control flush mask
+ * sde_plane_ctl_flush - set/clear control flush mask
  * @plane:   Pointer to DRM plane object
  * @ctl: Pointer to control hardware
- * @flush_sspp: Pointer to sspp flush control word
- * @flush_rot: Pointer to rotator flush control word
+ * @set: set if true else clear
  */
-void sde_plane_get_ctl_flush(struct drm_plane *plane, struct sde_hw_ctl *ctl,
-		u32 *flush_sspp, u32 *flush_rot);
+void sde_plane_ctl_flush(struct drm_plane *plane, struct sde_hw_ctl *ctl,
+		bool set);
 
 /**
  * sde_plane_rot_get_prefill - calculate rotator start prefill
@@ -299,9 +307,16 @@ int sde_plane_validate_multirect_v2(struct sde_multirect_plane_states *plane);
  */
 void sde_plane_clear_multirect(const struct drm_plane_state *drm_state);
 
-#ifdef VENDOR_EDIT
-int sde_plane_check_fingerprint_layer(const struct drm_plane_state *drm_state);
-#endif
+/**
+ * sde_plane_validate_src_addr - validate if current sspp addr of given
+ * plane is within the input address range
+ * @drm_plane:	Pointer to DRM plane object
+ * @base_addr:	Start address of the input address range
+ * @size:	Size of the input address range
+ * @Return:	Non-zero if source pipe current address is not in input range
+ */
+int sde_plane_validate_src_addr(struct drm_plane *plane,
+		unsigned long base_addr, u32 size);
 
 /**
  * sde_plane_wait_input_fence - wait for input fence object
@@ -340,7 +355,14 @@ int sde_plane_helper_reset_custom_properties(struct drm_plane *plane,
 		struct drm_plane_state *plane_state);
 
 /**
- * sde_plane_is_sec_ui_allowed - indicates if the sspp allows secure-ui layers
+ * sde_plane_get_sbuf_id - returns the hw_rot id if sspp of given plane is
+ *                           in streaming buffer mode
+ * @plane: pointer to drm plane
+ * return: sde_rot if sspp is in stream buffer mode
+ */
+int sde_plane_get_sbuf_id(struct drm_plane *plane);
+
+/* sde_plane_is_sec_ui_allowed - indicates if the sspp allows secure-ui layers
  * @plane: Pointer to DRM plane object
  * Returns: true if allowed; false otherwise
  */
@@ -354,5 +376,26 @@ bool sde_plane_is_sec_ui_allowed(struct drm_plane *plane);
  */
 void sde_plane_secure_ctrl_xin_client(struct drm_plane *plane,
 		struct drm_crtc *crtc);
+
+/*
+ * sde_plane_get_ubwc_error - gets the ubwc error code
+ * @plane: Pointer to DRM plane object
+ */
+u32 sde_plane_get_ubwc_error(struct drm_plane *plane);
+
+/*
+ * sde_plane_clear_ubwc_error - clears the ubwc error code
+ * @plane: Pointer to DRM plane object
+ */
+void sde_plane_clear_ubwc_error(struct drm_plane *plane);
+
+/*
+ * sde_plane_setup_src_split_order - enable/disable pipe's src_split_order
+ * @plane: Pointer to DRM plane object
+ * @rect_mode: multirect mode
+ * @enable: enable/disable flag
+ */
+void sde_plane_setup_src_split_order(struct drm_plane *plane,
+		enum sde_sspp_multirect_index rect_mode, bool enable);
 
 #endif /* _SDE_PLANE_H_ */

@@ -506,8 +506,7 @@ static int hix5hd2_i2c_remove(struct platform_device *pdev)
 #ifdef CONFIG_PM
 static int hix5hd2_i2c_runtime_suspend(struct device *dev)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct hix5hd2_i2c_priv *priv = platform_get_drvdata(pdev);
+	struct hix5hd2_i2c_priv *priv = dev_get_drvdata(dev);
 
 	clk_disable_unprepare(priv->clk);
 
@@ -516,8 +515,7 @@ static int hix5hd2_i2c_runtime_suspend(struct device *dev)
 
 static int hix5hd2_i2c_runtime_resume(struct device *dev)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct hix5hd2_i2c_priv *priv = platform_get_drvdata(pdev);
+	struct hix5hd2_i2c_priv *priv = dev_get_drvdata(dev);
 
 	clk_prepare_enable(priv->clk);
 	hix5hd2_i2c_init(priv);

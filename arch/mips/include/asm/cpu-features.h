@@ -11,6 +11,7 @@
 
 #include <asm/cpu.h>
 #include <asm/cpu-info.h>
+#include <asm/isa-rev.h>
 #include <cpu-feature-overrides.h>
 
 /*
@@ -72,7 +73,24 @@
 #define cpu_has_tx39_cache	(cpu_data[0].options & MIPS_CPU_TX39_CACHE)
 #endif
 #ifndef cpu_has_octeon_cache
-#define cpu_has_octeon_cache	0
+#define cpu_has_octeon_cache						\
+({									\
+	int __res;							\
+									\
+	switch (boot_cpu_type()) {					\
+	case CPU_CAVIUM_OCTEON:						\
+	case CPU_CAVIUM_OCTEON_PLUS:					\
+	case CPU_CAVIUM_OCTEON2:					\
+	case CPU_CAVIUM_OCTEON3:					\
+		__res = 1;						\
+		break;							\
+									\
+	default:							\
+		__res = 0;						\
+	}								\
+									\
+	__res;								\
+})
 #endif
 /* Don't override `cpu_has_fpu' to 1 or the "nofpu" option won't work.  */
 #ifndef cpu_has_fpu
@@ -137,6 +155,9 @@
 #endif
 #ifndef cpu_has_mips16
 #define cpu_has_mips16		(cpu_data[0].ases & MIPS_ASE_MIPS16)
+#endif
+#ifndef cpu_has_mips16e2
+#define cpu_has_mips16e2	(cpu_data[0].ases & MIPS_ASE_MIPS16E2)
 #endif
 #ifndef cpu_has_mdmx
 #define cpu_has_mdmx		(cpu_data[0].ases & MIPS_ASE_MDMX)
@@ -290,7 +311,7 @@
 ({									\
 	int __res;							\
 									\
-	switch (current_cpu_type()) {					\
+	switch (boot_cpu_type()) {					\
 	case CPU_M14KC:							\
 	case CPU_74K:							\
 	case CPU_1074K:							\
@@ -425,6 +446,9 @@
 #ifndef cpu_scache_line_size
 #define cpu_scache_line_size()	cpu_data[0].scache.linesz
 #endif
+#ifndef cpu_tcache_line_size
+#define cpu_tcache_line_size()	cpu_data[0].tcache.linesz
+#endif
 
 #ifndef cpu_hwrena_impl_bits
 #define cpu_hwrena_impl_bits		0
@@ -442,6 +466,10 @@
 # define cpu_has_msa		(cpu_data[0].ases & MIPS_ASE_MSA)
 #elif !defined(cpu_has_msa)
 # define cpu_has_msa		0
+#endif
+
+#ifndef cpu_has_ufr
+# define cpu_has_ufr		(cpu_data[0].options & MIPS_CPU_UFR)
 #endif
 
 #ifndef cpu_has_fre
@@ -481,6 +509,47 @@
 
 #ifndef cpu_has_perf
 # define cpu_has_perf		(cpu_data[0].options & MIPS_CPU_PERF)
+#endif
+
+#if defined(CONFIG_SMP) && (MIPS_ISA_REV >= 6)
+/*
+ * Some systems share FTLB RAMs between threads within a core (siblings in
+ * kernel parlance). This means that FTLB entries may become invalid at almost
+ * any point when an entry is evicted due to a sibling thread writing an entry
+ * to the shared FTLB RAM.
+ *
+ * This is only relevant to SMP systems, and the only systems that exhibit this
+ * property implement MIPSr6 or higher so we constrain support for this to
+ * kernels that will run on such systems.
+ */
+# ifndef cpu_has_shared_ftlb_ram
+#  define cpu_has_shared_ftlb_ram \
+	(current_cpu_data.options & MIPS_CPU_SHARED_FTLB_RAM)
+# endif
+
+/*
+ * Some systems take this a step further & share FTLB entries between siblings.
+ * This is implemented as TLB writes happening as usual, but if an entry
+ * written by a sibling exists in the shared FTLB for a translation which would
+ * otherwise cause a TLB refill exception then the CPU will use the entry
+ * written by its sibling rather than triggering a refill & writing a matching
+ * TLB entry for itself.
+ *
+ * This is naturally only valid if a TLB entry is known to be suitable for use
+ * on all siblings in a CPU, and so it only takes effect when MMIDs are in use
+ * rather than ASIDs or when a TLB entry is marked global.
+ */
+# ifndef cpu_has_shared_ftlb_entries
+#  define cpu_has_shared_ftlb_entries \
+	(current_cpu_data.options & MIPS_CPU_SHARED_FTLB_ENTRIES)
+# endif
+#endif /* SMP && MIPS_ISA_REV >= 6 */
+
+#ifndef cpu_has_shared_ftlb_ram
+# define cpu_has_shared_ftlb_ram 0
+#endif
+#ifndef cpu_has_shared_ftlb_entries
+# define cpu_has_shared_ftlb_entries 0
 #endif
 
 /*
@@ -528,6 +597,9 @@
 #ifndef cpu_guest_has_htw
 #define cpu_guest_has_htw	(cpu_data[0].guest.options & MIPS_CPU_HTW)
 #endif
+#ifndef cpu_guest_has_mvh
+#define cpu_guest_has_mvh	(cpu_data[0].guest.options & MIPS_CPU_MVH)
+#endif
 #ifndef cpu_guest_has_msa
 #define cpu_guest_has_msa	(cpu_data[0].guest.ases & MIPS_ASE_MSA)
 #endif
@@ -542,6 +614,9 @@
 #endif
 #ifndef cpu_guest_has_maar
 #define cpu_guest_has_maar	(cpu_data[0].guest.options & MIPS_CPU_MAAR)
+#endif
+#ifndef cpu_guest_has_userlocal
+#define cpu_guest_has_userlocal	(cpu_data[0].guest.options & MIPS_CPU_ULRI)
 #endif
 
 /*

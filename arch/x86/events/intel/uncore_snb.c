@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /* Nehalem/SandBridge/Haswell/Broadwell/Skylake uncore support */
 #include "uncore.h"
 
@@ -149,7 +150,7 @@ static struct attribute *snb_uncore_formats_attr[] = {
 	NULL,
 };
 
-static struct attribute_group snb_uncore_format_group = {
+static const struct attribute_group snb_uncore_format_group = {
 	.name		= "format",
 	.attrs		= snb_uncore_formats_attr,
 };
@@ -308,7 +309,7 @@ static struct attribute *snb_uncore_imc_formats_attr[] = {
 	NULL,
 };
 
-static struct attribute_group snb_uncore_imc_format_group = {
+static const struct attribute_group snb_uncore_imc_format_group = {
 	.name = "format",
 	.attrs = snb_uncore_imc_formats_attr,
 };
@@ -882,7 +883,7 @@ static struct attribute *nhm_uncore_formats_attr[] = {
 	NULL,
 };
 
-static struct attribute_group nhm_uncore_format_group = {
+static const struct attribute_group nhm_uncore_format_group = {
 	.name = "format",
 	.attrs = nhm_uncore_formats_attr,
 };

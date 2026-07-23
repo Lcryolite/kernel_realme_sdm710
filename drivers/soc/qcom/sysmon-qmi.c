@@ -23,7 +23,7 @@
 
 #include <soc/qcom/subsystem_restart.h>
 #include <soc/qcom/subsystem_notif.h>
-#include <soc/qcom/msm_qmi_interface.h>
+#include <linux/soc/qcom/qmi.h>
 #include <soc/qcom/sysmon.h>
 
 #define QMI_RESP_BIT_SHIFT(x)			(x << 16)
@@ -36,6 +36,7 @@
 #define QMI_SSCTL_SHUTDOWN_READY_IND_V02	0x0021
 #define QMI_SSCTL_GET_FAILURE_REASON_REQ_V02	0x0022
 #define QMI_SSCTL_GET_FAILURE_REASON_RESP_V02	0x0022
+#define QMI_SSCTL_GET_FAILURE_REASON_IND_V02	0x0022
 #define QMI_SSCTL_SUBSYS_EVENT_REQ_V02		0x0023
 #define QMI_SSCTL_SUBSYS_EVENT_RESP_V02		0x0023
 #define QMI_SSCTL_SUBSYS_EVENT_READY_IND_V02	0x0023
@@ -45,6 +46,7 @@
 #define QMI_SSCTL_SUBSYS_EVENT_REQ_LENGTH	40
 #define QMI_SSCTL_RESP_MSG_LENGTH		7
 #define QMI_SSCTL_EMPTY_MSG_LENGTH		0
+#define QMI_SSCTL_MAX_MSG_LENGTH		90
 
 #define SSCTL_SERVICE_ID			0x2B
 #define SSCTL_VER_2				2
@@ -65,27 +67,17 @@
 struct sysmon_qmi_data {
 	const char *name;
 	int instance_id;
-	struct work_struct svc_arrive;
-	struct work_struct svc_exit;
-	struct work_struct svc_rcv_msg;
-	struct qmi_handle *clnt_handle;
+	bool connected;
+	struct qmi_handle clnt_handle;
 	struct notifier_block notifier;
 	void *notif_handle;
 	bool legacy_version;
-	struct completion server_connect;
-	struct completion ind_recv;
+	struct sockaddr_qrtr ssctl;
 	struct list_head list;
 };
 
-static struct workqueue_struct *sysmon_wq;
-
 static LIST_HEAD(sysmon_list);
 static DEFINE_MUTEX(sysmon_list_lock);
-static DEFINE_MUTEX(sysmon_lock);
-
-static void sysmon_clnt_recv_msg(struct work_struct *work);
-static void sysmon_clnt_svc_arrive(struct work_struct *work);
-static void sysmon_clnt_svc_exit(struct work_struct *work);
 
 static const int notif_map[SUBSYS_NOTIF_TYPE_COUNT] = {
 	[0 ... SUBSYS_NOTIF_TYPE_COUNT - 1] = SSCTL_SSR_EVENT_INVALID,
@@ -95,124 +87,73 @@ static const int notif_map[SUBSYS_NOTIF_TYPE_COUNT] = {
 	[SUBSYS_AFTER_SHUTDOWN] = SSCTL_SSR_EVENT_AFTER_SHUTDOWN,
 };
 
-static void sysmon_ind_cb(struct qmi_handle *handle, unsigned int msg_id,
-			void *msg, unsigned int msg_len, void *ind_cb_priv)
+struct qmi_ssctl_shutdown_indication {
+};
+
+static struct qmi_elem_info qmi_ssctl_indication_ei[] = {
+	QMI_EOTI_DATA_TYPE
+};
+
+static void sysmon_ind_cb(struct qmi_handle *qmi, struct sockaddr_qrtr *sq,
+			struct qmi_txn *txn, const void *data)
 {
-	struct sysmon_qmi_data *data = NULL, *temp;
+	struct sysmon_qmi_data *qmi_data = container_of(qmi,
+					struct sysmon_qmi_data, clnt_handle);
 
-	mutex_lock(&sysmon_list_lock);
-	list_for_each_entry(temp, &sysmon_list, list)
-		if (!strcmp(temp->name, (char *)ind_cb_priv))
-			data = temp;
-	mutex_unlock(&sysmon_list_lock);
-
-	if (!data)
-		return;
-
-	pr_debug("%s: Indication received from subsystem\n", data->name);
-	complete(&data->ind_recv);
+	struct subsys_device *subsys_dev = find_subsys_device(qmi_data->name);
+	pr_info("%s: Indication received from subsystem\n", qmi_data->name);
+	if (subsys_dev)
+		complete_shutdown_ack(subsys_dev);
+	else
+		pr_err("Failed to find subsystem: %s for indication\n",
+		       qmi_data->name);
 }
 
-static int sysmon_svc_event_notify(struct notifier_block *this,
-				      unsigned long code,
-				      void *_cmd)
-{
-	struct sysmon_qmi_data *data = container_of(this,
-					struct sysmon_qmi_data, notifier);
-
-	switch (code) {
-	case QMI_SERVER_ARRIVE:
-		queue_work(sysmon_wq, &data->svc_arrive);
-		break;
-	case QMI_SERVER_EXIT:
-		queue_work(sysmon_wq, &data->svc_exit);
-		break;
-	default:
-		break;
-	}
-	return 0;
-}
-
-static void sysmon_clnt_notify(struct qmi_handle *handle,
-			     enum qmi_event_type event, void *notify_priv)
-{
-	struct sysmon_qmi_data *data = container_of(notify_priv,
-					struct sysmon_qmi_data, svc_arrive);
-
-	switch (event) {
-	case QMI_RECV_MSG:
-		schedule_work(&data->svc_rcv_msg);
-		break;
-	default:
-		break;
-	}
-}
+static struct qmi_msg_handler qmi_indication_handler[] = {
+	{
+		.type = QMI_INDICATION,
+		.msg_id = QMI_SSCTL_SHUTDOWN_READY_IND_V02,
+		.ei = qmi_ssctl_indication_ei,
+		.decoded_size = 0,
+		.fn = sysmon_ind_cb
+	},
+	{}
+};
 
 static bool is_ssctl_event(enum subsys_notif_type notif)
 {
 	return notif_map[notif] != SSCTL_SSR_EVENT_INVALID;
 }
 
-static void sysmon_clnt_svc_arrive(struct work_struct *work)
+static int ssctl_new_server(struct qmi_handle *qmi, struct qmi_service *svc)
 {
-	int rc;
-	struct sysmon_qmi_data *data = container_of(work,
-					struct sysmon_qmi_data, svc_arrive);
+	struct sysmon_qmi_data *data = container_of(qmi,
+					struct sysmon_qmi_data, clnt_handle);
 
-	mutex_lock(&sysmon_lock);
-	/* Create a Local client port for QMI communication */
-	data->clnt_handle = qmi_handle_create(sysmon_clnt_notify, work);
-	if (!data->clnt_handle) {
-		pr_err("QMI client handle alloc failed for %s\n", data->name);
-		mutex_unlock(&sysmon_lock);
-		return;
-	}
-
-	rc = qmi_connect_to_service(data->clnt_handle, SSCTL_SERVICE_ID,
-					SSCTL_VER_2, data->instance_id);
-	if (rc < 0) {
-		pr_err("%s: Could not connect handle to service\n",
-								data->name);
-		qmi_handle_destroy(data->clnt_handle);
-		data->clnt_handle = NULL;
-		mutex_unlock(&sysmon_lock);
-		return;
-	}
 	pr_info("Connection established between QMI handle and %s's SSCTL service\n"
 								, data->name);
 
-	rc = qmi_register_ind_cb(data->clnt_handle, sysmon_ind_cb,
-							(void *)data->name);
-	if (rc < 0)
-		pr_warn("%s: Could not register the indication callback\n",
-								data->name);
-	mutex_unlock(&sysmon_lock);
+	data->ssctl.sq_family = AF_QIPCRTR;
+	data->ssctl.sq_node = svc->node;
+	data->ssctl.sq_port = svc->port;
+	data->connected = true;
+	return 0;
 }
 
-static void sysmon_clnt_svc_exit(struct work_struct *work)
+static void ssctl_del_server(struct qmi_handle *qmi, struct qmi_service *svc)
 {
-	struct sysmon_qmi_data *data = container_of(work,
-					struct sysmon_qmi_data, svc_exit);
+	struct sysmon_qmi_data *data = container_of(qmi,
+					struct sysmon_qmi_data, clnt_handle);
 
-	mutex_lock(&sysmon_lock);
-	qmi_handle_destroy(data->clnt_handle);
-	data->clnt_handle = NULL;
-	mutex_unlock(&sysmon_lock);
+	pr_info("Connection lost between QMI handle and %s's SSCTL service\n"
+								, data->name);
+	data->connected = false;
 }
 
-static void sysmon_clnt_recv_msg(struct work_struct *work)
-{
-	int ret;
-	struct sysmon_qmi_data *data = container_of(work,
-					struct sysmon_qmi_data, svc_rcv_msg);
-
-	do {
-		pr_debug("%s: Notified about a Receive event\n", data->name);
-	} while ((ret = qmi_recv_msg(data->clnt_handle)) == 0);
-
-	if (ret != -ENOMSG)
-		pr_err("%s: Error receiving message\n", data->name);
-}
+struct qmi_ops ssctl_ops = {
+	.new_server = ssctl_new_server,
+	.del_server = ssctl_del_server,
+};
 
 struct qmi_ssctl_subsys_event_req_msg {
 	uint8_t subsys_name_len;
@@ -226,7 +167,7 @@ struct qmi_ssctl_subsys_event_resp_msg {
 	struct qmi_response_type_v01 resp;
 };
 
-static struct elem_info qmi_ssctl_subsys_event_req_msg_ei[] = {
+static struct qmi_elem_info qmi_ssctl_subsys_event_req_msg_ei[] = {
 	{
 		.data_type = QMI_DATA_LEN,
 		.elem_len  = 1,
@@ -280,7 +221,7 @@ static struct elem_info qmi_ssctl_subsys_event_req_msg_ei[] = {
 	QMI_EOTI_DATA_TYPE
 };
 
-static struct elem_info qmi_ssctl_subsys_event_resp_msg_ei[] = {
+static struct qmi_elem_info qmi_ssctl_subsys_event_resp_msg_ei[] = {
 	{
 		.data_type = QMI_STRUCT,
 		.elem_len  = 1,
@@ -289,7 +230,7 @@ static struct elem_info qmi_ssctl_subsys_event_resp_msg_ei[] = {
 		.tlv_type  = 0x02,
 		.offset    = offsetof(struct qmi_ssctl_subsys_event_resp_msg,
 				      resp),
-		.ei_array  = get_qmi_response_type_v01_ei(),
+		.ei_array  = qmi_response_type_v01_ei,
 	},
 	QMI_EOTI_DATA_TYPE
 };
@@ -317,12 +258,12 @@ int sysmon_send_event(struct subsys_desc *dest_desc,
 			enum subsys_notif_type notif)
 {
 	struct qmi_ssctl_subsys_event_req_msg req;
-	struct msg_desc req_desc, resp_desc;
 	struct qmi_ssctl_subsys_event_resp_msg resp = { { 0, 0 } };
 	struct sysmon_qmi_data *data = NULL, *temp;
 	const char *event_ss = event_desc->name;
 	const char *dest_ss = dest_desc->name;
 	int ret;
+	struct qmi_txn txn;
 
 	if (notif < 0 || notif >= SUBSYS_NOTIF_TYPE_COUNT ||
 	    !is_ssctl_event(notif) || event_ss == NULL || dest_ss == NULL)
@@ -337,7 +278,7 @@ int sysmon_send_event(struct subsys_desc *dest_desc,
 	if (!data)
 		return -EINVAL;
 
-	if (!data->clnt_handle) {
+	if (data->instance_id < 0) {
 		pr_debug("No SSCTL_V2 support for %s. Revert to SSCTL_V0\n",
 								dest_ss);
 		ret = sysmon_send_event_no_qmi(dest_desc, event_desc, notif);
@@ -347,36 +288,51 @@ int sysmon_send_event(struct subsys_desc *dest_desc,
 		return ret;
 	}
 
+	if (!data->connected)
+		return -EAGAIN;
+
 	snprintf(req.subsys_name, ARRAY_SIZE(req.subsys_name), "%s", event_ss);
 	req.subsys_name_len = strlen(req.subsys_name);
 	req.event = notif_map[notif];
 	req.evt_driven_valid = 1;
 	req.evt_driven = SSCTL_SSR_EVENT_FORCED;
 
-	req_desc.msg_id = QMI_SSCTL_SUBSYS_EVENT_REQ_V02;
-	req_desc.max_msg_len = QMI_SSCTL_SUBSYS_EVENT_REQ_LENGTH;
-	req_desc.ei_array = qmi_ssctl_subsys_event_req_msg_ei;
+	ret = qmi_txn_init(&data->clnt_handle, &txn,
+			qmi_ssctl_subsys_event_resp_msg_ei,
+			&resp);
 
-	resp_desc.msg_id = QMI_SSCTL_SUBSYS_EVENT_RESP_V02;
-	resp_desc.max_msg_len = QMI_SSCTL_RESP_MSG_LENGTH;
-	resp_desc.ei_array = qmi_ssctl_subsys_event_resp_msg_ei;
-
-	mutex_lock(&sysmon_lock);
-	ret = qmi_send_req_wait(data->clnt_handle, &req_desc, &req,
-		sizeof(req), &resp_desc, &resp, sizeof(resp), SERVER_TIMEOUT);
 	if (ret < 0) {
-		pr_err("QMI send req to %s failed, ret - %d\n", dest_ss, ret);
+		pr_err("SYSMON QMI tx init failed to dest %s, ret - %d\n",
+			dest_ss, ret);
+		goto out;
+	}
+
+	ret = qmi_send_request(&data->clnt_handle, &data->ssctl, &txn,
+			QMI_SSCTL_SUBSYS_EVENT_REQ_V02,
+			QMI_SSCTL_SUBSYS_EVENT_REQ_LENGTH,
+			qmi_ssctl_subsys_event_req_msg_ei,
+			&req);
+	if (ret < 0) {
+		pr_err("SYSMON QMI send req failed to dest %s, ret - %d\n",
+			 dest_ss, ret);
+		qmi_txn_cancel(&txn);
+		goto out;
+	}
+
+	ret = qmi_txn_wait(&txn, msecs_to_jiffies(SERVER_TIMEOUT));
+	if (ret < 0) {
+		pr_err("SYSMON QMI qmi txn wait failed for client %s, ret - %d\n",
+			dest_ss, ret);
 		goto out;
 	}
 
 	/* Check the response */
 	if (QMI_RESP_BIT_SHIFT(resp.resp.result) != QMI_RESULT_SUCCESS_V01) {
-		pr_debug("QMI request failed 0x%x\n",
+		pr_err("SYSMON QMI request failed 0x%x\n",
 					QMI_RESP_BIT_SHIFT(resp.resp.error));
 		ret = -EREMOTEIO;
 	}
 out:
-	mutex_unlock(&sysmon_lock);
 	return ret;
 }
 EXPORT_SYMBOL(sysmon_send_event);
@@ -388,11 +344,11 @@ struct qmi_ssctl_shutdown_resp_msg {
 	struct qmi_response_type_v01 resp;
 };
 
-static struct elem_info qmi_ssctl_shutdown_req_msg_ei[] = {
+static struct qmi_elem_info qmi_ssctl_shutdown_req_msg_ei[] = {
 	QMI_EOTI_DATA_TYPE
 };
 
-static struct elem_info qmi_ssctl_shutdown_resp_msg_ei[] = {
+static struct qmi_elem_info qmi_ssctl_shutdown_resp_msg_ei[] = {
 	{
 		.data_type = QMI_STRUCT,
 		.elem_len  = 1,
@@ -401,7 +357,7 @@ static struct elem_info qmi_ssctl_shutdown_resp_msg_ei[] = {
 		.tlv_type  = 0x02,
 		.offset    = offsetof(struct qmi_ssctl_shutdown_resp_msg,
 				      resp),
-		.ei_array  = get_qmi_response_type_v01_ei(),
+		.ei_array  = qmi_response_type_v01_ei,
 	},
 	QMI_EOTI_DATA_TYPE
 };
@@ -423,12 +379,12 @@ static struct elem_info qmi_ssctl_shutdown_resp_msg_ei[] = {
  */
 int sysmon_send_shutdown(struct subsys_desc *dest_desc)
 {
-	struct msg_desc req_desc, resp_desc;
 	struct qmi_ssctl_shutdown_resp_msg resp = { { 0, 0 } };
 	struct sysmon_qmi_data *data = NULL, *temp;
 	const char *dest_ss = dest_desc->name;
 	char req = 0;
 	int ret, shutdown_ack_ret;
+	struct qmi_txn txn;
 
 	if (dest_ss == NULL)
 		return -EINVAL;
@@ -442,7 +398,7 @@ int sysmon_send_shutdown(struct subsys_desc *dest_desc)
 	if (!data)
 		return -EINVAL;
 
-	if (!data->clnt_handle) {
+	if (data->instance_id < 0) {
 		pr_debug("No SSCTL_V2 support for %s. Revert to SSCTL_V0\n",
 								dest_ss);
 		ret = sysmon_send_shutdown_no_qmi(dest_desc);
@@ -452,50 +408,56 @@ int sysmon_send_shutdown(struct subsys_desc *dest_desc)
 		return ret;
 	}
 
-	req_desc.msg_id = QMI_SSCTL_SHUTDOWN_REQ_V02;
-	req_desc.max_msg_len = QMI_SSCTL_EMPTY_MSG_LENGTH;
-	req_desc.ei_array = qmi_ssctl_shutdown_req_msg_ei;
+	if (!data->connected)
+		return -EAGAIN;
 
-	resp_desc.msg_id = QMI_SSCTL_SHUTDOWN_RESP_V02;
-	resp_desc.max_msg_len = QMI_SSCTL_RESP_MSG_LENGTH;
-	resp_desc.ei_array = qmi_ssctl_shutdown_resp_msg_ei;
+	ret = qmi_txn_init(&data->clnt_handle, &txn,
+			qmi_ssctl_shutdown_resp_msg_ei,
+			&resp);
 
-	reinit_completion(&data->ind_recv);
-	mutex_lock(&sysmon_lock);
-	ret = qmi_send_req_wait(data->clnt_handle, &req_desc, &req,
-		sizeof(req), &resp_desc, &resp, sizeof(resp), SERVER_TIMEOUT);
 	if (ret < 0) {
-		pr_err("QMI send req to %s failed, ret - %d\n", dest_ss, ret);
+		pr_err("SYSMON QMI tx init failed to dest %s, ret - %d\n",
+			dest_ss, ret);
 		goto out;
 	}
 
+	ret = qmi_send_request(&data->clnt_handle, &data->ssctl, &txn,
+			QMI_SSCTL_SHUTDOWN_REQ_V02,
+			QMI_SSCTL_EMPTY_MSG_LENGTH,
+			qmi_ssctl_shutdown_req_msg_ei,
+			&req);
+	if (ret < 0) {
+		pr_err("SYSMON QMI send req failed to dest %s, ret - %d\n",
+			 dest_ss, ret);
+		qmi_txn_cancel(&txn);
+		goto out;
+	}
+
+	ret = qmi_txn_wait(&txn, msecs_to_jiffies(SERVER_TIMEOUT));
+	if (ret < 0) {
+		pr_err("SYSMON QMI txn wait failed to dest %s, ret - %d\n",
+			dest_ss, ret);
+	}
+
 	/* Check the response */
-	if (QMI_RESP_BIT_SHIFT(resp.resp.result) != QMI_RESULT_SUCCESS_V01) {
-		pr_err("QMI request failed 0x%x\n",
+	if (ret != -ETIMEDOUT && QMI_RESP_BIT_SHIFT(resp.resp.result) !=
+	    QMI_RESULT_SUCCESS_V01) {
+		pr_err("SYSMON QMI request failed 0x%x\n",
 					QMI_RESP_BIT_SHIFT(resp.resp.error));
 		ret = -EREMOTEIO;
 		goto out;
 	}
 
 	shutdown_ack_ret = wait_for_shutdown_ack(dest_desc);
-	if (shutdown_ack_ret < 0) {
-		pr_err("shutdown_ack SMP2P bit for %s not set\n", data->name);
-		if (!completion_done(&data->ind_recv)) {
-			pr_err("QMI shutdown indication not received\n");
-			ret = shutdown_ack_ret;
-		}
+	if (shutdown_ack_ret > 0) {
+		ret = 0;
 		goto out;
-	} else if (shutdown_ack_ret > 0)
-		goto out;
-
-	if (!wait_for_completion_timeout(&data->ind_recv,
-					msecs_to_jiffies(SHUTDOWN_TIMEOUT))) {
-		pr_err("Timed out waiting for shutdown indication from %s\n",
-							data->name);
-		ret = -ETIMEDOUT;
+	} else if (shutdown_ack_ret < 0) {
+		pr_err("shutdown acknowledgment not received for %s\n",
+		       data->name);
+		ret = shutdown_ack_ret;
 	}
 out:
-	mutex_unlock(&sysmon_lock);
 	return ret;
 }
 EXPORT_SYMBOL(sysmon_send_shutdown);
@@ -510,11 +472,11 @@ struct qmi_ssctl_get_failure_reason_resp_msg {
 	char error_message[QMI_SSCTL_ERROR_MSG_LENGTH];
 };
 
-static struct elem_info qmi_ssctl_get_failure_reason_req_msg_ei[] = {
+static struct qmi_elem_info qmi_ssctl_get_failure_reason_req_msg_ei[] = {
 	QMI_EOTI_DATA_TYPE
 };
 
-static struct elem_info qmi_ssctl_get_failure_reason_resp_msg_ei[] = {
+static struct qmi_elem_info qmi_ssctl_get_failure_reason_resp_msg_ei[] = {
 	{
 		.data_type = QMI_STRUCT,
 		.elem_len  = 1,
@@ -524,7 +486,7 @@ static struct elem_info qmi_ssctl_get_failure_reason_resp_msg_ei[] = {
 		.offset    = offsetof(
 			struct qmi_ssctl_get_failure_reason_resp_msg,
 							resp),
-		.ei_array  = get_qmi_response_type_v01_ei(),
+		.ei_array  = qmi_response_type_v01_ei,
 	},
 	{
 		.data_type = QMI_OPT_FLAG,
@@ -580,11 +542,10 @@ static struct elem_info qmi_ssctl_get_failure_reason_resp_msg_ei[] = {
  */
 int sysmon_get_reason(struct subsys_desc *dest_desc, char *buf, size_t len)
 {
-	struct msg_desc req_desc, resp_desc;
-	struct qmi_ssctl_get_failure_reason_resp_msg resp;
+	struct qmi_ssctl_get_failure_reason_resp_msg resp = { { 0 } };
 	struct sysmon_qmi_data *data = NULL, *temp;
+	struct qmi_txn txn;
 	const char *dest_ss = dest_desc->name;
-	const char expect[] = "ssr:return:";
 	char req = 0;
 	int ret;
 
@@ -600,7 +561,7 @@ int sysmon_get_reason(struct subsys_desc *dest_desc, char *buf, size_t len)
 	if (!data)
 		return -EINVAL;
 
-	if (!data->clnt_handle) {
+	if (data->instance_id < 0) {
 		pr_debug("No SSCTL_V2 support for %s. Revert to SSCTL_V0\n",
 								dest_ss);
 		ret = sysmon_get_reason_no_qmi(dest_desc, buf, len);
@@ -610,38 +571,48 @@ int sysmon_get_reason(struct subsys_desc *dest_desc, char *buf, size_t len)
 		return ret;
 	}
 
-	req_desc.msg_id = QMI_SSCTL_GET_FAILURE_REASON_REQ_V02;
-	req_desc.max_msg_len = QMI_SSCTL_EMPTY_MSG_LENGTH;
-	req_desc.ei_array = qmi_ssctl_get_failure_reason_req_msg_ei;
+	if (!data->connected)
+		return -EAGAIN;
 
-	resp_desc.msg_id = QMI_SSCTL_GET_FAILURE_REASON_RESP_V02;
-	resp_desc.max_msg_len = QMI_SSCTL_ERROR_MSG_LENGTH;
-	resp_desc.ei_array = qmi_ssctl_get_failure_reason_resp_msg_ei;
-
-	mutex_lock(&sysmon_lock);
-	ret = qmi_send_req_wait(data->clnt_handle, &req_desc, &req,
-		sizeof(req), &resp_desc, &resp, sizeof(resp), SERVER_TIMEOUT);
+	ret = qmi_txn_init(&data->clnt_handle, &txn,
+			qmi_ssctl_get_failure_reason_resp_msg_ei,
+			&resp);
 	if (ret < 0) {
-		pr_err("QMI send req to %s failed, ret - %d\n", dest_ss, ret);
+		pr_err("SYSMON QMI tx init failed to dest %s, ret - %d\n",
+			dest_ss, ret);
+		goto out;
+	}
+
+	ret = qmi_send_request(&data->clnt_handle, &data->ssctl, &txn,
+			QMI_SSCTL_GET_FAILURE_REASON_REQ_V02,
+			QMI_SSCTL_EMPTY_MSG_LENGTH,
+			qmi_ssctl_get_failure_reason_req_msg_ei,
+			&req);
+	if (ret < 0) {
+		pr_err("SYSMON QMI send req failed to dest %s, ret - %d\n",
+			 dest_ss, ret);
+		qmi_txn_cancel(&txn);
+		goto out;
+	}
+
+	ret = qmi_txn_wait(&txn, msecs_to_jiffies(SERVER_TIMEOUT));
+	if (ret < 0) {
+		pr_err("SYSMON QMI qmi txn wait failed to dest %s, ret - %d\n",
+			dest_ss, ret);
 		goto out;
 	}
 
 	/* Check the response */
 	if (QMI_RESP_BIT_SHIFT(resp.resp.result) != QMI_RESULT_SUCCESS_V01) {
-		pr_err("QMI request failed 0x%x\n",
+		pr_err("SYSMON QMI request failed 0x%x\n",
 					QMI_RESP_BIT_SHIFT(resp.resp.error));
 		ret = -EREMOTEIO;
 		goto out;
 	}
 
-	if (!strcmp(resp.error_message, expect)) {
-		pr_err("Unexpected response %s\n", resp.error_message);
-		ret = -EPROTO;
-		goto out;
-	}
 	strlcpy(buf, resp.error_message, resp.error_message_len);
+	return 0;
 out:
-	mutex_unlock(&sysmon_lock);
 	return ret;
 }
 EXPORT_SYMBOL(sysmon_get_reason);
@@ -668,43 +639,31 @@ int sysmon_notifier_register(struct subsys_desc *desc)
 
 	data->name = desc->name;
 	data->instance_id = desc->ssctl_instance_id;
-	data->clnt_handle = NULL;
 	data->legacy_version = false;
+	data->connected = false;
 
-	mutex_lock(&sysmon_list_lock);
 	if (data->instance_id <= 0) {
 		pr_debug("SSCTL instance id not defined\n");
 		goto add_list;
 	}
 
-	if (sysmon_wq)
-		goto notif_register;
-
-	sysmon_wq = create_singlethread_workqueue("sysmon_wq");
-	if (!sysmon_wq) {
-		mutex_unlock(&sysmon_list_lock);
-		pr_err("Could not create workqueue\n");
+	rc = qmi_handle_init(&data->clnt_handle,
+			QMI_SSCTL_MAX_MSG_LENGTH, &ssctl_ops,
+			qmi_indication_handler);
+	if (rc < 0) {
+		pr_err("Sysmon QMI handle init failed rc:%d\n", rc);
 		kfree(data);
-		return -ENOMEM;
+		return rc;
 	}
+	qmi_set_sndtimeo(&data->clnt_handle, HZ);
 
-notif_register:
-	data->notifier.notifier_call = sysmon_svc_event_notify;
-	init_completion(&data->ind_recv);
-
-	INIT_WORK(&data->svc_arrive, sysmon_clnt_svc_arrive);
-	INIT_WORK(&data->svc_exit, sysmon_clnt_svc_exit);
-	INIT_WORK(&data->svc_rcv_msg, sysmon_clnt_recv_msg);
-
-	rc = qmi_svc_event_notifier_register(SSCTL_SERVICE_ID, SSCTL_VER_2,
-					data->instance_id, &data->notifier);
-	if (rc < 0)
-		pr_err("Notifier register failed for %s\n", data->name);
+	qmi_add_lookup(&data->clnt_handle, SSCTL_SERVICE_ID,
+			SSCTL_VER_2, data->instance_id);
 add_list:
+	mutex_lock(&sysmon_list_lock);
 	INIT_LIST_HEAD(&data->list);
 	list_add_tail(&data->list, &sysmon_list);
 	mutex_unlock(&sysmon_list_lock);
-
 	return rc;
 }
 EXPORT_SYMBOL(sysmon_notifier_register);
@@ -727,18 +686,13 @@ void sysmon_notifier_unregister(struct subsys_desc *desc)
 			data = sysmon_data;
 			list_del(&data->list);
 		}
+	mutex_unlock(&sysmon_list_lock);
 
 	if (data == NULL)
-		goto exit;
+		return;
 
 	if (data->instance_id > 0)
-		qmi_svc_event_notifier_unregister(SSCTL_SERVICE_ID,
-			SSCTL_VER_2, data->instance_id, &data->notifier);
-
-	if (sysmon_wq && list_empty(&sysmon_list))
-		destroy_workqueue(sysmon_wq);
-exit:
-	mutex_unlock(&sysmon_list_lock);
+		qmi_handle_release(&data->clnt_handle);
 	kfree(data);
 }
 EXPORT_SYMBOL(sysmon_notifier_unregister);

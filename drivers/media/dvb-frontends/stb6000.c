@@ -41,11 +41,10 @@ struct stb6000_priv {
 	u32 frequency;
 };
 
-static int stb6000_release(struct dvb_frontend *fe)
+static void stb6000_release(struct dvb_frontend *fe)
 {
 	kfree(fe->tuner_priv);
 	fe->tuner_priv = NULL;
-	return 0;
 }
 
 static int stb6000_sleep(struct dvb_frontend *fe)
@@ -246,7 +245,7 @@ struct dvb_frontend *stb6000_attach(struct dvb_frontend *fe, int addr,
 
 	return fe;
 }
-EXPORT_SYMBOL(stb6000_attach);
+EXPORT_SYMBOL_GPL(stb6000_attach);
 
 module_param(debug, int, 0644);
 MODULE_PARM_DESC(debug, "Turn on/off frontend debugging (default:off).");

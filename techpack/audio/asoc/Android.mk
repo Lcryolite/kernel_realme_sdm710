@@ -8,31 +8,34 @@ TARGET := sdm845
 AUDIO_SELECT  := CONFIG_SND_SOC_SDM845=m
 endif
 
-ifeq ($(call is-board-platform-in-list,sdm710 qcs605),true)
-TARGET := sdm710
+ifeq ($(call is-board-platform,sdm660),true)
+TARGET := sdm660
+AUDIO_SELECT  := CONFIG_SND_SOC_SDM660=m
+endif
+
+ifeq ($(call is-board-platform-in-list,msm8953 sdm670 qcs605),true)
+TARGET := sdm670
 AUDIO_SELECT  := CONFIG_SND_SOC_SDM670=m
 endif
 
-ifeq ($(call is-board-platform-in-list,msm8953 msm8937),true)
-TARGET := sdm450
-AUDIO_SELECT  += CONFIG_SND_SOC_SDM450=m
-AUDIO_SELECT  += CONFIG_SND_SOC_EXT_CODEC_SDM450=m
+ifeq ($(call is-board-platform,msmnile),true)
+TARGET := msmnile
+AUDIO_SELECT  := CONFIG_SND_SOC_SM8150=m
 endif
 
-ifeq ($(strip $(AUDIO_FEATURE_ENABLED_DLKM_8909W)),true)
-TARGET := msm8909
-AUDIO_SELECT  += CONFIG_SND_SOC_BG_8909=m
-AUDIO_SELECT  += CONFIG_SND_SOC_8909_DIG_CDC=m
+ifeq ($(call is-board-platform-in-list,$(MSMSTEPPE) atoll),true)
+TARGET := talos
+AUDIO_SELECT  := CONFIG_SND_SOC_SM6150=m
 endif
 
-ifeq ($(strip $(TARGET_ROARING_LIONUS)),true)
-TARGET := msm8909
-AUDIO_SELECT  += CONFIG_MSM_8905=m
+ifeq ($(call is-board-platform,$(TRINKET)),true)
+TARGET := trinket
+AUDIO_SELECT  := CONFIG_SND_SOC_SM6150=m
 endif
 
 AUDIO_CHIPSET := audio
 # Build/Package only in case of supported target
-ifeq ($(call is-board-platform-in-list,msm8909 msm8953 msm8937 sdm845 sdm710 qcs605),true)
+ifeq ($(call is-board-platform-in-list,msm8953 sdm845 sdm670 sdm660 qcs605 msmnile $(MSMSTEPPE) $(TRINKET)),true)
 
 LOCAL_PATH := $(call my-dir)
 
@@ -43,11 +46,7 @@ ifneq ($(findstring opensource,$(LOCAL_PATH)),)
 	AUDIO_BLD_DIR := $(shell pwd)/vendor/qcom/opensource/audio-kernel
 endif # opensource
 
-ifeq ($(AUDIO_FEATURE_ENABLED_DLKM_8909W),true)
-DLKM_DIR := $(TOP)/device/qcom/msm8909w/common/dlkm
-else
 DLKM_DIR := $(TOP)/device/qcom/common/dlkm
-endif
 
 # Build audio.ko as $(AUDIO_CHIPSET)_audio.ko
 ###########################################################
@@ -71,7 +70,7 @@ LOCAL_MODULE_DEBUG_ENABLE := true
 LOCAL_MODULE_PATH         := $(KERNEL_MODULES_OUT)
 include $(DLKM_DIR)/AndroidKernelModule.mk
 ###########################################################
-ifeq ($(call is-board-platform-in-list,msm8953 msm8937 sdm710 qcs605),true)
+ifeq ($(call is-board-platform-in-list,msm8953 sdm670 sdm660 qcs605 $(TRINKET)),true)
 include $(CLEAR_VARS)
 LOCAL_MODULE              := $(AUDIO_CHIPSET)_cpe_lsm.ko
 LOCAL_MODULE_KBUILD_NAME  := cpe_lsm_dlkm.ko
@@ -82,46 +81,12 @@ include $(DLKM_DIR)/AndroidKernelModule.mk
 endif
 ###########################################################
 include $(CLEAR_VARS)
-ifeq ($(strip $(AUDIO_FEATURE_ENABLED_DLKM_8909W)),true)
-LOCAL_MODULE              := $(AUDIO_CHIPSET)_machine_$(TARGET)_bg.ko
-else
 LOCAL_MODULE              := $(AUDIO_CHIPSET)_machine_$(TARGET).ko
-endif
 LOCAL_MODULE_KBUILD_NAME  := machine_dlkm.ko
 LOCAL_MODULE_TAGS         := optional
 LOCAL_MODULE_DEBUG_ENABLE := true
 LOCAL_MODULE_PATH         := $(KERNEL_MODULES_OUT)
 include $(DLKM_DIR)/AndroidKernelModule.mk
-###########################################################
-ifeq ($(strip $(AUDIO_FEATURE_ENABLED_DLKM_8909W)),true)
-include $(CLEAR_VARS)
-LOCAL_MODULE              := $(AUDIO_CHIPSET)_machine_$(TARGET).ko
-LOCAL_MODULE_KBUILD_NAME  := machine_digcdc_dlkm.ko
-LOCAL_MODULE_TAGS         := optional
-LOCAL_MODULE_DEBUG_ENABLE := true
-LOCAL_MODULE_PATH         := $(KERNEL_MODULES_OUT)
-include $(DLKM_DIR)/AndroidKernelModule.mk
-endif
-###########################################################
-ifeq ($(call is-board-platform-in-list,msm8953 msm8937),true)
-include $(CLEAR_VARS)
-LOCAL_MODULE              := $(AUDIO_CHIPSET)_machine_ext_$(TARGET).ko
-LOCAL_MODULE_KBUILD_NAME  := machine_ext_dlkm.ko
-LOCAL_MODULE_TAGS         := optional
-LOCAL_MODULE_DEBUG_ENABLE := true
-LOCAL_MODULE_PATH         := $(KERNEL_MODULES_OUT)
-include $(DLKM_DIR)/AndroidKernelModule.mk
-endif
-###########################################################
-ifeq ($(strip $(TARGET_ROARING_LIONUS)),true)
-include $(CLEAR_VARS)
-LOCAL_MODULE              := $(AUDIO_CHIPSET)_machine_int_$(TARGET).ko
-LOCAL_MODULE_KBUILD_NAME  := machine_int_dlkm.ko
-LOCAL_MODULE_TAGS         := optional
-LOCAL_MODULE_DEBUG_ENABLE := true
-LOCAL_MODULE_PATH         := $(KERNEL_MODULES_OUT)
-include $(DLKM_DIR)/AndroidKernelModule.mk
-endif
 ###########################################################
 
 endif # DLKM check

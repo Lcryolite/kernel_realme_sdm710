@@ -798,7 +798,7 @@ static struct attribute *yld_attributes[] = {
 	NULL
 };
 
-static struct attribute_group yld_attr_group = {
+static const struct attribute_group yld_attr_group = {
 	.attrs = yld_attributes
 };
 
@@ -920,7 +920,7 @@ static int usb_probe(struct usb_interface *intf, const struct usb_device_id *id)
 
 	/* get a handle to the interrupt data pipe */
 	pipe = usb_rcvintpipe(udev, endpoint->bEndpointAddress);
-	ret = usb_maxpacket(udev, pipe);
+	ret = usb_maxpacket(udev, pipe, usb_pipeout(pipe));
 	if (ret != USB_PKT_LEN)
 		dev_err(&intf->dev, "invalid payload size %d, expected %zd\n",
 			ret, USB_PKT_LEN);

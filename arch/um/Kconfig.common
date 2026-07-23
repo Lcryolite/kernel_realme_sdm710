@@ -1,6 +1,8 @@
+# SPDX-License-Identifier: GPL-2.0
 config UML
 	bool
 	default y
+	select ARCH_HAS_CPU_FINALIZE_INIT
 	select ARCH_HAS_KCOV
 	select HAVE_ARCH_AUDITSYSCALL
 	select HAVE_ARCH_SECCOMP_FILTER
@@ -50,11 +52,6 @@ config GENERIC_CALIBRATE_DELAY
 	bool
 	default y
 
-config GENERIC_BUG
-	bool
-	default y
-	depends on BUG
-
 config HZ
 	int
 	default 100
@@ -62,3 +59,8 @@ config HZ
 config SUBARCH
 	string
 	option env="SUBARCH"
+
+config NR_CPUS
+	int
+	range 1 1
+	default 1

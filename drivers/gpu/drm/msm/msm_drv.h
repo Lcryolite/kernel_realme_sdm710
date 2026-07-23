@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2019, 2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
  * Copyright (C) 2013 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
  *
@@ -45,7 +45,6 @@
 #include <drm/drm_fb_helper.h>
 #include <drm/msm_drm.h>
 #include <drm/drm_gem.h>
-#include <drm/drm_client.h>
 
 #include "sde_power_handle.h"
 
@@ -66,25 +65,26 @@ struct msm_gem_address_space;
 struct msm_gem_vma;
 
 #define NUM_DOMAINS    4    /* one for KMS, then one per gpu core (?) */
-#define MAX_CRTCS      8
+#define MAX_CRTCS      16
 #define MAX_PLANES     20
-#define MAX_ENCODERS   8
-#define MAX_BRIDGES    8
-#define MAX_CONNECTORS 8
+#define MAX_ENCODERS   16
+#define MAX_BRIDGES    16
+#define MAX_CONNECTORS 16
 
 #define TEARDOWN_DEADLOCK_RETRY_MAX 5
 
 struct msm_file_private {
-	/* currently we don't do anything useful with this.. but when
-	 * per-context address spaces are supported we'd keep track of
-	 * the context's page-tables here.
-	 */
-	int dummy;
+	/* update the refcount when user driver calls power_ctrl IOCTL */
+	unsigned short enable_refcnt;
+
+	/* protects enable_refcnt */
+	struct mutex power_lock;
 };
 
 enum msm_mdp_plane_property {
 	/* blob properties, always put these first */
 	PLANE_PROP_CSC_V1,
+	PLANE_PROP_CSC_DMA_V1,
 	PLANE_PROP_INFO,
 	PLANE_PROP_SCALER_LUT_ED,
 	PLANE_PROP_SCALER_LUT_CIR,
@@ -92,6 +92,10 @@ enum msm_mdp_plane_property {
 	PLANE_PROP_SKIN_COLOR,
 	PLANE_PROP_SKY_COLOR,
 	PLANE_PROP_FOLIAGE_COLOR,
+	PLANE_PROP_VIG_GAMUT,
+	PLANE_PROP_VIG_IGC,
+	PLANE_PROP_DMA_IGC,
+	PLANE_PROP_DMA_GC,
 	PLANE_PROP_ROT_CAPS_V1,
 
 	/* # of blob properties */
@@ -117,17 +121,14 @@ enum msm_mdp_plane_property {
 	PLANE_PROP_PREFILL_TIME,
 	PLANE_PROP_SCALER_V1,
 	PLANE_PROP_SCALER_V2,
-#ifdef VENDOR_EDIT
-	PLANE_PROP_CUSTOM,
-#endif /* VENDOR_EDIT */
+	PLANE_PROP_ROT_OUT_FB,
+	PLANE_PROP_INVERSE_PMA,
 
 	/* enum/bitmask properties */
-	PLANE_PROP_ROTATION,
 	PLANE_PROP_BLEND_OP,
 	PLANE_PROP_SRC_CONFIG,
 	PLANE_PROP_FB_TRANSLATION_MODE,
 	PLANE_PROP_MULTIRECT_MODE,
-	PLANE_PROP_LAYOUT,
 
 	/* total # of properties */
 	PLANE_PROP_COUNT
@@ -162,11 +163,8 @@ enum msm_mdp_crtc_property {
 	CRTC_PROP_DEST_SCALER,
 	CRTC_PROP_CAPTURE_OUTPUT,
 
-	CRTC_PROP_ENABLE_SUI_ENHANCEMENT,
 	CRTC_PROP_IDLE_PC_STATE,
-#ifdef VENDOR_EDIT
-	CRTC_PROP_CUSTOM,
-#endif
+
 	/* total # of properties */
 	CRTC_PROP_COUNT
 };
@@ -193,9 +191,6 @@ enum msm_mdp_conn_property {
 	CONNECTOR_PROP_ROI_V1,
 	CONNECTOR_PROP_BL_SCALE,
 	CONNECTOR_PROP_AD_BL_SCALE,
-#ifdef VENDOR_EDIT
-	CONNECTOR_PROP_CUSTOM,
-#endif
 
 	/* enum/bitmask properties */
 	CONNECTOR_PROP_TOPOLOGY_NAME,
@@ -203,6 +198,7 @@ enum msm_mdp_conn_property {
 	CONNECTOR_PROP_AUTOREFRESH,
 	CONNECTOR_PROP_LP,
 	CONNECTOR_PROP_FB_TRANSLATION_MODE,
+	CONNECTOR_PROP_QSYNC_MODE,
 
 	/* total # of properties */
 	CONNECTOR_PROP_COUNT
@@ -221,12 +217,27 @@ enum msm_display_compression_type {
 };
 
 /**
+ * enum msm_display_compression_ratio - compression ratio
+ * @MSM_DISPLAY_COMPRESSION_NONE: no compression
+ * @MSM_DISPLAY_COMPRESSION_RATIO_2_TO_1: 2 to 1 compression
+ * @MSM_DISPLAY_COMPRESSION_RATIO_3_TO_1: 3 to 1 compression
+ */
+enum msm_display_compression_ratio {
+	MSM_DISPLAY_COMPRESSION_RATIO_NONE,
+	MSM_DISPLAY_COMPRESSION_RATIO_2_TO_1,
+	MSM_DISPLAY_COMPRESSION_RATIO_3_TO_1,
+	MSM_DISPLAY_COMPRESSION_RATIO_MAX,
+};
+
+/**
  * enum msm_display_caps - features/capabilities supported by displays
  * @MSM_DISPLAY_CAP_VID_MODE:           Video or "active" mode supported
  * @MSM_DISPLAY_CAP_CMD_MODE:           Command mode supported
  * @MSM_DISPLAY_CAP_HOT_PLUG:           Hot plug detection supported
  * @MSM_DISPLAY_CAP_EDID:               EDID supported
  * @MSM_DISPLAY_ESD_ENABLED:            ESD feature enabled
+ * @MSM_DISPLAY_CAP_MST_MODE:           Display with MST support
+ * @MSM_DISPLAY_SPLIT_LINK:             Split Link enabled
  */
 enum msm_display_caps {
 	MSM_DISPLAY_CAP_VID_MODE	= BIT(0),
@@ -234,6 +245,20 @@ enum msm_display_caps {
 	MSM_DISPLAY_CAP_HOT_PLUG	= BIT(2),
 	MSM_DISPLAY_CAP_EDID		= BIT(3),
 	MSM_DISPLAY_ESD_ENABLED		= BIT(4),
+	MSM_DISPLAY_CAP_MST_MODE	= BIT(5),
+	MSM_DISPLAY_SPLIT_LINK		= BIT(6),
+};
+
+/**
+ * enum panel_mode - panel operation mode
+ * @MSM_DISPLAY_VIDEO_MODE: video mode panel
+ * @MSM_DISPLAY_CMD_MODE:   Command mode panel
+ * @MODE_MAX:
+ */
+enum panel_op_mode {
+	MSM_DISPLAY_VIDEO_MODE = 0,
+	MSM_DISPLAY_CMD_MODE,
+	MSM_DISPLAY_MODE_MAX,
 };
 
 /**
@@ -330,6 +355,8 @@ struct msm_roi_caps {
  * @range_min_qp:            Min QP allowed.
  * @range_max_qp:            Max QP allowed.
  * @range_bpg_offset:        Bits per group adjustment.
+ * @extra_width:             Extra width required in timing calculations
+ * @pps_delay_ms:            Post PPS command delay in milliseconds.
  */
 struct msm_display_dsc_info {
 	u8 version;
@@ -385,16 +412,21 @@ struct msm_display_dsc_info {
 	char *range_min_qp;
 	char *range_max_qp;
 	char *range_bpg_offset;
+
+	u32 extra_width;
+	u32 pps_delay_ms;
 };
 
 /**
  * struct msm_compression_info - defined panel compression
  * @comp_type:        type of compression supported
+ * @comp_ratio:       compression ratio
  * @dsc_info:         dsc configuration if the compression
  *                    supported is DSC
  */
 struct msm_compression_info {
 	enum msm_display_compression_type comp_type;
+	enum msm_display_compression_ratio comp_ratio;
 
 	union{
 		struct msm_display_dsc_info dsc_info;
@@ -424,6 +456,11 @@ struct msm_display_topology {
  * @topology:        supported topology for the mode
  * @comp_info:       compression info supported
  * @roi_caps:        panel roi capabilities
+ * @wide_bus_en:	wide-bus mode cfg for interface module
+ * @mdp_transfer_time_us   Specifies the mdp transfer time for command mode
+ *                         panels in microseconds.
+ * @vpadding:        panel stacking height
+ * @overlap_pixels:	overlap pixels for certain panels
  */
 struct msm_mode_info {
 	uint32_t frame_rate;
@@ -435,6 +472,10 @@ struct msm_mode_info {
 	struct msm_display_topology topology;
 	struct msm_compression_info comp_info;
 	struct msm_roi_caps roi_caps;
+	bool wide_bus_en;
+	u32 mdp_transfer_time_us;
+	u32 vpadding;
+	u32 overlap_pixels;
 };
 
 /**
@@ -456,10 +497,13 @@ struct msm_mode_info {
  * @is_te_using_watchdog_timer:  Boolean to indicate watchdog TE is
  *				 used instead of panel TE in cmd mode panels
  * @roi_caps:           Region of interest capability info
+ * @qsync_min_fps	Minimum fps supported by Qsync feature
+ * @te_source		vsync source pin information
  */
 struct msm_display_info {
 	int intf_type;
 	uint32_t capabilities;
+	enum panel_op_mode curr_panel_mode;
 
 	uint32_t num_of_h_tiles;
 	uint32_t h_tile_instance[MAX_H_TILES_PER_DISPLAY];
@@ -476,6 +520,9 @@ struct msm_display_info {
 	bool is_primary;
 	bool is_te_using_watchdog_timer;
 	struct msm_roi_caps roi_caps;
+
+	uint32_t qsync_min_fps;
+	uint32_t te_source;
 };
 
 #define MSM_MAX_ROI	4
@@ -493,10 +540,22 @@ struct msm_roi_list {
 /**
  * struct - msm_display_kickoff_params - info for display features at kickoff
  * @rois: Regions of interest structure for mapping CRTC to Connector output
+ * @qsync_mode: Qsync mode, where 0: disabled 1: continuous mode
+ * @qsync_update: Qsync settings were changed/updated
  */
 struct msm_display_kickoff_params {
 	struct msm_roi_list *rois;
 	struct drm_msm_ext_hdr_metadata *hdr_meta;
+};
+
+/**
+ * struct - msm_display_conn_params - info of dpu display features
+ * @qsync_mode: Qsync mode, where 0: disabled 1: continuous mode
+ * @qsync_update: Qsync settings were changed/updated
+ */
+struct msm_display_conn_params {
+	uint32_t qsync_mode;
+	bool qsync_update;
 };
 
 /**
@@ -576,15 +635,8 @@ struct msm_drm_private {
 
 	/* crtcs pending async atomic updates: */
 	uint32_t pending_crtcs;
+	uint32_t pending_planes;
 	wait_queue_head_t pending_crtcs_event;
-
-	/* Registered address spaces.. currently this is fixed per # of
-	 * iommu's.  Ie. one for display block and one for gpu block.
-	 * Eventually, to do per-process gpu pagetables, we'll want one
-	 * of these per-process.
-	 */
-	unsigned int num_aspaces;
-	struct msm_gem_address_space *aspace[NUM_DOMAINS];
 
 	unsigned int num_planes;
 	struct drm_plane *planes[MAX_PLANES];
@@ -623,6 +675,7 @@ struct msm_drm_private {
 		 * and position mm_node->start is in # of pages:
 		 */
 		struct drm_mm mm;
+		spinlock_t lock; /* Protects drm_mm node allocation/removal */
 	} vram;
 
 	struct notifier_block vmap_notifier;
@@ -673,17 +726,21 @@ void __msm_fence_worker(struct work_struct *work);
 
 int msm_atomic_commit(struct drm_device *dev,
 		struct drm_atomic_state *state, bool nonblock);
+struct drm_atomic_state *msm_atomic_state_alloc(struct drm_device *dev);
+void msm_atomic_state_clear(struct drm_atomic_state *state);
+void msm_atomic_state_free(struct drm_atomic_state *state);
 
-void msm_gem_submit_free(struct msm_gem_submit *submit);
 void msm_gem_unmap_vma(struct msm_gem_address_space *aspace,
 		struct msm_gem_vma *vma, struct sg_table *sgt,
-		void *priv);
+		unsigned int flags);
 int msm_gem_map_vma(struct msm_gem_address_space *aspace,
-		struct msm_gem_vma *vma, struct sg_table *sgt,
-		void *priv, unsigned int flags);
-void msm_gem_address_space_destroy(struct msm_gem_address_space *aspace);
+		struct msm_gem_vma *vma, struct sg_table *sgt, int npages,
+		unsigned int flags);
 
-/* For GPU and legacy display */
+struct device *msm_gem_get_aspace_device(struct msm_gem_address_space *aspace);
+
+void msm_gem_address_space_put(struct msm_gem_address_space *aspace);
+
 struct msm_gem_address_space *
 msm_gem_address_space_create(struct device *dev, struct iommu_domain *domain,
 		const char *name);
@@ -715,6 +772,8 @@ void msm_gem_remove_obj_from_aspace_active_list(
 struct msm_gem_address_space *
 msm_gem_smmu_address_space_get(struct drm_device *dev,
 		unsigned int domain);
+int msm_register_mmu(struct drm_device *dev, struct msm_mmu *mmu);
+void msm_unregister_mmu(struct drm_device *dev, struct msm_mmu *mmu);
 
 /**
  * msm_gem_aspace_domain_attach_detach: function to inform the attach/detach
@@ -741,6 +800,7 @@ int msm_gem_address_space_unregister_cb(
 		void (*cb)(void *, bool),
 		void *cb_data);
 
+void msm_gem_submit_free(struct msm_gem_submit *submit);
 int msm_ioctl_gem_submit(struct drm_device *dev, void *data,
 		struct drm_file *file);
 
@@ -751,13 +811,11 @@ void msm_gem_sync(struct drm_gem_object *obj);
 int msm_gem_mmap_obj(struct drm_gem_object *obj,
 			struct vm_area_struct *vma);
 int msm_gem_mmap(struct file *filp, struct vm_area_struct *vma);
-int msm_gem_fault(struct vm_area_struct *vma, struct vm_fault *vmf);
+int msm_gem_fault(struct vm_fault *vmf);
 uint64_t msm_gem_mmap_offset(struct drm_gem_object *obj);
-int msm_gem_get_iova_locked(struct drm_gem_object *obj,
-		struct msm_gem_address_space *aspace, uint32_t *iova);
 int msm_gem_get_iova(struct drm_gem_object *obj,
-		struct msm_gem_address_space *aspace, uint32_t *iova);
-uint32_t msm_gem_iova(struct drm_gem_object *obj,
+		struct msm_gem_address_space *aspace, uint64_t *iova);
+uint64_t msm_gem_iova(struct drm_gem_object *obj,
 		struct msm_gem_address_space *aspace);
 struct page **msm_gem_get_pages(struct drm_gem_object *obj);
 void msm_gem_put_pages(struct drm_gem_object *obj);
@@ -777,17 +835,15 @@ struct drm_gem_object *msm_gem_prime_import_sg_table(struct drm_device *dev,
 		struct dma_buf_attachment *attach, struct sg_table *sg);
 int msm_gem_prime_pin(struct drm_gem_object *obj);
 void msm_gem_prime_unpin(struct drm_gem_object *obj);
-void *msm_gem_get_vaddr_locked(struct drm_gem_object *obj);
+struct drm_gem_object *msm_gem_prime_import(struct drm_device *dev,
+					    struct dma_buf *dma_buf);
 void *msm_gem_get_vaddr(struct drm_gem_object *obj);
-void msm_gem_put_vaddr_locked(struct drm_gem_object *obj);
 void msm_gem_put_vaddr(struct drm_gem_object *obj);
 int msm_gem_madvise(struct drm_gem_object *obj, unsigned madv);
-void msm_gem_purge(struct drm_gem_object *obj);
-void msm_gem_vunmap(struct drm_gem_object *obj);
 int msm_gem_sync_object(struct drm_gem_object *obj,
 		struct msm_fence_context *fctx, bool exclusive);
 void msm_gem_move_to_active(struct drm_gem_object *obj,
-		struct msm_gpu *gpu, bool exclusive, struct fence *fence);
+		struct msm_gpu *gpu, bool exclusive, struct dma_fence *fence);
 void msm_gem_move_to_inactive(struct drm_gem_object *obj);
 int msm_gem_cpu_prep(struct drm_gem_object *obj, uint32_t op, ktime_t *timeout);
 int msm_gem_cpu_fini(struct drm_gem_object *obj);
@@ -796,10 +852,20 @@ int msm_gem_new_handle(struct drm_device *dev, struct drm_file *file,
 		uint32_t size, uint32_t flags, uint32_t *handle);
 struct drm_gem_object *msm_gem_new(struct drm_device *dev,
 		uint32_t size, uint32_t flags);
+struct drm_gem_object *msm_gem_new_locked(struct drm_device *dev,
+		uint32_t size, uint32_t flags);
+void *msm_gem_kernel_new(struct drm_device *dev, uint32_t size,
+		uint32_t flags, struct msm_gem_address_space *aspace,
+		struct drm_gem_object **bo, uint64_t *iova);
+void *msm_gem_kernel_new_locked(struct drm_device *dev, uint32_t size,
+		uint32_t flags, struct msm_gem_address_space *aspace,
+		struct drm_gem_object **bo, uint64_t *iova);
 struct drm_gem_object *msm_gem_import(struct drm_device *dev,
 		struct dma_buf *dmabuf, struct sg_table *sgt);
+int msm_gem_delayed_import(struct drm_gem_object *obj);
 
 void msm_framebuffer_set_kmap(struct drm_framebuffer *fb, bool enable);
+void msm_framebuffer_set_keepattrs(struct drm_framebuffer *fb, bool enable);
 int msm_framebuffer_prepare(struct drm_framebuffer *fb,
 		struct msm_gem_address_space *aspace);
 void msm_framebuffer_cleanup(struct drm_framebuffer *fb,
@@ -810,9 +876,12 @@ uint32_t msm_framebuffer_phys(struct drm_framebuffer *fb, int plane);
 struct drm_gem_object *msm_framebuffer_bo(struct drm_framebuffer *fb, int plane);
 const struct msm_format *msm_framebuffer_format(struct drm_framebuffer *fb);
 struct drm_framebuffer *msm_framebuffer_init(struct drm_device *dev,
-		const struct drm_mode_fb_cmd2 *mode_cmd, struct drm_gem_object **bos);
+		const struct drm_mode_fb_cmd2 *mode_cmd,
+		struct drm_gem_object **bos);
 struct drm_framebuffer *msm_framebuffer_create(struct drm_device *dev,
 		struct drm_file *file, const struct drm_mode_fb_cmd2 *mode_cmd);
+struct drm_framebuffer * msm_alloc_stolen_fb(struct drm_device *dev,
+		int w, int h, int p, uint32_t format);
 
 struct drm_fb_helper *msm_fbdev_init(struct drm_device *dev);
 void msm_fbdev_free(struct drm_device *dev);
@@ -848,11 +917,6 @@ static inline void __exit msm_edp_unregister(void)
 #endif
 
 struct msm_dsi;
-enum msm_dsi_encoder_id {
-	MSM_DSI_VIDEO_ENCODER_ID = 0,
-	MSM_DSI_CMD_ENCODER_ID = 1,
-	MSM_DSI_ENCODER_NUM = 2
-};
 
 /* *
  * msm_mode_object_event_notify - notify user-space clients of drm object
@@ -867,7 +931,7 @@ void msm_mode_object_event_notify(struct drm_mode_object *obj,
 void __init msm_dsi_register(void);
 void __exit msm_dsi_unregister(void);
 int msm_dsi_modeset_init(struct msm_dsi *msm_dsi, struct drm_device *dev,
-		struct drm_encoder *encoders[MSM_DSI_ENCODER_NUM]);
+			 struct drm_encoder *encoder);
 #else
 static inline void __init msm_dsi_register(void)
 {
@@ -876,8 +940,8 @@ static inline void __exit msm_dsi_unregister(void)
 {
 }
 static inline int msm_dsi_modeset_init(struct msm_dsi *msm_dsi,
-		struct drm_device *dev,
-		struct drm_encoder *encoders[MSM_DSI_ENCODER_NUM])
+				       struct drm_device *dev,
+				       struct drm_encoder *encoder)
 {
 	return -EINVAL;
 }
@@ -887,21 +951,25 @@ void __init msm_mdp_register(void);
 void __exit msm_mdp_unregister(void);
 
 void msm_idle_set_state(struct drm_encoder *encoder, bool active);
+
 #ifdef CONFIG_DEBUG_FS
 void msm_gem_describe(struct drm_gem_object *obj, struct seq_file *m);
 void msm_gem_describe_objects(struct list_head *list, struct seq_file *m);
 void msm_framebuffer_describe(struct drm_framebuffer *fb, struct seq_file *m);
 int msm_debugfs_late_init(struct drm_device *dev);
 int msm_rd_debugfs_init(struct drm_minor *minor);
-void msm_rd_debugfs_cleanup(struct drm_minor *minor);
+void msm_rd_debugfs_cleanup(struct msm_drm_private *priv);
 void msm_rd_dump_submit(struct msm_gem_submit *submit);
 int msm_perf_debugfs_init(struct drm_minor *minor);
-void msm_perf_debugfs_cleanup(struct drm_minor *minor);
+void msm_perf_debugfs_cleanup(struct msm_drm_private *priv);
 #else
 static inline int msm_debugfs_late_init(struct drm_device *dev) { return 0; }
 static inline void msm_rd_dump_submit(struct msm_gem_submit *submit) {}
+static inline void msm_rd_debugfs_cleanup(struct msm_drm_private *priv) {}
+static inline void msm_perf_debugfs_cleanup(struct msm_drm_private *priv) {}
 #endif
 
+struct clk *msm_clk_get(struct platform_device *pdev, const char *name);
 void __iomem *msm_ioremap(struct platform_device *pdev, const char *name,
 		const char *dbgname);
 unsigned long msm_iomap_size(struct platform_device *pdev, const char *name);
@@ -909,8 +977,8 @@ void msm_iounmap(struct platform_device *dev, void __iomem *addr);
 void msm_writel(u32 data, void __iomem *addr);
 u32 msm_readl(const void __iomem *addr);
 
-#define DBG(fmt, ...) DRM_DEBUG(fmt"\n", ##__VA_ARGS__)
-#define VERB(fmt, ...) if (0) DRM_DEBUG(fmt"\n", ##__VA_ARGS__)
+#define DBG(fmt, ...) DRM_DEBUG_DRIVER(fmt"\n", ##__VA_ARGS__)
+#define VERB(fmt, ...) if (0) DRM_DEBUG_DRIVER(fmt"\n", ##__VA_ARGS__)
 
 static inline int align_pitch(int width, int bpp)
 {
@@ -946,4 +1014,7 @@ static inline unsigned long timeout_to_jiffies(const ktime_t *timeout)
 	return remaining_jiffies;
 }
 
+int msm_get_mixer_count(struct msm_drm_private *priv,
+		const struct drm_display_mode *mode,
+		u32 max_mixer_width, u32 *num_lm);
 #endif /* __MSM_DRV_H__ */

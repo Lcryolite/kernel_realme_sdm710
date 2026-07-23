@@ -75,7 +75,10 @@ static int pppopns_recv_core(struct sock *sk_raw, struct sk_buff *skb)
 	__u32 now = jiffies;
 	struct header *hdr;
 
-	/* Skip transport header */
+	if (skb_linearize(skb))
+		goto drop;
+
+	/* Skip network header */
 	skb_pull(skb, skb_transport_header(skb) - skb->data);
 
 	/* Drop the packet if GRE header is missing. */
@@ -112,7 +115,7 @@ static int pppopns_recv_core(struct sock *sk_raw, struct sk_buff *skb)
 
 	/* Fix PPP protocol if it is compressed. */
 	if (skb->len >= 1 && skb->data[0] & 1)
-		skb_push(skb, 1)[0] = 0;
+		*(u8 *)skb_push(skb, 1) = 0;
 
 	/* Drop the packet if PPP protocol is missing. */
 	if (skb->len < 2)

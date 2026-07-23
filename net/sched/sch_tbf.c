@@ -305,7 +305,7 @@ static int tbf_change(struct Qdisc *sch, struct nlattr *opt)
 	s64 buffer, mtu;
 	u64 rate64 = 0, prate64 = 0;
 
-	err = nla_parse_nested(tb, TCA_TBF_MAX, opt, tbf_policy);
+	err = nla_parse_nested(tb, TCA_TBF_MAX, opt, tbf_policy, NULL);
 	if (err < 0)
 		return err;
 
@@ -378,13 +378,16 @@ static int tbf_change(struct Qdisc *sch, struct nlattr *opt)
 			err = PTR_ERR(child);
 			goto done;
 		}
+
+		/* child is fifo, no need to check for noop_qdisc */
+		qdisc_hash_add(child, true);
 	}
 
 	sch_tree_lock(sch);
 	if (child) {
 		qdisc_tree_reduce_backlog(q->qdisc, q->qdisc->q.qlen,
 					  q->qdisc->qstats.backlog);
-		qdisc_destroy(q->qdisc);
+		qdisc_put(q->qdisc);
 		q->qdisc = child;
 	}
 	q->limit = qopt->limit;
@@ -429,7 +432,7 @@ static void tbf_destroy(struct Qdisc *sch)
 	struct tbf_sched_data *q = qdisc_priv(sch);
 
 	qdisc_watchdog_cancel(&q->watchdog);
-	qdisc_destroy(q->qdisc);
+	qdisc_put(q->qdisc);
 }
 
 static int tbf_dump(struct Qdisc *sch, struct sk_buff *skb)
@@ -499,13 +502,9 @@ static struct Qdisc *tbf_leaf(struct Qdisc *sch, unsigned long arg)
 	return q->qdisc;
 }
 
-static unsigned long tbf_get(struct Qdisc *sch, u32 classid)
+static unsigned long tbf_find(struct Qdisc *sch, u32 classid)
 {
 	return 1;
-}
-
-static void tbf_put(struct Qdisc *sch, unsigned long arg)
-{
 }
 
 static void tbf_walk(struct Qdisc *sch, struct qdisc_walker *walker)
@@ -523,8 +522,7 @@ static void tbf_walk(struct Qdisc *sch, struct qdisc_walker *walker)
 static const struct Qdisc_class_ops tbf_class_ops = {
 	.graft		=	tbf_graft,
 	.leaf		=	tbf_leaf,
-	.get		=	tbf_get,
-	.put		=	tbf_put,
+	.find		=	tbf_find,
 	.walk		=	tbf_walk,
 	.dump		=	tbf_dump_class,
 };

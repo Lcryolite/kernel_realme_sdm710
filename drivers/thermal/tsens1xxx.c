@@ -33,7 +33,6 @@
 #define TSENS_UPPER_THRESHOLD_SHIFT	10
 
 #define TSENS_S0_STATUS_ADDR(n)		((n) + 0x30)
-#define TSENS_S0_TRDY_ADDR(n)		((n) + 0x5c)
 #define TSENS_SN_ADDR_OFFSET		0x4
 #define TSENS_SN_STATUS_TEMP_MASK	0x3ff
 #define TSENS_SN_STATUS_LOWER_STATUS	BIT(11)
@@ -42,10 +41,11 @@
 
 #define TSENS_TRDY_MASK			BIT(0)
 
-#define TSENS_SN_STATUS_ADDR(n)	((n) + 0x44)
+#define TSENS_SN_STATUS_ADDR(n)		(n)
 #define TSENS_SN_STATUS_VALID		BIT(14)
 #define TSENS_SN_STATUS_VALID_MASK	0x4000
-#define TSENS_TRDY_ADDR(n)		((n) + 0x84)
+#define TSENS_TRDY_ADDR(n)		(n)
+
 
 #define TSENS_CTRL_ADDR(n)		(n)
 #define TSENS_EN				BIT(0)
@@ -104,21 +104,10 @@ static int tsens1xxx_get_temp(struct tsens_sensor *sensor, int *temp)
 
 	tmdev = sensor->tmdev;
 
-	if ((tmdev->ctrl_data->ver_major == 1) &&
-			(tmdev->ctrl_data->ver_minor == 1)) {
-		trdy_addr = TSENS_S0_TRDY_ADDR(tmdev->tsens_tm_addr);
-		sensor_addr = TSENS_S0_STATUS_ADDR(tmdev->tsens_tm_addr);
-
-		if (!(tmdev->prev_reading_avail)) {
-			while (!((readl_relaxed(trdy_addr)) & TSENS_TRDY_MASK))
-				usleep_range(TSENS_TRDY_RDY_MIN_TIME,
-						TSENS_TRDY_RDY_MAX_TIME);
-			tmdev->prev_reading_avail = true;
-		}
-	} else {
-		trdy_addr = TSENS_TRDY_ADDR(tmdev->tsens_tm_addr);
-		sensor_addr = TSENS_SN_STATUS_ADDR(tmdev->tsens_tm_addr);
-	}
+	trdy_addr = TSENS_TRDY_ADDR(tmdev->tsens_tm_addr +
+		tmdev->ctrl_data->tsens_trdy_offset);
+	sensor_addr = TSENS_SN_STATUS_ADDR(tmdev->tsens_tm_addr +
+		tmdev->ctrl_data->tsens_sn_offset);
 
 	code = readl_relaxed(sensor_addr +
 			(sensor->hw_id << TSENS_STATUS_ADDR_OFFSET));
@@ -160,13 +149,13 @@ static int tsens1xxx_get_temp(struct tsens_sensor *sensor, int *temp)
 
 	if (tmdev->ops->dbg)
 		tmdev->ops->dbg(tmdev, (u32)sensor->hw_id,
-				TSENS_DBG_LOG_TEMP_READS, temp);
+			TSENS_DBG_LOG_TEMP_READS, temp);
 
 	return 0;
 }
 
 static int tsens_tz_activate_trip_type(struct tsens_sensor *tm_sensor,
-			int trip, enum thermal_trip_activation_mode mode)
+			int trip, enum thermal_device_mode mode)
 {
 	struct tsens_device *tmdev = NULL;
 	unsigned int reg_cntl, code, hi_code, lo_code, mask;
@@ -212,7 +201,7 @@ static int tsens_tz_activate_trip_type(struct tsens_sensor *tm_sensor,
 		return -EINVAL;
 	}
 
-	if (mode == THERMAL_TRIP_ACTIVATION_DISABLED)
+	if (mode == THERMAL_DEVICE_DISABLED)
 		writel_relaxed(reg_cntl | mask,
 		(TSENS_S0_UPPER_LOWER_STATUS_CTRL_ADDR(tmdev->tsens_tm_addr) +
 			(tm_sensor->hw_id * TSENS_SN_ADDR_OFFSET)));
@@ -291,7 +280,7 @@ static int tsens1xxx_set_trip_temp(struct tsens_sensor *tm_sensor,
 	if (high_temp != INT_MAX) {
 		rc = tsens_tz_activate_trip_type(tm_sensor,
 				THERMAL_TRIP_CONFIGURABLE_HI,
-				THERMAL_TRIP_ACTIVATION_ENABLED);
+				THERMAL_DEVICE_ENABLED);
 		if (rc) {
 			pr_err("trip high enable error :%d\n", rc);
 			goto fail;
@@ -299,7 +288,7 @@ static int tsens1xxx_set_trip_temp(struct tsens_sensor *tm_sensor,
 	} else {
 		rc = tsens_tz_activate_trip_type(tm_sensor,
 				THERMAL_TRIP_CONFIGURABLE_HI,
-				THERMAL_TRIP_ACTIVATION_DISABLED);
+				THERMAL_DEVICE_DISABLED);
 		if (rc) {
 			pr_err("trip high disable error :%d\n", rc);
 			goto fail;
@@ -309,7 +298,7 @@ static int tsens1xxx_set_trip_temp(struct tsens_sensor *tm_sensor,
 	if (low_temp != INT_MIN) {
 		rc = tsens_tz_activate_trip_type(tm_sensor,
 				THERMAL_TRIP_CONFIGURABLE_LOW,
-				THERMAL_TRIP_ACTIVATION_ENABLED);
+				THERMAL_DEVICE_ENABLED);
 		if (rc) {
 			pr_err("trip low enable activation error :%d\n", rc);
 			goto fail;
@@ -317,7 +306,7 @@ static int tsens1xxx_set_trip_temp(struct tsens_sensor *tm_sensor,
 	} else {
 		rc = tsens_tz_activate_trip_type(tm_sensor,
 				THERMAL_TRIP_CONFIGURABLE_LOW,
-				THERMAL_TRIP_ACTIVATION_DISABLED);
+				THERMAL_DEVICE_DISABLED);
 		if (rc) {
 			pr_err("trip low disable error :%d\n", rc);
 			goto fail;
@@ -338,13 +327,8 @@ static irqreturn_t tsens_irq_thread(int irq, void *data)
 	void __iomem *sensor_status_ctrl_addr;
 	u32 rc = 0, addr_offset;
 
-
-	if ((tm->ctrl_data->ver_major == 1) &&
-			(tm->ctrl_data->ver_minor == 1))
-		sensor_status_addr = TSENS_S0_STATUS_ADDR(tm->tsens_tm_addr);
-	else
-		sensor_status_addr = TSENS_SN_STATUS_ADDR(tm->tsens_tm_addr);
-
+	sensor_status_addr = TSENS_SN_STATUS_ADDR(tm->tsens_tm_addr +
+				tm->ctrl_data->tsens_sn_offset);
 	sensor_status_ctrl_addr =
 		TSENS_S0_UPPER_LOWER_STATUS_CTRL_ADDR(tm->tsens_tm_addr);
 
@@ -379,15 +363,15 @@ static irqreturn_t tsens_irq_thread(int irq, void *data)
 			if (th_temp > (temp/TSENS_SCALE_MILLIDEG)) {
 				pr_debug("Re-arm high threshold\n");
 				rc = tsens_tz_activate_trip_type(
-					&tm->sensor[i],
-					THERMAL_TRIP_CONFIGURABLE_HI,
-					THERMAL_TRIP_ACTIVATION_ENABLED);
+						&tm->sensor[i],
+						THERMAL_TRIP_CONFIGURABLE_HI,
+						THERMAL_DEVICE_ENABLED);
 				if (rc)
 					pr_err("high rearm failed");
 			} else {
 				upper_thr = true;
 				tm->sensor[i].thr_state.high_th_state =
-					THERMAL_TRIP_ACTIVATION_DISABLED;
+					THERMAL_DEVICE_DISABLED;
 			}
 		}
 
@@ -401,15 +385,15 @@ static irqreturn_t tsens_irq_thread(int irq, void *data)
 			if (th_temp < (temp/TSENS_SCALE_MILLIDEG)) {
 				pr_debug("Re-arm Low threshold\n");
 				rc = tsens_tz_activate_trip_type(
-					&tm->sensor[i],
-					THERMAL_TRIP_CONFIGURABLE_LOW,
-					THERMAL_TRIP_ACTIVATION_ENABLED);
+						&tm->sensor[i],
+						THERMAL_TRIP_CONFIGURABLE_LOW,
+						THERMAL_DEVICE_ENABLED);
 				if (rc)
 					pr_err("low rearm failed");
 			} else {
 				lower_thr = true;
 				tm->sensor[i].thr_state.low_th_state =
-					THERMAL_TRIP_ACTIVATION_DISABLED;
+					THERMAL_DEVICE_DISABLED;
 			}
 		}
 		spin_unlock_irqrestore(&tm->tsens_upp_low_lock, flags);
@@ -419,7 +403,7 @@ static irqreturn_t tsens_irq_thread(int irq, void *data)
 				tm->sensor[i].hw_id,
 				code_to_degc((status &
 				TSENS_SN_STATUS_TEMP_MASK),
-				tm->sensor));
+				(tm->sensor + i)));
 			of_thermal_handle_trip(tm->sensor[i].tzd);
 		}
 	}
@@ -439,12 +423,8 @@ static int tsens1xxx_hw_sensor_en(struct tsens_device *tmdev,
 	void __iomem *srot_addr;
 	unsigned int srot_val, sensor_en;
 
-	if ((tmdev->ctrl_data->ver_major == 1) &&
-			(tmdev->ctrl_data->ver_minor == 1))
-		srot_addr = TSENS_CTRL_ADDR(tmdev->tsens_srot_addr);
-	else
-		srot_addr = TSENS_CTRL_ADDR(tmdev->tsens_srot_addr + 0x4);
-
+	srot_addr = TSENS_CTRL_ADDR(tmdev->tsens_srot_addr +
+			tmdev->ctrl_data->tsens_srot_offset);
 	srot_val = readl_relaxed(srot_addr);
 	srot_val = TSENS_CTRL_SENSOR_EN_MASK(srot_val);
 
@@ -458,12 +438,8 @@ static int tsens1xxx_hw_init(struct tsens_device *tmdev)
 	void __iomem *srot_addr;
 	unsigned int srot_val;
 
-	if ((tmdev->ctrl_data->ver_major == 1) &&
-			(tmdev->ctrl_data->ver_minor == 1))
-		srot_addr = TSENS_CTRL_ADDR(tmdev->tsens_srot_addr);
-	else
-		srot_addr = TSENS_CTRL_ADDR(tmdev->tsens_srot_addr + 0x4);
-
+	srot_addr = TSENS_CTRL_ADDR(tmdev->tsens_srot_addr +
+			tmdev->ctrl_data->tsens_srot_offset);
 	srot_val = readl_relaxed(srot_addr);
 	if (!(srot_val & TSENS_EN)) {
 		pr_err("TSENS device is not enabled\n");
@@ -474,7 +450,6 @@ static int tsens1xxx_hw_init(struct tsens_device *tmdev)
 			TSENS_UPPER_LOWER_INTERRUPT_CTRL(tmdev->tsens_tm_addr));
 
 	spin_lock_init(&tmdev->tsens_upp_low_lock);
-
 	if (tmdev->ctrl_data->mtc) {
 		if (tmdev->ops->dbg)
 			tmdev->ops->dbg(tmdev, 0, TSENS_DBG_MTC_DATA, NULL);
@@ -523,13 +498,13 @@ static int tsens1xxx_register_interrupts(struct tsens_device *tmdev)
 }
 
 static const struct tsens_ops ops_tsens1xxx = {
-	.hw_init		= tsens1xxx_hw_init,
-	.get_temp		= tsens1xxx_get_temp,
-	.set_trips		= tsens1xxx_set_trip_temp,
-	.interrupts_reg	= tsens1xxx_register_interrupts,
-	.sensor_en		= tsens1xxx_hw_sensor_en,
-	.calibrate		= calibrate_8937,
-	.dbg            = tsens2xxx_dbg,
+	.hw_init = tsens1xxx_hw_init,
+	.get_temp = tsens1xxx_get_temp,
+	.set_trips = tsens1xxx_set_trip_temp,
+	.interrupts_reg = tsens1xxx_register_interrupts,
+	.sensor_en = tsens1xxx_hw_sensor_en,
+	.calibrate = calibrate_8937,
+	.dbg = tsens2xxx_dbg,
 };
 
 const struct tsens_data data_tsens14xx = {
@@ -539,21 +514,50 @@ const struct tsens_data data_tsens14xx = {
 	.mtc = true,
 	.ver_major = 1,
 	.ver_minor = 4,
+	.tsens_srot_offset = TSENS_SROT_OFFSET_8937,
+	.tsens_sn_offset = TSENS_SN_STATUS_ADDR_8937,
+	.tsens_trdy_offset = TSENS_TRDY_ADDR_8937,
 };
 
-static const struct tsens_ops ops_tsens1xxx_8909 = {
-	.hw_init		= tsens1xxx_hw_init,
-	.get_temp		= tsens1xxx_get_temp,
-	.set_trips		= tsens1xxx_set_trip_temp,
-	.interrupts_reg	= tsens1xxx_register_interrupts,
-	.sensor_en		= tsens1xxx_hw_sensor_en,
-	.calibrate		= calibrate_8909,
-	.dbg			= tsens2xxx_dbg,
+static const struct tsens_ops ops_tsens1xxx_405 = {
+	.hw_init = tsens1xxx_hw_init,
+	.get_temp = tsens1xxx_get_temp,
+	.set_trips = tsens1xxx_set_trip_temp,
+	.interrupts_reg = tsens1xxx_register_interrupts,
+	.sensor_en = tsens1xxx_hw_sensor_en,
+	.calibrate = calibrate_405,
+	.dbg = tsens2xxx_dbg,
 };
 
-const struct tsens_data data_tsens1xxx_8909 = {
-	.num_sensors = TSENS_NUM_SENSORS_8909,
-	.ops = &ops_tsens1xxx_8909,
+const struct tsens_data data_tsens14xx_405 = {
+	.num_sensors = TSENS_NUM_SENSORS_405,
+	.ops = &ops_tsens1xxx_405,
+	.valid_status_check = true,
+	.mtc = true,
 	.ver_major = 1,
-	.ver_minor = 1,
+	.ver_minor = 4,
+	.tsens_srot_offset = TSENS_SROT_OFFSET_405,
+	.tsens_sn_offset = TSENS_SN_STATUS_ADDR_405,
+	.tsens_trdy_offset = TSENS_TRDY_ADDR_405,
+};
+
+static const struct tsens_ops ops_tsens1xxx_9607 = {
+	.hw_init = tsens1xxx_hw_init,
+	.get_temp = tsens1xxx_get_temp,
+	.set_trips = tsens1xxx_set_trip_temp,
+	.interrupts_reg = tsens1xxx_register_interrupts,
+	.sensor_en = tsens1xxx_hw_sensor_en,
+	.calibrate = calibrate_9607,
+	.dbg = tsens2xxx_dbg,
+};
+
+const struct tsens_data data_tsens14xx_9607 = {
+	.num_sensors = TSENS_NUM_SENSORS_9607,
+	.ops = &ops_tsens1xxx_9607,
+	.valid_status_check = true,
+	.ver_major = 1,
+	.ver_minor = 4,
+	.tsens_srot_offset = TSENS_SROT_OFFSET_9607,
+	.tsens_sn_offset = TSENS_SN_STATUS_ADDR_9607,
+	.tsens_trdy_offset = TSENS_TRDY_ADDR_9607,
 };

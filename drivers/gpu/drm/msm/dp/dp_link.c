@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2012-2018,2020-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -17,8 +16,6 @@
 
 #include "dp_link.h"
 #include "dp_panel.h"
-
-#include <uapi/drm/drm_mode.h>
 
 enum dynamic_range {
 	DP_DYNAMIC_RANGE_RGB_VESA = 0x00,
@@ -791,14 +788,8 @@ static int dp_link_parse_request(struct dp_link_private *link)
 
 	data = bp;
 
-	pr_debug("device service irq vector = 0x%x\n", data);
-
-	drm_dp_cec_irq(link->aux->drm_aux);
-
-	if (!(data & DP_AUTOMATED_TEST_REQUEST)) {
-		pr_debug("no test requested\n");
+	if (!(data & DP_AUTOMATED_TEST_REQUEST))
 		return 0;
-	}
 
 	/**
 	 * Read the link request byte (Byte 0x218) to determine what type
@@ -819,7 +810,6 @@ static int dp_link_parse_request(struct dp_link_private *link)
 		goto end;
 	}
 
-	pr_debug("%s (0x%x) requested\n", dp_link_get_test_name(data), data);
 	link->request.test_requested = data;
 
 	if (link->request.test_requested == DP_TEST_LINK_PHY_TEST_PATTERN) {
@@ -966,15 +956,9 @@ static int dp_link_psm_config(struct dp_link *dp_link,
 
 	link = container_of(dp_link, struct dp_link_private, dp_link);
 
-	if (enable) {
-		if (dp_link->power_mode != DRM_MODE_DPMS_STANDBY
-				&& dp_link->power_mode != DRM_MODE_DPMS_SUSPEND)
-			ret = drm_dp_link_power_down(link->aux->drm_aux,
-					link_info);
-		else
-			ret = drm_dp_link_power_down_aux_up(link->aux->drm_aux,
-					link_info);
-	} else
+	if (enable)
+		ret = drm_dp_link_power_down(link->aux->drm_aux, link_info);
+	else
 		ret = drm_dp_link_power_up(link->aux->drm_aux, link_info);
 
 	if (ret)
@@ -1148,7 +1132,7 @@ static int dp_link_process_link_status_update(struct dp_link_private *link)
 		return -EINVAL;
 
 	pr_debug("channel_eq_done = %d, clock_recovery_done = %d\n",
-			drm_dp_clock_recovery_ok(link->link_status,
+			drm_dp_channel_eq_ok(link->link_status,
 			link->dp_link.link_params.lane_count),
 			drm_dp_clock_recovery_ok(link->link_status,
 			link->dp_link.link_params.lane_count));
@@ -1297,8 +1281,6 @@ static int dp_link_process_request(struct dp_link *dp_link)
 
 	link = container_of(dp_link, struct dp_link_private, dp_link);
 
-	pr_debug("start\n");
-
 	dp_link_reset_data(link);
 
 	dp_link_parse_sink_status_field(link);
@@ -1344,9 +1326,18 @@ static int dp_link_process_request(struct dp_link *dp_link)
 		goto exit;
 	}
 
-	pr_debug("done\n");
-exit:
+	pr_debug("no test requested\n");
 	return ret;
+exit:
+	/*
+	 * log this as it can be a use initiated action to run a DP CTS
+	 * test or in normal cases, sink has encountered a problem and
+	 * and want source to redo some part of initialization which can
+	 * be helpful in debugging.
+	 */
+	pr_info("test requested: %s\n",
+		dp_link_get_test_name(dp_link->sink_request));
+	return 0;
 }
 
 static int dp_link_get_colorimetry_config(struct dp_link *dp_link)
@@ -1387,6 +1378,7 @@ static int dp_link_adjust_levels(struct dp_link *dp_link, u8 *link_status)
 	int max = 0;
 	u8 data;
 	struct dp_link_private *link;
+	u8 buf[8] = {0}, offset = 0;
 
 	if (!dp_link) {
 		pr_err("invalid input\n");
@@ -1398,49 +1390,52 @@ static int dp_link_adjust_levels(struct dp_link *dp_link, u8 *link_status)
 	/* use the max level across lanes */
 	for (i = 0; i < dp_link->link_params.lane_count; i++) {
 		data = drm_dp_get_adjust_request_voltage(link_status, i);
-		pr_debug("lane=%d req_voltage_swing=%d\n", i, data);
+		data >>= DP_TRAIN_VOLTAGE_SWING_SHIFT;
+
+		offset = i * 2;
+		if (offset < sizeof(buf))
+			buf[offset] = data;
+
 		if (max < data)
 			max = data;
 	}
 
-	dp_link->phy_params.v_level = max >> DP_TRAIN_VOLTAGE_SWING_SHIFT;
+	dp_link->phy_params.v_level = max;
 
 	/* use the max level across lanes */
 	max = 0;
 	for (i = 0; i < dp_link->link_params.lane_count; i++) {
 		data = drm_dp_get_adjust_request_pre_emphasis(link_status, i);
-		pr_debug("lane=%d req_pre_emphasis=%d\n", i, data);
+		data >>= DP_TRAIN_PRE_EMPHASIS_SHIFT;
+
+		offset = (i * 2) + 1;
+		if (offset < sizeof(buf))
+			buf[offset] = data;
+
 		if (max < data)
 			max = data;
 	}
 
-	dp_link->phy_params.p_level = max >> DP_TRAIN_PRE_EMPHASIS_SHIFT;
+	dp_link->phy_params.p_level = max;
+
+	print_hex_dump(KERN_DEBUG, "[drm-dp] Req (VxPx): ",
+		DUMP_PREFIX_NONE, 8, 2, buf, sizeof(buf), false);
 
 	/**
 	 * Adjust the voltage swing and pre-emphasis level combination to within
 	 * the allowable range.
 	 */
-	if (dp_link->phy_params.v_level > DP_LINK_VOLTAGE_MAX) {
-		pr_debug("Requested vSwingLevel=%d, change to %d\n",
-			dp_link->phy_params.v_level, DP_LINK_VOLTAGE_MAX);
+	if (dp_link->phy_params.v_level > DP_LINK_VOLTAGE_MAX)
 		dp_link->phy_params.v_level = DP_LINK_VOLTAGE_MAX;
-	}
 
-	if (dp_link->phy_params.p_level > DP_LINK_PRE_EMPHASIS_MAX) {
-		pr_debug("Requested preEmphasisLevel=%d, change to %d\n",
-			dp_link->phy_params.p_level, DP_LINK_PRE_EMPHASIS_MAX);
+	if (dp_link->phy_params.p_level > DP_LINK_PRE_EMPHASIS_MAX)
 		dp_link->phy_params.p_level = DP_LINK_PRE_EMPHASIS_MAX;
-	}
 
 	if ((dp_link->phy_params.p_level > DP_LINK_PRE_EMPHASIS_LEVEL_1)
-		&& (dp_link->phy_params.v_level == DP_LINK_VOLTAGE_LEVEL_2)) {
-		pr_debug("Requested preEmphasisLevel=%d, change to %d\n",
-			dp_link->phy_params.p_level,
-			DP_LINK_PRE_EMPHASIS_LEVEL_1);
+		&& (dp_link->phy_params.v_level == DP_LINK_VOLTAGE_LEVEL_2))
 		dp_link->phy_params.p_level = DP_LINK_PRE_EMPHASIS_LEVEL_1;
-	}
 
-	pr_debug("adjusted: v_level=%d, p_level=%d\n",
+	pr_debug("Set (VxPx): %x%x\n",
 		dp_link->phy_params.v_level, dp_link->phy_params.p_level);
 
 	return 0;

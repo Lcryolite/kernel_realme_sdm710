@@ -11,6 +11,8 @@
 #define QTI_CTRL_EP_LOOKUP _IOR(QTI_CTRL_IOCTL_MAGIC, 3, struct ep_info)
 #define QTI_CTRL_MODEM_OFFLINE _IO(QTI_CTRL_IOCTL_MAGIC, 4)
 #define QTI_CTRL_MODEM_ONLINE _IO(QTI_CTRL_IOCTL_MAGIC, 5)
+#define QTI_CTRL_DATA_BUF_INFO \
+	_IOR(QTI_CTRL_IOCTL_MAGIC, 6, struct data_buf_info)
 
 #define GSI_MBIM_IOCTL_MAGIC 'o'
 #define GSI_MBIM_GET_NTB_SIZE  _IOR(GSI_MBIM_IOCTL_MAGIC, 2, __u32)
@@ -43,5 +45,11 @@ struct ep_info {
 
 };
 
-#endif
+struct data_buf_info {
+	__u32 epout_buf_len;
+	__u32 epout_total_buf_len;
+	__u32 epin_buf_len;
+	__u32 epin_total_buf_len;
+};
 
+#endif

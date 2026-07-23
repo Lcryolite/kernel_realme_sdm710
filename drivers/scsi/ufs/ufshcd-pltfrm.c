@@ -40,6 +40,8 @@
 #include "ufshcd.h"
 #include "ufshcd-pltfrm.h"
 
+#define UFSHCD_DEFAULT_LANES_PER_DIRECTION		2
+
 static int ufshcd_parse_reset_info(struct ufs_hba *hba)
 {
 	int ret = 0;
@@ -71,8 +73,6 @@ static int ufshcd_parse_clock_info(struct ufs_hba *hba)
 
 	if (!np)
 		goto out;
-
-	INIT_LIST_HEAD(&hba->clk_list_head);
 
 	cnt = of_property_count_strings(np, "clock-names");
 	if (!cnt || (cnt == -EINVAL)) {
@@ -208,13 +208,24 @@ static int ufshcd_populate_vreg(struct device *dev, const char *name,
 				vreg->min_uV = be32_to_cpup(&prop[0]);
 				vreg->max_uV = be32_to_cpup(&prop[1]);
 			}
+
+			if (of_property_read_bool(np, "vcc-low-voltage-sup"))
+				vreg->low_voltage_sup = true;
 		}
 	} else if (!strcmp(name, "vccq")) {
 		vreg->min_uV = UFS_VREG_VCCQ_MIN_UV;
 		vreg->max_uV = UFS_VREG_VCCQ_MAX_UV;
 	} else if (!strcmp(name, "vccq2")) {
-		vreg->min_uV = UFS_VREG_VCCQ2_MIN_UV;
-		vreg->max_uV = UFS_VREG_VCCQ2_MAX_UV;
+		prop = of_get_property(np, "vccq2-voltage-level", &len);
+		if (!prop || (len != (2 * sizeof(__be32)))) {
+			dev_warn(dev, "%s vccq2-voltage-level property.\n",
+				prop ? "invalid format" : "no");
+			vreg->min_uV = UFS_VREG_VCCQ2_MIN_UV;
+			vreg->max_uV = UFS_VREG_VCCQ2_MAX_UV;
+		} else {
+			vreg->min_uV = be32_to_cpup(&prop[0]);
+			vreg->max_uV = be32_to_cpup(&prop[1]);
+		}
 	}
 
 	goto out;
@@ -270,6 +281,34 @@ static void ufshcd_parse_pm_levels(struct ufs_hba *hba)
 	}
 }
 
+static int ufshcd_parse_pinctrl_info(struct ufs_hba *hba)
+{
+	int ret = 0;
+
+	/* Try to obtain pinctrl handle */
+	hba->pctrl = devm_pinctrl_get(hba->dev);
+	if (IS_ERR(hba->pctrl)) {
+		ret = PTR_ERR(hba->pctrl);
+		hba->pctrl = NULL;
+	}
+
+	return ret;
+}
+
+static int ufshcd_parse_extcon_info(struct ufs_hba *hba)
+{
+	struct extcon_dev *extcon;
+
+	extcon = extcon_get_edev_by_phandle(hba->dev, 0);
+	if (IS_ERR(extcon) && PTR_ERR(extcon) != -ENODEV)
+		return PTR_ERR(extcon);
+
+	if (!IS_ERR(extcon))
+		hba->extcon = extcon;
+
+	return 0;
+}
+
 static void ufshcd_parse_gear_limits(struct ufs_hba *hba)
 {
 	struct device *dev = hba->dev;
@@ -315,6 +354,14 @@ static void ufshcd_parse_cmd_timeout(struct ufs_hba *hba)
 		hba->scsi_cmd_timeout = 0;
 }
 
+static void ufshcd_parse_force_g4_flag(struct ufs_hba *hba)
+{
+	if (device_property_read_bool(hba->dev, "force-g4"))
+		hba->force_g4 = true;
+	else
+		hba->force_g4 = false;
+}
+
 static void ufshcd_parse_dev_ref_clk_freq(struct ufs_hba *hba)
 {
 	struct device *dev = hba->dev;
@@ -333,35 +380,46 @@ static void ufshcd_parse_dev_ref_clk_freq(struct ufs_hba *hba)
 		hba->dev_ref_clk_freq = REF_CLK_FREQ_26_MHZ;
 }
 
-static int ufshcd_parse_pinctrl_info(struct ufs_hba *hba)
-{
-	int ret = 0;
-
-	/* Try to obtain pinctrl handle */
-	hba->pctrl = devm_pinctrl_get(hba->dev);
-	if (IS_ERR(hba->pctrl)) {
-		ret = PTR_ERR(hba->pctrl);
-		hba->pctrl = NULL;
-	}
-
-	return ret;
-}
-
-static int ufshcd_parse_extcon_info(struct ufs_hba *hba)
-{
-	struct extcon_dev *extcon;
-
-	extcon = extcon_get_edev_by_phandle(hba->dev, 0);
-	if (IS_ERR(extcon) && PTR_ERR(extcon) != -ENODEV)
-		return PTR_ERR(extcon);
-
-	if (!IS_ERR(extcon))
-		hba->extcon = extcon;
-
-	return 0;
-}
-
 #ifdef CONFIG_SMP
+/**
+ * ufshcd_pltfrm_restore - restore power management function
+ * @dev: pointer to device handle
+ *
+ * Returns 0 if successful
+ * Returns non-zero otherwise
+ */
+int ufshcd_pltfrm_restore(struct device *dev)
+{
+	return ufshcd_system_restore(dev_get_drvdata(dev));
+}
+EXPORT_SYMBOL(ufshcd_pltfrm_restore);
+
+/**
+ * ufshcd_pltfrm_freeze - freeze power management function
+ * @dev: pointer to device handle
+ *
+ * Returns 0 if successful
+ * Returns non-zero otherwise
+ */
+int ufshcd_pltfrm_freeze(struct device *dev)
+{
+	return ufshcd_system_freeze(dev_get_drvdata(dev));
+}
+EXPORT_SYMBOL(ufshcd_pltfrm_freeze);
+
+/**
+ * ufshcd_pltfrm_thaw - freeze power management function
+ * @dev: pointer to device handle
+ *
+ * Returns 0 if successful
+ * Returns non-zero otherwise
+ */
+int ufshcd_pltfrm_thaw(struct device *dev)
+{
+	return ufshcd_system_thaw(dev_get_drvdata(dev));
+}
+EXPORT_SYMBOL(ufshcd_pltfrm_thaw);
+
 /**
  * ufshcd_pltfrm_suspend - suspend power management function
  * @dev: pointer to device handle
@@ -414,6 +472,21 @@ void ufshcd_pltfrm_shutdown(struct platform_device *pdev)
 }
 EXPORT_SYMBOL_GPL(ufshcd_pltfrm_shutdown);
 
+static void ufshcd_init_lanes_per_dir(struct ufs_hba *hba)
+{
+	struct device *dev = hba->dev;
+	int ret;
+
+	ret = of_property_read_u32(dev->of_node, "lanes-per-direction",
+		&hba->lanes_per_direction);
+	if (ret) {
+		dev_dbg(hba->dev,
+			"%s: failed to read lanes-per-direction, ret=%d\n",
+			__func__, ret);
+		hba->lanes_per_direction = UFSHCD_DEFAULT_LANES_PER_DIRECTION;
+	}
+}
+
 /**
  * ufshcd_pltfrm_init - probe routine of the driver
  * @pdev: pointer to Platform device handle
@@ -432,8 +505,8 @@ int ufshcd_pltfrm_init(struct platform_device *pdev,
 
 	mem_res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	mmio_base = devm_ioremap_resource(dev, mem_res);
-	if (IS_ERR(*(void **)&mmio_base)) {
-		err = PTR_ERR(*(void **)&mmio_base);
+	if (IS_ERR(mmio_base)) {
+		err = PTR_ERR(mmio_base);
 		goto out;
 	}
 
@@ -483,6 +556,7 @@ int ufshcd_pltfrm_init(struct platform_device *pdev,
 	ufshcd_parse_pm_levels(hba);
 	ufshcd_parse_gear_limits(hba);
 	ufshcd_parse_cmd_timeout(hba);
+	ufshcd_parse_force_g4_flag(hba);
 	err = ufshcd_parse_extcon_info(hba);
 	if (err)
 		goto dealloc_host;
@@ -490,9 +564,11 @@ int ufshcd_pltfrm_init(struct platform_device *pdev,
 	if (!dev->dma_mask)
 		dev->dma_mask = &dev->coherent_dma_mask;
 
+	ufshcd_init_lanes_per_dir(hba);
+
 	err = ufshcd_init(hba, mmio_base, irq);
 	if (err) {
-		dev_err(dev, "Intialization failed\n");
+		dev_err(dev, "Initialization failed\n");
 		goto dealloc_host;
 	}
 
@@ -500,7 +576,6 @@ int ufshcd_pltfrm_init(struct platform_device *pdev,
 	pm_runtime_enable(&pdev->dev);
 
 	return 0;
-
 dealloc_host:
 	ufshcd_dealloc_host(hba);
 out:
@@ -510,6 +585,6 @@ EXPORT_SYMBOL_GPL(ufshcd_pltfrm_init);
 
 MODULE_AUTHOR("Santosh Yaragnavi <santosh.sy@samsung.com>");
 MODULE_AUTHOR("Vinayak Holikatti <h.vinayak@samsung.com>");
-MODULE_DESCRIPTION("UFS host controller Pltform bus based glue driver");
+MODULE_DESCRIPTION("UFS host controller Platform bus based glue driver");
 MODULE_LICENSE("GPL");
 MODULE_VERSION(UFSHCD_DRIVER_VERSION);

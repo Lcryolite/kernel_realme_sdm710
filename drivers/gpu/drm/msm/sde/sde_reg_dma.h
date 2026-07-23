@@ -54,7 +54,10 @@ enum sde_reg_dma_read_sel {
  * @IGC: inverse gamma correction
  * @PCC: polynomical color correction
  * @VLUT: PA vlut
- * @MEM_COLOR: memory color
+ * @MEMC_SKIN: memory color skin
+ * @MEMC_SKY: memory color sky
+ * @MEMC_FOLIAGE: memory color foliage
+ * @MEMC_PROT: memory color protect
  * @SIX_ZONE: six zone
  * @HSIC: Hue, saturation and contrast
  * @GC: gamma correction
@@ -66,7 +69,10 @@ enum sde_reg_dma_features {
 	IGC,
 	PCC,
 	VLUT,
-	MEM_COLOR,
+	MEMC_SKIN,
+	MEMC_SKY,
+	MEMC_FOLIAGE,
+	MEMC_PROT,
 	SIX_ZONE,
 	HSIC,
 	GC,
@@ -106,12 +112,14 @@ enum sde_reg_dma_trigger_mode {
  * @HW_BLK_SELECT: op for selecting the hardware block
  * @REG_SINGLE_WRITE: op for writing single register value
  *                    at the address provided
- * @REG_BLK_WRITE_SINGLE: op for writing multiple registers using hw index
- *                        register
- * @REG_BLK_WRITE_INC: op for writing multiple registers using auto address
+ * @REG_BLK_WRITE_SINGLE: op for writing multiple registers using auto address
  *                     increment
+ * @REG_BLK_WRITE_INC: op for writing multiple registers using hw index
+ *                        register
  * @REG_BLK_WRITE_MULTIPLE: op for writing hw index based registers at
  *                         non-consecutive location
+ * @REG_SINGLE_MODIFY: op for modifying single register value
+ *                    with bitmask at the address provided
  * @REG_DMA_SETUP_OPS_MAX: invalid operation
  */
 enum sde_reg_dma_setup_ops {
@@ -120,6 +128,7 @@ enum sde_reg_dma_setup_ops {
 	REG_BLK_WRITE_SINGLE,
 	REG_BLK_WRITE_INC,
 	REG_BLK_WRITE_MULTIPLE,
+	REG_SINGLE_MODIFY,
 	REG_DMA_SETUP_OPS_MAX,
 };
 
@@ -196,7 +205,7 @@ struct sde_reg_dma_buffer {
 	struct msm_gem_address_space *aspace;
 	u32 buffer_size;
 	u32 index;
-	u32 iova;
+	u64 iova;
 	void *vaddr;
 	u32 next_op_allowed;
 	u32 ops_completed;
@@ -230,6 +239,7 @@ struct sde_reg_dma_setup_ops_cfg {
 	u32 blk_offset;
 	struct sde_reg_dma_buffer *dma_buf;
 	u32 *data;
+	u32 mask;
 	u32 data_size;
 };
 

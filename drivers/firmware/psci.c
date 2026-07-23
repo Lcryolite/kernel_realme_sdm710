@@ -40,6 +40,15 @@
  * For such calls PSCI_FN_NATIVE(version, name) will choose the appropriate
  * (native-width) function ID.
  */
+
+#ifdef CONFIG_THUMB2_KERNEL
+#define cpu_resume_secondary cpu_resume_arm
+extern void cpu_resume_arm(void);
+#else
+#define cpu_resume_secondary cpu_resume
+extern void cpu_resume(void);
+#endif
+
 #ifdef CONFIG_64BIT
 #define PSCI_FN_NATIVE(version, name)	PSCI_##version##_FN64_##name
 #else
@@ -315,8 +324,8 @@ static int psci_dt_cpu_init_idle(struct device_node *cpu_node, int cpu)
 					   "arm,psci-suspend-param",
 					   &state);
 		if (ret) {
-			pr_warn(" * %s missing arm,psci-suspend-param property\n",
-				state_node->full_name);
+			pr_warn(" * %pOF missing arm,psci-suspend-param property\n",
+				state_node);
 			of_node_put(state_node);
 			goto free_mem;
 		}
@@ -420,7 +429,7 @@ int psci_cpu_init_idle(unsigned int cpu)
 static int psci_suspend_finisher(unsigned long state_id)
 {
 	return psci_ops.cpu_suspend(state_id,
-				    virt_to_phys(cpu_resume));
+				    __pa_symbol(cpu_resume_secondary));
 }
 int psci_cpu_suspend_enter(unsigned long state_id)
 {
@@ -455,7 +464,7 @@ CPUIDLE_METHOD_OF_DECLARE(psci, "psci", &psci_cpuidle_ops);
 static int psci_system_suspend(unsigned long unused)
 {
 	return invoke_psci_fn(PSCI_FN_NATIVE(1_0, SYSTEM_SUSPEND),
-			      virt_to_phys(cpu_resume), 0, 0);
+			      __pa_symbol(cpu_resume_secondary), 0, 0);
 }
 
 static int psci_system_suspend_enter(suspend_state_t state)
@@ -694,7 +703,7 @@ int __init psci_dt_init(void)
 
 	np = of_find_matching_node_and_match(NULL, psci_of_match, &matched_np);
 
-	if (!np)
+	if (!np || !of_device_is_available(np))
 		return -ENODEV;
 
 	init_fn = (psci_initcall_t)matched_np->data;

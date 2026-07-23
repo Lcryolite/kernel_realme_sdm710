@@ -1,0 +1,111 @@
+{
+  "schema": 1,
+  "milestone": "M2-sdm670-static-port",
+  "status": "PASS",
+  "compiled_tree_equivalent_commit": "8e99996ae9c2f8ca45415226d7a3c9099d70be6a",
+  "kernel_release": "4.14.357-openela-RMX1901-A17-M2",
+  "toolchain": {
+    "clang": "Android (6443078 based on r383902) clang 11.0.1",
+    "lld": "LLD 11.0.1",
+    "dtc": "DTC 1.8.1",
+    "dtc_sha256": "223c2f97f431b1ef64c206e15375c063a180287cf29acdbdbf1d0dc3cdeee7b4"
+  },
+  "reproducibility": {
+    "clean_builds": 2,
+    "different_output_directories": true,
+    "core_artifacts_byte_identical": true,
+    "modules_byte_identical": true,
+    "source_date_epoch": 1784042363,
+    "build_user": "rmx1901",
+    "build_host": "bringup",
+    "build_version": 1,
+    "timestamp": "Tue Jul 14 15:19:23 UTC 2026",
+    "localversion_environment": "",
+    "debug_compilation_directory": ".",
+    "absolute_output_path_in_representative_bitcode": false,
+    "module_signing_pem_sha256": "3eebca2a75fbd744e0f2a42a60fff8d97cbc2ee073c7912e17fe1b58a6fb0e03",
+    "module_signing_x509_sha256": "e4db0c74f32306baf093f81e1f87c6d8d541d5dde2669f39f21a7343c2cc4dbe",
+    "random_signing_key_generated": false,
+    "private_key_committed": false
+  },
+  "configuration": {
+    "defconfig": "arch/arm64/configs/vendor/rmx1901_m2_defconfig",
+    "defconfig_sha256": "707c0160f92b00e0e59d887c49e324bc2abc60e6b73787553d2d0b069e57aa20",
+    "dot_config_sha256": "02a78e4515d97eaa96c8830729796efc24a91e57d74c1ac488c9386ced8fc46f",
+    "listnewconfig_entries": 0,
+    "savedefconfig_matches": true,
+    "arch_sdm670": true,
+    "arch_sm8150": false,
+    "resukisu": false,
+    "kernelsu": false,
+    "bore": false
+  },
+  "artifacts": {
+    "Image": {
+      "bytes": 46997504,
+      "sha256": "689d2f3771680e3ee9073b9de9034bc265887584af54326408b56e29310429ef"
+    },
+    "Image.gz": {
+      "bytes": 17886337,
+      "sha256": "5fa3261d55b91a1a0043be99174f985c4bb2fe77fde34d34a3bb3e210e51b02e"
+    },
+    "vmlinux": {
+      "bytes": 981214392,
+      "sha256": "595467b0a80a6f5f64f9d3685cd670f0c038376b8e1340363c9dc839ca3584ea",
+      "build_id": "94e18848c97b18ef"
+    },
+    "vmlinux_o": {
+      "bytes": 2805172976,
+      "sha256": "332ccdec4a9f7753ce92fddaae518d4db8026eaeb4a2b3486c77e17f8f1249f7"
+    },
+    "System.map": {
+      "bytes": 8582195,
+      "sha256": "bc2f855f3eda5080400ffeb13e38907b14945d57bcd6c763834d9cc97fa24ea7"
+    },
+    "Module.symvers": {
+      "bytes": 684453,
+      "sha256": "eeae281557132e39fd538abc5272db0b0742622d0ae8d57a9bb1ebb028d9a1a8"
+    },
+    "rmx1901_dtb": {
+      "bytes": 383739,
+      "sha256": "2847b2fe3474c9e18db37e24accd894f9ed5096448050b3b01cc2c8f5f67c6c7"
+    }
+  },
+  "modules": [
+    {
+      "path": "drivers/media/usb/gspca/gspca_main.ko",
+      "bytes": 598760,
+      "sha256": "6837dfa5a5039d9337e1748ccaee473e358c73f9f75382ab89a32a4ceae40b94"
+    },
+    {
+      "path": "techpack/data/drivers/rmnet/perf/rmnet_perf.ko",
+      "bytes": 2121312,
+      "sha256": "899a3edac97c13405d1bf75bc220e8b5d97cf5dbfdcf89493dac1d287702a212"
+    },
+    {
+      "path": "techpack/data/drivers/rmnet/shs/rmnet_shs.ko",
+      "bytes": 3043264,
+      "sha256": "c2678749a4f94a7d7ba870a6960594ba8e05e5adf733188ccee4922e95d5b251"
+    }
+  ],
+  "device_tree_gate": {
+    "known_good_overlay_entry": 46,
+    "overlay_sha256": "4649a0431ef594d6366ed0ad616e65b8c5b873906003bc80f951369c00e33301",
+    "fixups_required": 179,
+    "fixups_satisfied": 179,
+    "reserved_memory_regions": 19,
+    "reserved_memory_overlaps": 0,
+    "critical_nodes": "PASS"
+  },
+  "diagnostics": {
+    "errors": 0,
+    "warning_lines": 10,
+    "all_warnings_in_m1_baseline": true,
+    "baseline": "bringup/baselines/M1-warnings.txt"
+  },
+  "remaining_gates": {
+    "arm64_arm32_uapi_oracle": "IN_PROGRESS",
+    "boot_image_repack_validation": "NOT_STARTED",
+    "device_flash_allowed": false
+  }
+}

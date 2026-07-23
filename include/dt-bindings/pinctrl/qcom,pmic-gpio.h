@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * This header provides constants for the Qualcomm PMIC GPIO binding.
  */
@@ -93,6 +94,10 @@
 #define PMA8084_GPIO_L1			1
 #define PMA8084_GPIO_S4			2
 #define PMA8084_GPIO_L6			3
+
+#define PM8994_GPIO_VPH			0
+#define PM8994_GPIO_S4			2
+#define PM8994_GPIO_L12			3
 
 /* ATEST MUX selection for analog-pass-through mode */
 #define PMIC_GPIO_AOUT_ATEST1		0

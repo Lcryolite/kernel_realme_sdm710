@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __ASM_METAG_ATOMIC_LNKGET_H
 #define __ASM_METAG_ATOMIC_LNKGET_H
 
@@ -153,7 +154,7 @@ static inline int atomic_xchg(atomic_t *v, int new)
 	return old;
 }
 
-static inline int __atomic_add_unless(atomic_t *v, int a, int u)
+static inline int atomic_fetch_add_unless(atomic_t *v, int a, int u)
 {
 	int result, temp;
 

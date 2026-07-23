@@ -1,7 +1,7 @@
 /*
  * Qualcomm SCM driver
  *
- * Copyright (c) 2010,2015, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2010,2015,2020 The Linux Foundation. All rights reserved.
  * Copyright (C) 2015 Linaro Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -28,12 +28,29 @@
 
 #include "qcom_scm.h"
 
+#define SCM_HAS_CORE_CLK	BIT(0)
+#define SCM_HAS_IFACE_CLK	BIT(1)
+#define SCM_HAS_BUS_CLK		BIT(2)
+
 struct qcom_scm {
 	struct device *dev;
 	struct clk *core_clk;
 	struct clk *iface_clk;
 	struct clk *bus_clk;
 	struct reset_controller_dev reset;
+};
+
+struct qcom_scm_current_perm_info {
+	__le32 vmid;
+	__le32 perm;
+	__le64 ctx;
+	__le32 ctx_size;
+	__le32 unused;
+};
+
+struct qcom_scm_mem_map_info {
+	__le64 mem_addr;
+	__le64 mem_size;
 };
 
 static struct qcom_scm *__scm;
@@ -311,6 +328,24 @@ static const struct reset_control_ops qcom_scm_pas_reset_ops = {
 	.deassert = qcom_scm_pas_reset_deassert,
 };
 
+int qcom_scm_restore_sec_cfg(u32 device_id, u32 spare)
+{
+	return __qcom_scm_restore_sec_cfg(__scm->dev, device_id, spare);
+}
+EXPORT_SYMBOL(qcom_scm_restore_sec_cfg);
+
+int qcom_scm_iommu_secure_ptbl_size(u32 spare, size_t *size)
+{
+	return __qcom_scm_iommu_secure_ptbl_size(__scm->dev, spare, size);
+}
+EXPORT_SYMBOL(qcom_scm_iommu_secure_ptbl_size);
+
+int qcom_scm_iommu_secure_ptbl_init(u64 addr, u32 size, u32 spare)
+{
+	return __qcom_scm_iommu_secure_ptbl_init(__scm->dev, addr, size, spare);
+}
+EXPORT_SYMBOL(qcom_scm_iommu_secure_ptbl_init);
+
 /**
  * qcom_scm_is_available() - Checks if SCM is available
  */
@@ -320,35 +355,131 @@ bool qcom_scm_is_available(void)
 }
 EXPORT_SYMBOL(qcom_scm_is_available);
 
+int qcom_scm_set_remote_state(u32 state, u32 id)
+{
+	return __qcom_scm_set_remote_state(__scm->dev, state, id);
+}
+EXPORT_SYMBOL(qcom_scm_set_remote_state);
+
+/**
+ * qcom_scm_assign_mem() - Make a secure call to reassign memory ownership
+ * @mem_addr: mem region whose ownership need to be reassigned
+ * @mem_sz:   size of the region.
+ * @srcvm:    vmid for current set of owners, each set bit in
+ *            flag indicate a unique owner
+ * @newvm:    array having new owners and corrsponding permission
+ *            flags
+ * @dest_cnt: number of owners in next set.
+ *
+ * Return negative errno on failure, 0 on success, with @srcvm updated.
+ */
+int qcom_scm_assign_mem(phys_addr_t mem_addr, size_t mem_sz,
+			unsigned int *srcvm,
+			struct qcom_scm_vmperm *newvm, int dest_cnt)
+{
+	struct qcom_scm_current_perm_info *destvm;
+	struct qcom_scm_mem_map_info *mem_to_map;
+	phys_addr_t mem_to_map_phys;
+	phys_addr_t dest_phys;
+	phys_addr_t ptr_phys;
+	size_t mem_to_map_sz;
+	size_t dest_sz;
+	size_t src_sz;
+	size_t ptr_sz;
+	int next_vm;
+	__le32 *src;
+	void *ptr;
+	int ret;
+	int len;
+	int i;
+
+	src_sz = hweight_long(*srcvm) * sizeof(*src);
+	mem_to_map_sz = sizeof(*mem_to_map);
+	dest_sz = dest_cnt * sizeof(*destvm);
+	ptr_sz = ALIGN(src_sz, SZ_64) + ALIGN(mem_to_map_sz, SZ_64) +
+			ALIGN(dest_sz, SZ_64);
+
+	ptr = dma_alloc_coherent(__scm->dev, ptr_sz, &ptr_phys, GFP_KERNEL);
+	if (!ptr)
+		return -ENOMEM;
+
+	/* Fill source vmid detail */
+	src = ptr;
+	len = hweight_long(*srcvm);
+	for (i = 0; i < len; i++) {
+		src[i] = cpu_to_le32(ffs(*srcvm) - 1);
+		*srcvm ^= 1 << (ffs(*srcvm) - 1);
+	}
+
+	/* Fill details of mem buff to map */
+	mem_to_map = ptr + ALIGN(src_sz, SZ_64);
+	mem_to_map_phys = ptr_phys + ALIGN(src_sz, SZ_64);
+	mem_to_map[0].mem_addr = cpu_to_le64(mem_addr);
+	mem_to_map[0].mem_size = cpu_to_le64(mem_sz);
+
+	next_vm = 0;
+	/* Fill details of next vmid detail */
+	destvm = ptr + ALIGN(mem_to_map_sz, SZ_64) + ALIGN(src_sz, SZ_64);
+	dest_phys = ptr_phys + ALIGN(mem_to_map_sz, SZ_64) + ALIGN(src_sz, SZ_64);
+	for (i = 0; i < dest_cnt; i++) {
+		destvm[i].vmid = cpu_to_le32(newvm[i].vmid);
+		destvm[i].perm = cpu_to_le32(newvm[i].perm);
+		destvm[i].ctx = 0;
+		destvm[i].ctx_size = 0;
+		next_vm |= BIT(newvm[i].vmid);
+	}
+
+	ret = __qcom_scm_assign_mem(__scm->dev, mem_to_map_phys, mem_to_map_sz,
+				    ptr_phys, src_sz, dest_phys, dest_sz);
+	dma_free_coherent(__scm->dev, ALIGN(ptr_sz, SZ_64), ptr, ptr_phys);
+	if (ret) {
+		dev_err(__scm->dev,
+			"Assign memory protection call failed %d.\n", ret);
+		return -EINVAL;
+	}
+
+	*srcvm = next_vm;
+	return 0;
+}
+EXPORT_SYMBOL(qcom_scm_assign_mem);
+
 static int qcom_scm_probe(struct platform_device *pdev)
 {
 	struct qcom_scm *scm;
+	unsigned long clks;
 	int ret;
 
 	scm = devm_kzalloc(&pdev->dev, sizeof(*scm), GFP_KERNEL);
 	if (!scm)
 		return -ENOMEM;
 
-	scm->core_clk = devm_clk_get(&pdev->dev, "core");
-	if (IS_ERR(scm->core_clk)) {
-		if (PTR_ERR(scm->core_clk) == -EPROBE_DEFER)
+	clks = (unsigned long)of_device_get_match_data(&pdev->dev);
+	if (clks & SCM_HAS_CORE_CLK) {
+		scm->core_clk = devm_clk_get(&pdev->dev, "core");
+		if (IS_ERR(scm->core_clk)) {
+			if (PTR_ERR(scm->core_clk) != -EPROBE_DEFER)
+				dev_err(&pdev->dev,
+					"failed to acquire core clk\n");
 			return PTR_ERR(scm->core_clk);
-
-		scm->core_clk = NULL;
+		}
 	}
 
-	if (of_device_is_compatible(pdev->dev.of_node, "qcom,scm")) {
+	if (clks & SCM_HAS_IFACE_CLK) {
 		scm->iface_clk = devm_clk_get(&pdev->dev, "iface");
 		if (IS_ERR(scm->iface_clk)) {
 			if (PTR_ERR(scm->iface_clk) != -EPROBE_DEFER)
-				dev_err(&pdev->dev, "failed to acquire iface clk\n");
+				dev_err(&pdev->dev,
+					"failed to acquire iface clk\n");
 			return PTR_ERR(scm->iface_clk);
 		}
+	}
 
+	if (clks & SCM_HAS_BUS_CLK) {
 		scm->bus_clk = devm_clk_get(&pdev->dev, "bus");
 		if (IS_ERR(scm->bus_clk)) {
 			if (PTR_ERR(scm->bus_clk) != -EPROBE_DEFER)
-				dev_err(&pdev->dev, "failed to acquire bus clk\n");
+				dev_err(&pdev->dev,
+					"failed to acquire bus clk\n");
 			return PTR_ERR(scm->bus_clk);
 		}
 	}
@@ -356,7 +487,9 @@ static int qcom_scm_probe(struct platform_device *pdev)
 	scm->reset.ops = &qcom_scm_pas_reset_ops;
 	scm->reset.nr_resets = 1;
 	scm->reset.of_node = pdev->dev.of_node;
-	reset_controller_register(&scm->reset);
+	ret = devm_reset_controller_register(&pdev->dev, &scm->reset);
+	if (ret)
+		return ret;
 
 	/* vote for max clk rate for highest performance */
 	ret = clk_set_rate(scm->core_clk, INT_MAX);
@@ -372,10 +505,23 @@ static int qcom_scm_probe(struct platform_device *pdev)
 }
 
 static const struct of_device_id qcom_scm_dt_match[] = {
-	{ .compatible = "qcom,scm-apq8064",},
-	{ .compatible = "qcom,scm-msm8660",},
-	{ .compatible = "qcom,scm-msm8960",},
-	{ .compatible = "qcom,scm",},
+	{ .compatible = "qcom,scm-apq8064",
+	  /* FIXME: This should have .data = (void *) SCM_HAS_CORE_CLK */
+	},
+	{ .compatible = "qcom,scm-msm8660",
+	  .data = (void *) SCM_HAS_CORE_CLK,
+	},
+	{ .compatible = "qcom,scm-msm8960",
+	  .data = (void *) SCM_HAS_CORE_CLK,
+	},
+	{ .compatible = "qcom,scm-msm8996",
+	  .data = NULL, /* no clocks */
+	},
+	{ .compatible = "qcom,scm",
+	  .data = (void *)(SCM_HAS_CORE_CLK
+			   | SCM_HAS_IFACE_CLK
+			   | SCM_HAS_BUS_CLK),
+	},
 	{}
 };
 

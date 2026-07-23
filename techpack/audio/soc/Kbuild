@@ -9,7 +9,7 @@ endif
 ifeq ($(KERNEL_BUILD), 1)
 	# These are configurable via Kconfig for kernel-based builds
 	# Need to explicitly configure for Android-based builds
-	AUDIO_BLD_DIR := $(shell pwd)/kernel/msm-4.9
+	AUDIO_BLD_DIR := $(shell pwd)/kernel/msm-4.14
 	AUDIO_ROOT := $(AUDIO_BLD_DIR)/techpack/audio
 endif
 
@@ -19,37 +19,45 @@ ifeq ($(KERNEL_BUILD), 0)
 		export
 		INCS    +=  -include $(AUDIO_ROOT)/config/sdm845autoconf.h
 	endif
-	ifeq ($(CONFIG_ARCH_SDM670), y)
-		include $(AUDIO_ROOT)/config/sdm710auto.conf
+	ifeq ($(CONFIG_ARCH_SDM660), y)
+		include $(AUDIO_ROOT)/config/sdm660auto.conf
 		export
-		INCS    +=  -include $(AUDIO_ROOT)/config/sdm710autoconf.h
+		INCS    +=  -include $(AUDIO_ROOT)/config/sdm660autoconf.h
+	endif
+	ifeq ($(CONFIG_ARCH_SDM670), y)
+		include $(AUDIO_ROOT)/config/sdm670auto.conf
+		export
+		INCS    +=  -include $(AUDIO_ROOT)/config/sdm670autoconf.h
 	endif
 	ifeq ($(CONFIG_ARCH_SDM450), y)
-		include $(AUDIO_ROOT)/config/sdm450auto.conf
+		include $(AUDIO_ROOT)/config/sdm670auto.conf
 		export
-		INCS    +=  -include $(AUDIO_ROOT)/config/sdm450autoconf.h
+		INCS    +=  -include $(AUDIO_ROOT)/config/sdm670autoconf.h
 	endif
-	ifeq ($(CONFIG_ARCH_SDM439), y)
-		include $(AUDIO_ROOT)/config/sdm450auto.conf
+	ifeq ($(CONFIG_ARCH_SM8150), y)
+		include $(AUDIO_ROOT)/config/sm8150auto.conf
 		export
-		INCS    +=  -include $(AUDIO_ROOT)/config/sdm450autoconf.h
+		INCS    +=  -include $(AUDIO_ROOT)/config/sm8150autoconf.h
 	endif
-	ifeq ($(CONFIG_ARCH_MSM8909), y)
-		ifeq ($(CONFIG_MSM_BGCOM), y)
-			include $(AUDIO_ROOT)/config/msm8909auto.conf
-			export
-			INCS    +=  -include $(AUDIO_ROOT)/config/msm8909autoconf.h
-		endif
-		ifeq ($(CONFIG_MSM_8905), m)
-			include $(AUDIO_ROOT)/config/msm8905auto.conf
-			export
-			INCS    +=  -include $(AUDIO_ROOT)/config/msm8905autoconf.h
-		endif
-	endif
-	ifeq ($(CONFIG_ARCH_MSM8917), y)
-		include $(AUDIO_ROOT)/config/sdm450auto.conf
+	ifeq ($(CONFIG_ARCH_SM6150), y)
+		include $(AUDIO_ROOT)/config/sm6150auto.conf
 		export
-		INCS    +=  -include $(AUDIO_ROOT)/config/sdm450autoconf.h
+		INCS    +=  -include $(AUDIO_ROOT)/config/sm6150autoconf.h
+	endif
+	ifeq ($(CONFIG_ARCH_TRINKET), y)
+		include $(AUDIO_ROOT)/config/trinketauto.conf
+		export
+		INCS    +=  -include $(AUDIO_ROOT)/config/trinketautoconf.h
+	endif
+	ifeq ($(CONFIG_ARCH_SDMSHRIKE), y)
+		include $(AUDIO_ROOT)/config/sm8150auto.conf
+		export
+		INCS    +=  -include $(AUDIO_ROOT)/config/sm8150autoconf.h
+	endif
+	ifeq ($(CONFIG_ARCH_QCS405), y)
+		include $(AUDIO_ROOT)/config/qcs405auto.conf
+		export
+		INCS    +=  -include $(AUDIO_ROOT)/config/qcs405autoconf.h
 	endif
 endif
 
@@ -94,12 +102,21 @@ ifdef CONFIG_SOUNDWIRE_WCD_CTRL
 	SWR_CTRL_OBJS += swr-wcd-ctrl.o
 endif
 
+# for new soundwire driver
+ifdef CONFIG_SOUNDWIRE_MSTR_CTRL
+	SWR_CTRL_OBJS += swr-mstr-ctrl.o
+endif
+
 ifdef CONFIG_SOUNDWIRE
 	SWR_OBJS += regmap-swr.o
 	SWR_OBJS += soundwire.o
 endif
 
-LINUX_INC +=	-Iinclude/linux
+ifdef CONFIG_SND_EVENT
+	SND_EVENT_OBJS += snd_event.o
+endif
+
+LINUX_INC +=	-I$(srctree)/include/linux
 
 INCS +=		$(COMMON_INC) \
 		$(UAPI_INC)
@@ -136,6 +153,10 @@ ifeq ($(call cc-option-yn, -Wheader-guard),y)
 EXTRA_CFLAGS += -Wheader-guard
 endif
 
+ifeq ($(CONFIG_SND_SOC_GCOV), y)
+GCOV_PROFILE := y
+endif
+
 # Module information used by KBuild framework
 obj-$(CONFIG_PINCTRL_WCD) += pinctrl_wcd_dlkm.o
 pinctrl_wcd_dlkm-y := $(PINCTRL_WCD_OBJS)
@@ -146,8 +167,9 @@ pinctrl_lpi_dlkm-y := $(PINCTRL_LPI_OBJS)
 obj-$(CONFIG_SOUNDWIRE) += swr_dlkm.o
 swr_dlkm-y := $(SWR_OBJS)
 
-obj-$(CONFIG_SOUNDWIRE_WCD_CTRL) += swr_ctrl_dlkm.o
-swr_ctrl_dlkm-y := $(SWR_CTRL_OBJS)
+obj-$(CONFIG_SND_EVENT) += snd_event_dlkm.o
+snd_event_dlkm-y := $(SND_EVENT_OBJS)
 
-# inject some build related information
-DEFINES += -DBUILD_TIMESTAMP=\"$(shell date -u +'%Y-%m-%dT%H:%M:%SZ')\"
+obj-$(CONFIG_SOUNDWIRE_WCD_CTRL) += swr_ctrl_dlkm.o
+obj-$(CONFIG_SOUNDWIRE_MSTR_CTRL) += swr_ctrl_dlkm.o
+swr_ctrl_dlkm-y := $(SWR_CTRL_OBJS)

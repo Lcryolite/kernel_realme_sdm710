@@ -1,4 +1,5 @@
-/* Copyright (c) 2012-2015, 2018 The Linux Foundation. All rights reserved.
+/*
+ * Copyright (c) 2012-2015, 2018-2019 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -8,7 +9,6 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
  */
 
 #ifndef __H_VENUS_HFI_H__
@@ -122,10 +122,10 @@ enum vidc_hw_reg {
 };
 
 struct vidc_mem_addr {
-	ion_phys_addr_t align_device_addr;
+	phys_addr_t align_device_addr;
 	u8 *align_virtual_addr;
 	u32 mem_size;
-	struct msm_smem *mem_data;
+	struct msm_smem mem_data;
 };
 
 struct vidc_iface_q_info {
@@ -235,7 +235,6 @@ struct venus_hfi_device {
 	struct vidc_mem_addr sfr;
 	struct vidc_mem_addr mem_addr;
 	struct vidc_iface_q_info iface_queues[VIDC_IFACEQ_NUMQ];
-	struct smem_client *hal_client;
 	struct hal_data *hal_data;
 	struct workqueue_struct *vidc_workq;
 	struct workqueue_struct *venus_pm_workq;

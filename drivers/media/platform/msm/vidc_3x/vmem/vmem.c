@@ -1,4 +1,5 @@
-/* Copyright (c) 2014-2016, 2018 The Linux Foundation. All rights reserved.
+/*
+ * Copyright (c) 2014-2016, 2018-2019 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -408,13 +409,13 @@ static void __irq_helper(struct work_struct *work)
 	err_syn = __readl(OCIMEM_AXI_ERR_SYNDROME(v));
 
 	pr_crit("Detected a fault on VMEM:\n");
-	pr_cont("\tinterrupt status: %x\n", stat);
-	pr_cont("\tgeneral status: %x\n", gen_stat);
-	pr_cont("\tmemory status: %x\n", pscgc_stat);
-	pr_cont("\tfault address: %x (absolute), %x (relative)\n",
+	pr_debug("\tinterrupt status: %x\n", stat);
+	pr_debug("\tgeneral status: %x\n", gen_stat);
+	pr_debug("\tmemory status: %x\n", pscgc_stat);
+	pr_debug("\tfault address: %x (absolute), %x (relative)\n",
 			err_addr_abs, err_addr_rel);
-	pr_cont("\tfault bank: %x\n", err_addr_rel / v->bank_size);
-	pr_cont("\tfault core: %u (mid), %u (pid), %u (bid)\n",
+	pr_debug("\tfault bank: %x\n", err_addr_rel / v->bank_size);
+	pr_debug("\tfault core: %u (mid), %u (pid), %u (bid)\n",
 			ERR_SYN_AMID(err_syn), ERR_SYN_APID(err_syn),
 			ERR_SYN_ABID(err_syn));
 

@@ -335,6 +335,11 @@ enum kgsl_timestamp_type {
 #define KGSL_PROP_L3_PWR_CONSTRAINT     0x22
 #define KGSL_PROP_SECURE_BUFFER_ALIGNMENT 0x23
 #define KGSL_PROP_SECURE_CTXT_SUPPORT 0x24
+#define KGSL_PROP_SPEED_BIN		0x25
+#define KGSL_PROP_GAMING_BIN		0x26
+#define KGSL_PROP_CONTEXT_PROPERTY	0x28
+#define KGSL_PROP_MACROTILING_CHANNELS	0x29
+
 
 struct kgsl_shadowprop {
 	unsigned long gpuaddr;
@@ -374,6 +379,21 @@ struct kgsl_gpmu_version {
 	unsigned int minor;
 	unsigned int features;
 };
+
+struct kgsl_context_property {
+	__u64 data;
+	__u32 size;
+	__u32 type;
+	__u32 contextid;
+};
+
+struct kgsl_context_property_fault {
+	__s32 faults;
+	__u32 timestamp;
+};
+
+/* Context property sub types */
+#define KGSL_CONTEXT_PROP_FAULTS 1
 
 /* Performance counter groups */
 
@@ -1129,9 +1149,9 @@ struct kgsl_device_constraint {
 
 /* PWRLEVEL constraint level*/
 /* set to min frequency */
-#define KGSL_CONSTRAINT_PWR_MIN 0
+#define KGSL_CONSTRAINT_PWR_MIN    0
 /* set to max frequency */
-#define KGSL_CONSTRAINT_PWR_MAX 1
+#define KGSL_CONSTRAINT_PWR_MAX    1
 
 /* L3 PWRLEVEL constraint level */
 #define KGSL_CONSTRAINT_L3_PWR_MED	0
@@ -1477,7 +1497,7 @@ struct kgsl_preemption_counters_query {
 
 /**
  * struct kgsl_gpuobj_set_info - argument for IOCTL_KGSL_GPUOBJ_SET_INFO
- * @flags: Flags to indicate which paramaters to change
+ * @flags: Flags to indicate which parameters to change
  * @metadata:  If KGSL_GPUOBJ_SET_INFO_METADATA is set, a pointer to the new
  * metadata
  * @id: GPU memory object ID to change

@@ -549,16 +549,6 @@ mpt_lan_close(struct net_device *dev)
 }
 
 /*=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=*/
-static int
-mpt_lan_change_mtu(struct net_device *dev, int new_mtu)
-{
-	if ((new_mtu < MPT_LAN_MIN_MTU) || (new_mtu > MPT_LAN_MAX_MTU))
-		return -EINVAL;
-	dev->mtu = new_mtu;
-	return 0;
-}
-
-/*=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=*/
 /* Tx timeout handler. */
 static void
 mpt_lan_tx_timeout(struct net_device *dev)
@@ -1304,7 +1294,6 @@ static const struct net_device_ops mpt_netdev_ops = {
 	.ndo_open       = mpt_lan_open,
 	.ndo_stop       = mpt_lan_close,
 	.ndo_start_xmit = mpt_lan_sdu_send,
-	.ndo_change_mtu = mpt_lan_change_mtu,
 	.ndo_tx_timeout = mpt_lan_tx_timeout,
 };
 
@@ -1375,6 +1364,10 @@ mpt_register_lan_device (MPT_ADAPTER *mpt_dev, int pnum)
 	dev->netdev_ops = &mpt_netdev_ops;
 	dev->watchdog_timeo = MPT_LAN_TX_TIMEOUT;
 
+	/* MTU range: 96 - 65280 */
+	dev->min_mtu = MPT_LAN_MIN_MTU;
+	dev->max_mtu = MPT_LAN_MAX_MTU;
+
 	dlprintk((KERN_INFO MYNAM ": Finished registering dev "
 		"and setting initial values\n"));
 
@@ -1436,7 +1429,9 @@ mptlan_remove(struct pci_dev *pdev)
 {
 	MPT_ADAPTER 		*ioc = pci_get_drvdata(pdev);
 	struct net_device	*dev = ioc->netdev;
+	struct mpt_lan_priv *priv = netdev_priv(dev);
 
+	cancel_delayed_work_sync(&priv->post_buckets_task);
 	if(dev != NULL) {
 		unregister_netdev(dev);
 		free_netdev(dev);

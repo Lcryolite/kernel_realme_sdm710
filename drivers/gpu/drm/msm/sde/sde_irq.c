@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -19,7 +19,7 @@
 #include "sde_irq.h"
 #include "sde_core_irq.h"
 
-static uint32_t g_sde_irq_status;
+uint32_t g_sde_irq_status;
 
 void sde_irq_update(struct msm_kms *msm_kms, bool enable)
 {
@@ -29,6 +29,8 @@ void sde_irq_update(struct msm_kms *msm_kms, bool enable)
 		SDE_ERROR("invalid kms arguments\n");
 		return;
 	}
+
+	sde_kms->irq_enabled = enable;
 
 	if (enable)
 		enable_irq(sde_kms->irq_num);
@@ -97,14 +99,16 @@ void sde_irq_preinstall(struct msm_kms *kms)
 
 	sde_core_irq_preinstall(sde_kms);
 
-	sde_kms->irq_num = platform_get_irq(sde_kms->dev->platformdev, 0);
+	sde_kms->irq_num = platform_get_irq(
+				to_platform_device(sde_kms->dev->dev),
+				0);
 	if (sde_kms->irq_num < 0) {
 		SDE_ERROR("invalid irq number %d\n", sde_kms->irq_num);
 		return;
 	}
 
 	/* disable irq until power event enables it */
-	if (!sde_kms->splash_data.cont_splash_en)
+	if (!sde_kms->splash_data.num_splash_displays && !sde_kms->irq_enabled)
 		irq_set_status_flags(sde_kms->irq_num, IRQ_NOAUTOEN);
 }
 

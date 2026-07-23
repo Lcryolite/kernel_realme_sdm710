@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Discontiguous memory support, Kanoj Sarcar, SGI, Nov 1999
  */
@@ -8,6 +9,7 @@
 #include <linux/mm_types.h>
 #include <asm/dma.h>
 #include <asm/processor.h>
+#include <linux/memblock.h>
 
 /*
  *  simple boot-time physical memory area allocator.
@@ -171,6 +173,9 @@ void __memblock_free_late(phys_addr_t base, phys_addr_t size);
 static inline void * __init memblock_virt_alloc(
 					phys_addr_t size,  phys_addr_t align)
 {
+	memblock_dbg("%s: %llu bytes align=0x%llx %pF\n",
+			__func__, (u64)size, (u64)align, (void *)_RET_IP_);
+
 	return memblock_virt_alloc_try_nid(size, align, BOOTMEM_LOW_LIMIT,
 					    BOOTMEM_ALLOC_ACCESSIBLE,
 					    NUMA_NO_NODE);
@@ -358,6 +363,7 @@ extern void *alloc_large_system_hash(const char *tablename,
 #define HASH_EARLY	0x00000001	/* Allocating during early boot? */
 #define HASH_SMALL	0x00000002	/* sub-page allocation allowed, min
 					 * shift passed via *_hash_shift */
+#define HASH_ZERO	0x00000004	/* Zero allocated hash table */
 
 /* Only NUMA needs hash distribution. 64bit NUMA architectures have
  * sufficient vmalloc space.

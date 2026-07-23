@@ -1,0 +1,10 @@
+../scripts/mod/modpost.c:811:9: warning: assigning to 'char *' from 'const char *' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
+WARNING: EXPORT symbol "gspca_debug" [drivers/media/usb/gspca/gspca_main.lto.ko] version generation failed, symbol will not be versioned.
+WARNING: EXPORT symbol "gspca_dev_probe" [drivers/media/usb/gspca/gspca_main.lto.ko] version generation failed, symbol will not be versioned.
+WARNING: EXPORT symbol "gspca_dev_probe2" [drivers/media/usb/gspca/gspca_main.lto.ko] version generation failed, symbol will not be versioned.
+WARNING: EXPORT symbol "gspca_disconnect" [drivers/media/usb/gspca/gspca_main.lto.ko] version generation failed, symbol will not be versioned.
+WARNING: EXPORT symbol "gspca_frame_add" [drivers/media/usb/gspca/gspca_main.lto.ko] version generation failed, symbol will not be versioned.
+WARNING: EXPORT symbol "gspca_resume" [drivers/media/usb/gspca/gspca_main.lto.ko] version generation failed, symbol will not be versioned.
+WARNING: EXPORT symbol "gspca_suspend" [drivers/media/usb/gspca/gspca_main.lto.ko] version generation failed, symbol will not be versioned.
+WARNING: EXPORT symbol "gspca_coarse_grained_expo_autogain" [drivers/media/usb/gspca/gspca_main.lto.ko] version generation failed, symbol will not be versioned.
+WARNING: EXPORT symbol "gspca_expo_autogain" [drivers/media/usb/gspca/gspca_main.lto.ko] version generation failed, symbol will not be versioned.

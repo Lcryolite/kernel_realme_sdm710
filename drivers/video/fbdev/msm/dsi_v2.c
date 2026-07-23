@@ -41,7 +41,7 @@ static int dsi_on(struct mdss_panel_data *pdata)
 {
 	int rc = 0;
 
-	pr_debug("dsi_on DSI controller on\n");
+	pr_debug("%s DSI controller on\n", __func__);
 	if (dsi_intf.on)
 		rc = dsi_intf.on(pdata);
 
@@ -89,7 +89,7 @@ static int dsi_panel_handler(struct mdss_panel_data *pdata, int enable)
 	int rc = 0;
 	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
 
-	pr_debug("dsi_panel_handler enable=%d\n", enable);
+	pr_debug("%s enable=%d\n", __func__, enable);
 	if (!pdata)
 		return -ENODEV;
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
@@ -101,8 +101,7 @@ static int dsi_panel_handler(struct mdss_panel_data *pdata, int enable)
 			mdss_dsi_panel_reset(pdata, 1);
 			rc = ctrl_pdata->on(pdata);
 			if (rc)
-				pr_err("dsi_panel_handler panel on failed %d\n",
-									rc);
+				pr_err("%s panel on failed %d\n", __func__, rc);
 		}
 		pdata->panel_info.panel_power_state = MDSS_PANEL_POWER_ON;
 		if (pdata->panel_info.type == MIPI_CMD_PANEL)
@@ -233,15 +232,11 @@ static int dsi_parse_gpio(struct platform_device *pdev,
 		pr_err("%s:%d, bklt_en gpio not specified\n",
 						__func__, __LINE__);
 
-	ctrl_pdata->bklt_en_gpio_invert =
-			of_property_read_bool(ctrl_pdev->dev.of_node,
-				"qcom,platform-bklight-en-gpio-invert");
-
 	return 0;
 }
 
 static void mdss_dsi_put_dt_vreg_data(struct device *dev,
-	struct mdss_module_power *module_power)
+	struct dss_module_power *module_power)
 {
 	if (!module_power) {
 		pr_err("%s: invalid input\n", __func__);
@@ -256,7 +251,7 @@ static void mdss_dsi_put_dt_vreg_data(struct device *dev,
 }
 
 static int mdss_dsi_get_dt_vreg_data(struct device *dev,
-	struct mdss_module_power *mp, enum dsi_pm_type module)
+	struct dss_module_power *mp, enum dsi_pm_type module)
 {
 	int i = 0, rc = 0;
 	u32 tmp = 0;
@@ -291,7 +286,7 @@ static int mdss_dsi_get_dt_vreg_data(struct device *dev,
 		pr_debug("%s: vreg found. count=%d\n", __func__, mp->num_vreg);
 	}
 
-	mp->vreg_config = devm_kzalloc(dev, sizeof(struct mdss_vreg) *
+	mp->vreg_config = devm_kzalloc(dev, sizeof(struct dss_vreg) *
 		mp->num_vreg, GFP_KERNEL);
 	if (!mp->vreg_config) {
 		rc = -ENOMEM;
@@ -603,10 +598,8 @@ void dsi_register_interface(struct dsi_interface *intf)
 int dsi_buf_alloc(struct dsi_buf *dp, int size)
 {
 	dp->start = kzalloc(size, GFP_KERNEL);
-	if (dp->start == NULL) {
-		pr_err("%s:%u\n", __func__, __LINE__);
+	if (!dp->start)
 		return -ENOMEM;
-	}
 
 	dp->end = dp->start + size;
 	dp->size = size;

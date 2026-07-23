@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "milestone": "M2-sdm670-static-port",
+  "status": "PASS_FOR_STATIC_DTB_GATE",
+  "build": {
+    "target": "rmx1901/sdm710.dtb",
+    "toolchain": "Android (6443078 based on r383902) clang version 11.0.1",
+    "dtc": "/usr/bin/dtc version 1.8.1",
+    "warnings": 0,
+    "size": 383739,
+    "sha256": "2847b2fe3474c9e18db37e24accd894f9ed5096448050b3b01cc2c8f5f67c6c7"
+  },
+  "base_identity": {
+    "model": "Qualcomm Technologies, Inc. SDM710 SoC",
+    "compatible": ["qcom,sdm670"],
+    "msm_id": [360, 0, 393, 0],
+    "board_id": [0, 0],
+    "project": [1, 18041]
+  },
+  "known_good_overlay": {
+    "dtbo_entry": 46,
+    "sha256": "4649a0431ef594d6366ed0ad616e65b8c5b873906003bc80f951369c00e33301",
+    "model": "Qualcomm Technologies, Inc. SDM710 PM660 + PM660A MTP",
+    "compatible": ["qcom,sdm670-mtp", "qcom,sdm670", "qcom,mtp"],
+    "msm_id": [360, 0, 393, 0],
+    "board_id": [8, 0],
+    "project": [1, 18041],
+    "fixups_required": 179,
+    "fixups_satisfied": 179,
+    "fdtoverlay_result": "PASS"
+  },
+  "reserved_memory": {
+    "regions": 19,
+    "overlaps": 0,
+    "ramoops_start": "0xb7e00000",
+    "ramoops_size": "0x00400000"
+  },
+  "platform_nodes": {
+    "gic_v3": "PASS",
+    "arm_arch_timer": "PASS",
+    "rpmh_rsc": "PASS",
+    "pdc": "PASS",
+    "clock_rpmh": "PASS",
+    "pinctrl": "PASS",
+    "spmi": "PASS",
+    "ufs_after_overlay": "PASS"
+  },
+  "roundtrip": "PASS",
+  "device_flash_allowed": false
+}

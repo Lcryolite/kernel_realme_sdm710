@@ -29,6 +29,8 @@
 #include <net/flow.h>
 #include <net/inet_sock.h>
 #include <net/ip_fib.h>
+#include <net/arp.h>
+#include <net/ndisc.h>
 #include <linux/in_route.h>
 #include <linux/rtnetlink.h>
 #include <linux/rcupdate.h>
@@ -55,12 +57,15 @@ struct rtable {
 	unsigned int		rt_flags;
 	__u16			rt_type;
 	__u8			rt_is_input;
-	__u8			rt_uses_gateway;
+	u8			rt_gw_family;
 
 	int			rt_iif;
 
 	/* Info on neighbour */
-	__be32			rt_gateway;
+	union {
+		__be32      rt_gw4;
+		struct in6_addr rt_gw6;
+	};
 
 	/* Miscellaneous cached information */
 	u32			rt_mtu_locked:1,
@@ -84,8 +89,8 @@ static inline bool rt_is_output_route(const struct rtable *rt)
 
 static inline __be32 rt_nexthop(const struct rtable *rt, __be32 daddr)
 {
-	if (rt->rt_gateway)
-		return rt->rt_gateway;
+	if (rt->rt_gw_family == AF_INET)
+		return rt->rt_gw4;
 	return daddr;
 }
 
@@ -114,13 +119,16 @@ struct in_device;
 int ip_rt_init(void);
 void rt_cache_flush(struct net *net);
 void rt_flush_dev(struct net_device *dev);
-struct rtable *__ip_route_output_key_hash(struct net *, struct flowi4 *flp,
-					  int mp_hash);
+struct rtable *ip_route_output_key_hash(struct net *net, struct flowi4 *flp,
+					const struct sk_buff *skb);
+struct rtable *ip_route_output_key_hash_rcu(struct net *net, struct flowi4 *flp,
+					    struct fib_result *res,
+					    const struct sk_buff *skb);
 
 static inline struct rtable *__ip_route_output_key(struct net *net,
 						   struct flowi4 *flp)
 {
-	return __ip_route_output_key_hash(net, flp, -1);
+	return ip_route_output_key_hash(net, flp, NULL);
 }
 
 struct rtable *ip_route_output_flow(struct net *, struct flowi4 *flp,
@@ -173,9 +181,14 @@ static inline struct rtable *ip_route_output_gre(struct net *net, struct flowi4 
 	fl4->fl4_gre_key = gre_key;
 	return ip_route_output_key(net, fl4);
 }
-
+int ip_mc_validate_source(struct sk_buff *skb, __be32 daddr, __be32 saddr,
+			  u8 tos, struct net_device *dev,
+			  struct in_device *in_dev, u32 *itag);
 int ip_route_input_noref(struct sk_buff *skb, __be32 dst, __be32 src,
 			 u8 tos, struct net_device *devin);
+int ip_route_input_rcu(struct sk_buff *skb, __be32 dst, __be32 src,
+		       u8 tos, struct net_device *devin,
+		       struct fib_result *res);
 
 static inline int ip_route_input(struct sk_buff *skb, __be32 dst, __be32 src,
 				 u8 tos, struct net_device *devin)
@@ -184,8 +197,11 @@ static inline int ip_route_input(struct sk_buff *skb, __be32 dst, __be32 src,
 
 	rcu_read_lock();
 	err = ip_route_input_noref(skb, dst, src, tos, devin);
-	if (!err)
+	if (!err) {
 		skb_dst_force(skb);
+		if (!skb_dst(skb))
+			err = -EINVAL;
+	}
 	rcu_read_unlock();
 
 	return err;
@@ -333,6 +349,36 @@ static inline int ip4_dst_hoplimit(const struct dst_entry *dst)
 	if (hoplimit == 0)
 		hoplimit = net->ipv4.sysctl_ip_default_ttl;
 	return hoplimit;
+}
+
+static inline struct neighbour *ip_neigh_gw4(struct net_device *dev,
+					     __be32 daddr)
+{
+	struct neighbour *neigh;
+
+	neigh = __ipv4_neigh_lookup_noref(dev, daddr);
+	if (unlikely(!neigh))
+		neigh = __neigh_create(&arp_tbl, &daddr, dev, false);
+
+	return neigh;
+}
+
+static inline struct neighbour *ip_neigh_for_gw(struct rtable *rt,
+						struct sk_buff *skb,
+						bool *is_v6gw)
+{
+	struct net_device *dev = rt->dst.dev;
+	struct neighbour *neigh;
+
+	if (likely(rt->rt_gw_family == AF_INET)) {
+		neigh = ip_neigh_gw4(dev, rt->rt_gw4);
+	} else if (rt->rt_gw_family == AF_INET6) {
+		neigh = ip_neigh_gw6(dev, &rt->rt_gw6);
+		*is_v6gw = true;
+	} else {
+		neigh = ip_neigh_gw4(dev, ip_hdr(skb)->daddr);
+	}
+	return neigh;
 }
 
 #endif	/* _ROUTE_H */

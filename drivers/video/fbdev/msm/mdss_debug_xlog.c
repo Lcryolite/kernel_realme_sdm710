@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2016, 2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2018, 2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -280,6 +280,7 @@ static void mdss_dump_debug_bus(u32 bus_dump_flag,
 	phys_addr_t phys = 0;
 	int list_size = mdata->dbg_bus_size;
 	int i;
+	u32 offset;
 
 	if (!(mdata->dbg_bus && list_size))
 		return;
@@ -313,8 +314,14 @@ static void mdss_dump_debug_bus(u32 bus_dump_flag,
 		writel_relaxed(TEST_MASK(head->block_id, head->test_id),
 				mdss_res->mdp_base + head->wr_addr);
 		wmb(); /* make sure test bits were written */
+
+		if (mdata->dbg_bus_flags & DEBUG_FLAGS_DSPP)
+			offset = MDSS_MDP_DSPP_DEBUGBUS_STATUS;
+		else
+			offset = head->wr_addr + 0x4;
+
 		status = readl_relaxed(mdss_res->mdp_base +
-			head->wr_addr + 0x4);
+			offset);
 
 		if (in_log)
 			pr_err("waddr=0x%x blk=%d tst=%d val=0x%x\n",
@@ -351,7 +358,7 @@ static void __vbif_debug_bus(struct vbif_debug_bus *head,
 				vbif_base + head->block_bus_addr);
 		/* make sure that current bus blcok enable */
 		wmb();
-		for (j = 0; j < head->test_pnt_cnt; j++) {
+		for (j = head->test_pnt_start; j < head->test_pnt_cnt; j++) {
 			writel_relaxed(j, vbif_base + head->block_bus_addr + 4);
 			/* make sure that test point is enabled */
 			wmb();
@@ -395,7 +402,7 @@ static void mdss_dump_vbif_debug_bus(u32 bus_dump_flag,
 		bus_size = mdata->nrt_vbif_dbg_bus_size;
 	}
 
-	if (!dbg_bus || !bus_size)
+	if (!vbif_base || !dbg_bus || !bus_size)
 		return;
 
 	/* allocate memory for each test point */
@@ -486,8 +493,8 @@ void mdss_dump_reg(const char *dump_name, u32 reg_dump_flag, char *addr,
 		}
 	}
 
-	if (!from_isr && mdata->debug_inf.debug_enable_clock)
-		mdata->debug_inf.debug_enable_clock(MDP_BLOCK_POWER_ON);
+	if (!from_isr)
+		mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON);
 
 	for (i = 0; i < len; i++) {
 		u32 x0, x4, x8, xc;
@@ -511,8 +518,8 @@ void mdss_dump_reg(const char *dump_name, u32 reg_dump_flag, char *addr,
 		addr += 16;
 	}
 
-	if (!from_isr && mdata->debug_inf.debug_enable_clock)
-		mdata->debug_inf.debug_enable_clock(MDP_BLOCK_POWER_OFF);
+	if (!from_isr)
+		mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF);
 }
 
 static void mdss_dump_reg_by_ranges(struct mdss_debug_base *dbg,
@@ -803,8 +810,8 @@ int mdss_create_xlog_debug(struct mdss_debug_data *mdd)
 						&mdss_xlog_fops);
 	debugfs_create_u32("enable", 0644, mdss_dbg_xlog.xlog,
 			    &mdss_dbg_xlog.xlog_enable);
-	debugfs_create_bool("panic", 0644, mdss_dbg_xlog.xlog,
-			    (bool *)&mdss_dbg_xlog.panic_on_err);
+	debugfs_create_u32("panic", 0644, mdss_dbg_xlog.xlog,
+			    &mdss_dbg_xlog.panic_on_err);
 	debugfs_create_u32("reg_dump", 0644, mdss_dbg_xlog.xlog,
 			    &mdss_dbg_xlog.enable_reg_dump);
 	debugfs_create_u32("dbgbus_dump", 0644, mdss_dbg_xlog.xlog,

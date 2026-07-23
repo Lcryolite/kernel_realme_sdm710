@@ -338,17 +338,11 @@ int pciehp_check_link_status(struct controller *ctrl)
 static int __pciehp_link_set(struct controller *ctrl, bool enable)
 {
 	struct pci_dev *pdev = ctrl_dev(ctrl);
-	u16 lnk_ctrl;
 
-	pcie_capability_read_word(pdev, PCI_EXP_LNKCTL, &lnk_ctrl);
+	pcie_capability_clear_and_set_word(pdev, PCI_EXP_LNKCTL,
+					   PCI_EXP_LNKCTL_LD,
+					   enable ? 0 : PCI_EXP_LNKCTL_LD);
 
-	if (enable)
-		lnk_ctrl &= ~PCI_EXP_LNKCTL_LD;
-	else
-		lnk_ctrl |= PCI_EXP_LNKCTL_LD;
-
-	pcie_capability_write_word(pdev, PCI_EXP_LNKCTL, lnk_ctrl);
-	ctrl_dbg(ctrl, "%s: lnk_ctrl = %x\n", __func__, lnk_ctrl);
 	return 0;
 }
 
@@ -623,8 +617,18 @@ static irqreturn_t pciehp_isr(int irq, void *dev_id)
 		pciehp_queue_interrupt_event(slot, INT_BUTTON_PRESS);
 	}
 
-	/* Check Presence Detect Changed */
-	if (events & PCI_EXP_SLTSTA_PDC) {
+	/*
+	 * Check Link Status Changed at higher precedence than Presence
+	 * Detect Changed.  The PDS value may be set to "card present" from
+	 * out-of-band detection, which may be in conflict with a Link Down
+	 * and cause the wrong event to queue.
+	 */
+	if (events & PCI_EXP_SLTSTA_DLLSC) {
+		ctrl_info(ctrl, "Slot(%s): Link %s\n", slot_name(slot),
+			  link ? "Up" : "Down");
+		pciehp_queue_interrupt_event(slot, link ? INT_LINK_UP :
+					     INT_LINK_DOWN);
+	} else if (events & PCI_EXP_SLTSTA_PDC) {
 		present = !!(status & PCI_EXP_SLTSTA_PDS);
 		ctrl_info(ctrl, "Slot(%s): Card %spresent\n", slot_name(slot),
 			  present ? "" : "not ");
@@ -637,13 +641,6 @@ static irqreturn_t pciehp_isr(int irq, void *dev_id)
 		ctrl->power_fault_detected = 1;
 		ctrl_err(ctrl, "Slot(%s): Power fault\n", slot_name(slot));
 		pciehp_queue_interrupt_event(slot, INT_POWER_FAULT);
-	}
-
-	if (events & PCI_EXP_SLTSTA_DLLSC) {
-		ctrl_info(ctrl, "Slot(%s): Link %s\n", slot_name(slot),
-			  link ? "Up" : "Down");
-		pciehp_queue_interrupt_event(slot, link ? INT_LINK_UP :
-					     INT_LINK_DOWN);
 	}
 
 	return IRQ_HANDLED;
@@ -854,6 +851,13 @@ struct controller *pcie_init(struct pcie_device *dev)
 
 	if (pdev->hotplug_user_indicators)
 		slot_cap &= ~(PCI_EXP_SLTCAP_AIP | PCI_EXP_SLTCAP_PIP);
+
+	/*
+	 * We assume no Thunderbolt controllers support Command Complete events,
+	 * but some controllers falsely claim they do.
+	 */
+	if (pdev->is_thunderbolt)
+		slot_cap |= PCI_EXP_SLTCAP_NCCS;
 
 	ctrl->slot_cap = slot_cap;
 	mutex_init(&ctrl->ctrl_lock);

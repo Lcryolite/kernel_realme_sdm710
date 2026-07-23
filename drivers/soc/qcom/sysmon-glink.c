@@ -417,7 +417,6 @@ int sysmon_glink_register(struct subsys_desc *desc)
 
 	link_info = kzalloc(sizeof(struct glink_link_info), GFP_KERNEL);
 	if (!link_info) {
-		pr_err("Could not allocate link info structure\n");
 		kfree(ss);
 		return -ENOMEM;
 	}

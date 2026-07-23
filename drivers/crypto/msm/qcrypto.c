@@ -1,7 +1,7 @@
 /*
  * QTI Crypto driver
  *
- * Copyright (c) 2010-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2010-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -927,7 +927,7 @@ static void _qcrypto_ahash_cra_exit(struct crypto_tfm *tfm)
 	struct qcrypto_sha_ctx *sha_ctx = crypto_tfm_ctx(tfm);
 
 	if (!list_empty(&sha_ctx->rsp_queue))
-		pr_err("_qcrypto_ahash_cra_exit: requests still outstanding");
+		pr_err("%s: requests still outstanding\n", __func__);
 	if (sha_ctx->ahash_req != NULL) {
 		ahash_request_free(sha_ctx->ahash_req);
 		sha_ctx->ahash_req = NULL;
@@ -1393,6 +1393,7 @@ static int _qcrypto_remove(struct platform_device *pdev)
 
 	if (msm_bus_scale_client_update_request(pengine->bus_scale_handle, 0))
 		pr_err("%s Unable to set low bandwidth\n", __func__);
+
 	msm_bus_scale_unregister_client(pengine->bus_scale_handle);
 	pengine->bus_scale_handle = 0;
 
@@ -1765,8 +1766,8 @@ static void _qce_ahash_complete(void *cookie, unsigned char *digest,
 	}
 
 #ifdef QCRYPTO_DEBUG
-	dev_info(&pengine->pdev->dev, "_qce_ahash_complete: %pK ret %d\n",
-				areq, ret);
+	dev_info(&pengine->pdev->dev, "%s: %pK ret %d\n",
+				__func__, areq, ret);
 #endif
 	if (digest) {
 		memcpy(rctx->digest, digest, diglen);
@@ -1824,8 +1825,8 @@ static void _qce_ablk_cipher_complete(void *cookie, unsigned char *icb,
 	}
 
 #ifdef QCRYPTO_DEBUG
-	dev_info(&pengine->pdev->dev, "_qce_ablk_cipher_complete: %pK ret %d\n",
-				areq, ret);
+	dev_info(&pengine->pdev->dev, "%s: %pK ret %d\n",
+			__func__, areq, ret);
 #endif
 	if (iv)
 		memcpy(ctx->iv, iv, crypto_ablkcipher_ivsize(ablk));
@@ -1977,14 +1978,14 @@ static int qcrypto_aead_ccm_format_adata(struct qce_req *qreq, uint32_t alen,
 		*(__be16 *)adata = cpu_to_be16(alen);
 		len = 2;
 	} else {
-			if ((alen >= 65280) && (alen <= 0xffffffff)) {
-				*(__be16 *)adata = cpu_to_be16(0xfffe);
-				*(__be32 *)&adata[2] = cpu_to_be32(alen);
-				len = 6;
+		if ((alen >= 65280) && (alen <= 0xffffffff)) {
+			*(__be16 *)adata = cpu_to_be16(0xfffe);
+			*(__be32 *)&adata[2] = cpu_to_be32(alen);
+			len = 6;
 		} else {
-				*(__be16 *)adata = cpu_to_be16(0xffff);
-				*(__be32 *)&adata[6] = cpu_to_be32(alen);
-				len = 10;
+			*(__be16 *)adata = cpu_to_be16(0xffff);
+			*(__be32 *)&adata[6] = cpu_to_be32(alen);
+			len = 10;
 		}
 	}
 	adata += len;
@@ -2526,7 +2527,7 @@ static int _qcrypto_enc_aes_ecb(struct ablkcipher_request *req)
 	WARN_ON(crypto_tfm_alg_type(req->base.tfm) !=
 					CRYPTO_ALG_TYPE_ABLKCIPHER);
 #ifdef QCRYPTO_DEBUG
-	dev_info(&ctx->pengine->pdev->dev, "_qcrypto_enc_aes_ecb: %pK\n", req);
+	dev_info(&ctx->pengine->pdev->dev, "%s: %pK\n", __func__, req);
 #endif
 
 	if ((ctx->enc_key_len == AES_KEYSIZE_192) &&
@@ -2556,7 +2557,7 @@ static int _qcrypto_enc_aes_cbc(struct ablkcipher_request *req)
 	WARN_ON(crypto_tfm_alg_type(req->base.tfm) !=
 					CRYPTO_ALG_TYPE_ABLKCIPHER);
 #ifdef QCRYPTO_DEBUG
-	dev_info(&ctx->pengine->pdev->dev, "_qcrypto_enc_aes_cbc: %pK\n", req);
+	dev_info(&ctx->pengine->pdev->dev, "%s: %pK\n", __func__, req);
 #endif
 
 	if ((ctx->enc_key_len == AES_KEYSIZE_192) &&
@@ -2586,7 +2587,7 @@ static int _qcrypto_enc_aes_ctr(struct ablkcipher_request *req)
 	WARN_ON(crypto_tfm_alg_type(req->base.tfm) !=
 				CRYPTO_ALG_TYPE_ABLKCIPHER);
 #ifdef QCRYPTO_DEBUG
-	dev_info(&ctx->pengine->pdev->dev, "_qcrypto_enc_aes_ctr: %pK\n", req);
+	dev_info(&ctx->pengine->pdev->dev, "%s: %pK\n", __func__, req);
 #endif
 
 	if ((ctx->enc_key_len == AES_KEYSIZE_192) &&
@@ -2774,7 +2775,7 @@ static int _qcrypto_dec_aes_ecb(struct ablkcipher_request *req)
 	WARN_ON(crypto_tfm_alg_type(req->base.tfm) !=
 				CRYPTO_ALG_TYPE_ABLKCIPHER);
 #ifdef QCRYPTO_DEBUG
-	dev_info(&ctx->pengine->pdev->dev, "_qcrypto_dec_aes_ecb: %pK\n", req);
+	dev_info(&ctx->pengine->pdev->dev, "%s: %pK\n", __func__, req);
 #endif
 
 	if ((ctx->enc_key_len == AES_KEYSIZE_192) &&
@@ -2804,7 +2805,7 @@ static int _qcrypto_dec_aes_cbc(struct ablkcipher_request *req)
 	WARN_ON(crypto_tfm_alg_type(req->base.tfm) !=
 				CRYPTO_ALG_TYPE_ABLKCIPHER);
 #ifdef QCRYPTO_DEBUG
-	dev_info(&ctx->pengine->pdev->dev, "_qcrypto_dec_aes_cbc: %pK\n", req);
+	dev_info(&ctx->pengine->pdev->dev, "%s: %pK\n", __func__, req);
 #endif
 
 	if ((ctx->enc_key_len == AES_KEYSIZE_192) &&
@@ -2834,7 +2835,7 @@ static int _qcrypto_dec_aes_ctr(struct ablkcipher_request *req)
 	WARN_ON(crypto_tfm_alg_type(req->base.tfm) !=
 					CRYPTO_ALG_TYPE_ABLKCIPHER);
 #ifdef QCRYPTO_DEBUG
-	dev_info(&ctx->pengine->pdev->dev, "_qcrypto_dec_aes_ctr: %pK\n", req);
+	dev_info(&ctx->pengine->pdev->dev, "%s: %pK\n", __func__, req);
 #endif
 
 	if ((ctx->enc_key_len == AES_KEYSIZE_192) &&
@@ -3399,8 +3400,7 @@ static int _qcrypto_aead_encrypt_aes_cbc(struct aead_request *req)
 	pstat = &_qcrypto_stat;
 
 #ifdef QCRYPTO_DEBUG
-	dev_info(&ctx->pengine->pdev->dev,
-			 "_qcrypto_aead_encrypt_aes_cbc: %pK\n", req);
+	dev_info(&ctx->pengine->pdev->dev, "%s: %pK\n", __func__, req);
 #endif
 
 	rctx = aead_request_ctx(req);
@@ -3430,8 +3430,7 @@ static int _qcrypto_aead_decrypt_aes_cbc(struct aead_request *req)
 	pstat = &_qcrypto_stat;
 
 #ifdef QCRYPTO_DEBUG
-	dev_info(&ctx->pengine->pdev->dev,
-			 "_qcrypto_aead_decrypt_aes_cbc: %pK\n", req);
+	dev_info(&ctx->pengine->pdev->dev, "%s: %pK\n", __func__, req);
 #endif
 	rctx = aead_request_ctx(req);
 	rctx->aead = 1;
@@ -3812,11 +3811,8 @@ static int _sha_update(struct ahash_request  *req, uint32_t sha_block_size)
 	if (rctx->trailing_buf_len) {
 		if (cp->ce_support.aligned_only)  {
 			rctx->data2 = kzalloc((req->nbytes + 64), GFP_ATOMIC);
-			if (rctx->data2 == NULL) {
-				pr_err("Mem Alloc fail srctx->data2, err %ld\n",
-							PTR_ERR(rctx->data2));
+			if (rctx->data2 == NULL)
 				return -ENOMEM;
-			}
 			memcpy(rctx->data2, staging,
 						rctx->trailing_buf_len);
 			memcpy((rctx->data2 + rctx->trailing_buf_len),
@@ -4018,6 +4014,7 @@ static int _sha1_hmac_setkey(struct crypto_ahash *tfm, const u8 *key,
 {
 	struct qcrypto_sha_ctx *sha_ctx = crypto_tfm_ctx(&tfm->base);
 	int ret = 0;
+
 	memset(&sha_ctx->authkey[0], 0, SHA1_BLOCK_SIZE);
 	if (len <= SHA1_BLOCK_SIZE) {
 		memcpy(&sha_ctx->authkey[0], key, len);
@@ -4997,8 +4994,9 @@ static int  _qcrypto_probe(struct platform_device *pdev)
 	qce_hw_support(pengine->qce, &cp->ce_support);
 	pengine->ce_hw_instance = cp->ce_support.ce_hw_instance;
 	pengine->max_req = cp->ce_support.max_request;
-	pqcrypto_req_control = kzalloc(sizeof(struct qcrypto_req_control) *
-			pengine->max_req, GFP_KERNEL);
+	pqcrypto_req_control = kcalloc(pengine->max_req,
+				sizeof(struct qcrypto_req_control),
+				GFP_KERNEL);
 	if (pqcrypto_req_control == NULL) {
 		rc = -ENOMEM;
 		goto exit_unlock_mutex;
@@ -5321,7 +5319,8 @@ exit_qce_close:
 	if (pengine->qce)
 		qce_close(pengine->qce);
 exit_free_pdata:
-	msm_bus_scale_client_update_request(pengine->bus_scale_handle, 0);
+	if (msm_bus_scale_client_update_request(pengine->bus_scale_handle, 0))
+		pr_err("%s Unable to set low bandwidth\n", __func__);
 	platform_set_drvdata(pdev, NULL);
 exit_kzfree:
 	kzfree(pengine);
@@ -5530,7 +5529,7 @@ static int _qcrypto_debug_init(void)
 
 	_debug_dent = debugfs_create_dir("qcrypto", NULL);
 	if (IS_ERR(_debug_dent)) {
-		pr_err("qcrypto debugfs_create_dir fail, error %ld\n",
+		pr_debug("qcrypto debugfs_create_dir fail, error %ld\n",
 				PTR_ERR(_debug_dent));
 		return PTR_ERR(_debug_dent);
 	}
@@ -5540,7 +5539,7 @@ static int _qcrypto_debug_init(void)
 	dent = debugfs_create_file(name, 0644, _debug_dent,
 				&_debug_qcrypto, &_debug_stats_ops);
 	if (dent == NULL) {
-		pr_err("qcrypto debugfs_create_file fail, error %ld\n",
+		pr_debug("qcrypto debugfs_create_file fail, error %ld\n",
 				PTR_ERR(dent));
 		rc = PTR_ERR(dent);
 		goto err;
@@ -5553,12 +5552,9 @@ err:
 
 static int __init _qcrypto_init(void)
 {
-	int rc;
 	struct crypto_priv *pcp = &qcrypto_dev;
 
-	rc = _qcrypto_debug_init();
-	if (rc)
-		return rc;
+	_qcrypto_debug_init();
 	INIT_LIST_HEAD(&pcp->alg_list);
 	INIT_LIST_HEAD(&pcp->engine_list);
 	init_llist_head(&pcp->ordered_resp_list);

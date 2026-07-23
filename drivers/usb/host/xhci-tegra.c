@@ -1185,6 +1185,7 @@ static int tegra_xusb_remove(struct platform_device *pdev)
 
 	usb_remove_hcd(xhci->shared_hcd);
 	usb_put_hcd(xhci->shared_hcd);
+	xhci->shared_hcd = NULL;
 	usb_remove_hcd(tegra->hcd);
 	usb_put_hcd(tegra->hcd);
 
@@ -1315,7 +1316,6 @@ static int tegra_xhci_setup(struct usb_hcd *hcd)
 }
 
 static const struct xhci_driver_overrides tegra_xhci_overrides __initconst = {
-	.extra_priv_size = sizeof(struct xhci_hcd),
 	.reset = tegra_xhci_setup,
 };
 

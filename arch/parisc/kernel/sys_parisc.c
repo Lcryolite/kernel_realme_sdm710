@@ -23,13 +23,15 @@
  *    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/elf.h>
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/linkage.h>
 #include <linux/mm.h>
 #include <linux/mman.h>
+#include <linux/sched/signal.h>
+#include <linux/sched/mm.h>
 #include <linux/shm.h>
 #include <linux/syscalls.h>
 #include <linux/utsname.h>
@@ -228,17 +230,15 @@ static unsigned long mmap_rnd(void)
 {
 	unsigned long rnd = 0;
 
-	/*
-	*  8 bits of randomness in 32bit mmaps, 20 address space bits
-	* 28 bits of randomness in 64bit mmaps, 40 address space bits
-	*/
-	if (current->flags & PF_RANDOMIZE) {
-		if (is_32bit_task())
-			rnd = get_random_int() % (1<<8);
-		else
-			rnd = get_random_int() % (1<<28);
-	}
+	if (current->flags & PF_RANDOMIZE)
+		rnd = get_random_int() & MMAP_RND_MASK;
+
 	return rnd << PAGE_SHIFT;
+}
+
+unsigned long arch_mmap_rnd(void)
+{
+	return (get_random_int() & MMAP_RND_MASK) << PAGE_SHIFT;
 }
 
 static unsigned long mmap_legacy_base(void)
@@ -384,4 +384,31 @@ long parisc_personality(unsigned long personality)
 		err = (err & ~PER_MASK) | PER_LINUX;
 
 	return err;
+}
+
+/*
+ * madvise() wrapper
+ *
+ * Up to kernel v6.1 parisc has different values than all other
+ * platforms for the MADV_xxx flags listed below.
+ * To keep binary compatibility with existing userspace programs
+ * translate the former values to the new values.
+ *
+ * XXX: Remove this wrapper in year 2025 (or later)
+ */
+
+asmlinkage notrace long parisc_madvise(unsigned long start, size_t len_in, int behavior)
+{
+	switch (behavior) {
+	case 65: behavior = MADV_MERGEABLE;	break;
+	case 66: behavior = MADV_UNMERGEABLE;	break;
+	case 67: behavior = MADV_HUGEPAGE;	break;
+	case 68: behavior = MADV_NOHUGEPAGE;	break;
+	case 69: behavior = MADV_DONTDUMP;	break;
+	case 70: behavior = MADV_DODUMP;	break;
+	case 71: behavior = MADV_WIPEONFORK;	break;
+	case 72: behavior = MADV_KEEPONFORK;	break;
+	}
+
+	return sys_madvise(start, len_in, behavior);
 }

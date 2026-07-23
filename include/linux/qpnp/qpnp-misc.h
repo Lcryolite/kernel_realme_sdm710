@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2014, 2017-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2014, 2017, 2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -52,7 +52,7 @@ int qpnp_misc_read_reg(struct device_node *node, u16 addr, u8 *val);
  *
  * @nb: pointer to the client's notifier handle
  *
- * This function returns 0 if the client is successfuly added to the
+ * This function returns 0 if the client is successfully added to the
  * notifer list.
  */
 int qpnp_misc_twm_notifier_register(struct notifier_block *nb);
@@ -62,7 +62,7 @@ int qpnp_misc_twm_notifier_register(struct notifier_block *nb);
  *
  * @nb: pointer to the client's notifier handle
  *
- * This function returns 0 if the client is successfuly removed from the
+ * This function returns 0 if the client is successfully removed from the
  * notifer list.
  */
 int qpnp_misc_twm_notifier_unregister(struct notifier_block *nb);

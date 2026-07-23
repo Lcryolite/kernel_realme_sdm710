@@ -1,17 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/platform_device.h>
+#include <linux/of_device.h>
 #include <linux/string.h>
 #include <linux/types.h>
 #include <linux/spinlock.h>
@@ -20,9 +15,11 @@
 #include <linux/slab.h>
 #include <linux/sysfs.h>
 #include <linux/kobject.h>
+#include <linux/delay.h>
 #include <dsp/q6core.h>
 #include <dsp/audio_cal_utils.h>
 #include <dsp/apr_audio-v2.h>
+#include <soc/snd_event.h>
 #include <ipc/apr.h>
 #include "adsp_err.h"
 
@@ -33,6 +30,10 @@
  * is sufficient to make sure the Q6 will be ready.
  */
 #define Q6_READY_TIMEOUT_MS 100
+
+#define ADSP_STATE_READY_TIMEOUT_MS 3000
+
+#define APR_ENOTREADY 10
 
 enum {
 	META_CAL,
@@ -72,6 +73,7 @@ struct q6core_str {
 	struct cal_type_data *cal_data[CORE_MAX_CAL];
 	uint32_t mem_map_cal_handle;
 	int32_t adsp_status;
+	int32_t avs_state;
 	struct q6core_avcs_ver_info q6core_avcs_ver_info;
 };
 
@@ -187,7 +189,7 @@ EXPORT_SYMBOL(q6core_send_uevent);
 static int parse_fwk_version_info(uint32_t *payload, uint16_t payload_size)
 {
 	size_t ver_size;
-	int num_services;
+	uint16_t num_services;
 
 	pr_debug("%s: Payload info num services %d\n",
 		 __func__, payload[4]);
@@ -269,12 +271,24 @@ static int32_t aprv2_core_fn_q(struct apr_client_data *data, void *priv)
 		case AVCS_CMD_SHARED_MEM_UNMAP_REGIONS:
 			pr_debug("%s: Cmd = AVCS_CMD_SHARED_MEM_UNMAP_REGIONS status[0x%x]\n",
 				__func__, payload1[1]);
+			/* -ADSP status to match Linux error standard */
+			q6core_lcl.adsp_status = -payload1[1];
 			q6core_lcl.bus_bw_resp_received = 1;
 			wake_up(&q6core_lcl.bus_bw_req_wait);
 			break;
 		case AVCS_CMD_SHARED_MEM_MAP_REGIONS:
 			pr_debug("%s: Cmd = AVCS_CMD_SHARED_MEM_MAP_REGIONS status[0x%x]\n",
 				__func__, payload1[1]);
+			/* -ADSP status to match Linux error standard */
+			q6core_lcl.adsp_status = -payload1[1];
+			q6core_lcl.bus_bw_resp_received = 1;
+			wake_up(&q6core_lcl.bus_bw_req_wait);
+			break;
+		case AVCS_CMD_MAP_MDF_SHARED_MEMORY:
+			pr_debug("%s: Cmd = AVCS_CMD_MAP_MDF_SHARED_MEMORY status[0x%x]\n",
+				__func__, payload1[1]);
+			/* -ADSP status to match Linux error standard */
+			q6core_lcl.adsp_status = -payload1[1];
 			q6core_lcl.bus_bw_resp_received = 1;
 			wake_up(&q6core_lcl.bus_bw_req_wait);
 			break;
@@ -302,6 +316,15 @@ static int32_t aprv2_core_fn_q(struct apr_client_data *data, void *priv)
 					VER_QUERY_UNSUPPORTED;
 			q6core_lcl.avcs_fwk_ver_resp_received = 1;
 			wake_up(&q6core_lcl.avcs_fwk_ver_req_wait);
+			break;
+		case AVCS_CMD_LOAD_TOPO_MODULES:
+		case AVCS_CMD_UNLOAD_TOPO_MODULES:
+			pr_debug("%s: Cmd = %s status[%s]\n",
+				__func__,
+				(payload1[0] == AVCS_CMD_LOAD_TOPO_MODULES) ?
+				"AVCS_CMD_LOAD_TOPO_MODULES" :
+				"AVCS_CMD_UNLOAD_TOPO_MODULES",
+				adsp_err_get_err_str(payload1[1]));
 			break;
 		default:
 			pr_err("%s: Invalid cmd rsp[0x%x][0x%x] opcode %d\n",
@@ -542,44 +565,7 @@ EXPORT_SYMBOL(q6core_get_service_version);
 
 static int q6core_get_avcs_fwk_version(void)
 {
-        int ret = 0;
-
-        mutex_lock(&(q6core_lcl.ver_lock));
-        pr_debug("%s: q6core_avcs_ver_info.status(%d)\n", __func__,
-                 q6core_lcl.q6core_avcs_ver_info.status);
-
-        switch (q6core_lcl.q6core_avcs_ver_info.status) {
-        case VER_QUERY_SUPPORTED:
-                pr_debug("%s: AVCS FWK version query already attempted\n",
-                         __func__);
-                break;
-        case VER_QUERY_UNSUPPORTED:
-                ret = -EOPNOTSUPP;
-                break;
-        case VER_QUERY_UNATTEMPTED:
-                pr_debug("%s: Attempting AVCS FWK version query\n", __func__);
-                if (q6core_is_adsp_ready()) {
-                        ret = q6core_send_get_avcs_fwk_ver_cmd();
-                } else {
-                        pr_err("%s: ADSP is not ready to query version\n",
-                               __func__);
-                        ret = -ENODEV;
-                }
-                break;
-        default:
-                pr_err("%s: Invalid version query status %d\n", __func__,
-                       q6core_lcl.q6core_avcs_ver_info.status);
-                ret = -EINVAL;
-                break;
-        }
-        mutex_unlock(&(q6core_lcl.ver_lock));
-        return ret;
-}
-
-size_t q6core_get_fwk_version_size(uint32_t service_id)
-{
 	int ret = 0;
-	uint32_t num_services;
 
 	mutex_lock(&(q6core_lcl.ver_lock));
 	pr_debug("%s: q6core_avcs_ver_info.status(%d)\n", __func__,
@@ -610,7 +596,15 @@ size_t q6core_get_fwk_version_size(uint32_t service_id)
 		break;
 	}
 	mutex_unlock(&(q6core_lcl.ver_lock));
+	return ret;
+}
 
+size_t q6core_get_fwk_version_size(uint32_t service_id)
+{
+	int ret = 0;
+	uint32_t num_services;
+
+	ret = q6core_get_avcs_fwk_version();
 	if (ret)
 		goto done;
 
@@ -643,29 +637,29 @@ EXPORT_SYMBOL(q6core_get_fwk_version_size);
  */
 int q6core_get_avcs_api_version_per_service(uint32_t service_id)
 {
-        struct avcs_fwk_ver_info *cached_ver_info = NULL;
-        int i;
-        uint32_t num_services;
-        int ret = 0;
+	struct avcs_fwk_ver_info *cached_ver_info = NULL;
+	int i;
+	uint32_t num_services;
+	int ret = 0;
 
-        if (service_id == AVCS_SERVICE_ID_ALL)
-                return -EINVAL;
+	if (service_id == AVCS_SERVICE_ID_ALL)
+		return -EINVAL;
 
-        ret = q6core_get_avcs_fwk_version();
-        if (ret < 0) {
-                pr_err("%s: failure in getting AVCS version\n", __func__);
-                return ret;
-        }
+	ret = q6core_get_avcs_fwk_version();
+	if (ret < 0) {
+		pr_err("%s: failure in getting AVCS version\n", __func__);
+		return ret;
+	}
 
-        cached_ver_info = q6core_lcl.q6core_avcs_ver_info.ver_info;
-        num_services = cached_ver_info->avcs_fwk_version.num_services;
+	cached_ver_info = q6core_lcl.q6core_avcs_ver_info.ver_info;
+	num_services = cached_ver_info->avcs_fwk_version.num_services;
 
-        for (i = 0; i < num_services; i++) {
-                if (cached_ver_info->services[i].service_id == service_id)
-                        return cached_ver_info->services[i].api_version;
-        }
-        pr_err("%s: No service matching service ID %d\n", __func__, service_id);
-        return -EINVAL;
+	for (i = 0; i < num_services; i++) {
+		if (cached_ver_info->services[i].service_id == service_id)
+			return cached_ver_info->services[i].api_version;
+	}
+	pr_err("%s: No service matching service ID %d\n", __func__, service_id);
+	return -EINVAL;
 }
 EXPORT_SYMBOL(q6core_get_avcs_api_version_per_service);
 
@@ -861,6 +855,53 @@ uint32_t core_set_dolby_manufacturer_id(int manufacturer_id)
 }
 EXPORT_SYMBOL(core_set_dolby_manufacturer_id);
 
+int32_t q6core_load_unload_topo_modules(uint32_t topo_id,
+			bool preload_type)
+{
+	struct avcs_cmd_load_unload_topo_modules load_unload_topo_modules;
+	int ret = 0;
+
+	mutex_lock(&(q6core_lcl.cmd_lock));
+	ocm_core_open();
+	if (q6core_lcl.core_handle_q == NULL) {
+		pr_err("%s: apr registration for CORE failed\n", __func__);
+		ret  = -ENODEV;
+		goto done;
+	}
+
+	memset(&load_unload_topo_modules, 0, sizeof(load_unload_topo_modules));
+	load_unload_topo_modules.hdr.hdr_field =
+			APR_HDR_FIELD(APR_MSG_TYPE_SEQ_CMD,
+			APR_HDR_LEN(APR_HDR_SIZE), APR_PKT_VER);
+	load_unload_topo_modules.hdr.pkt_size =
+			sizeof(struct avcs_cmd_load_unload_topo_modules);
+	load_unload_topo_modules.hdr.src_port = 0;
+	load_unload_topo_modules.hdr.dest_port = 0;
+	load_unload_topo_modules.hdr.token = 0;
+
+	if (preload_type == CORE_LOAD_TOPOLOGY)
+		load_unload_topo_modules.hdr.opcode =
+			AVCS_CMD_LOAD_TOPO_MODULES;
+	else
+		load_unload_topo_modules.hdr.opcode =
+			AVCS_CMD_UNLOAD_TOPO_MODULES;
+
+	load_unload_topo_modules.topology_id = topo_id;
+	ret = apr_send_pkt(q6core_lcl.core_handle_q,
+		(uint32_t *) &load_unload_topo_modules);
+	if (ret < 0) {
+		pr_err_ratelimited("%s: Load/unload topo modules failed for topology = %d ret = %d\n",
+			__func__, topo_id, ret);
+		ret = -EINVAL;
+	}
+
+done:
+	mutex_unlock(&(q6core_lcl.cmd_lock));
+
+	return ret;
+}
+EXPORT_SYMBOL(q6core_load_unload_topo_modules);
+
 /**
  * q6core_is_adsp_ready - check adsp ready status
  *
@@ -906,7 +947,7 @@ bail:
 }
 EXPORT_SYMBOL(q6core_is_adsp_ready);
 
-static int q6core_map_memory_regions(phys_addr_t *buf_add, uint32_t mempool_id,
+int q6core_map_memory_regions(phys_addr_t *buf_add, uint32_t mempool_id,
 			uint32_t *bufsz, uint32_t bufcnt, uint32_t *map_handle)
 {
 	struct avs_cmd_shared_mem_map_regions *mmap_regions = NULL;
@@ -934,7 +975,7 @@ static int q6core_map_memory_regions(phys_addr_t *buf_add, uint32_t mempool_id,
 	mmap_regions->hdr.dest_port = 0;
 	mmap_regions->hdr.token = 0;
 	mmap_regions->hdr.opcode = AVCS_CMD_SHARED_MEM_MAP_REGIONS;
-	mmap_regions->mem_pool_id = ADSP_MEMORY_MAP_SHMEM8_4K_POOL & 0x00ff;
+	mmap_regions->mem_pool_id = mempool_id & 0x00ff;
 	mmap_regions->num_regions = bufcnt & 0x00ff;
 	mmap_regions->property_flag = 0x00;
 
@@ -954,6 +995,7 @@ static int q6core_map_memory_regions(phys_addr_t *buf_add, uint32_t mempool_id,
 		__func__, buf_add, bufsz[0], mmap_regions->num_regions);
 
 	*map_handle = 0;
+	q6core_lcl.adsp_status = 0;
 	q6core_lcl.bus_bw_resp_received = 0;
 	ret = apr_send_pkt(q6core_lcl.core_handle_q, (uint32_t *)
 		mmap_regions);
@@ -971,6 +1013,16 @@ static int q6core_map_memory_regions(phys_addr_t *buf_add, uint32_t mempool_id,
 		pr_err("%s: timeout. waited for memory map\n", __func__);
 		ret = -ETIME;
 		goto done;
+	} else {
+		/* set ret to 0 as no timeout happened */
+		ret = 0;
+	}
+
+	if (q6core_lcl.adsp_status < 0) {
+		pr_err("%s: DSP returned error %d\n",
+			__func__, q6core_lcl.adsp_status);
+		ret = q6core_lcl.adsp_status;
+		goto done;
 	}
 
 	*map_handle = q6core_lcl.mem_map_cal_handle;
@@ -979,7 +1031,7 @@ done:
 	return ret;
 }
 
-static int q6core_memory_unmap_regions(uint32_t mem_map_handle)
+int q6core_memory_unmap_regions(uint32_t mem_map_handle)
 {
 	struct avs_cmd_shared_mem_unmap_regions unmap_regions;
 	int ret = 0;
@@ -998,6 +1050,7 @@ static int q6core_memory_unmap_regions(uint32_t mem_map_handle)
 	unmap_regions.hdr.opcode = AVCS_CMD_SHARED_MEM_UNMAP_REGIONS;
 	unmap_regions.mem_map_handle = mem_map_handle;
 
+	q6core_lcl.adsp_status = 0;
 	q6core_lcl.bus_bw_resp_received = 0;
 
 	pr_debug("%s: unmap regions map handle %d\n",
@@ -1020,8 +1073,107 @@ static int q6core_memory_unmap_regions(uint32_t mem_map_handle)
 		       __func__);
 		ret = -ETIME;
 		goto done;
+	} else {
+		/* set ret to 0 as no timeout happened */
+		ret = 0;
+	}
+	if (q6core_lcl.adsp_status < 0) {
+		pr_err("%s: DSP returned error %d\n",
+			__func__, q6core_lcl.adsp_status);
+		ret = q6core_lcl.adsp_status;
+		goto done;
 	}
 done:
+	return ret;
+}
+
+
+int q6core_map_mdf_shared_memory(uint32_t map_handle, phys_addr_t *buf_add,
+			uint32_t proc_id, uint32_t *bufsz, uint32_t bufcnt)
+{
+	struct avs_cmd_map_mdf_shared_memory *mmap_regions = NULL;
+	struct avs_shared_map_region_payload *mregions = NULL;
+	void *mmap_region_cmd = NULL;
+	void *payload = NULL;
+	int ret = 0;
+	int i = 0;
+	int cmd_size = 0;
+
+	cmd_size = sizeof(struct avs_cmd_map_mdf_shared_memory)
+			+ sizeof(struct avs_shared_map_region_payload)
+			* bufcnt;
+
+	mmap_region_cmd = kzalloc(cmd_size, GFP_KERNEL);
+	if (mmap_region_cmd == NULL)
+		return -ENOMEM;
+
+	mmap_regions = (struct avs_cmd_map_mdf_shared_memory *)mmap_region_cmd;
+	mmap_regions->hdr.hdr_field = APR_HDR_FIELD(APR_MSG_TYPE_SEQ_CMD,
+						APR_HDR_LEN(APR_HDR_SIZE),
+								APR_PKT_VER);
+	mmap_regions->hdr.pkt_size = cmd_size;
+	mmap_regions->hdr.src_port = 0;
+	mmap_regions->hdr.dest_port = 0;
+	mmap_regions->hdr.token = 0;
+	mmap_regions->hdr.opcode = AVCS_CMD_MAP_MDF_SHARED_MEMORY;
+	mmap_regions->mem_map_handle = map_handle;
+	mmap_regions->proc_id = proc_id & 0x00ff;
+	mmap_regions->num_regions = bufcnt & 0x00ff;
+
+	payload = ((u8 *) mmap_region_cmd +
+				sizeof(struct avs_cmd_map_mdf_shared_memory));
+	mregions = (struct avs_shared_map_region_payload *)payload;
+
+	for (i = 0; i < bufcnt; i++) {
+		mregions->shm_addr_lsw = lower_32_bits(buf_add[i]);
+		mregions->shm_addr_msw =
+				msm_audio_populate_upper_32_bits(buf_add[i]);
+		mregions->mem_size_bytes = bufsz[i];
+		++mregions;
+	}
+
+	pr_debug("%s: sending mdf memory map, addr %pa, size %d, bufcnt = %d\n",
+		__func__, buf_add, bufsz[0], mmap_regions->num_regions);
+
+	q6core_lcl.adsp_status = 0;
+	q6core_lcl.bus_bw_resp_received = 0;
+	ret = apr_send_pkt(q6core_lcl.core_handle_q, (uint32_t *)
+		mmap_regions);
+	if (ret < 0) {
+		pr_err("%s: mdf memory map failed %d\n",
+			__func__, ret);
+		ret = -EINVAL;
+		goto done;
+	}
+
+	ret = wait_event_timeout(q6core_lcl.bus_bw_req_wait,
+				(q6core_lcl.bus_bw_resp_received == 1),
+				msecs_to_jiffies(TIMEOUT_MS));
+	if (!ret) {
+		pr_err("%s: timeout. waited for mdf memory map\n",
+			__func__);
+		ret = -ETIME;
+		goto done;
+	} else {
+		/* set ret to 0 as no timeout happened */
+		ret = 0;
+	}
+
+	/*
+	 * When the remote DSP is not ready, the ADSP will validate and store
+	 * the memory information and return APR_ENOTREADY to HLOS. The ADSP
+	 * will map the memory with remote DSP when it is ready. HLOS should
+	 * not treat APR_ENOTREADY as an error.
+	 */
+	if (q6core_lcl.adsp_status != -APR_ENOTREADY) {
+		pr_err("%s: DSP returned error %d\n",
+			__func__, q6core_lcl.adsp_status);
+		ret = q6core_lcl.adsp_status;
+		goto done;
+	}
+
+done:
+	kfree(mmap_region_cmd);
 	return ret;
 }
 
@@ -1102,10 +1254,11 @@ static int q6core_send_custom_topologies(void)
 
 	q6core_dereg_all_custom_topologies();
 
-	ret = q6core_map_memory_regions(&cal_block->cal_data.paddr, 0,
+	ret = q6core_map_memory_regions(&cal_block->cal_data.paddr,
+		ADSP_MEMORY_MAP_SHMEM8_4K_POOL,
 		(uint32_t *)&cal_block->map_data.map_size, 1,
 		&cal_block->map_data.q6map_handle);
-	if (!ret)  {
+	if (ret)  {
 		pr_err("%s: q6core_map_memory_regions failed\n", __func__);
 		goto unlock;
 	}
@@ -1155,7 +1308,7 @@ static int q6core_send_custom_topologies(void)
 		ret = q6core_lcl.adsp_status;
 unmap:
 	ret2 = q6core_memory_unmap_regions(cal_block->map_data.q6map_handle);
-	if (!ret2)  {
+	if (ret2)  {
 		pr_err("%s: q6core_memory_unmap_regions failed for map handle %d\n",
 			__func__, cal_block->map_data.q6map_handle);
 		ret = ret2;
@@ -1305,6 +1458,133 @@ err:
 	return ret;
 }
 
+int q6core_is_avs_up(int32_t *avs_state)
+{
+	unsigned long timeout;
+	int32_t adsp_ready = 0;
+	int ret = 0;
+
+	timeout = jiffies +
+		msecs_to_jiffies(ADSP_STATE_READY_TIMEOUT_MS);
+
+	/* sleep for 100ms before querying AVS up */
+	msleep(100);
+	do {
+		adsp_ready = q6core_is_adsp_ready();
+		pr_debug("%s: ADSP Audio is %s\n", __func__,
+			 adsp_ready ? "ready" : "not ready");
+		if (adsp_ready)
+			break;
+
+		/*
+		 * ADSP will be coming up after boot up and AVS might
+		 * not be fully up when the control reaches here.
+		 * So, wait for 50msec before checking ADSP state again.
+		 */
+		msleep(50);
+	} while (time_after(timeout, jiffies));
+
+	*avs_state = adsp_ready;
+	pr_debug("%s: ADSP Audio is %s\n", __func__,
+	       adsp_ready ? "ready" : "not ready");
+
+	if (!adsp_ready) {
+		pr_err_ratelimited("%s: Timeout. ADSP Audio is not ready\n",
+				   __func__);
+		ret = -ETIMEDOUT;
+	}
+
+	return ret;
+}
+EXPORT_SYMBOL(q6core_is_avs_up);
+
+static int q6core_ssr_enable(struct device *dev, void *data)
+{
+	int32_t avs_state = 0;
+	int ret = 0;
+
+	if (!dev) {
+		pr_err("%s: dev is NULL\n", __func__);
+		return -EINVAL;
+	}
+
+	if (!q6core_lcl.avs_state) {
+		ret = q6core_is_avs_up(&avs_state);
+		if (ret < 0)
+			goto err;
+		q6core_lcl.avs_state = avs_state;
+	}
+
+err:
+	return ret;
+}
+
+static void q6core_ssr_disable(struct device *dev, void *data)
+{
+	/* Reset AVS state to 0 */
+	q6core_lcl.avs_state = 0;
+}
+
+static const struct snd_event_ops q6core_ssr_ops = {
+	.enable = q6core_ssr_enable,
+	.disable = q6core_ssr_disable,
+};
+
+static int q6core_probe(struct platform_device *pdev)
+{
+	int32_t avs_state = 0;
+	int rc = 0;
+
+	rc = q6core_is_avs_up(&avs_state);
+	if (rc < 0)
+		goto err;
+	q6core_lcl.avs_state = avs_state;
+
+	rc = of_platform_populate(pdev->dev.of_node, NULL, NULL, &pdev->dev);
+	if (rc) {
+		dev_err(&pdev->dev, "%s: failed to add child nodes, rc=%d\n",
+			__func__, rc);
+		rc = -EINVAL;
+		goto err;
+	}
+	dev_dbg(&pdev->dev, "%s: added child node\n", __func__);
+
+	rc = snd_event_client_register(&pdev->dev, &q6core_ssr_ops, NULL);
+	if (!rc) {
+		snd_event_notify(&pdev->dev, SND_EVENT_UP);
+	} else {
+		dev_err(&pdev->dev,
+			"%s: Registration with SND event fwk failed rc = %d\n",
+			__func__, rc);
+		rc = 0;
+	}
+
+err:
+	return rc;
+}
+
+static int q6core_remove(struct platform_device *pdev)
+{
+	snd_event_client_deregister(&pdev->dev);
+	of_platform_depopulate(&pdev->dev);
+	return 0;
+}
+
+static const struct of_device_id q6core_of_match[]  = {
+	{ .compatible = "qcom,q6core-audio", },
+	{},
+};
+
+static struct platform_driver q6core_driver = {
+	.probe = q6core_probe,
+	.remove = q6core_remove,
+	.driver = {
+		.name = "q6core_audio",
+		.owner = THIS_MODULE,
+		.of_match_table = q6core_of_match,
+	}
+};
+
 int __init core_init(void)
 {
 	memset(&q6core_lcl, 0, sizeof(struct q6core_str));
@@ -1318,7 +1598,7 @@ int __init core_init(void)
 	q6core_init_cal_data();
 	q6core_init_uevent_kset();
 
-	return 0;
+	return platform_driver_register(&q6core_driver);
 }
 
 void core_exit(void)
@@ -1327,6 +1607,7 @@ void core_exit(void)
 	mutex_destroy(&q6core_lcl.ver_lock);
 	q6core_delete_cal_data();
 	q6core_destroy_uevent_kset();
+	platform_driver_unregister(&q6core_driver);
 }
 MODULE_DESCRIPTION("ADSP core driver");
 MODULE_LICENSE("GPL v2");

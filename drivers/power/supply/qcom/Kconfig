@@ -1,13 +1,4 @@
-menu "Qualcomm Technologies Inc Charger and Fuel Gauge support"
-
-config QPNP_FG
-	tristate "QPNP fuel gauge driver"
-	depends on MFD_SPMI_PMIC
-	help
-	  Say Y here to enable the Fuel Gauge driver. This adds support for
-	  battery fuel gauging and state of charge of battery connected to the
-	  fuel gauge. The state of charge is reported through a BMS power
-	  supply property and also sends uevents when the capacity is updated.
+menu "Qualcomm Technologies, Inc. Charger and Fuel Gauge support"
 
 config QPNP_FG_GEN3
 	tristate "QPNP GEN3 fuel gauge driver"
@@ -18,37 +9,24 @@ config QPNP_FG_GEN3
 	  the fuel gauge. The state of charge is reported through a BMS power
 	  supply property and also sends uevents when the capacity is updated.
 
-config SMB135X_CHARGER
-	tristate "SMB135X Battery Charger"
-	depends on I2C
+config QPNP_FG_GEN4
+	tristate "QPNP GEN4 fuel gauge driver"
+	depends on MFD_SPMI_PMIC
 	help
-	  Say Y to include support for SMB135X Battery Charger.
-	  SMB135X is a dual path switching mode charger capable of charging
-	  the battery with 3Amps of current.
-	  The driver supports charger enable/disable.
-	  The driver reports the charger status via the power supply framework.
-	  A charger status change triggers an IRQ via the device STAT pin.
+	  Say Y here to enable the GEN4 Fuel Gauge driver. This adds support
+	  for battery fuel gauging and state of charge of battery connected to
+	  the device that has QTI PMICs like PM8150B. The state of charge is
+	  reported through a BMS power supply property and also sends uevents
+	  when the capacity is updated.
 
-config SMB1360_CHARGER_FG
-	tristate "SMB1360 Charger and Fuel Gauge"
-	depends on I2C
+config QPNP_QG
+	bool "QPNP Qgauge driver"
+	depends on MFD_SPMI_PMIC
 	help
-	  Say Y to include support for SMB1360 Charger and Fuel Gauge.
-	  SMB1360 is a single path switching mode charger capable of charging
-	  the battery with 1.5Amps of current. It supports a fuel gauge which
-	  uses voltage and coloumb counting for state of charge reporting.
-	  The driver reports the status via the power supply framework.
-	  A status change triggers an IRQ via the device STAT pin.
-
-config SMB1355_SLAVE_CHARGER
-	tristate "SMB1355 Slave Battery Charger"
-	depends on MFD_I2C_PMIC
-	help
-	  Say Y to include support for SMB1355 Battery Charger.
-	  SMB1355 is a single phase 5A battery charger.
-	  The driver supports charger enable/disable.
-	  The driver reports the charger status via the power supply framework.
-	  A charger status change triggers an IRQ via the device STAT pin.
+	  Say Y here to enable the Qualcomm Technologies, Inc. QGauge driver
+	  which uses the periodic sampling of the battery voltage and current
+	  to determine the battery state-of-charge (SOC) and supports other
+	  battery management features.
 
 config SMB1351_USB_CHARGER
 	tristate "smb1351 usb charger (with VBUS detection)"
@@ -59,6 +37,16 @@ config SMB1351_USB_CHARGER
 	 charge-current limiting. It also provides USB VBUS detection and
 	 notification support. The driver controls SMB1351 via I2C and
 	 supports device-tree interface.
+
+config SMB1355_SLAVE_CHARGER
+	tristate "SMB1355 Slave Battery Charger"
+	depends on MFD_I2C_PMIC
+	help
+	  Say Y to include support for SMB1355 Battery Charger.
+	  SMB1355 is a single phase 5A battery charger.
+	  The driver supports charger enable/disable.
+	  The driver reports the charger status via the power supply framework.
+	  A charger status change triggers an IRQ via the device STAT pin.
 
 config QPNP_SMB2
 	tristate "SMB2 Battery Charger"
@@ -97,15 +85,6 @@ config SMB138X_CHARGER
 	  The driver reports the charger status via the power supply framework.
 	  A charger status change triggers an IRQ via the device STAT pin.
 
-config QPNP_SMBCHARGER
-	tristate "QPNP SMB Charger driver"
-	depends on MFD_SPMI_PMIC
-	help
-	  Say Y here to enable the dual path switch mode battery charger which
-	  supports USB detection and battery charging up to 3A.
-	  The driver also offers relevant information to userspace via the
-	  power supply framework.
-
 config QPNP_QNOVO
 	bool "QPNP QNOVO driver"
 	depends on MFD_SPMI_PMIC
@@ -115,45 +94,14 @@ config QPNP_QNOVO
 	  module. It also allows userspace code to read diagnostics of voltage
 	  and current measured during certain phases of the pulses.
 
-config QPNP_VM_BMS
-	tristate "QPNP Voltage-Mode Battery Monitoring System driver"
+config QPNP_QNOVO5
+	bool "QPNP QNOVO5 driver"
 	depends on MFD_SPMI_PMIC
 	help
-	  Say Y here to enable support for QPNP chip vm-bms device.
-	  The voltage-mode (vm) BMS driver uses periodic VBATT
-	  readings from the battery to calculate the State of
-	  Charge.
-
-config QPNP_LINEAR_CHARGER
-	tristate "QPNP Linear Charger driver"
-	depends on MFD_SPMI_PMIC
-	depends on THERMAL_QPNP_ADC_TM
-	help
-	  Say Y here to enable the Linear battery charger which supports USB
-	  detection and charging. The driver also offers relevant information
-	  to userspace via the power supply framework.
-	  The power supply framework is used to communicate battery and
-	  usb properties to userspace and other driver consumers like USB.
-
-config QPNP_TYPEC
-	tristate "QPNP Type-C driver"
-	depends on MFD_SPMI_PMIC
-	help
-	  Say Y here to enable QPNP Type-C driver.
-	  The QPNP Type-C module supports the USB type-C protocol. It supports
-	  type-C cable detection and other type-C parameters such as
-	  current-capability and CC-orientation. The module does not support
-	  USB power-delivery. The driver adds support to report these type-C
-	  parameters via the power-supply framework.
-
-config QPNP_QG
-	bool "QPNP Qgauge driver"
-	depends on MFD_SPMI_PMIC
-	help
-	  Say Y here to enable the Qualcomm Technologies, Inc. QGauge driver
-	  which uses the periodic sampling of the battery voltage and current
-	  to determine the battery state-of-charge (SOC) and supports other
-	  battery management features.
+	  Say Y here to enable the Qnovo5 PBS-based pulse charging engine.
+	  Qnovo5 driver accepts pulse parameters via sysfs entries and programs
+	  the hardware module. It also allows userspace code to read diagnostics
+	  of voltage and current measured during certain phases of the pulses.
 
 config SMB1390_CHARGE_PUMP
 	tristate "SMB1390 Charge Pump"
@@ -162,5 +110,37 @@ config SMB1390_CHARGE_PUMP
 	  Say Y to include support for SMB1390 Charge Pump.
 	  SMB1390 is a div2 charge pump capable of delivering 6A charge current
 	  with very high efficiency.
+
+config SMB1390_CHARGE_PUMP_PSY
+	tristate "SMB1390 power supply framework based driver"
+	depends on MFD_I2C_PMIC && !SMB1390_CHARGE_PUMP
+	help
+	  Say Y to include support for SMB1390 Charge Pump driver based on
+	  power supply framework.
+	  SMB1390 is a div2 charge pump capable of delivering 6A charge current
+	  with very high efficiency.
+
+config SMB1398_CHARGER
+	tristate "SMB1398 power supply framework based driver"
+	depends on MFD_I2C_PMIC
+	help
+	  Say Y to include the support of SMB1398 Charge driver based on power
+	  supply framework.
+	  SMB1398 is a combo charger chip which can work in different modes:
+	  (1) DIV2 charge pump mode to work as a companion charger to be paired
+	      with Qualcomm Technologies, Inc.’s family of standalone chargers;
+	  (2) DIV2 and 3-level buck combo mode to regulate the output power from
+	      wireless charger receiver and provide the input for downstream
+	      chargers.
+config SMB358_CHARGER
+	tristate "SMB358 Battery Charger"
+	depends on I2C
+	help
+	  Say Y to include support for SMB358 Battery Charger.
+	  SMB358 is a single path switching mode charger capable of charging
+	  the battery with 2Amps of current.
+	  The driver supports charger enable/disable.
+	  The driver reports the charger status via the power supply framework.
+	  A charger status change triggers an IRQ via the device STAT pin.
 
 endmenu

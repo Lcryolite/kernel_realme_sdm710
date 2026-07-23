@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -752,7 +752,7 @@ EXPORT_SYMBOL(slim_msg_response);
 static int slim_processtxn(struct slim_controller *ctrl,
 				struct slim_msg_txn *txn, bool need_tid)
 {
-	u8 i = 0;
+	unsigned int i = 0;
 	int ret = 0;
 	unsigned long flags;
 
@@ -763,7 +763,7 @@ static int slim_processtxn(struct slim_controller *ctrl,
 				break;
 		}
 		if (i >= ctrl->last_tid) {
-			if (ctrl->last_tid == 255) {
+			if (ctrl->last_tid == SLIM_MAX_TXNS) {
 				spin_unlock_irqrestore(&ctrl->txn_lock, flags);
 				return -ENOMEM;
 			}
@@ -889,7 +889,7 @@ EXPORT_SYMBOL(slim_assign_laddr);
 
 /*
  * slim_get_logical_addr: Return the logical address of a slimbus device.
- * @sb: client handle requesting the adddress.
+ * @sb: client handle requesting the address.
  * @e_addr: Elemental address of the device.
  * @e_len: Length of e_addr
  * @laddr: output buffer to store the address
@@ -2520,7 +2520,7 @@ static int slim_sched_chans(struct slim_device *sb, u32 clkgear,
 				}
 			}
 			/* schedule 4k family channels */
-			while (coeff1 < ctrl->sched.num_cc1 && slc1 &&
+			while (coeff1 < ctrl->sched.num_cc1 &&
 				curexp == (int)slc1->rootexp + expshft) {
 				/* searchorder effective when opensl valid */
 				static const int srcho[] = { 5, 2, 4, 1, 3, 0 };
@@ -2903,7 +2903,8 @@ static void slim_chan_changes(struct slim_device *sb, bool revert)
  * This API does what commit flag in other scheduling APIs do.
  * -EXFULL is returned if there is no space in TDM to reserve the
  * bandwidth. -EBUSY is returned if reconfiguration request is already in
- * progress.
+ * progress. This API caller should take care of the mutex lock for
+ * ctrl->sched.m_reconf.
  */
 int slim_reconfigure_now(struct slim_device *sb)
 {
@@ -2919,7 +2920,6 @@ int slim_reconfigure_now(struct slim_device *sb)
 	DEFINE_SLIM_BCAST_TXN(txn, SLIM_MSG_MC_BEGIN_RECONFIGURATION, 0, 3,
 				NULL, NULL, sb->laddr);
 
-	mutex_lock(&ctrl->sched.m_reconf);
 	/*
 	 * If there are no pending changes from this client, avoid sending
 	 * the reconfiguration sequence
@@ -2949,7 +2949,6 @@ int slim_reconfigure_now(struct slim_device *sb)
 			}
 		}
 		if (list_empty(&sb->mark_removal)) {
-			mutex_unlock(&ctrl->sched.m_reconf);
 			pr_info("SLIM_CL: skip reconfig sequence");
 			return 0;
 		}
@@ -3154,14 +3153,12 @@ int slim_reconfigure_now(struct slim_device *sb)
 		ctrl->sched.msgsl = ctrl->sched.pending_msgsl;
 		sb->cur_msgsl = sb->pending_msgsl;
 		slim_chan_changes(sb, false);
-		mutex_unlock(&ctrl->sched.m_reconf);
 		return 0;
 	}
 
 revert_reconfig:
 	/* Revert channel changes */
 	slim_chan_changes(sb, true);
-	mutex_unlock(&ctrl->sched.m_reconf);
 	return ret;
 }
 EXPORT_SYMBOL(slim_reconfigure_now);
@@ -3270,9 +3267,9 @@ int slim_control_ch(struct slim_device *sb, u16 chanh,
 		if (nchan < SLIM_GRP_TO_NCHAN(chanh))
 			chan = SLIM_HDL_TO_CHIDX(slc->nextgrp);
 	} while (nchan < SLIM_GRP_TO_NCHAN(chanh));
-	mutex_unlock(&ctrl->sched.m_reconf);
 	if (!ret && commit == true)
 		ret = slim_reconfigure_now(sb);
+	mutex_unlock(&ctrl->sched.m_reconf);
 	mutex_unlock(&sb->sldev_reconf);
 	return ret;
 }
@@ -3306,8 +3303,11 @@ int slim_reservemsg_bw(struct slim_device *sb, u32 bw_bps, bool commit)
 	dev_dbg(&ctrl->dev, "request:bw:%d, slots:%d, current:%d\n", bw_bps, sl,
 						sb->cur_msgsl);
 	sb->pending_msgsl = sl;
-	if (commit == true)
+	if (commit == true) {
+		mutex_lock(&ctrl->sched.m_reconf);
 		ret = slim_reconfigure_now(sb);
+		mutex_unlock(&ctrl->sched.m_reconf);
+	}
 	mutex_unlock(&sb->sldev_reconf);
 	return ret;
 }

@@ -29,9 +29,16 @@
 
 struct drm_device;
 struct drm_atomic_state;
+struct drm_plane;
 
-struct drm_property *drm_mode_create_rotation_property(struct drm_device *dev,
-						       unsigned int supported_rotations);
+static inline bool drm_rotation_90_or_270(unsigned int rotation)
+{
+	return rotation & (DRM_MODE_ROTATE_90 | DRM_MODE_ROTATE_270);
+}
+
+int drm_plane_create_rotation_property(struct drm_plane *plane,
+				       unsigned int rotation,
+				       unsigned int supported_rotations);
 unsigned int drm_rotation_simplify(unsigned int rotation,
 				   unsigned int supported_rotations);
 

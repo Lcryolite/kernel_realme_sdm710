@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -37,7 +37,7 @@
  *				   and transfer it.
  * @DSI_CTRL_CMD_LAST_COMMAND:     Trigger the DMA cmd transfer if this is last
  *				   command in the batch.
- * @DSI_CTRL_CMD_NON_EMBEDDED_MODE:Trasfer cmd packets in non embedded mode.
+ * @DSI_CTRL_CMD_NON_EMBEDDED_MODE:Transfer cmd packets in non embedded mode.
  * @DSI_CTRL_CMD_CUSTOM_DMA_SCHED: Use the dma scheduling line number defined in
  *				   display panel dtsi file instead of default.
  */
@@ -58,18 +58,6 @@
 
 /* max size supported for dsi cmd transfer using TPG */
 #define DSI_CTRL_MAX_CMD_FIFO_STORE_SIZE 64
-
-/**
- * enum dsi_channel_id - defines dsi channel id.
- * @DSI_CTRL_LEFT:    DSI 0 channel
- * @DSI_CTRL_RIGHT:   DSI 1 channel
- * @DSI_CTRL_MAX:  Maximum value.
- */
-enum dsi_channel_id {
-	DSI_CTRL_LEFT = 0,
-	DSI_CTRL_RIGHT,
-	DSI_CTRL_MAX,
-};
 
 /**
  * enum dsi_power_state - defines power states for dsi controller.
@@ -94,6 +82,23 @@ enum dsi_engine_state {
 	DSI_CTRL_ENGINE_OFF = 0,
 	DSI_CTRL_ENGINE_ON,
 	DSI_CTRL_ENGINE_MAX,
+};
+
+
+/**
+ * enum dsi_ctrl_driver_ops - controller driver ops
+ */
+enum dsi_ctrl_driver_ops {
+	DSI_CTRL_OP_POWER_STATE_CHANGE,
+	DSI_CTRL_OP_CMD_ENGINE,
+	DSI_CTRL_OP_VID_ENGINE,
+	DSI_CTRL_OP_HOST_ENGINE,
+	DSI_CTRL_OP_CMD_TX,
+	DSI_CTRL_OP_HOST_INIT,
+	DSI_CTRL_OP_TPG,
+	DSI_CTRL_OP_PHY_SW_RESET,
+	DSI_CTRL_OP_ASYNC_TIMING,
+	DSI_CTRL_OP_MAX
 };
 
 /**
@@ -230,6 +235,7 @@ struct dsi_ctrl_interrupts {
  * @null_insertion_enabled:  A boolean property to allow dsi controller to
  *                           insert null packet.
  * @modeupdated:	  Boolean to send new roi if mode is updated.
+ * @split_link_supported: Boolean to check if hw supports split link.
  */
 struct dsi_ctrl {
 	struct platform_device *pdev;
@@ -276,9 +282,14 @@ struct dsi_ctrl {
 	bool misr_enable;
 	u32 misr_cache;
 
+	/* Check for spurious interrupts */
+	unsigned long jiffies_start;
+	unsigned int error_interrupt_count;
+
 	bool phy_isolation_enabled;
 	bool null_insertion_enabled;
 	bool modeupdated;
+	bool split_link_supported;
 };
 
 /**
@@ -402,6 +413,17 @@ int dsi_ctrl_phy_sw_reset(struct dsi_ctrl *dsi_ctrl);
  * Return: error code.
  */
 int dsi_ctrl_phy_reset_config(struct dsi_ctrl *dsi_ctrl, bool enable);
+
+/**
+ * dsi_ctrl_config_clk_gating() - Enable/Disable DSI PHY clk gating
+ * @dsi_ctrl:        DSI controller handle.
+ * @enable:          Enable/disable DSI PHY clk gating
+ * @clk_selection:   clock selection for gating
+ *
+ * Return: error code.
+ */
+int dsi_ctrl_config_clk_gating(struct dsi_ctrl *dsi_ctrl, bool enable,
+		 enum dsi_clk_gate_type clk_selection);
 
 /**
  * dsi_ctrl_soft_reset() - perform a soft reset on DSI controller
@@ -573,7 +595,7 @@ int dsi_ctrl_set_cmd_engine_state(struct dsi_ctrl *dsi_ctrl,
  *
  * Validate DSI cotroller host state
  *
- * Return: boolean indicating whether host is not initalized.
+ * Return: boolean indicating whether host is not initialized.
  */
 bool dsi_ctrl_validate_host_state(struct dsi_ctrl *dsi_ctrl);
 
@@ -632,7 +654,7 @@ int dsi_ctrl_clk_cb_register(struct dsi_ctrl *dsi_ctrl,
  * @enable:               enable/disable clamping.
  * @ulps_enabled:         ulps state.
  *
- * Clamps can be enabled/disabled while DSI contoller is still turned on.
+ * Clamps can be enabled/disabled while DSI controller is still turned on.
  *
  * Return: error code.
  */
@@ -689,6 +711,12 @@ int dsi_ctrl_setup_misr(struct dsi_ctrl *dsi_ctrl,
 u32 dsi_ctrl_collect_misr(struct dsi_ctrl *dsi_ctrl);
 
 /**
+ * dsi_ctrl_cache_misr - Cache frame MISR value
+ * @dsi_ctrl:              DSI controller handle.
+ */
+void dsi_ctrl_cache_misr(struct dsi_ctrl *dsi_ctrl);
+
+/**
  * dsi_ctrl_drv_register() - register platform driver for dsi controller
  */
 void dsi_ctrl_drv_register(void);
@@ -717,6 +745,13 @@ int dsi_ctrl_get_hw_version(struct dsi_ctrl *dsi_ctrl);
  * @on:		variable to control video engine ON/OFF.
  */
 int dsi_ctrl_vid_engine_en(struct dsi_ctrl *dsi_ctrl, bool on);
+
+/**
+ * dsi_ctrl_setup_avr() - Set/Clear the AVR_SUPPORT_ENABLE bit
+ * @dsi_ctrl:        DSI controller handle.
+ * @enable:          variable to control AVR support ON/OFF.
+ */
+int dsi_ctrl_setup_avr(struct dsi_ctrl *dsi_ctrl, bool enable);
 
 /**
  * @dsi_ctrl:        DSI controller handle.
@@ -766,16 +801,29 @@ int dsi_ctrl_get_host_engine_init_state(struct dsi_ctrl *dsi_ctrl,
 		bool *state);
 
 /**
- * dsi_ctrl_update_host_init_state() - Set the host initialization state
- */
-int dsi_ctrl_update_host_init_state(struct dsi_ctrl *dsi_ctrl, bool en);
-
-/**
  * dsi_ctrl_wait_for_cmd_mode_mdp_idle() - Wait for command mode engine not to
  *				     be busy sending data from display engine.
  * @dsi_ctrl:                     DSI controller handle.
  */
 int dsi_ctrl_wait_for_cmd_mode_mdp_idle(struct dsi_ctrl *dsi_ctrl);
+/**
+ * dsi_ctrl_update_host_state() - Set the host state
+ */
+int dsi_ctrl_update_host_state(struct dsi_ctrl *dsi_ctrl,
+			       enum dsi_ctrl_driver_ops op, bool en);
+
+/**
+ * dsi_ctrl_pixel_format_to_bpp() - returns number of bits per pxl
+ */
+int dsi_ctrl_pixel_format_to_bpp(enum dsi_pixel_format dst_format);
+
+/**
+ * dsi_ctrl_hs_req_sel() - API to enable continuous clk support through phy
+ * @dsi_ctrl:			DSI controller handle.
+ * @sel_phy:			Boolean to control whether to select phy or
+ *				controller
+ */
+void dsi_ctrl_hs_req_sel(struct dsi_ctrl *dsi_ctrl, bool sel_phy);
 
 /**
  * dsi_ctrl_set_continuous_clk() - API to set/unset force clock lane HS request.

@@ -31,6 +31,7 @@
 #define JPEG_DEC_ID 2
 #define UINT32_MAX (0xFFFFFFFFU)
 #define MAX_WAIT_TIMEOUT UINT_MAX
+#define MAX_HW_CMD_N 4095
 
 
 #ifdef CONFIG_COMPAT
@@ -819,16 +820,19 @@ static int msm_jpeg_ioctl_hw_cmd(struct msm_jpeg_device *pgmn_dev,
 	void __user *arg)
 {
 	struct msm_jpeg_hw_cmd hw_cmd;
-	int is_copy_to_user;
+	int is_copy_to_user = 0;
 
 	if (copy_from_user(&hw_cmd, (const void __user *)arg,
 		sizeof(struct msm_jpeg_hw_cmd))) {
 		JPEG_PR_ERR("%s:%d] failed\n", __func__, __LINE__);
 		return -EFAULT;
 	}
-
-	is_copy_to_user = msm_jpeg_hw_exec_cmds(&hw_cmd, 1,
-		pgmn_dev->res_size, pgmn_dev->base);
+	if (hw_cmd.n > 0 && hw_cmd.n <= MAX_HW_CMD_N) {
+		is_copy_to_user = msm_jpeg_hw_exec_cmds(&hw_cmd, 1,
+			pgmn_dev->res_size, pgmn_dev->base);
+	} else {
+		JPEG_PR_ERR("%s:%d] n %d\n", __func__, __LINE__, hw_cmd.n);
+	}
 	JPEG_DBG(
 	"%s:%d] type %d, n %d, offset %d, mask %x, data %x, pdata %lx\n",
 		__func__, __LINE__, hw_cmd.type, hw_cmd.n, hw_cmd.offset,
@@ -1274,8 +1278,8 @@ long __msm_jpeg_compat_ioctl(struct msm_jpeg_device *pgmn_dev,
 	unsigned int cmd, unsigned long arg)
 {
 	int rc = 0;
-	struct msm_jpeg_ctrl_cmd *pctrl_cmd = NULL, ctrl_cmd;
-	struct msm_jpeg_buf jpeg_buf;
+	struct msm_jpeg_ctrl_cmd *pctrl_cmd = NULL, ctrl_cmd = {0};
+	struct msm_jpeg_buf jpeg_buf = {0};
 	mm_segment_t old_fs;
 
 	old_fs = get_fs();

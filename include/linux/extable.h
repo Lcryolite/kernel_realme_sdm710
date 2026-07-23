@@ -1,14 +1,16 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _LINUX_EXTABLE_H
 #define _LINUX_EXTABLE_H
 
 #include <linux/stddef.h>	/* for NULL */
+#include <linux/types.h>
 
 struct module;
 struct exception_table_entry;
 
 const struct exception_table_entry *
-search_extable(const struct exception_table_entry *first,
-	       const struct exception_table_entry *last,
+search_extable(const struct exception_table_entry *base,
+	       const size_t num,
 	       unsigned long value);
 void sort_extable(struct exception_table_entry *start,
 		  struct exception_table_entry *finish);
@@ -28,5 +30,15 @@ search_module_extables(unsigned long addr)
 	return NULL;
 }
 #endif /*CONFIG_MODULES*/
+
+#ifdef CONFIG_BPF_JIT
+const struct exception_table_entry *search_bpf_extables(unsigned long addr);
+#else
+static inline const struct exception_table_entry *
+search_bpf_extables(unsigned long addr)
+{
+	return NULL;
+}
+#endif
 
 #endif /* _LINUX_EXTABLE_H */

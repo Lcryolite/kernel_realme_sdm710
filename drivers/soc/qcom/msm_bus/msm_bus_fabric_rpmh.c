@@ -21,6 +21,7 @@
 #include <soc/qcom/rpmh.h>
 #include <soc/qcom/tcs.h>
 #include <trace/events/trace_msm_bus.h>
+#include <dt-bindings/msm/msm-bus-ids.h>
 #include "msm_bus_core.h"
 #include "msm_bus_rpmh.h"
 #include "msm_bus_noc.h"
@@ -42,6 +43,7 @@
 	((vote_y & BCM_TCS_CMD_VOTE_MASK) << BCM_TCS_CMD_VOTE_Y_SHFT))
 
 static int msm_bus_dev_init_qos(struct device *dev, void *data);
+static int msm_bus_dev_sbm_config(struct device *dev, bool enable);
 
 static struct list_head bcm_query_list_inorder[VCD_MAX_CNT];
 static struct msm_bus_node_device_type *cur_rsc;
@@ -78,15 +80,6 @@ ssize_t bw_show(struct device *dev, struct device_attribute *attr,
 			bus_node->lnode_list[i].lnode_ab[ACTIVE_CTX],
 			bus_node->lnode_list[i].lnode_ib[DUAL_CTX],
 			bus_node->lnode_list[i].lnode_ab[DUAL_CTX]);
-#if defined(CONFIG_TRACING) && defined(DEBUG)
-		trace_printk(
-		"[%d]:%s:Act_IB %llu Act_AB %llu Slp_IB %llu Slp_AB %llu\n",
-			i, bus_node->lnode_list[i].cl_name,
-			bus_node->lnode_list[i].lnode_ib[ACTIVE_CTX],
-			bus_node->lnode_list[i].lnode_ab[ACTIVE_CTX],
-			bus_node->lnode_list[i].lnode_ib[DUAL_CTX],
-			bus_node->lnode_list[i].lnode_ab[DUAL_CTX]);
-#endif
 	}
 	off += scnprintf((buf + off), PAGE_SIZE,
 	"Max_Act_IB %llu Sum_Act_AB %llu Act_Util_fact %d Act_Vrail_comp %d\n",
@@ -100,20 +93,6 @@ ssize_t bw_show(struct device *dev, struct device_attribute *attr,
 		bus_node->node_bw[DUAL_CTX].sum_ab,
 		bus_node->node_bw[DUAL_CTX].util_used,
 		bus_node->node_bw[DUAL_CTX].vrail_used);
-#if defined(CONFIG_TRACING) && defined(DEBUG)
-	trace_printk(
-	"Max_Act_IB %llu Sum_Act_AB %llu Act_Util_fact %d Act_Vrail_comp %d\n",
-		bus_node->node_bw[ACTIVE_CTX].max_ib,
-		bus_node->node_bw[ACTIVE_CTX].sum_ab,
-		bus_node->node_bw[ACTIVE_CTX].util_used,
-		bus_node->node_bw[ACTIVE_CTX].vrail_used);
-	trace_printk(
-	"Max_Slp_IB %llu Sum_Slp_AB %lluSlp_Util_fact %d Slp_Vrail_comp %d\n",
-		bus_node->node_bw[DUAL_CTX].max_ib,
-		bus_node->node_bw[DUAL_CTX].sum_ab,
-		bus_node->node_bw[DUAL_CTX].util_used,
-		bus_node->node_bw[DUAL_CTX].vrail_used);
-#endif
 	return off;
 }
 
@@ -458,12 +437,13 @@ static int bcm_clist_add(struct msm_bus_node_device_type *cur_dev)
 			goto exit_bcm_clist_add;
 
 		if (!cur_rsc)
-			cur_rsc = to_msm_bus_node(cur_bcm->node_info->
-								rsc_devs[0]);
+			cur_rsc = to_msm_bus_node(
+					cur_bcm->node_info->rsc_devs[0]);
 
 		if (!cur_bcm->dirty) {
 			list_add_tail(&cur_bcm->link,
 					&cur_rsc->rscdev->bcm_clist[cur_vcd]);
+			msm_bus_dbg_add_bcm(cur_bcm);
 			cur_bcm->dirty = true;
 		}
 		cur_bcm->updated = false;
@@ -471,6 +451,23 @@ static int bcm_clist_add(struct msm_bus_node_device_type *cur_dev)
 
 exit_bcm_clist_add:
 	return ret;
+}
+
+static void tcs_cmd_n_shrink(int *n)
+{
+	int i = 0, j = 0, sum = 0;
+
+	do {
+		if (sum + n[i] > MAX_RPMH_PAYLOAD) {
+			n[j] = sum;
+			sum = 0;
+			j++;
+		}
+		sum += n[i];
+	} while (n[i++]);
+
+	n[j] = sum;
+	n[j+1] = 0;
 }
 
 static int bcm_query_list_add(struct msm_bus_node_device_type *cur_dev)
@@ -487,9 +484,11 @@ static int bcm_query_list_add(struct msm_bus_node_device_type *cur_dev)
 		cur_bcm = to_msm_bus_node(cur_dev->node_info->bcm_devs[i]);
 		cur_vcd = cur_bcm->bcmdev->clk_domain;
 
-		if (!cur_bcm->query_dirty)
+		if (!cur_bcm->query_dirty) {
 			list_add_tail(&cur_bcm->query_link,
 					&bcm_query_list_inorder[cur_vcd]);
+			cur_bcm->query_dirty = true;
+		}
 	}
 
 exit_bcm_query_list_add:
@@ -514,6 +513,7 @@ static int bcm_clist_clean(struct msm_bus_node_device_type *cur_dev)
 			cur_bcm->node_vec[ACTIVE_CTX].vec_b == 0 &&
 			init_time == false) {
 			cur_bcm->dirty = false;
+			msm_bus_dbg_remove_bcm(cur_bcm);
 			list_del_init(&cur_bcm->link);
 		}
 	}
@@ -568,6 +568,7 @@ int msm_bus_commit_data(struct list_head *clist)
 
 	list_for_each_entry_safe(node, node_tmp, clist, link) {
 		bcm_clist_add(node);
+		msm_bus_dev_sbm_config(&node->dev, false);
 	}
 
 	if (!cur_rsc) {
@@ -614,17 +615,21 @@ int msm_bus_commit_data(struct list_head *clist)
 	bcm_cnt = tcs_cmd_list_gen(n_active, n_wake, n_sleep, cmdlist_active,
 				cmdlist_wake, cmdlist_sleep, cur_bcm_clist);
 
+	tcs_cmd_n_shrink(n_active);
+	tcs_cmd_n_shrink(n_wake);
+	tcs_cmd_n_shrink(n_sleep);
+
 	ret = rpmh_invalidate(cur_mbox);
 	if (ret)
 		MSM_BUS_ERR("%s: Error invalidating mbox: %d\n",
 						__func__, ret);
 
-	if (cur_rsc->rscdev->req_state == RPMH_AWAKE_STATE) {
-		ret = rpmh_write(cur_mbox, cur_rsc->rscdev->req_state,
-						cmdlist_active, cnt_active);
+	if (cur_rsc->node_info->id == MSM_BUS_RSC_DISP) {
+		ret = rpmh_write_batch(cur_mbox, cur_rsc->rscdev->req_state,
+						cmdlist_active, n_active);
 		/*
-		 * Ignore -EBUSY from rpmh_write if it's an AWAKE_STATE
-		 * request since AWAKE requests are invalid when
+		 * Ignore -EBUSY from rpmh_write if it's an AMC
+		 * request to Display RSC which are invalid when
 		 * the display RSC is in solver mode and the bus driver
 		 * does not know the current state of the display RSC.
 		 */
@@ -656,6 +661,7 @@ int msm_bus_commit_data(struct list_head *clist)
 	list_for_each_entry_safe(node, node_tmp, clist, link) {
 		if (unlikely(node->node_info->defer_qos))
 			msm_bus_dev_init_qos(&node->dev, NULL);
+		msm_bus_dev_sbm_config(&node->dev, true);
 	}
 
 exit_msm_bus_commit_data:
@@ -1011,7 +1017,6 @@ static int msm_bus_dev_init_qos(struct device *dev, void *data)
 
 				bus_node_info->fabdev->noc_ops.qos_init(
 					node_dev,
-					bus_node_info,
 					bus_node_info->fabdev->qos_base,
 					bus_node_info->fabdev->base_offset,
 					bus_node_info->fabdev->qos_off,
@@ -1025,6 +1030,87 @@ static int msm_bus_dev_init_qos(struct device *dev, void *data)
 				__func__, node_dev->node_info->id);
 	}
 exit_init_qos:
+	return ret;
+}
+
+static int msm_bus_dev_sbm_config(struct device *dev, bool enable)
+{
+	int ret = 0, idx = 0;
+	struct msm_bus_node_device_type *node_dev = NULL;
+	struct msm_bus_node_device_type *fab_dev = NULL;
+
+	node_dev = to_msm_bus_node(dev);
+	if (!node_dev) {
+		MSM_BUS_ERR("%s: Unable to get node device info", __func__);
+		return -ENXIO;
+	}
+
+	if (!node_dev->node_info->num_disable_ports)
+		return 0;
+
+	if ((node_dev->node_bw[DUAL_CTX].sum_ab ||
+		node_dev->node_bw[DUAL_CTX].max_ib ||
+		!node_dev->is_connected) && !enable)
+		return 0;
+	else if (((!node_dev->node_bw[DUAL_CTX].sum_ab &&
+		!node_dev->node_bw[DUAL_CTX].max_ib) ||
+		node_dev->is_connected) && enable)
+		return 0;
+
+	if (enable) {
+		for (idx = 0; idx < node_dev->num_regs; idx++) {
+			if (!node_dev->node_regs[idx].reg)
+				node_dev->node_regs[idx].reg =
+				devm_regulator_get(dev,
+				node_dev->node_regs[idx].name);
+
+			if ((IS_ERR_OR_NULL(node_dev->node_regs[idx].reg)))
+				return -ENXIO;
+			ret = regulator_enable(node_dev->node_regs[idx].reg);
+			if (ret) {
+				MSM_BUS_ERR("%s: Failed to enable reg:%s\n",
+				__func__, node_dev->node_regs[idx].name);
+				return ret;
+			}
+		}
+		node_dev->is_connected = true;
+	}
+
+	fab_dev = to_msm_bus_node(node_dev->node_info->bus_device);
+	if (!fab_dev) {
+		MSM_BUS_ERR("%s: Unable to get bus device info for %d",
+			__func__,
+			node_dev->node_info->id);
+		return -ENXIO;
+	}
+
+	if (fab_dev->fabdev &&
+			fab_dev->fabdev->noc_ops.sbm_config) {
+		ret = fab_dev->fabdev->noc_ops.sbm_config(
+			node_dev,
+			fab_dev->fabdev->qos_base,
+			fab_dev->fabdev->sbm_offset,
+			enable);
+	}
+
+	if (!enable) {
+		for (idx = 0; idx < node_dev->num_regs; idx++) {
+			if (!node_dev->node_regs[idx].reg)
+				node_dev->node_regs[idx].reg =
+				devm_regulator_get(dev,
+					node_dev->node_regs[idx].name);
+
+			if ((IS_ERR_OR_NULL(node_dev->node_regs[idx].reg)))
+				return -ENXIO;
+			ret = regulator_disable(node_dev->node_regs[idx].reg);
+			if (ret) {
+				MSM_BUS_ERR("%s: Failed to disable reg:%s\n",
+				__func__, node_dev->node_regs[idx].name);
+				return ret;
+			}
+		}
+		node_dev->is_connected = false;
+	}
 	return ret;
 }
 
@@ -1064,6 +1150,7 @@ static int msm_bus_fabric_init(struct device *dev,
 	fabdev->qos_freq = pdata->fabdev->qos_freq;
 	fabdev->bus_type = pdata->fabdev->bus_type;
 	fabdev->bypass_qos_prg = pdata->fabdev->bypass_qos_prg;
+	fabdev->sbm_offset = pdata->fabdev->sbm_offset;
 	msm_bus_fab_init_noc_ops(node_dev);
 
 	fabdev->qos_base = devm_ioremap(dev,
@@ -1123,9 +1210,8 @@ static int msm_bus_bcm_init(struct device *dev,
 	bcmdev->num_bus_devs = 0;
 
 	// Add way to count # of VCDs, initialize LL
-	for (i = 0; i < VCD_MAX_CNT; i++) {
+	for (i = 0; i < VCD_MAX_CNT; i++)
 		INIT_LIST_HEAD(&bcm_query_list_inorder[i]);
-	}
 
 exit_bcm_init:
 	return ret;
@@ -1317,6 +1403,8 @@ static int msm_bus_copy_node_info(struct msm_bus_node_device_type *pdata,
 	node_info->num_bcm_devs = pdata_node_info->num_bcm_devs;
 	node_info->num_rsc_devs = pdata_node_info->num_rsc_devs;
 	node_info->num_qports = pdata_node_info->num_qports;
+	node_info->num_disable_ports = pdata_node_info->num_disable_ports;
+	node_info->disable_ports = pdata_node_info->disable_ports;
 	node_info->virt_dev = pdata_node_info->virt_dev;
 	node_info->is_fab_dev = pdata_node_info->is_fab_dev;
 	node_info->is_bcm_dev = pdata_node_info->is_bcm_dev;
@@ -1404,10 +1492,10 @@ static int msm_bus_copy_node_info(struct msm_bus_node_device_type *pdata,
 		goto exit_copy_node_info;
 	}
 
-	node_info->black_listed_connections = devm_kzalloc(bus_dev,
+	node_info->bl_cons = devm_kzalloc(bus_dev,
 			pdata_node_info->num_blist * sizeof(int),
 			GFP_KERNEL);
-	if (!node_info->black_listed_connections) {
+	if (!node_info->bl_cons) {
 		MSM_BUS_ERR("%s:Bus black list connections alloc failed\n",
 					__func__);
 		devm_kfree(bus_dev, node_info->black_connections);
@@ -1417,8 +1505,8 @@ static int msm_bus_copy_node_info(struct msm_bus_node_device_type *pdata,
 		goto exit_copy_node_info;
 	}
 
-	memcpy(node_info->black_listed_connections,
-		pdata_node_info->black_listed_connections,
+	memcpy(node_info->bl_cons,
+		pdata_node_info->bl_cons,
 		sizeof(int) * pdata_node_info->num_blist);
 
 	node_info->bcm_devs = devm_kzalloc(bus_dev,
@@ -1476,7 +1564,7 @@ static int msm_bus_copy_node_info(struct msm_bus_node_device_type *pdata,
 		MSM_BUS_ERR("%s:Bus qport allocation failed\n", __func__);
 		devm_kfree(bus_dev, node_info->dev_connections);
 		devm_kfree(bus_dev, node_info->connections);
-		devm_kfree(bus_dev, node_info->black_listed_connections);
+		devm_kfree(bus_dev, node_info->bl_cons);
 		ret = -ENOMEM;
 		goto exit_copy_node_info;
 	}
@@ -1497,9 +1585,9 @@ static struct device *msm_bus_device_init(
 	struct msm_bus_node_info_type *node_info = NULL;
 	int ret = -ENODEV, i = 0;
 
-	/**
-	* Init here so we can use devm calls
-	*/
+	/*
+	 * Init here so we can use devm calls
+	 */
 
 	bus_node = kzalloc(sizeof(struct msm_bus_node_device_type), GFP_KERNEL);
 	if (!bus_node) {
@@ -1537,6 +1625,9 @@ static struct device *msm_bus_device_init(
 					pdata->qos_bcms[i].vec.vec_b;
 		}
 	}
+	bus_node->num_regs = pdata->num_regs;
+	if (bus_node->num_regs)
+		bus_node->node_regs = pdata->node_regs;
 
 	bus_dev->of_node = pdata->of_node;
 
@@ -1623,14 +1714,12 @@ static int msm_bus_setup_dev_conn(struct device *bus_dev, void *data)
 	for (j = 0; j < bus_node->node_info->num_blist; j++) {
 		bus_node->node_info->black_connections[j] =
 			bus_find_device(&msm_bus_type, NULL,
-				(void *)&bus_node->node_info->
-				black_listed_connections[j],
+				(void *)&bus_node->node_info->bl_cons[j],
 				msm_bus_device_match_adhoc);
 
 		if (!bus_node->node_info->black_connections[j]) {
 			MSM_BUS_ERR("%s: Error finding conn %d for device %d\n",
-				__func__, bus_node->node_info->
-				black_listed_connections[j],
+				__func__, bus_node->node_info->bl_cons[j],
 				bus_node->node_info->id);
 			ret = -ENODEV;
 			goto exit_setup_dev_conn;
@@ -1703,6 +1792,12 @@ exit_node_debug:
 	return ret;
 }
 
+static int msm_bus_pm_restore(struct device *dev)
+{
+	return bus_for_each_dev(&msm_bus_type, NULL, NULL,
+			msm_bus_dev_init_qos);
+}
+
 static int msm_bus_free_dev(struct device *dev, void *data)
 {
 	struct msm_bus_node_device_type *bus_node = NULL;
@@ -1733,8 +1828,8 @@ static int msm_bus_device_probe(struct platform_device *pdev)
 	if (pdev->dev.of_node)
 		pdata = msm_bus_of_to_pdata(pdev);
 	else {
-		pdata = (struct msm_bus_device_node_registration *)pdev->
-			dev.platform_data;
+		pdata = (struct msm_bus_device_node_registration *)
+			pdev->dev.platform_data;
 	}
 
 	MSM_BUS_ERR("msm_bus: DT Parsing complete");
@@ -1869,6 +1964,10 @@ static struct platform_driver msm_bus_rules_driver = {
 	},
 };
 
+static const struct dev_pm_ops msm_bus_pm_ops = {
+	.restore = msm_bus_pm_restore,
+};
+
 static const struct of_device_id fabric_match[] = {
 	{.compatible = "qcom,msm-bus-device"},
 	{}
@@ -1881,6 +1980,7 @@ static struct platform_driver msm_bus_device_driver = {
 		.name = "msm_bus_device",
 		.owner = THIS_MODULE,
 		.of_match_table = fabric_match,
+		.pm = &msm_bus_pm_ops,
 	},
 };
 

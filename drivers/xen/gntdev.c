@@ -32,9 +32,11 @@
 #include <linux/types.h>
 #include <linux/uaccess.h>
 #include <linux/sched.h>
+#include <linux/sched/mm.h>
 #include <linux/spinlock.h>
 #include <linux/slab.h>
 #include <linux/highmem.h>
+#include <linux/refcount.h>
 
 #include <xen/xen.h>
 #include <xen/grant_table.h>
@@ -86,7 +88,7 @@ struct grant_map {
 	int index;
 	int count;
 	int flags;
-	atomic_t users;
+	refcount_t users;
 	struct unmap_notify notify;
 	struct ioctl_gntdev_grant_ref *grants;
 	struct gnttab_map_grant_ref   *map_ops;
@@ -175,7 +177,7 @@ static struct grant_map *gntdev_alloc_map(struct gntdev_priv *priv, int count)
 
 	add->index = 0;
 	add->count = count;
-	atomic_set(&add->users, 1);
+	refcount_set(&add->users, 1);
 
 	return add;
 
@@ -221,7 +223,7 @@ static void gntdev_put_map(struct gntdev_priv *priv, struct grant_map *map)
 	if (!map)
 		return;
 
-	if (!atomic_dec_and_test(&map->users))
+	if (!refcount_dec_and_test(&map->users))
 		return;
 
 	atomic_sub(map->count, &pages_mapped);
@@ -233,9 +235,10 @@ static void gntdev_put_map(struct gntdev_priv *priv, struct grant_map *map)
 		 * gntdev_put_map() recursively, but such calls will be with a
 		 * reference count greater than 1, so they will return before
 		 * this code is reached.  The recursion depth is thus limited to
-		 * 1.
+		 * 1.  Do NOT use refcount_inc() here, as it will detect that
+		 * the reference count is zero and WARN().
 		 */
-		atomic_set(&map->users, 1);
+		refcount_set(&map->users, 1);
 
 		/*
 		 * Unmap the grants.  This may or may not be asynchronous, so it
@@ -245,7 +248,7 @@ static void gntdev_put_map(struct gntdev_priv *priv, struct grant_map *map)
 		unmap_grant_pages(map, 0, map->count);
 
 		/* Check if the memory now needs to be freed */
-		if (!atomic_dec_and_test(&map->users))
+		if (!refcount_dec_and_test(&map->users))
 			return;
 
 		/*
@@ -447,7 +450,7 @@ static void __unmap_grant_pages(struct grant_map *map, int offset, int pages)
 	map->unmap_data.count = pages;
 	map->unmap_data.done = __unmap_grant_pages_done;
 	map->unmap_data.data = map;
-	atomic_inc(&map->users); /* to keep map alive during async call below */
+	refcount_inc(&map->users); /* to keep map alive during async call below */
 
 	gnttab_unmap_refs_async(&map->unmap_data);
 }
@@ -490,7 +493,7 @@ static void gntdev_vma_open(struct vm_area_struct *vma)
 	struct grant_map *map = vma->vm_private_data;
 
 	pr_debug("gntdev_vma_open %p\n", vma);
-	atomic_inc(&map->users);
+	refcount_inc(&map->users);
 }
 
 static void gntdev_vma_close(struct vm_area_struct *vma)
@@ -571,13 +574,6 @@ static void mn_invl_range_start(struct mmu_notifier *mn,
 	mutex_unlock(&priv->lock);
 }
 
-static void mn_invl_page(struct mmu_notifier *mn,
-			 struct mm_struct *mm,
-			 unsigned long address)
-{
-	mn_invl_range_start(mn, mm, address, address + PAGE_SIZE);
-}
-
 static void mn_release(struct mmu_notifier *mn,
 		       struct mm_struct *mm)
 {
@@ -606,7 +602,6 @@ static void mn_release(struct mmu_notifier *mn,
 
 static const struct mmu_notifier_ops gntdev_mmu_ops = {
 	.release                = mn_release,
-	.invalidate_page        = mn_invl_page,
 	.invalidate_range_start = mn_invl_range_start,
 };
 
@@ -1093,7 +1088,7 @@ static int gntdev_mmap(struct file *flip, struct vm_area_struct *vma)
 		err = -EAGAIN;
 		goto unlock_out;
 	}
-	atomic_inc(&map->users);
+	refcount_inc(&map->users);
 
 	vma->vm_ops = &gntdev_vmops;
 

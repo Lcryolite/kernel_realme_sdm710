@@ -44,6 +44,7 @@
 #include <linux/uaccess.h>
 #include <linux/cpumask.h>
 #include <linux/delay.h>
+#include <linux/sched/clock.h>
 #include "trace.h"
 
 static struct trace_array	*hwlat_trace;
@@ -78,12 +79,12 @@ static u64 last_tracing_thresh = DEFAULT_LAT_THRESHOLD * NSEC_PER_USEC;
 
 /* Individual latency samples are stored here when detected. */
 struct hwlat_sample {
-	u64		seqnum;		/* unique sequence */
-	u64		duration;	/* delta */
-	u64		outer_duration;	/* delta (outer loop) */
-	u64		nmi_total_ts;	/* Total time spent in NMIs */
-	struct timespec	timestamp;	/* wall time */
-	int		nmi_count;	/* # NMIs during this sample */
+	u64			seqnum;		/* unique sequence */
+	u64			duration;	/* delta */
+	u64			outer_duration;	/* delta (outer loop) */
+	u64			nmi_total_ts;	/* Total time spent in NMIs */
+	struct timespec64	timestamp;	/* wall time */
+	int			nmi_count;	/* # NMIs during this sample */
 };
 
 /* keep the global state somewhere. */
@@ -127,7 +128,7 @@ static void trace_hwlat_sample(struct hwlat_sample *sample)
 	entry->nmi_count		= sample->nmi_count;
 
 	if (!call_filter_check_discard(call, entry, buffer, event))
-		__buffer_unlock_commit(buffer, event);
+		trace_buffer_unlock_commit_nostack(buffer, event);
 }
 
 /* Macros to encapsulate the time capturing infrastructure */
@@ -249,7 +250,7 @@ static int get_sample(void)
 		s.seqnum = hwlat_data.count;
 		s.duration = sample;
 		s.outer_duration = outer_sample;
-		s.timestamp = CURRENT_TIME;
+		ktime_get_real_ts64(&s.timestamp);
 		s.nmi_total_ts = nmi_total_ts;
 		s.nmi_count = nmi_count;
 		trace_hwlat_sample(&s);
@@ -313,10 +314,7 @@ static void move_to_next_cpu(void)
  * need to ensure nothing else might be running (and thus preempting).
  * Obviously this should never be used in production environments.
  *
- * Currently this runs on which ever CPU it was scheduled on, but most
- * real-world hardware latency situations occur across several CPUs,
- * but we might later generalize this if we find there are any actualy
- * systems with alternate SMI delivery or other hardware latencies.
+ * Executes one loop interaction on each CPU in tracing_cpumask sysfs file.
  */
 static int kthread_fn(void *data)
 {

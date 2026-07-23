@@ -28,15 +28,16 @@
 #include <linux/list_sort.h>
 #include <linux/idr.h>
 #include <linux/interrupt.h>
-#include <linux/of_gpio.h>
+#include <linux/of_irq.h>
 #include <linux/of_address.h>
 #include <linux/io.h>
 #include <linux/dma-mapping.h>
 #include <soc/qcom/ramdump.h>
 #include <soc/qcom/subsystem_restart.h>
 #include <soc/qcom/secure_buffer.h>
-#include <soc/qcom/smem.h>
+#include <linux/soc/qcom/smem.h>
 #include <linux/kthread.h>
+#include <soc/qcom/boot_stats.h>
 
 #include <linux/uaccess.h>
 #include <asm/setup.h>
@@ -44,7 +45,6 @@
 #include <trace/events/trace_msm_pil_event.h>
 
 #include "peripheral-loader.h"
-#include <soc/qcom/boot_stats.h>
 
 #define pil_err(desc, fmt, ...)						\
 	dev_err(desc->dev, "%s: " fmt, desc->name, ##__VA_ARGS__)
@@ -57,10 +57,46 @@
 #define pil_memset_io(d, c, count) memset_io(d, c, count)
 #endif
 
-#define PIL_NUM_DESC		10
+#define PIL_NUM_DESC		16
 #define MAX_LEN 96
+#define NUM_OF_ENCRYPTED_KEY	3
+#define MINIDUMP_DEBUG_PROP "qcom,msm-imem-minidump-debug"
+
+#define pil_log(msg, desc)	\
+	do {			\
+		if (pil_ipc_log)		\
+			pil_ipc("[%s]: %s", desc->name, msg); \
+		else		\
+			trace_pil_event(msg, desc);	\
+	} while (0)
+
+
 static void __iomem *pil_info_base;
+#ifdef CONFIG_QCOM_MINIDUMP
+static void __iomem *minidump_debug;
 static struct md_global_toc *g_md_toc;
+#endif
+
+void *pil_ipc_log;
+
+#ifdef CONFIG_QCOM_MINIDUMP
+static void __iomem *map_prop(const char *propname)
+{
+	struct device_node *np = of_find_compatible_node(NULL, NULL, propname);
+	void __iomem *addr;
+
+	if (!np) {
+		pr_err("Unable to find DT property: %s\n", propname);
+		return NULL;
+	}
+
+	addr = of_iomap(np, 0);
+	if (!addr)
+		pr_err("Unable to map memory for DT property: %s\n", propname);
+
+	return addr;
+}
+#endif
 
 /**
  * proxy_timeout - Override for proxy vote timeouts
@@ -145,105 +181,252 @@ struct pil_priv {
 	size_t region_size;
 };
 
+#ifdef CONFIG_QCOM_MINIDUMP
+/**
+ * struct aux_minidumpinfo - State maintained for each aux minidump entry dumped
+ * during SSR
+ * @region_info_aux: region that contains an array of descriptors, where
+ * each one describes the base address and size of a segment that should be
+ * dumped during SSR minidump
+ * @seg_cnt: the number of such regions
+ */
+struct aux_minidump_info {
+	struct md_ss_region __iomem *region_info_aux;
+	unsigned int seg_cnt;
+};
+
+/**
+ * map_minidump_regions() - map the region containing the segment descriptors
+ * for an entry in the global minidump table
+ * @toc: the subsystem table of contents
+ * @num_segs: the number of segment descriptors in the region defined by the
+ * subsystem table of contents
+ *
+ * Maps the region containing num_segs segment descriptor into the kernel's
+ * address space.
+ */
+static struct md_ss_region __iomem *map_minidump_regions(struct md_ss_toc *toc,
+							int num_segs)
+{
+	u64 region_ptr = (u64)toc->md_ss_smem_regions_baseptr;
+	void __iomem *segtable_base = ioremap((unsigned long)region_ptr,
+					      num_segs *
+					      sizeof(struct md_ss_region));
+	struct md_ss_region __iomem *region_info = (struct md_ss_region __iomem
+						  *)segtable_base;
+	if (!region_info)
+		return NULL;
+
+	pr_debug("Minidump : Segments in minidump 0x%x\n", num_segs);
+
+	return region_info;
+}
+
+/**
+ * map_aux_minidump_regions() - map the region containing the segment
+ * descriptors for a set of entries in the global minidump table
+ * @desc: descriptor from pil_desc_init()
+ * @aux_mdump_data: contains an array of pointers to segment descriptor regions
+ * per auxiliary minidump ID
+ * @total_aux_segs: value that is incremented to capture the total number of
+ * segments that are needed to dump all auxiliary regions
+ *
+ * Maps the regions of segment descriptors for a set of auxiliary minidump IDs.
+ */
+static int map_aux_minidump_regions(struct pil_desc *desc,
+				    struct aux_minidump_info *aux_mdump_data,
+				    int *total_aux_segs)
+{
+	unsigned int i;
+	struct md_ss_toc *toc;
+
+	for (i = 0; i < desc->num_aux_minidump_ids; i++) {
+		toc = desc->aux_minidump[i];
+		if (toc && (toc->md_ss_toc_init == true) &&
+		    (toc->md_ss_enable_status == MD_SS_ENABLED) &&
+		    (toc->md_ss_smem_regions_baseptr) &&
+		    (toc->encryption_status == MD_SS_ENCR_DONE)) {
+			aux_mdump_data[i].seg_cnt = toc->ss_region_count;
+			aux_mdump_data[i].region_info_aux =
+				map_minidump_regions(desc->aux_minidump[i],
+						aux_mdump_data[i].seg_cnt);
+			if (!aux_mdump_data[i].region_info_aux)
+				return -ENOMEM;
+			*total_aux_segs += aux_mdump_data[i].seg_cnt;
+		}
+	}
+
+	return 0;
+}
+
+/**
+ * unmap_aux_minidump_regions() - unmap the regions containing the segment
+ * descriptors for a set of entries in the global minidump table
+ * @aux_mdump: contains an array of pointers to segment descriptor regions
+ * per auxiliary minidump ID
+ * @num_aux_md_ids: the number of auxiliary minidump IDs
+ *
+ * Unmaps the regions of segment descriptors for a set of auxiliary minidump
+ * IDs.
+ */
+static void unmap_aux_minidump_regions(struct aux_minidump_info *aux_mdump,
+				       int num_aux_md_ids)
+{
+	unsigned int i = 0;
+
+	while (i < num_aux_md_ids && aux_mdump[i].region_info_aux) {
+		iounmap(aux_mdump[i].region_info_aux);
+		i++;
+	}
+}
+
+/**
+ * prepare_minidump_segments() - Fills in the necessary information for the
+ * ramdump driver to dump a region of memory, described by a segment.
+ * @rd_segs: segments that will be filled in for ramdump collection
+ * @region_info: the start of the region that contains the segment descriptors
+ * @num_segs: the number of segment descriptors in region_info
+ * @ss_valid_seg_cnt: the number of valid segments for this ramdump. Will be
+ * decremented if a segment is found to be invalid.
+ *
+ * Fills in the necessary information in the ramdump_segment structures to
+ * describe regions that should be dumped by the ramdump driver.
+ */
+static unsigned int prepare_minidump_segments(struct ramdump_segment *rd_segs,
+				      struct md_ss_region __iomem *region_info,
+				      int num_segs, int *ss_valid_seg_cnt)
+{
+	void __iomem *offset;
+	unsigned int i;
+	unsigned int val_segs = 0;
+
+
+	for (i = 0; i < num_segs; i++) {
+		memcpy(&offset, &region_info, sizeof(region_info));
+		offset = offset + sizeof(region_info->name) +
+				sizeof(region_info->seq_num);
+		if (__raw_readl(offset) == MD_REGION_VALID) {
+			memcpy(&rd_segs->name, &region_info,
+			       sizeof(region_info));
+			offset = offset +
+				sizeof(region_info->md_valid);
+			rd_segs->address = __raw_readl(offset);
+			offset = offset +
+				sizeof(region_info->region_base_address);
+			rd_segs->size = __raw_readl(offset);
+			pr_debug("Minidump : Dumping segment %s with address 0x%lx and size 0x%x\n",
+				rd_segs->name, rd_segs->address,
+				(unsigned int)rd_segs->size);
+			rd_segs++;
+			val_segs++;
+		} else {
+			*ss_valid_seg_cnt = *ss_valid_seg_cnt - 1;
+		}
+
+		region_info++;
+	}
+
+	return val_segs;
+}
+
+/**
+ * prepare_aux_minidump_segments() - Fills in the necessary information for the
+ * ramdump driver to dump a region of memory, described by a segment. This is
+ * done for a set of auxiliary minidump IDs.
+ * @rd_segs: segments that will be filled in for ramdump collection
+ * @aux_mdump: contains an array of pointers to segment descriptor regions per
+ * auxiliary minidump ID
+ * @ss_valid_seg_cnt: the number of valid segments for this ramdump. Will be
+ * decremented if a segment is found to be invalid.
+ * @num_aux_md_ids: the number of auxiliary minidump IDs
+ *
+ * Fills in the necessary information in the ramdump_segment structures to
+ * describe the regions that should be dumped by the ramdump driver for a set
+ * of auxiliary minidump IDs.
+ */
+static void prepare_aux_minidump_segments(struct ramdump_segment *rd_segs,
+					  struct aux_minidump_info *aux_mdump,
+					  int *ss_valid_seg_cnt,
+					  int num_aux_md_ids)
+{
+	unsigned int i;
+	struct ramdump_segment *s = rd_segs;
+	unsigned int next_offset = 0;
+
+	for (i = 0; i < num_aux_md_ids; i++) {
+		s = &rd_segs[next_offset];
+		next_offset = prepare_minidump_segments(s,
+					aux_mdump[i].region_info_aux,
+					aux_mdump[i].seg_cnt,
+					ss_valid_seg_cnt);
+	}
+}
+
 static int pil_do_minidump(struct pil_desc *desc, void *ramdump_dev)
 {
 	struct md_ss_region __iomem *region_info_ss;
-	struct md_ss_region __iomem *region_info_pdr;
-	struct ramdump_segment *ramdump_segs, *s;
+	struct ramdump_segment *ramdump_segs;
 	struct pil_priv *priv = desc->priv;
-	void __iomem *subsys_segtable_base_ss;
-	void __iomem *subsys_segtable_base_pdr;
-	u64 ss_region_ptr = 0;
-	void __iomem *offset_ss;
-	void __iomem *offset_pdr;
-	int ss_mdump_seg_cnt_ss = 0, ss_mdump_seg_cnt_pdr = 0, total_segs;
+	int ss_mdump_seg_cnt_ss = 0, total_segs;
+	int total_aux_segs = 0;
 	int ss_valid_seg_cnt;
-	int ret, i;
+	int ret;
+	struct aux_minidump_info *aux_minidump_data = NULL;
+	unsigned int next_offset;
 
 	if (!ramdump_dev)
 		return -ENODEV;
 
-	ss_region_ptr = desc->minidump_ss->md_ss_smem_regions_baseptr;
 	ss_mdump_seg_cnt_ss = desc->minidump_ss->ss_region_count;
-	subsys_segtable_base_ss =
-		ioremap((unsigned long)ss_region_ptr,
-		ss_mdump_seg_cnt_ss * sizeof(struct md_ss_region));
-	region_info_ss =
-		(struct md_ss_region __iomem *)subsys_segtable_base_ss;
+	region_info_ss = map_minidump_regions(desc->minidump_ss,
+					     ss_mdump_seg_cnt_ss);
 	if (!region_info_ss)
 		return -EINVAL;
-	pr_info("Minidump : SS Segments in minidump 0x%x\n",
-		ss_mdump_seg_cnt_ss);
 
-	if (desc->minidump_pdr &&
-		(desc->minidump_pdr->md_ss_enable_status == MD_SS_ENABLED)) {
-		ss_region_ptr = desc->minidump_pdr->md_ss_smem_regions_baseptr;
-		ss_mdump_seg_cnt_pdr = desc->minidump_pdr->ss_region_count;
-		subsys_segtable_base_pdr =
-			ioremap((unsigned long)ss_region_ptr,
-			ss_mdump_seg_cnt_pdr * sizeof(struct md_ss_region));
-		region_info_pdr =
-			(struct md_ss_region __iomem *)subsys_segtable_base_pdr;
-		if (!region_info_pdr)
-			return -EINVAL;
-		pr_info("Minidump : PDR Segments in minidump 0x%x\n",
-			ss_mdump_seg_cnt_pdr);
+	if (desc->num_aux_minidump_ids > 0) {
+		aux_minidump_data = kcalloc(desc->num_aux_minidump_ids,
+					  sizeof(*aux_minidump_data),
+					  GFP_KERNEL);
+		if (!aux_minidump_data) {
+			ret = -ENOMEM;
+			goto setup_fail;
+		}
+
+		if (map_aux_minidump_regions(desc, aux_minidump_data,
+					     &total_aux_segs) < 0) {
+			ret = -ENOMEM;
+			goto mapping_fail;
+		}
 	}
-	total_segs = ss_mdump_seg_cnt_ss + ss_mdump_seg_cnt_pdr;
+
+	total_segs = ss_mdump_seg_cnt_ss + total_aux_segs;
 	ramdump_segs = kcalloc(total_segs,
 			       sizeof(*ramdump_segs), GFP_KERNEL);
-	if (!ramdump_segs)
-		return -ENOMEM;
+	if (!ramdump_segs) {
+		ret = -ENOMEM;
+		goto mapping_fail;
+	}
 
 	if (desc->subsys_vmid > 0)
 		ret = pil_assign_mem_to_linux(desc, priv->region_start,
 			(priv->region_end - priv->region_start));
 
-	s = ramdump_segs;
 	ss_valid_seg_cnt = total_segs;
-	for (i = 0; i < ss_mdump_seg_cnt_ss; i++) {
-		memcpy(&offset_ss, &region_info_ss, sizeof(region_info_ss));
-		offset_ss = offset_ss + sizeof(region_info_ss->name) +
-				sizeof(region_info_ss->seq_num);
-		if (__raw_readl(offset_ss) == MD_REGION_VALID) {
-			memcpy(&s->name, &region_info_ss,
-				sizeof(region_info_ss));
-			offset_ss = offset_ss +
-				sizeof(region_info_ss->md_valid);
-			s->address = __raw_readl(offset_ss);
-			offset_ss = offset_ss +
-				sizeof(region_info_ss->region_base_address);
-			s->size = __raw_readl(offset_ss);
-			pr_info("Minidump : Dumping segment %s with address 0x%lx and size 0x%x\n",
-				s->name, s->address, (unsigned int)s->size);
-		} else
-			ss_valid_seg_cnt--;
-		s++;
-		region_info_ss++;
-	}
+	next_offset = prepare_minidump_segments(ramdump_segs, region_info_ss,
+						 ss_mdump_seg_cnt_ss,
+						 &ss_valid_seg_cnt);
 
-	for (i = 0; i < ss_mdump_seg_cnt_pdr; i++) {
-		memcpy(&offset_pdr, &region_info_pdr, sizeof(region_info_pdr));
-		offset_pdr = offset_pdr + sizeof(region_info_pdr->name) +
-				sizeof(region_info_pdr->seq_num);
-		if (__raw_readl(offset_pdr) == MD_REGION_VALID) {
-			memcpy(&s->name, &region_info_pdr,
-				sizeof(region_info_pdr));
-			offset_pdr = offset_pdr +
-				sizeof(region_info_pdr->md_valid);
-			s->address = __raw_readl(offset_pdr);
-			offset_pdr = offset_pdr +
-				sizeof(region_info_pdr->region_base_address);
-			s->size = __raw_readl(offset_pdr);
-			pr_info("Minidump : Dumping segment %s with address 0x%lx and size 0x%x\n",
-				s->name, s->address, (unsigned int)s->size);
-		} else
-			ss_valid_seg_cnt--;
-		s++;
-		region_info_pdr++;
-	}
-	ret = do_minidump(ramdump_dev, ramdump_segs, ss_valid_seg_cnt);
-	kfree(ramdump_segs);
+	if (desc->num_aux_minidump_ids > 0)
+		prepare_aux_minidump_segments(&ramdump_segs[next_offset],
+					      aux_minidump_data,
+					      &ss_valid_seg_cnt,
+					      desc->num_aux_minidump_ids);
+
+	if (desc->minidump_as_elf32)
+		ret = do_elf_ramdump(ramdump_dev, ramdump_segs,
+				     ss_valid_seg_cnt);
+	else
+		ret = do_minidump(ramdump_dev, ramdump_segs, ss_valid_seg_cnt);
 	if (ret)
 		pil_err(desc, "%s: Minidump collection failed for subsys %s rc:%d\n",
 			__func__, desc->name, ret);
@@ -251,37 +434,44 @@ static int pil_do_minidump(struct pil_desc *desc, void *ramdump_dev)
 	if (desc->subsys_vmid > 0)
 		ret = pil_assign_mem_to_subsys(desc, priv->region_start,
 			(priv->region_end - priv->region_start));
+
+	kfree(ramdump_segs);
+mapping_fail:
+	unmap_aux_minidump_regions(aux_minidump_data,
+				   desc->num_aux_minidump_ids);
+	kfree(aux_minidump_data);
+setup_fail:
+	iounmap(region_info_ss);
 	return ret;
 }
 
-#ifdef OPLUS_FEATURE_SSR
-void __adsp_send_uevent(struct device *dev, char *reason)
+/**
+ * print_aux_minidump_tocs() - Print the ToC for an auxiliary minidump entry
+ * @desc: PIL descriptor for the subsystem for which minidump is collected
+ *
+ * Prints out the table of contents(ToC) for all of the auxiliary
+ * minidump entries for a subsystem.
+ */
+static void print_aux_minidump_tocs(struct pil_desc *desc)
 {
-	int ret_val;
-	char adsp_event[] = "ADSP_EVENT=adsp_crash";
-	char adsp_reason[300] = {0};
-	char *envp[3];
+	int i;
+	struct md_ss_toc *toc;
 
-	envp[0] = (char *)&adsp_event;
-	if(reason){
-		snprintf(adsp_reason, sizeof(adsp_reason),"ADSP_REASON=%s", reason);
-	}else{
-	    snprintf(adsp_reason, sizeof(adsp_reason),"ADSP_REASON=unkown");
-	}
-	adsp_reason[299] = 0;
-	envp[1] = (char *)&adsp_reason;
-	envp[2] = 0;
-
-	if(dev){
-		ret_val = kobject_uevent_env(&(dev->kobj), KOBJ_CHANGE, envp);
-		if(!ret_val){
-			pr_info("adsp_crash:kobject_uevent_env success!\n");
-		}else{
-			pr_info("adsp_crash:kobject_uevent_env fail,error=%d!\n", ret_val);
-		}
+	for (i = 0; i < desc->num_aux_minidump_ids; i++) {
+		toc = desc->aux_minidump[i];
+		pr_debug("Minidump : md_aux_toc->toc_init 0x%x\n",
+			 (unsigned int)toc->md_ss_toc_init);
+		pr_debug("Minidump : md_aux_toc->enable_status 0x%x\n",
+			 (unsigned int)toc->md_ss_enable_status);
+		pr_debug("Minidump : md_aux_toc->encryption_status 0x%x\n",
+			 (unsigned int)toc->encryption_status);
+		pr_debug("Minidump : md_aux_toc->ss_region_count 0x%x\n",
+			 (unsigned int)toc->ss_region_count);
+		pr_debug("Minidump : md_aux_toc->smem_regions_baseptr 0x%x\n",
+			 (unsigned int)toc->md_ss_smem_regions_baseptr);
 	}
 }
-#endif /*OPLUS_FEATURE_SSR*/
+#endif
 
 /**
  * pil_do_ramdump() - Ramdump an image
@@ -298,58 +488,46 @@ int pil_do_ramdump(struct pil_desc *desc,
 	struct pil_priv *priv = desc->priv;
 	struct pil_seg *seg;
 	int count = 0, ret;
-	u32 encryption_status = 0;
 
-	#ifdef OPLUS_FEATURE_MODEM_MINIDUMP
-	//Add for customized subsystem ramdump to skip generate dump cause by SAU
-	if (SKIP_GENERATE_RAMDUMP) {
-		pil_err(desc, "%s: Skip ramdump cuase by ap normal trigger.\n %s",
-			__func__, desc->name);
-		SKIP_GENERATE_RAMDUMP = false;
-		return -1;
-	}
-	#endif
+#ifdef CONFIG_QCOM_MINIDUMP
 	if (desc->minidump_ss) {
-		pr_info("Minidump : md_ss_toc->md_ss_toc_init is 0x%x\n",
+		pr_debug("Minidump : md_ss_toc->md_ss_toc_init is 0x%x\n",
 			(unsigned int)desc->minidump_ss->md_ss_toc_init);
-		pr_info("Minidump : md_ss_toc->md_ss_enable_status is 0x%x\n",
+		pr_debug("Minidump : md_ss_toc->md_ss_enable_status is 0x%x\n",
 			(unsigned int)desc->minidump_ss->md_ss_enable_status);
-		pr_info("Minidump : md_ss_toc->encryption_status is 0x%x\n",
+		pr_debug("Minidump : md_ss_toc->encryption_status is 0x%x\n",
 			(unsigned int)desc->minidump_ss->encryption_status);
-		pr_info("Minidump : md_ss_toc->ss_region_count is 0x%x\n",
+		pr_debug("Minidump : md_ss_toc->ss_region_count is 0x%x\n",
 			(unsigned int)desc->minidump_ss->ss_region_count);
-		pr_info("Minidump : md_ss_toc->md_ss_smem_regions_baseptr is 0x%x\n",
+		pr_debug("Minidump : md_ss_toc->md_ss_smem_regions_baseptr is 0x%x\n",
 			(unsigned int)
 			desc->minidump_ss->md_ss_smem_regions_baseptr);
+
+		print_aux_minidump_tocs(desc);
+
+		if (minidump_debug)
+			pr_info("Minidump debug cookie=%x\n",
+				__raw_readl(minidump_debug));
 		/**
 		 * Collect minidump if SS ToC is valid and segment table
 		 * is initialized in memory and encryption status is set.
 		 */
-		encryption_status = desc->minidump_ss->encryption_status;
-
 		if ((desc->minidump_ss->md_ss_smem_regions_baseptr != 0) &&
 			(desc->minidump_ss->md_ss_toc_init == true) &&
 			(desc->minidump_ss->md_ss_enable_status ==
 				MD_SS_ENABLED)) {
-
-			#ifndef OPLUS_FEATURE_MODEM_MINIDUMP
-			//Add for skip mini dump encryption
-			if (encryption_status == MD_SS_ENCR_DONE ||
-				encryption_status == MD_SS_ENCR_NOTREQ) {
-				pr_info("Minidump : Dumping for %s\n",
+			if (desc->minidump_ss->encryption_status ==
+			    MD_SS_ENCR_DONE) {
+				pr_debug("Dumping Minidump for %s\n",
 					desc->name);
 				return pil_do_minidump(desc, minidump_dev);
 			}
-			#else
-				pr_info("Minidump : Dumping for %s\n",
-					desc->name);
-				return pil_do_minidump(desc, minidump_dev);
-			#endif
-			pr_info("Minidump : aborted for %s\n", desc->name);
+			pr_debug("Minidump aborted for %s\n", desc->name);
 			return -EINVAL;
 		}
 	}
 	pr_debug("Continuing with full SSR dump for %s\n", desc->name);
+#endif
 	list_for_each_entry(seg, &priv->segs, list)
 		count++;
 
@@ -636,12 +814,11 @@ static int pil_init_entry_addr(struct pil_priv *priv, const struct pil_mdt *mdt)
 }
 
 static int pil_alloc_region(struct pil_priv *priv, phys_addr_t min_addr,
-				phys_addr_t max_addr, size_t align,
-				size_t mdt_size)
+				phys_addr_t max_addr, size_t align)
 {
 	void *region;
 	size_t size = max_addr - min_addr;
-	size_t aligned_size = max(size, mdt_size);
+	size_t aligned_size;
 
 	/* Don't reallocate due to fragmentation concerns, just sanity check */
 	if (priv->region) {
@@ -651,12 +828,12 @@ static int pil_alloc_region(struct pil_priv *priv, phys_addr_t min_addr,
 		return 0;
 	}
 
-	if (align > SZ_4M)
-		aligned_size = ALIGN(aligned_size, SZ_4M);
-	else if (align > SZ_1M)
-		aligned_size = ALIGN(aligned_size, SZ_1M);
+	if (align >= SZ_4M)
+		aligned_size = ALIGN(size, SZ_4M);
+	else if (align >= SZ_1M)
+		aligned_size = ALIGN(size, SZ_1M);
 	else
-		aligned_size = ALIGN(aligned_size, SZ_4K);
+		aligned_size = ALIGN(size, SZ_4K);
 
 	priv->desc->attrs = 0;
 	priv->desc->attrs |= DMA_ATTR_SKIP_ZEROING | DMA_ATTR_NO_KERNEL_MAPPING;
@@ -681,8 +858,7 @@ static int pil_alloc_region(struct pil_priv *priv, phys_addr_t min_addr,
 	return 0;
 }
 
-static int pil_setup_region(struct pil_priv *priv, const struct pil_mdt *mdt,
-				size_t mdt_size)
+static int pil_setup_region(struct pil_priv *priv, const struct pil_mdt *mdt)
 {
 	const struct elf32_phdr *phdr;
 	phys_addr_t min_addr_r, min_addr_n, max_addr_r, max_addr_n, start, end;
@@ -727,8 +903,7 @@ static int pil_setup_region(struct pil_priv *priv, const struct pil_mdt *mdt,
 	max_addr_r = ALIGN(max_addr_r, SZ_4K);
 
 	if (relocatable) {
-		ret = pil_alloc_region(priv, min_addr_r, max_addr_r, align,
-					mdt_size);
+		ret = pil_alloc_region(priv, min_addr_r, max_addr_r, align);
 	} else {
 		priv->region_start = min_addr_n;
 		priv->region_end = max_addr_n;
@@ -759,19 +934,20 @@ static int pil_cmp_seg(void *priv, struct list_head *a, struct list_head *b)
 	return ret;
 }
 
-static int pil_init_mmap(struct pil_desc *desc, const struct pil_mdt *mdt,
-			size_t mdt_size)
+static int pil_init_mmap(struct pil_desc *desc, const struct pil_mdt *mdt)
 {
 	struct pil_priv *priv = desc->priv;
 	const struct elf32_phdr *phdr;
 	struct pil_seg *seg;
 	int i, ret;
 
-	ret = pil_setup_region(priv, mdt, mdt_size);
+	ret = pil_setup_region(priv, mdt);
 	if (ret)
 		return ret;
 
-	place_marker("M - Modem Image Start Loading");
+	if (!strcmp(desc->name, "modem"))
+		place_marker("M - Modem Image Start Loading");
+
 	pil_info(desc, "loading from %pa to %pa\n", &priv->region_start,
 							&priv->region_end);
 
@@ -954,31 +1130,21 @@ static int pil_parse_devicetree(struct pil_desc *desc)
 		pr_debug("Unable to read the addr-protect-id for %s\n",
 					desc->name);
 
-	if (desc->ops->proxy_unvote && of_find_property(ofnode,
-					"qcom,gpio-proxy-unvote",
-					NULL)) {
-		clk_ready = of_get_named_gpio(ofnode,
-				"qcom,gpio-proxy-unvote", 0);
+	if (desc->ops->proxy_unvote &&
+			of_property_match_string(ofnode, "interrupt-names",
+				"qcom,proxy-unvote") >= 0) {
+		clk_ready = of_irq_get_byname(ofnode,
+				"qcom,proxy-unvote");
 
 		if (clk_ready < 0) {
 			dev_dbg(desc->dev,
-				"[%s]: Error getting proxy unvoting gpio\n",
+				"[%s]: Error getting proxy unvoting irq\n",
 				desc->name);
 			return clk_ready;
 		}
 
-		clk_ready = gpio_to_irq(clk_ready);
-		if (clk_ready < 0) {
-			dev_err(desc->dev,
-				"[%s]: Error getting proxy unvote IRQ\n",
-				desc->name);
-			return clk_ready;
-		}
 	}
 	desc->proxy_unvote_irq = clk_ready;
-
-	desc->sequential_load = of_property_read_bool(ofnode,
-						"qcom,sequential-fw-load");
 	return 0;
 }
 
@@ -1060,8 +1226,7 @@ static int pil_load_segs(struct pil_desc *desc)
 	list_for_each_entry(seg, &desc->priv->segs, list) {
 		flush_work(&pil_seg_data[seg_id].load_seg_work);
 
-		/*
-		 * Don't exit if one of the thread fails. Wait for others to
+		/* Don't exit if one of the thread fails. Wait for others to
 		 * complete. Bitmap the return codes we get from the threads.
 		 */
 		if (pil_seg_data[seg_id].retval) {
@@ -1150,7 +1315,7 @@ int pil_boot(struct pil_desc *desc)
 		goto release_fw;
 	}
 
-	ret = pil_init_mmap(desc, mdt, fw->size);
+	ret = pil_init_mmap(desc, mdt);
 	if (ret)
 		goto release_fw;
 
@@ -1161,16 +1326,15 @@ int pil_boot(struct pil_desc *desc)
 		goto release_fw;
 	}
 
-	trace_pil_event("before_init_image", desc);
+	pil_log("before_init_image", desc);
 	if (desc->ops->init_image)
-		ret = desc->ops->init_image(desc, fw->data, fw->size,
-				priv->region_start, priv->region);
+		ret = desc->ops->init_image(desc, fw->data, fw->size);
 	if (ret) {
 		pil_err(desc, "Initializing image failed(rc:%d)\n", ret);
 		goto err_boot;
 	}
 
-	trace_pil_event("before_mem_setup", desc);
+	pil_log("before_mem_setup", desc);
 	if (desc->ops->mem_setup)
 		ret = desc->ops->mem_setup(desc, priv->region_start,
 				priv->region_end - priv->region_start);
@@ -1186,7 +1350,7 @@ int pil_boot(struct pil_desc *desc)
 		 * Also for secure boot devices, modem memory has to be released
 		 * after MBA is booted
 		 */
-		trace_pil_event("before_assign_mem", desc);
+		pil_log("before_assign_mem", desc);
 		if (desc->modem_ssr) {
 			ret = pil_assign_mem_to_linux(desc, priv->region_start,
 				(priv->region_end - priv->region_start));
@@ -1205,22 +1369,26 @@ int pil_boot(struct pil_desc *desc)
 		hyp_assign = true;
 	}
 
-	trace_pil_event("before_load_seg", desc);
+	pil_log("before_load_seg", desc);
 
-	if (desc->sequential_load) {
+	/**
+	 * Fallback to serial loading of blobs if the
+	 * workqueue creatation failed during module init.
+	 */
+	if (pil_wq && !(desc->sequential_loading)) {
+		ret = pil_load_segs(desc);
+		if (ret)
+			goto err_deinit_image;
+	} else {
 		list_for_each_entry(seg, &desc->priv->segs, list) {
 			ret = pil_load_seg(desc, seg);
 			if (ret)
 				goto err_deinit_image;
 		}
-	} else {
-		ret = pil_load_segs(desc);
-		if (ret)
-			goto err_deinit_image;
 	}
 
 	if (desc->subsys_vmid > 0) {
-		trace_pil_event("before_reclaim_mem", desc);
+		pil_log("before_reclaim_mem", desc);
 		ret =  pil_reclaim_mem(desc, priv->region_start,
 				(priv->region_end - priv->region_start),
 				desc->subsys_vmid);
@@ -1232,15 +1400,18 @@ int pil_boot(struct pil_desc *desc)
 		hyp_assign = false;
 	}
 
-	trace_pil_event("before_auth_reset", desc);
+	pil_log("before_auth_reset", desc);
 	ret = desc->ops->auth_and_reset(desc);
 	if (ret) {
 		pil_err(desc, "Failed to bring out of reset(rc:%d)\n", ret);
 		goto err_auth_and_reset;
 	}
-	trace_pil_event("reset_done", desc);
+	pil_log("reset_done", desc);
+
+	if (!strcmp(desc->name, "modem"))
+		place_marker("M - Modem out of reset");
+
 	pil_info(desc, "Brought out of reset\n");
-	place_marker("M - Modem out of reset");
 	desc->modem_ssr = false;
 err_auth_and_reset:
 	if (ret && desc->subsys_vmid > 0) {
@@ -1338,6 +1509,52 @@ bool is_timeout_disabled(void)
 {
 	return disable_timeouts;
 }
+
+#ifdef CONFIG_QCOM_MINIDUMP
+static int collect_aux_minidump_ids(struct pil_desc *desc)
+{
+	u32 id;
+	const __be32 *p;
+	struct property *prop;
+	unsigned int i = 0;
+	void *aux_toc_addr;
+	struct device_node *node = desc->dev->of_node;
+	int num_ids = of_property_count_u32_elems(node,
+						 "qcom,aux-minidump-ids");
+
+	if (num_ids > 0) {
+		desc->num_aux_minidump_ids = num_ids;
+		desc->aux_minidump_ids = kmalloc_array(num_ids,
+						sizeof(*desc->aux_minidump_ids),
+						GFP_KERNEL);
+		if (!desc->aux_minidump_ids)
+			return -ENOMEM;
+
+		desc->aux_minidump = kmalloc_array(num_ids,
+					     sizeof(*desc->aux_minidump),
+					     GFP_KERNEL);
+		if (!desc->aux_minidump) {
+			kfree(desc->aux_minidump_ids);
+			desc->aux_minidump_ids = NULL;
+			return -ENOMEM;
+		}
+
+		of_property_for_each_u32(node, "qcom,aux-minidump-ids", prop,
+					 p, id) {
+			desc->aux_minidump_ids[i] = id;
+			aux_toc_addr = &g_md_toc->md_ss_toc[id];
+			pr_debug("Minidump: aux_toc_addr is %pa and id: %d\n",
+				 &aux_toc_addr, id);
+			memcpy(&desc->aux_minidump[i], &aux_toc_addr,
+			       sizeof(aux_toc_addr));
+			i++;
+		}
+	}
+
+	return 0;
+}
+#endif
+
 /**
  * pil_desc_init() - Initialize a pil descriptor
  * @desc: descriptor to initialize
@@ -1351,10 +1568,12 @@ int pil_desc_init(struct pil_desc *desc)
 {
 	struct pil_priv *priv;
 	void __iomem *addr;
-	void *ss_toc_addr;
 	int ret;
 	char buf[sizeof(priv->info->name)];
+#ifdef CONFIG_QCOM_MINIDUMP
+	void *ss_toc_addr;
 	struct device_node *ofnode = desc->dev->of_node;
+#endif
 
 	if (WARN(desc->ops->proxy_unvote && !desc->ops->proxy_vote,
 				"Invalid proxy voting. Ignoring\n"))
@@ -1377,6 +1596,8 @@ int pil_desc_init(struct pil_desc *desc)
 		strlcpy(buf, desc->name, sizeof(buf));
 		__iowrite32_copy(priv->info->name, buf, sizeof(buf) / 4);
 	}
+
+#ifdef CONFIG_QCOM_MINIDUMP
 	if (of_property_read_u32(ofnode, "qcom,minidump-id",
 		&desc->minidump_id))
 		pr_err("minidump-id not found for %s\n", desc->name);
@@ -1387,14 +1608,13 @@ int pil_desc_init(struct pil_desc *desc)
 				&ss_toc_addr, desc->minidump_id);
 			memcpy(&desc->minidump_ss, &ss_toc_addr,
 			       sizeof(ss_toc_addr));
-			ss_toc_addr =
-				&g_md_toc->md_ss_toc[desc->minidump_id + 1];
-			pr_debug("Minidump : ss_toc_addr for pdr is %pa and desc->minidump_id is %d\n",
-				&ss_toc_addr, desc->minidump_id);
-			memcpy(&desc->minidump_pdr, &ss_toc_addr,
-			       sizeof(ss_toc_addr));
+
+			if (collect_aux_minidump_ids(desc) < 0)
+				pr_err("Failed to get aux %s minidump ids\n",
+				       desc->name);
 		}
 	}
+#endif
 
 	ret = pil_parse_devicetree(desc);
 	if (ret)
@@ -1432,10 +1652,19 @@ int pil_desc_init(struct pil_desc *desc)
 	if (!desc->unmap_fw_mem)
 		desc->unmap_fw_mem = unmap_fw_mem;
 
+#ifdef CONFIG_QCOM_MINIDUMP
+	desc->minidump_as_elf32 = of_property_read_bool(
+					ofnode, "qcom,minidump-as-elf32");
+#endif
+
 	return 0;
 err_parse_dt:
 	ida_simple_remove(&pil_ida, priv->id);
 err:
+#ifdef CONFIG_QCOM_MINIDUMP
+	kfree(desc->aux_minidump);
+	kfree(desc->aux_minidump_ids);
+#endif
 	kfree(priv);
 	return ret;
 }
@@ -1481,7 +1710,9 @@ static int __init msm_pil_init(void)
 	struct device_node *np;
 	struct resource res;
 	int i;
-	unsigned int size;
+#ifdef CONFIG_QCOM_MINIDUMP
+	size_t size;
+#endif
 
 	np = of_find_compatible_node(NULL, NULL, "qcom,msm-imem-pil");
 	if (!np) {
@@ -1504,23 +1735,30 @@ static int __init msm_pil_init(void)
 	for (i = 0; i < resource_size(&res)/sizeof(u32); i++)
 		writel_relaxed(0, pil_info_base + (i * sizeof(u32)));
 
+#ifdef CONFIG_QCOM_MINIDUMP
 	/* Get Global minidump ToC*/
-	g_md_toc = smem_get_entry(SBL_MINIDUMP_SMEM_ID, &size, 0,
-				  SMEM_ANY_HOST_FLAG);
+	g_md_toc = qcom_smem_get(QCOM_SMEM_HOST_ANY, SBL_MINIDUMP_SMEM_ID,
+				 &size);
 	pr_debug("Minidump: g_md_toc is %pa\n", &g_md_toc);
 	if (PTR_ERR(g_md_toc) == -EPROBE_DEFER) {
 		pr_err("SMEM is not initialized.\n");
 		return -EPROBE_DEFER;
 	}
 
+	minidump_debug = map_prop(MINIDUMP_DEBUG_PROP);
+#endif
+
 	pil_wq = alloc_workqueue("pil_workqueue", WQ_HIGHPRI | WQ_UNBOUND, 0);
 	if (!pil_wq)
 		pr_warn("pil: Defaulting to sequential firmware loading.\n");
 
+	pil_ipc_log = ipc_log_context_create(2, "PIL-IPC", 0);
+	if (!pil_ipc_log)
+		pr_warn("Failed to setup PIL ipc logging\n");
 out:
 	return register_pm_notifier(&pil_pm_notifier);
 }
-device_initcall(msm_pil_init);
+subsys_initcall(msm_pil_init);
 
 static void __exit msm_pil_exit(void)
 {
@@ -1529,6 +1767,11 @@ static void __exit msm_pil_exit(void)
 	unregister_pm_notifier(&pil_pm_notifier);
 	if (pil_info_base)
 		iounmap(pil_info_base);
+
+#ifdef CONFIG_QCOM_MINIDUMP
+	if (minidump_debug)
+		iounmap(minidump_debug);
+#endif
 }
 module_exit(msm_pil_exit);
 

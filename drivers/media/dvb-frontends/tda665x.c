@@ -197,13 +197,12 @@ static int tda665x_set_params(struct dvb_frontend *fe)
 	return 0;
 }
 
-static int tda665x_release(struct dvb_frontend *fe)
+static void tda665x_release(struct dvb_frontend *fe)
 {
 	struct tda665x_state *state = fe->tuner_priv;
 
 	fe->tuner_priv = NULL;
 	kfree(state);
-	return 0;
 }
 
 static const struct dvb_tuner_ops tda665x_ops = {
@@ -240,7 +239,7 @@ struct dvb_frontend *tda665x_attach(struct dvb_frontend *fe,
 
 	return fe;
 }
-EXPORT_SYMBOL(tda665x_attach);
+EXPORT_SYMBOL_GPL(tda665x_attach);
 
 MODULE_DESCRIPTION("TDA665x driver");
 MODULE_AUTHOR("Manu Abraham");

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -49,6 +49,17 @@ enum phy_engine_state {
 	DSI_PHY_ENGINE_MAX,
 };
 
+/**
+ * enum phy_ulps_return_type - define set_ulps return type for dsi phy.
+ * @DSI_PHY_ULPS_HANDLED:      ulps is handled in phy.
+ * @DSI_PHY_ULPS_NOT_HANDLED:  ulps is not handled in phy.
+ * @DSI_PHY_ULPS_ERROR:        ulps request failed in phy.
+ */
+enum phy_ulps_return_type {
+	DSI_PHY_ULPS_HANDLED = 0,
+	DSI_PHY_ULPS_NOT_HANDLED,
+	DSI_PHY_ULPS_ERROR,
+};
 
 /**
  * struct msm_dsi_phy - DSI PHY object
@@ -117,6 +128,14 @@ struct msm_dsi_phy *dsi_phy_get(struct device_node *of_node);
  * back the DSI PHY into reset state.
  */
 void dsi_phy_put(struct msm_dsi_phy *dsi_phy);
+
+/**
+ * dsi_phy_get_version() - returns dsi phy version
+ * @dsi_phy:         DSI PHY handle.
+ *
+ * Return: phy version
+ */
+int dsi_phy_get_version(struct msm_dsi_phy *phy);
 
 /**
  * dsi_phy_drv_init() - initialize dsi phy driver
@@ -269,6 +288,15 @@ int dsi_phy_lane_reset(struct msm_dsi_phy *phy);
 void dsi_phy_toggle_resync_fifo(struct msm_dsi_phy *phy);
 
 /**
+ * dsi_phy_reset_clk_en_sel() - reset clk_en_select on cmn_clk_cfg1 register
+ * @phy:          DSI PHY handle
+ *
+ * After toggling resync fifo regiater, clk_en_sel bit on cmn_clk_cfg1
+ * register has to be reset
+ */
+void dsi_phy_reset_clk_en_sel(struct msm_dsi_phy *phy);
+
+/**
  * dsi_phy_drv_register() - register platform driver for dsi phy
  */
 void dsi_phy_drv_register(void);
@@ -282,21 +310,24 @@ void dsi_phy_drv_unregister(void);
  * dsi_phy_update_phy_timings() - Update dsi phy timings
  * @phy:	DSI PHY handle
  * @config:	DSI Host config parameters
+ * @is_cphy:	Boolean to indicate cphy mode
  *
  * Return: error code.
  */
 int dsi_phy_update_phy_timings(struct msm_dsi_phy *phy,
-			       struct dsi_host_config *config);
+				struct dsi_host_config *config,
+				bool is_cphy);
 
 /**
  * dsi_phy_config_dynamic_refresh() - Configure dynamic refresh registers
  * @phy:	DSI PHY handle
  * @delay:	pipe delays for dynamic refresh
  * @is_master:	Boolean to indicate if for master or slave
+ * @is_cphy:	Boolean to indicate cphy mode
  */
 void dsi_phy_config_dynamic_refresh(struct msm_dsi_phy *phy,
 				    struct dsi_dyn_clk_delay *delay,
-				    bool is_master);
+				    bool is_master, bool is_cphy);
 /**
  * dsi_phy_dynamic_refresh_trigger() - trigger dynamic refresh
  * @phy:	DSI PHY handle
@@ -319,4 +350,11 @@ void dsi_phy_dynamic_refresh_clear(struct msm_dsi_phy *phy);
  */
 int dsi_phy_dyn_refresh_cache_phy_timings(struct msm_dsi_phy *phy,
 					  u32 *dst, u32 size);
+/**
+ * dsi_phy_set_continuous_clk() - API to set/unset force clock lane HS request.
+ * @phy:	DSI PHY Handle.
+ * @enable:	variable to control continuous clock.
+ */
+void dsi_phy_set_continuous_clk(struct msm_dsi_phy *phy, bool enable);
+
 #endif /* _DSI_PHY_H_ */

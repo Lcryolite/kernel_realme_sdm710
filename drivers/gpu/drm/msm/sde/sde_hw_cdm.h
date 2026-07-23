@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -28,6 +28,7 @@ struct sde_hw_cdm_cfg {
 	const struct sde_format *output_fmt;
 	u32 output_type;
 	int flags;
+	int pp_id;
 };
 
 enum sde_hw_cdwn_type {
@@ -57,6 +58,8 @@ enum sde_hw_cdwn_output_bit_depth {
  *  @enable:               Enables the output to interface and programs the
  *                         output packer
  *  @disable:              Puts the cdm in bypass mode
+ * @bind_pingpong_blk:    enable/disable the connection with pingpong which
+ *                        will feed pixels to this cdm
  */
 struct sde_hw_cdm_ops {
 	/**
@@ -90,6 +93,23 @@ struct sde_hw_cdm_ops {
 	 * @cdm         Pointer to chroma down context
 	 */
 	void (*disable)(struct sde_hw_cdm *cdm);
+
+	/**
+	 * Enable/disable the connection with pingpong
+	 * @cdm         Pointer to chroma down context
+	 * @enable      Enable/disable control
+	 * @pp          pingpong block id.
+	 */
+	void (*bind_pingpong_blk)(struct sde_hw_cdm *cdm,
+			bool enable,
+			const enum sde_pingpong pp);
+
+	/**
+	 * Configure CDM output
+	 * @cdm         Pointer to chroma down context
+	 */
+	void (*setup_output)(struct sde_hw_cdm *cdm,
+	struct sde_hw_cdm_cfg *cfg);
 };
 
 struct sde_hw_cdm {

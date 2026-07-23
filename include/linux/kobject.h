@@ -29,13 +29,8 @@
 #include <linux/workqueue.h>
 
 #define UEVENT_HELPER_PATH_LEN		256
-//#ifdef OPLUS_FEATURE_CHG_BASIC
-#define UEVENT_NUM_ENVP			128	/* number of env pointers */
-#define UEVENT_BUFFER_SIZE		4096	/* buffer for the variables */
-//#else
-//#define UEVENT_NUM_ENVP			64	/* number of env pointers */
-//#define UEVENT_BUFFER_SIZE		2048	/* buffer for the variables */
-//#endif
+#define UEVENT_NUM_ENVP			64	/* number of env pointers */
+#define UEVENT_BUFFER_SIZE		2048	/* buffer for the variables */
 
 #ifdef CONFIG_UEVENT_HELPER
 /* path to the userspace helper executed on an event */
@@ -62,6 +57,8 @@ enum kobject_action {
 	KOBJ_MOVE,
 	KOBJ_ONLINE,
 	KOBJ_OFFLINE,
+	KOBJ_BIND,
+	KOBJ_UNBIND,
 	KOBJ_MAX
 };
 
@@ -132,7 +129,7 @@ extern char *kobject_get_path(struct kobject *kobj, gfp_t flag);
  */
 static inline bool kobject_has_children(struct kobject *kobj)
 {
-	WARN_ON_ONCE(atomic_read(&kobj->kref.refcount) == 0);
+	WARN_ON_ONCE(kref_read(&kobj->kref) == 0);
 
 	return kobj->sd && kobj->sd->dir.subdirs;
 }
@@ -194,7 +191,7 @@ struct kset {
 	spinlock_t list_lock;
 	struct kobject kobj;
 	const struct kset_uevent_ops *uevent_ops;
-};
+} __randomize_layout;
 
 extern void kset_init(struct kset *kset);
 extern int __must_check kset_register(struct kset *kset);
@@ -239,11 +236,9 @@ extern struct kobject *firmware_kobj;
 int kobject_uevent(struct kobject *kobj, enum kobject_action action);
 int kobject_uevent_env(struct kobject *kobj, enum kobject_action action,
 			char *envp[]);
+int kobject_synth_uevent(struct kobject *kobj, const char *buf, size_t count);
 
 __printf(2, 3)
 int add_uevent_var(struct kobj_uevent_env *env, const char *format, ...);
-
-int kobject_action_type(const char *buf, size_t count,
-			enum kobject_action *type);
 
 #endif /* _KOBJECT_H_ */

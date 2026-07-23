@@ -10,8 +10,9 @@
  * GNU General Public License for more details.
  */
 
+#define pr_fmt(fmt)	"[drm:%s:%d] " fmt, __func__, __LINE__
 #include <linux/sync_file.h>
-#include <linux/fence.h>
+#include <linux/dma-fence.h>
 #include "msm_drv.h"
 #include "sde_kms.h"
 #include "sde_fence.h"
@@ -27,21 +28,21 @@ void *sde_sync_get(uint64_t fd)
 void sde_sync_put(void *fence)
 {
 	if (fence)
-		fence_put(fence);
+		dma_fence_put(fence);
 }
 
 signed long sde_sync_wait(void *fnc, long timeout_ms)
 {
-	struct fence *fence = fnc;
+	struct dma_fence *fence = fnc;
 	int rc;
 	char timeline_str[TIMELINE_VAL_LENGTH];
 
 	if (!fence)
 		return -EINVAL;
-	else if (fence_is_signaled(fence))
+	else if (dma_fence_is_signaled(fence))
 		return timeout_ms ? msecs_to_jiffies(timeout_ms) : 1;
 
-	rc = fence_wait_timeout(fence, true,
+	rc = dma_fence_wait_timeout(fence, true,
 				msecs_to_jiffies(timeout_ms));
 	if (!rc || (rc == -EINVAL)) {
 		if (fence->ops->timeline_value_str)
@@ -64,7 +65,7 @@ uint32_t sde_sync_get_name_prefix(void *fence)
 {
 	const char *name;
 	uint32_t i, prefix;
-	struct fence *f = fence;
+	struct dma_fence *f = fence;
 
 	if (!fence)
 		return 0;
@@ -88,7 +89,7 @@ uint32_t sde_sync_get_name_prefix(void *fence)
  * @fd: fd attached to this fence - debugging purpose.
  */
 struct sde_fence {
-	struct fence base;
+	struct dma_fence base;
 	struct sde_fence_context *ctx;
 	char name[SDE_FENCE_NAME_SIZE];
 	struct list_head	fence_list;
@@ -97,33 +98,42 @@ struct sde_fence {
 
 static void sde_fence_destroy(struct kref *kref)
 {
+	struct sde_fence_context *ctx;
+
+	if (!kref) {
+		SDE_ERROR("received invalid kref\n");
+		return;
+	}
+
+	ctx = container_of(kref, struct sde_fence_context, kref);
+	kfree(ctx);
 }
 
-static inline struct sde_fence *to_sde_fence(struct fence *fence)
+static inline struct sde_fence *to_sde_fence(struct dma_fence *fence)
 {
 	return container_of(fence, struct sde_fence, base);
 }
 
-static const char *sde_fence_get_driver_name(struct fence *fence)
+static const char *sde_fence_get_driver_name(struct dma_fence *fence)
 {
 	struct sde_fence *f = to_sde_fence(fence);
 
 	return f->name;
 }
 
-static const char *sde_fence_get_timeline_name(struct fence *fence)
+static const char *sde_fence_get_timeline_name(struct dma_fence *fence)
 {
 	struct sde_fence *f = to_sde_fence(fence);
 
 	return f->ctx->name;
 }
 
-static bool sde_fence_enable_signaling(struct fence *fence)
+static bool sde_fence_enable_signaling(struct dma_fence *fence)
 {
 	return true;
 }
 
-static bool sde_fence_signaled(struct fence *fence)
+static bool sde_fence_signaled(struct dma_fence *fence)
 {
 	struct sde_fence *f = to_sde_fence(fence);
 	bool status;
@@ -134,17 +144,18 @@ static bool sde_fence_signaled(struct fence *fence)
 	return status;
 }
 
-static void sde_fence_release(struct fence *fence)
+static void sde_fence_release(struct dma_fence *fence)
 {
 	struct sde_fence *f;
 
 	if (fence) {
 		f = to_sde_fence(fence);
+		kref_put(&f->ctx->kref, sde_fence_destroy);
 		kfree(f);
 	}
 }
 
-static void sde_fence_value_str(struct fence *fence, char *str, int size)
+static void sde_fence_value_str(struct dma_fence *fence, char *str, int size)
 {
 	if (!fence || !str)
 		return;
@@ -152,7 +163,7 @@ static void sde_fence_value_str(struct fence *fence, char *str, int size)
 	snprintf(str, size, "%d", fence->seqno);
 }
 
-static void sde_fence_timeline_value_str(struct fence *fence, char *str,
+static void sde_fence_timeline_value_str(struct dma_fence *fence, char *str,
 		int size)
 {
 	struct sde_fence *f = to_sde_fence(fence);
@@ -163,12 +174,12 @@ static void sde_fence_timeline_value_str(struct fence *fence, char *str,
 	snprintf(str, size, "%d", f->ctx->done_count);
 }
 
-static struct fence_ops sde_fence_ops = {
+static struct dma_fence_ops sde_fence_ops = {
 	.get_driver_name = sde_fence_get_driver_name,
 	.get_timeline_name = sde_fence_get_timeline_name,
 	.enable_signaling = sde_fence_enable_signaling,
 	.signaled = sde_fence_signaled,
-	.wait = fence_default_wait,
+	.wait = dma_fence_default_wait,
 	.release = sde_fence_release,
 	.fence_value_str = sde_fence_value_str,
 	.timeline_value_str = sde_fence_timeline_value_str,
@@ -200,15 +211,16 @@ static int _sde_fence_create_fd(void *fence_ctx, uint32_t val)
 	sde_fence->ctx = fence_ctx;
 	snprintf(sde_fence->name, SDE_FENCE_NAME_SIZE, "sde_fence:%s:%u",
 						sde_fence->ctx->name, val);
-	fence_init(&sde_fence->base, &sde_fence_ops, &ctx->lock,
+	dma_fence_init(&sde_fence->base, &sde_fence_ops, &ctx->lock,
 		ctx->context, val);
+	kref_get(&ctx->kref);
 
 	/* create fd */
 	fd = get_unused_fd_flags(0);
 	if (fd < 0) {
 		SDE_ERROR("failed to get_unused_fd_flags(), %s\n",
 							sde_fence->name);
-		fence_put(&sde_fence->base);
+		dma_fence_put(&sde_fence->base);
 		goto exit;
 	}
 
@@ -218,13 +230,12 @@ static int _sde_fence_create_fd(void *fence_ctx, uint32_t val)
 		put_unused_fd(fd);
 		fd = -EINVAL;
 		SDE_ERROR("couldn't create fence, %s\n", sde_fence->name);
-		fence_put(&sde_fence->base);
+		dma_fence_put(&sde_fence->base);
 		goto exit;
 	}
 
 	fd_install(fd, sync_file->file);
 	sde_fence->fd = fd;
-	kref_get(&ctx->kref);
 
 	spin_lock(&ctx->list_lock);
 	list_add_tail(&sde_fence->fence_list, &ctx->fence_list_head);
@@ -234,25 +245,32 @@ exit:
 	return fd;
 }
 
-int sde_fence_init(struct sde_fence_context *ctx,
-		const char *name, uint32_t drm_id)
+struct sde_fence_context *sde_fence_init(const char *name, uint32_t drm_id)
 {
-	if (!ctx || !name) {
+	struct sde_fence_context *ctx;
+
+	if (!name) {
 		SDE_ERROR("invalid argument(s)\n");
-		return -EINVAL;
+		return ERR_PTR(-EINVAL);
 	}
-	memset(ctx, 0, sizeof(*ctx));
+
+	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
+
+	if (!ctx) {
+		SDE_ERROR("failed to alloc fence ctx\n");
+		return ERR_PTR(-ENOMEM);
+	}
 
 	strlcpy(ctx->name, name, ARRAY_SIZE(ctx->name));
 	ctx->drm_id = drm_id;
 	kref_init(&ctx->kref);
-	ctx->context = fence_context_alloc(1);
+	ctx->context = dma_fence_context_alloc(1);
 
 	spin_lock_init(&ctx->lock);
 	spin_lock_init(&ctx->list_lock);
 	INIT_LIST_HEAD(&ctx->fence_list_head);
 
-	return 0;
+	return ctx;
 }
 
 void sde_fence_deinit(struct sde_fence_context *ctx)
@@ -303,13 +321,12 @@ static void _sde_fence_trigger(struct sde_fence_context *ctx,
 		spin_lock_irqsave(&ctx->lock, flags);
 		fc->base.error = error ? -EBUSY : 0;
 		fc->base.timestamp = ts;
-		is_signaled = fence_is_signaled_locked(&fc->base);
+		is_signaled = dma_fence_is_signaled_locked(&fc->base);
 		spin_unlock_irqrestore(&ctx->lock, flags);
 
 		if (is_signaled) {
 			list_del_init(&fc->fence_list);
-			fence_put(&fc->base);
-			kref_put(&ctx->kref, sde_fence_destroy);
+			dma_fence_put(&fc->base);
 		} else {
 			spin_lock(&ctx->list_lock);
 			list_move(&fc->fence_list, &ctx->fence_list_head);
@@ -432,7 +449,7 @@ void sde_fence_timeline_status(struct sde_fence_context *ctx,
 		ctx->commit_count);
 }
 
-void sde_fence_list_dump(struct fence *fence, struct seq_file **s)
+void sde_fence_list_dump(struct dma_fence *fence, struct seq_file **s)
 {
 	char timeline_str[TIMELINE_VAL_LENGTH];
 
@@ -453,7 +470,7 @@ void sde_debugfs_timeline_dump(struct sde_fence_context *ctx,
 {
 	char *obj_name;
 	struct sde_fence *fc, *next;
-	struct fence *fence;
+	struct dma_fence *fence;
 
 	if (!ctx || !drm_obj) {
 		SDE_ERROR("invalid input params\n");

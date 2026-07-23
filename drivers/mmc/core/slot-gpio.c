@@ -41,10 +41,6 @@ static irqreturn_t mmc_gpio_cd_irqt(int irq, void *dev_id)
 		mmc_hostname(host), present, present?"INSERT":"REMOVAL");
 
 	host->trigger_card_event = true;
-#ifdef CONFIG_EMMC_SDCARD_OPTIMIZE
-	host->detect_change_retry = 5;
-#endif /* CONFIG_EMMC_SDCARD_OPTIMIZE */
-
 	mmc_detect_change(host, msecs_to_jiffies(200));
 
 	return IRQ_HANDLED;
@@ -136,6 +132,27 @@ int mmc_gpio_request_ro(struct mmc_host *host, unsigned int gpio)
 }
 EXPORT_SYMBOL(mmc_gpio_request_ro);
 
+void mmc_gpiod_free_cd_irq(struct mmc_host *host)
+{
+	devm_free_irq(host->parent, host->slot.cd_irq, host);
+}
+EXPORT_SYMBOL(mmc_gpiod_free_cd_irq);
+
+void mmc_gpiod_restore_cd_irq(struct mmc_host *host)
+{
+	struct mmc_gpio *ctx = host->slot.handler_priv;
+	int irq = host->slot.cd_irq;
+
+	if (irq >= 0) {
+		devm_request_threaded_irq(host->parent, irq,
+			NULL, ctx->cd_gpio_isr,
+			IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING |
+			IRQF_ONESHOT,
+			ctx->cd_label, host);
+	}
+}
+EXPORT_SYMBOL(mmc_gpiod_restore_cd_irq);
+
 void mmc_gpiod_request_cd_irq(struct mmc_host *host)
 {
 	struct mmc_gpio *ctx = host->slot.handler_priv;
@@ -169,6 +186,8 @@ void mmc_gpiod_request_cd_irq(struct mmc_host *host)
 
 	if (irq < 0)
 		host->caps |= MMC_CAP_NEEDS_POLL;
+	else if ((host->caps & MMC_CAP_CD_WAKE) && !enable_irq_wake(irq))
+		host->slot.cd_wake_enabled = true;
 }
 EXPORT_SYMBOL(mmc_gpiod_request_cd_irq);
 
@@ -300,9 +319,6 @@ int mmc_gpiod_request_cd(struct mmc_host *host, const char *con_id,
 	struct gpio_desc *desc;
 	int ret;
 
-	if (!con_id)
-		con_id = ctx->cd_label;
-
 	desc = devm_gpiod_get_index(host->parent, con_id, idx, GPIOD_IN);
 	if (IS_ERR(desc))
 		return PTR_ERR(desc);
@@ -322,6 +338,14 @@ int mmc_gpiod_request_cd(struct mmc_host *host, const char *con_id,
 	return 0;
 }
 EXPORT_SYMBOL(mmc_gpiod_request_cd);
+
+bool mmc_can_gpio_cd(struct mmc_host *host)
+{
+	struct mmc_gpio *ctx = host->slot.handler_priv;
+
+	return ctx->cd_gpio ? true : false;
+}
+EXPORT_SYMBOL(mmc_can_gpio_cd);
 
 /**
  * mmc_gpiod_request_ro - request a gpio descriptor for write protection
@@ -345,9 +369,6 @@ int mmc_gpiod_request_ro(struct mmc_host *host, const char *con_id,
 	struct mmc_gpio *ctx = host->slot.handler_priv;
 	struct gpio_desc *desc;
 	int ret;
-
-	if (!con_id)
-		con_id = ctx->ro_label;
 
 	desc = devm_gpiod_get_index(host->parent, con_id, idx, GPIOD_IN);
 	if (IS_ERR(desc))

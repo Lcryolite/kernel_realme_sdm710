@@ -23,6 +23,8 @@
 #include <linux/mmc/host.h>
 
 #include "core.h"
+#include "card.h"
+#include "host.h"
 #include "sdio_cis.h"
 #include "bus.h"
 
@@ -167,19 +169,9 @@ static int mmc_bus_suspend(struct device *dev)
 	if (mmc_bus_needs_resume(host))
 		return 0;
 	ret = host->bus_ops->suspend(host);
-
-	/*
-	 * bus_ops->suspend may fail due to some reason
-	 * In such cases if we return error to PM framework
-	 * from here without calling pm_generic_resume then mmc
-	 * request may get stuck since PM framework will assume
-	 * that mmc bus is not suspended (because of error) and
-	 * it won't call resume again.
-	 *
-	 * So in case of error call pm_generic_resume().
-	 */
 	if (ret)
 		pm_generic_resume(dev);
+
 	return ret;
 }
 
@@ -283,12 +275,15 @@ EXPORT_SYMBOL(mmc_unregister_driver);
 static void mmc_release_card(struct device *dev)
 {
 	struct mmc_card *card = mmc_dev_to_card(dev);
+	struct mmc_host *host = card->host;
 
 	sdio_free_common_cis(card);
 
 	kfree(card->info);
 
 	kfree(card);
+	if (host && card == host->card)
+		host->card = NULL;
 }
 
 /*
@@ -311,7 +306,6 @@ struct mmc_card *mmc_alloc_card(struct mmc_host *host, struct device_type *type)
 	card->dev.release = mmc_release_card;
 	card->dev.type = type;
 
-	spin_lock_init(&card->wr_pack_stats.lock);
 	spin_lock_init(&card->bkops.stats.lock);
 
 	return card;
@@ -429,8 +423,6 @@ void mmc_remove_card(struct mmc_card *card)
 		device_del(&card->dev);
 		of_node_put(card->dev.of_node);
 	}
-
-	kfree(card->wr_pack_stats.packing_events);
 
 	put_device(&card->dev);
 }

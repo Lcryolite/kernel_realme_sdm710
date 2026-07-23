@@ -16,11 +16,6 @@
 #include <linux/xattr.h>
 #include <linux/posix_acl.h>
 
-#ifdef CONFIG_OPLUS_FEATURE_ACM
-#include <linux/acm_fs.h>
-#define ACM_DELETE_ERR  999
-#endif
-
 static bool fuse_use_readdirplus(struct inode *dir, struct dir_context *ctx)
 {
 	struct fuse_conn *fc = get_fuse_conn(dir);
@@ -237,7 +232,7 @@ static int fuse_dentry_revalidate(struct dentry *entry, unsigned int flags)
 			spin_unlock(&fc->lock);
 		}
 		kfree(forget);
-		if (ret == -ENOMEM)
+		if (ret == -ENOMEM || ret == -EINTR)
 			goto out;
 		if (ret || fuse_invalid_attr(&outarg.attr) ||
 		    (outarg.attr.mode ^ inode->i_mode) & S_IFMT)
@@ -268,6 +263,50 @@ invalid:
 	goto out;
 }
 
+/*
+ * Get the canonical path. Since we must translate to a path, this must be done
+ * in the context of the userspace daemon, however, the userspace daemon cannot
+ * look up paths on its own. Instead, we handle the lookup as a special case
+ * inside of the write request.
+ */
+static void fuse_dentry_canonical_path(const struct path *path, struct path *canonical_path) {
+	struct inode *inode = path->dentry->d_inode;
+	struct fuse_conn *fc = get_fuse_conn(inode);
+	struct fuse_req *req;
+	int err;
+	char *path_name;
+
+	req = fuse_get_req(fc, 1);
+	err = PTR_ERR(req);
+	if (IS_ERR(req))
+		goto default_path;
+
+	path_name = (char*)get_zeroed_page(GFP_KERNEL);
+	if (!path_name) {
+		fuse_put_request(fc, req);
+		goto default_path;
+	}
+
+	req->in.h.opcode = FUSE_CANONICAL_PATH;
+	req->in.h.nodeid = get_node_id(inode);
+	req->in.numargs = 0;
+	req->out.numargs = 1;
+	req->out.args[0].size = PATH_MAX;
+	req->out.args[0].value = path_name;
+	req->canonical_path = canonical_path;
+	req->out.argvar = 1;
+	fuse_request_send(fc, req);
+	err = req->out.h.error;
+	fuse_put_request(fc, req);
+	free_page((unsigned long)path_name);
+	if (!err)
+		return;
+default_path:
+	canonical_path->dentry = path->dentry;
+	canonical_path->mnt = path->mnt;
+	path_get(canonical_path);
+}
+
 static int invalid_nodeid(u64 nodeid)
 {
 	return !nodeid || nodeid == FUSE_ROOT_ID;
@@ -286,44 +325,6 @@ static void fuse_dentry_release(struct dentry *dentry)
 	kfree_rcu(fd, rcu);
 }
 
-/*
- * Get the canonical path. Since we must translate to a path, this must be done
- * in the context of the userspace daemon, however, the userspace daemon cannot
- * look up paths on its own. Instead, we handle the lookup as a special case
- * inside of the write request.
- */
-static void fuse_dentry_canonical_path(const struct path *path,
-				       struct path *canonical_path)
-{
-	struct inode *inode = d_inode(path->dentry);
-	struct fuse_conn *fc = get_fuse_conn(inode);
-	FUSE_ARGS(args);
-	char *path_name;
-	int err;
-
-	path_name = (char *)__get_free_page(GFP_KERNEL);
-	if (!path_name)
-		goto default_path;
-
-	args.in.h.opcode = FUSE_CANONICAL_PATH;
-	args.in.h.nodeid = get_node_id(inode);
-	args.in.numargs = 0;
-	args.out.numargs = 1;
-	args.out.args[0].size = PATH_MAX;
-	args.out.args[0].value = path_name;
-	args.out.argvar = 1;
-	args.out.canonical_path = canonical_path;
-
-	err = fuse_simple_request(fc, &args);
-	free_page((unsigned long)path_name);
-	if (err > 0)
-		return;
-default_path:
-	canonical_path->dentry = path->dentry;
-	canonical_path->mnt = path->mnt;
-	path_get(canonical_path);
-}
-
 const struct dentry_operations fuse_dentry_operations = {
 	.d_revalidate	= fuse_dentry_revalidate,
 	.d_init		= fuse_dentry_init,
@@ -334,6 +335,7 @@ const struct dentry_operations fuse_dentry_operations = {
 const struct dentry_operations fuse_root_dentry_operations = {
 	.d_init		= fuse_dentry_init,
 	.d_release	= fuse_dentry_release,
+	.d_canonical_path = fuse_dentry_canonical_path,
 };
 
 int fuse_valid_type(int m)
@@ -465,9 +467,6 @@ static int fuse_create_open(struct inode *dir, struct dentry *entry,
 	struct fuse_open_out outopen;
 	struct fuse_entry_out outentry;
 	struct fuse_file *ff;
-#ifdef CONFIG_OPLUS_FEATURE_FUSE_FS_SHORTCIRCUIT
-	char *iname;
-#endif /* CONFIG_OPLUS_FEATURE_FUSE_FS_SHORTCIRCUIT */
 
 	/* Userspace expects S_IFREG in create mode */
 	BUG_ON((mode & S_IFMT) != S_IFREG);
@@ -503,27 +502,7 @@ static int fuse_create_open(struct inode *dir, struct dentry *entry,
 	args.out.args[0].value = &outentry;
 	args.out.args[1].size = sizeof(outopen);
 	args.out.args[1].value = &outopen;
-	args.out.passthrough_filp = NULL;
-#ifdef CONFIG_OPLUS_FEATURE_FUSE_FS_SHORTCIRCUIT
-	args.private_lower_rw_file = NULL;
-	iname = inode_name(dir);
-	if (iname) {
-		/* compose full path */
-		if ((strlen(iname) + entry->d_name.len + 2) <= PATH_MAX) {
-			strlcat(iname, "/", PATH_MAX);
-			strlcat(iname, entry->d_name.name, PATH_MAX);
-		} else {
-			__putname(iname);
-			iname = NULL;
-		}
-	}
-	args.iname = iname;
-#endif /* CONFIG_OPLUS_FEATURE_FUSE_FS_SHORTCIRCUIT */
 	err = fuse_simple_request(fc, &args);
-#ifdef CONFIG_OPLUS_FEATURE_FUSE_FS_SHORTCIRCUIT
-	if (args.iname)
-		__putname(args.iname);
-#endif /* CONFIG_OPLUS_FEATURE_FUSE_FS_SHORTCIRCUIT */
 	if (err)
 		goto out_free_ff;
 
@@ -535,12 +514,7 @@ static int fuse_create_open(struct inode *dir, struct dentry *entry,
 	ff->fh = outopen.fh;
 	ff->nodeid = outentry.nodeid;
 	ff->open_flags = outopen.open_flags;
-#ifdef CONFIG_OPLUS_FEATURE_FUSE_FS_SHORTCIRCUIT
-	if (args.private_lower_rw_file != NULL)
-		ff->rw_lower_file = args.private_lower_rw_file;
-#endif /* CONFIG_OPLUS_FEATURE_FUSE_FS_SHORTCIRCUIT */
-	if (args.out.passthrough_filp != NULL)
-		ff->passthrough_filp = args.out.passthrough_filp;
+	fuse_passthrough_setup(fc, ff, &outopen);
 	inode = fuse_iget(dir->i_sb, outentry.nodeid, outentry.generation,
 			  &outentry.attr, entry_attr_timeout(&outentry), 0);
 	if (!inode) {
@@ -558,12 +532,9 @@ static int fuse_create_open(struct inode *dir, struct dentry *entry,
 	if (err) {
 		fuse_sync_release(ff, flags);
 	} else {
-		file->private_data = fuse_file_get(ff);
+		file->private_data = ff;
 		fuse_finish_open(inode, file);
 	}
-#ifdef CONFIG_OPLUS_FEATURE_ACM
-	monitor_acm2(entry, NULL, args.in.h.opcode);
-#endif
 	return err;
 
 out_free_ff:
@@ -670,11 +641,6 @@ static int create_new_entry(struct fuse_conn *fc, struct fuse_args *args,
 
 	fuse_change_entry_timeout(entry, &outarg);
 	fuse_invalidate_attr(dir);
-#ifdef CONFIG_OPLUS_FEATURE_ACM
-	if ((args->in.h.opcode == FUSE_MKNOD) ||
-		(args->in.h.opcode == FUSE_MKDIR))
-		monitor_acm2(entry, NULL, args->in.h.opcode);
-#endif
 	return 0;
 
  out_put_forget_req:
@@ -770,13 +736,6 @@ static int fuse_unlink(struct inode *dir, struct dentry *entry)
 	args.in.numargs = 1;
 	args.in.args[0].size = entry->d_name.len + 1;
 	args.in.args[0].value = entry->d_name.name;
-#ifdef CONFIG_OPLUS_FEATURE_ACM
-	err = monitor_acm2(entry, NULL, args.in.h.opcode);
-	if (err) {
-		err = ACM_DELETE_ERR;
-		return err;
-	}
-#endif
 	err = fuse_simple_request(fc, &args);
 	if (!err) {
 		struct inode *inode = d_inode(entry);
@@ -816,13 +775,6 @@ static int fuse_rmdir(struct inode *dir, struct dentry *entry)
 	args.in.numargs = 1;
 	args.in.args[0].size = entry->d_name.len + 1;
 	args.in.args[0].value = entry->d_name.name;
-#ifdef CONFIG_OPLUS_FEATURE_ACM
-	err = monitor_acm2(entry, NULL, args.in.h.opcode);
-	if (err) {
-		err = ACM_DELETE_ERR;
-		return err;
-	}
-#endif
 	err = fuse_simple_request(fc, &args);
 	if (!err) {
 		clear_nlink(d_inode(entry));
@@ -885,9 +837,7 @@ static int fuse_rename_common(struct inode *olddir, struct dentry *oldent,
 		if (d_really_is_positive(newent))
 			fuse_invalidate_entry(newent);
 	}
-#ifdef CONFIG_OPLUS_FEATURE_ACM
-	monitor_acm2(oldent, newent, args.in.h.opcode);
-#endif
+
 	return err;
 }
 
@@ -1049,31 +999,27 @@ static int fuse_do_getattr(struct inode *inode, struct kstat *stat,
 	return err;
 }
 
-int fuse_update_attributes(struct inode *inode, struct kstat *stat,
-			   struct file *file, bool *refreshed)
+static int fuse_update_get_attr(struct inode *inode, struct file *file,
+				struct kstat *stat)
 {
 	struct fuse_inode *fi = get_fuse_inode(inode);
-	int err;
-	bool r;
+	int err = 0;
 
 	if (time_before64(fi->i_time, get_jiffies_64())) {
-		r = true;
 		forget_all_cached_acls(inode);
 		err = fuse_do_getattr(inode, stat, file);
-	} else {
-		r = false;
-		err = 0;
-		if (stat) {
-			generic_fillattr(inode, stat);
-			stat->mode = fi->orig_i_mode;
-			stat->ino = fi->orig_ino;
-		}
+	} else if (stat) {
+		generic_fillattr(inode, stat);
+		stat->mode = fi->orig_i_mode;
+		stat->ino = fi->orig_ino;
 	}
 
-	if (refreshed != NULL)
-		*refreshed = r;
-
 	return err;
+}
+
+int fuse_update_attributes(struct inode *inode, struct file *file)
+{
+	return fuse_update_get_attr(inode, file, NULL);
 }
 
 int fuse_reverse_inval_entry(struct super_block *sb, u64 parent_nodeid,
@@ -1567,7 +1513,7 @@ static int fuse_dir_open(struct inode *inode, struct file *file)
 
 static int fuse_dir_release(struct inode *inode, struct file *file)
 {
-	fuse_release_common(file, FUSE_RELEASEDIR);
+	fuse_release_common(file, true);
 
 	return 0;
 }
@@ -1959,7 +1905,7 @@ static int fuse_getattr(const struct path *path, struct kstat *stat,
 	if (!fuse_allow_current_process(fc))
 		return -EACCES;
 
-	return fuse_update_attributes(inode, stat, NULL, NULL);
+	return fuse_update_get_attr(inode, NULL, stat);
 }
 
 static const struct inode_operations fuse_dir_inode_operations = {
@@ -2004,7 +1950,6 @@ static const struct inode_operations fuse_common_inode_operations = {
 static const struct inode_operations fuse_symlink_inode_operations = {
 	.setattr	= fuse_setattr,
 	.get_link	= fuse_get_link,
-	.readlink	= generic_readlink,
 	.getattr	= fuse_getattr,
 	.listxattr	= fuse_listxattr,
 };

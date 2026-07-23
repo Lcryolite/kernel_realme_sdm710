@@ -1,4 +1,4 @@
-/* Copyright (c) 2009-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2009-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -221,11 +221,29 @@ static int32_t msm_flash_i2c_init(
 		flash_ctrl->power_setting_array.size_down =
 			power_setting_array32->size_down;
 
+		/* Validate power_up array size and power_down array size */
+		if ((!flash_ctrl->power_setting_array.size) ||
+			(flash_ctrl->power_setting_array.size >
+			MAX_POWER_CONFIG) ||
+			(!flash_ctrl->power_setting_array.size_down) ||
+			(flash_ctrl->power_setting_array.size_down >
+			MAX_POWER_CONFIG)) {
+
+			pr_err("failed: invalid size %d, size_down %d",
+				flash_ctrl->power_setting_array.size,
+				flash_ctrl->power_setting_array.size_down);
+			kfree(power_setting_array32);
+			power_setting_array32 = NULL;
+			return -EINVAL;
+		}
+
 		flash_ctrl->power_setting_array.power_down_setting =
-			kzalloc(sizeof(struct msm_sensor_power_setting)*
-			flash_ctrl->power_setting_array.size_down, GFP_KERNEL);
-		if (!flash_ctrl->power_setting_array.power_down_setting)
+			kcalloc(flash_ctrl->power_setting_array.size_down,
+			sizeof(struct msm_sensor_power_setting), GFP_KERNEL);
+		if (!flash_ctrl->power_setting_array.power_down_setting) {
+			kfree(power_setting_array32);
 			return -ENOMEM;
+		}
 		if (copy_from_user(
 			flash_ctrl->power_setting_array.power_down_setting,
 			(void __user *)
@@ -233,14 +251,17 @@ static int32_t msm_flash_i2c_init(
 			sizeof(struct msm_sensor_power_setting)*
 			flash_ctrl->power_setting_array.size_down)) {
 			pr_err("%s:%d failed\n", __func__, __LINE__);
+			kfree(power_setting_array32);
 			return -EFAULT;
 		}
 
 		flash_ctrl->power_setting_array.power_setting =
 			kzalloc(sizeof(struct msm_sensor_power_setting)*
 			flash_ctrl->power_setting_array.size, GFP_KERNEL);
-		if (!flash_ctrl->power_setting_array.power_setting)
+		if (!flash_ctrl->power_setting_array.power_setting) {
+			kfree(power_setting_array32);
 			return -ENOMEM;
+		}
 		if (copy_from_user(
 			flash_ctrl->power_setting_array.power_setting,
 			(void __user *)
@@ -248,6 +269,7 @@ static int32_t msm_flash_i2c_init(
 			sizeof(struct msm_sensor_power_setting)*
 			flash_ctrl->power_setting_array.size)) {
 			pr_err("%s:%d failed\n", __func__, __LINE__);
+			kfree(power_setting_array32);
 			return -EFAULT;
 		}
 
@@ -276,7 +298,8 @@ static int32_t msm_flash_i2c_init(
 			flash_ctrl->power_setting_array.power_down_setting_a,
 			power_setting_array32->power_down_setting_a,
 			flash_ctrl->power_setting_array.size_down);
-	} else
+		kfree(power_setting_array32);
+	}
 #endif
 	if (copy_from_user(&flash_ctrl->power_setting_array,
 		(void __user *)flash_init_info->power_setting_array,
@@ -344,7 +367,6 @@ static int32_t msm_flash_i2c_init(
 				__func__, __LINE__, rc);
 		}
 	}
-
 	return 0;
 
 msm_flash_i2c_init_fail:
@@ -387,13 +409,6 @@ static int32_t msm_flash_i2c_release(
 	struct msm_flash_ctrl_t *flash_ctrl)
 {
 	int32_t rc = 0;
-
-	if (!(&flash_ctrl->power_info) || !(&flash_ctrl->flash_i2c_client)) {
-		pr_err("%s:%d failed: %pK %pK\n",
-			__func__, __LINE__, &flash_ctrl->power_info,
-			&flash_ctrl->flash_i2c_client);
-		return -EINVAL;
-	}
 
 	rc = msm_camera_power_down(&flash_ctrl->power_info,
 		flash_ctrl->flash_device_type,
@@ -712,7 +727,7 @@ static int32_t msm_flash_query_current(
 
 	if (flash_ctrl->switch_trigger) {
 		ret = qpnp_flash_led_prepare(flash_ctrl->switch_trigger,
-					QUERY_MAX_CURRENT, &max_current);
+					QUERY_MAX_AVAIL_CURRENT, &max_current);
 		if (ret < 0) {
 			pr_err("%s:%d Query max_avail_curr failed ret = %d\n",
 				__func__, __LINE__, ret);
@@ -831,10 +846,10 @@ static int32_t msm_flash_query_data(struct msm_flash_ctrl_t *flash_ctrl,
 
 	switch (flash_query->query_type) {
 	case FLASH_QUERY_CURRENT:
-		if (flash_ctrl->func_tbl && flash_ctrl->func_tbl->
-				camera_flash_query_current != NULL)
-			rc = flash_ctrl->func_tbl->
-				camera_flash_query_current(
+		if (flash_ctrl->func_tbl &&
+			flash_ctrl->func_tbl->camera_flash_query_current !=
+			NULL)
+			rc = flash_ctrl->func_tbl->camera_flash_query_current(
 				flash_ctrl, flash_query);
 		else {
 			flash_query->max_avail_curr = 0;
@@ -1295,6 +1310,7 @@ static int32_t msm_flash_platform_probe(struct platform_device *pdev)
 	flash_ctrl->flash_i2c_client.cci_client = kzalloc(
 		sizeof(struct msm_camera_cci_client), GFP_KERNEL);
 	if (!flash_ctrl->flash_i2c_client.cci_client) {
+		kfree(flash_ctrl->power_info.gpio_conf);
 		kfree(flash_ctrl);
 		pr_err("failed no memory\n");
 		return -ENOMEM;

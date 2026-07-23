@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0
 ###
 # Main build makefile.
 #
@@ -19,14 +20,8 @@ else
   Q=@
 endif
 
-ifneq ($(filter 4.%,$(MAKE_VERSION)),)	# make-4
-ifneq ($(filter %s ,$(firstword x$(MAKEFLAGS))),)
+ifneq ($(findstring s,$(filter-out --%,$(MAKEFLAGS))),)
   quiet=silent_
-endif
-else					# make-3.8x
-ifneq ($(filter s% -s%,$(MAKEFLAGS)),)
-  quiet=silent_
-endif
 endif
 
 build-dir := $(srctree)/tools/build
@@ -135,10 +130,6 @@ objprefix    := $(subst ./,,$(OUTPUT)$(dir)/)
 obj-y        := $(addprefix $(objprefix),$(obj-y))
 subdir-obj-y := $(addprefix $(objprefix),$(subdir-obj-y))
 
-# Separate out test log files from real build objects.
-test-y       := $(filter %_log, $(obj-y))
-obj-y        := $(filter-out %_log, $(obj-y))
-
 # Final '$(obj)-in.o' object
 in-target := $(objprefix)$(obj)-in.o
 
@@ -149,7 +140,7 @@ $(subdir-y):
 
 $(sort $(subdir-obj-y)): $(subdir-y) ;
 
-$(in-target): $(obj-y) $(test-y) FORCE
+$(in-target): $(obj-y) FORCE
 	$(call rule_mkdir)
 	$(call if_changed,$(host)ld_multi)
 

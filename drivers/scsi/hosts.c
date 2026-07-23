@@ -213,6 +213,14 @@ int scsi_add_host_with_dma(struct Scsi_Host *shost, struct device *dev,
 		goto fail;
 	}
 
+	/* Use min_t(int, ...) in case shost->can_queue exceeds SHRT_MAX */
+	shost->cmd_per_lun = min_t(int, shost->cmd_per_lun,
+				   shost->can_queue);
+
+	error = scsi_init_sense_cache(shost);
+	if (error)
+		goto fail;
+
 	if (shost_use_blk_mq(shost)) {
 		error = scsi_mq_setup_tags(shost);
 		if (error)
@@ -225,19 +233,6 @@ int scsi_add_host_with_dma(struct Scsi_Host *shost, struct device *dev,
 			goto fail;
 		}
 	}
-
-	/*
-	 * Note that we allocate the freelist even for the MQ case for now,
-	 * as we need a command set aside for scsi_reset_provider.  Having
-	 * the full host freelist and one command available for that is a
-	 * little heavy-handed, but avoids introducing a special allocator
-	 * just for this.  Eventually the structure of scsi_reset_provider
-	 * will need a major overhaul.
-	 */
-	error = scsi_setup_command_freelist(shost);
-	if (error)
-		goto out_destroy_tags;
-
 
 	if (!shost->shost_gendev.parent)
 		shost->shost_gendev.parent = dev ? dev : &platform_bus;
@@ -258,7 +253,7 @@ int scsi_add_host_with_dma(struct Scsi_Host *shost, struct device *dev,
 
 	error = device_add(&shost->shost_gendev);
 	if (error)
-		goto out_destroy_freelist;
+		goto out_disable_runtime_pm;
 
 	scsi_host_set_state(shost, SHOST_RUNNING);
 	get_device(shost->shost_gendev.parent);
@@ -312,13 +307,11 @@ int scsi_add_host_with_dma(struct Scsi_Host *shost, struct device *dev,
 	 */
 	put_device(&shost->shost_dev);
 	device_del(&shost->shost_gendev);
- out_destroy_freelist:
+ out_disable_runtime_pm:
 	device_disable_async_suspend(&shost->shost_gendev);
 	pm_runtime_disable(&shost->shost_gendev);
 	pm_runtime_set_suspended(&shost->shost_gendev);
 	pm_runtime_put_noidle(&shost->shost_gendev);
-	scsi_destroy_command_freelist(shost);
- out_destroy_tags:
 	if (shost_use_blk_mq(shost))
 		scsi_mq_destroy_tags(shost);
  fail:
@@ -330,10 +323,11 @@ static void scsi_host_dev_release(struct device *dev)
 {
 	struct Scsi_Host *shost = dev_to_shost(dev);
 	struct device *parent = dev->parent;
-	struct request_queue *q;
-	void *queuedata;
 
 	scsi_proc_hostdir_rm(shost->hostt);
+
+	/* Wait for functions invoked through call_rcu(&shost->rcu, ...) */
+	rcu_barrier();
 
 	if (shost->tmf_work_q)
 		destroy_workqueue(shost->tmf_work_q);
@@ -341,12 +335,6 @@ static void scsi_host_dev_release(struct device *dev)
 		kthread_stop(shost->ehandler);
 	if (shost->work_q)
 		destroy_workqueue(shost->work_q);
-	q = shost->uspace_req_q;
-	if (q) {
-		queuedata = q->queuedata;
-		blk_cleanup_queue(q);
-		kfree(queuedata);
-	}
 
 	if (shost->shost_state == SHOST_CREATED) {
 		/*
@@ -359,7 +347,6 @@ static void scsi_host_dev_release(struct device *dev)
 		kfree(dev_name(&shost->shost_dev));
 	}
 
-	scsi_destroy_command_freelist(shost);
 	if (shost_use_blk_mq(shost)) {
 		if (shost->tag_set.tags)
 			scsi_mq_destroy_tags(shost);
@@ -497,6 +484,7 @@ struct Scsi_Host *scsi_host_alloc(struct scsi_host_template *sht, int privsize)
 		shost->dma_boundary = 0xffffffff;
 
 	shost->use_blk_mq = scsi_use_blk_mq;
+	shost->use_blk_mq = scsi_use_blk_mq || shost->hostt->force_blk_mq;
 
 	device_initialize(&shost->shost_gendev);
 	dev_set_name(&shost->shost_gendev, "host%d", shost->host_no);
@@ -567,7 +555,7 @@ EXPORT_SYMBOL(scsi_unregister);
 static int __scsi_host_match(struct device *dev, const void *data)
 {
 	struct Scsi_Host *p;
-	const unsigned short *hostnum = data;
+	const unsigned int *hostnum = data;
 
 	p = class_to_shost(dev);
 	return p->host_no == *hostnum;
@@ -584,7 +572,7 @@ static int __scsi_host_match(struct device *dev, const void *data)
  *	that scsi_host_get() took. The put_device() below dropped
  *	the reference from class_find_device().
  **/
-struct Scsi_Host *scsi_host_lookup(unsigned short hostnum)
+struct Scsi_Host *scsi_host_lookup(unsigned int hostnum)
 {
 	struct device *cdev;
 	struct Scsi_Host *shost = NULL;

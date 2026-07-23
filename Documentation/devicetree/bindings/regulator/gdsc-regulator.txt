@@ -1,8 +1,8 @@
 QTI Global Distributed Switch Controller (GDSC) Regulator Driver
 
 The GDSC driver, implemented under the regulator framework, is responsible for
-safely collapsing and restoring power to peripheral cores on chipsets like
-msm8996 for power savings.
+safely collapsing and restoring power to peripheral and multimedia cores on
+chipsets like SDM845 for power savings.
 
 Required properties:
  - compatible:      Must be "qcom,gdsc"
@@ -43,6 +43,12 @@ Optional properties:
 			Ex. "base", "domain-addr", "sw-reset", "hw-ctrl-addr".
  - qcom,no-status-check-on-disable: Do not poll the status bit when GDSC
 			is disabled.
+ - qcom,skip-disable:	Boolean flag indicating that the GDSC must not be
+			physically disabled upon a software disable request.
+			Instead, the GDSC will be disabled by the always-on
+			processor (AOP) upon entering system sleep.  The AOP
+			will also perform a special reset sequence for the GDSC
+			upon resuming from system sleep.
  - qcom,disallow-clear: Presence denotes the periph & core memory will not be
 			cleared, unless the required subsystem does not invoke
 			the api which will allow clearing the bits.
@@ -61,20 +67,25 @@ Optional properties:
  - reset-names: reset signal name strings sorted in the same order as the resets
 			property. These can be supplied only if we support
 			qcom,skip-logic-collapse.
- - qcom,poll-cfg-gdscr:	Poll the CFG register of the GDSC to determine if the
-			GDSC is enabled/disabled. This flag should not be set
-			in conjunction with "hw-ctrl-addr".
- - qcom,toggle-sw-collapse-in-disable: If set, SW_COLLAPSE bit is toggled
-			in disable call.
- - qcom,en-few-wait-val: Input value for EN_FEW_WAIT controls state transition
-			 delay after receiving ack signal (gds_enf_ack) from the
-			 longest en_few power switch chain.
- - qcom,en-rest-wait-val: Input value for EN_REST_WAIT controls state transition
-			  delay after receiving ack signal (gds_enr_ack) from the
-			  longest en_rest power switch chain.
+ - qcom,msm-bus,name:	Name to use for the bus client.  See [1] for details.
+ - qcom,msm-bus,num-cases: Must be 2 if qcom,msm-bus,name is specified.  The
+			first case corresponds to no bus request and the second
+			case corresponds to a minimum bus request.  See [1] for
+			details.
+ - qcom,msm-bus,num-paths: Should be 1 if qcom,msm-bus,name is specified.  See
+			[1] for details.
+ - qcom,msm-bus,vectors-KBps: Required if qcom,msm-bus,name is specified.  See
+			[1] for an explanation of the data format.
+ - mboxes:		Mailbox tuple containing QMP mailbox phandle and channel
+			identifier.  If this is specified, then a QMP message
+			should be sent to enable the GDSC instead of setting
+			SW_COLLAPSE=0.
  - qcom,skip-disable-before-sw-enable: Presence denotes a hardware requirement
 					to leave the GDSC on that has been
 					enabled by an entity external to HLOS.
+
+[1]: Documentation/devicetree/bindings/arm/msm/msm_bus.txt
+
 Example:
 	gdsc_oxili_gx: qcom,gdsc@fd8c4024 {
 		compatible = "qcom,gdsc";

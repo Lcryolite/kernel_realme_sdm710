@@ -13,21 +13,13 @@
 
 #include <linux/kernel.h>
 #include <linux/platform_device.h>
-#include <asm/arch_timer.h>
-#include <clocksource/arm_arch_timer.h>
-#include "rpmh_master_stat.h"
-#include <soc/qcom/lpm_levels.h>
 #include <soc/qcom/rpmh.h>
+#include <clocksource/arm_arch_timer.h>
+#include <soc/qcom/lpm_levels.h>
+#include "rpmh_master_stat.h"
 
 #define PDC_TIME_VALID_SHIFT	31
 #define PDC_TIME_UPPER_MASK	0xFFFFFF
-
-#ifdef CONFIG_ARM_GIC_V3
-#include <linux/irqchip/arm-gic-v3.h>
-#else
-static inline void gic_v3_dist_restore(void) {}
-static inline void gic_v3_dist_save(void) {}
-#endif
 
 static struct rpmh_client *rpmh_client;
 
@@ -68,7 +60,6 @@ static bool system_sleep_allowed(void)
  */
 static int system_sleep_enter(struct cpumask *mask)
 {
-	gic_v3_dist_save();
 	return rpmh_flush(rpmh_client);
 }
 
@@ -79,7 +70,6 @@ static void system_sleep_exit(bool success)
 {
 	if (success)
 		msm_rpmh_master_stats_update();
-	gic_v3_dist_restore();
 }
 
 static struct system_pm_ops pm_ops = {

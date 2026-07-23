@@ -65,4 +65,3 @@ struct msm_buf_mngr_main_cont_info {
 #define VIDIOC_MSM_BUF_MNGR_BUF_ERROR \
 	_IOWR('V', BASE_VIDIOC_PRIVATE + 41, struct msm_buf_mngr_info)
 #endif
-

@@ -64,6 +64,11 @@
 /* AUX CH addresses */
 /* DPCD */
 #define DP_DPCD_REV                         0x000
+# define DP_DPCD_REV_10                     0x10
+# define DP_DPCD_REV_11                     0x11
+# define DP_DPCD_REV_12                     0x12
+# define DP_DPCD_REV_13                     0x13
+# define DP_DPCD_REV_14                     0x14
 
 #define DP_MAX_LINK_RATE                    0x001
 
@@ -75,6 +80,7 @@
 #define DP_MAX_DOWNSPREAD                   0x003
 # define DP_MAX_DOWNSPREAD_0_5		    (1 << 0)
 # define DP_NO_AUX_HANDSHAKE_LINK_TRAINING  (1 << 6)
+# define DP_TPS4_SUPPORTED                  (1 << 7)
 
 #define DP_NORP                             0x004
 
@@ -118,6 +124,7 @@
 # define DP_DPCD_DISPLAY_CONTROL_CAPABLE     (1 << 3) /* edp v1.2 or higher */
 
 #define DP_TRAINING_AUX_RD_INTERVAL         0x00e   /* XXX 1.2? */
+# define DP_TRAINING_AUX_RD_MASK            0x7F    /* XXX 1.2? */
 
 #define DP_ADAPTER_CAP			    0x00f   /* 1.2 */
 # define DP_FORCE_LOAD_SENSE_CAP	    (1 << 0)
@@ -179,6 +186,111 @@
 
 #define DP_GUID				    0x030   /* 1.2 */
 
+#define DP_DSC_SUPPORT                      0x060   /* DP 1.4 */
+# define DP_DSC_DECOMPRESSION_IS_SUPPORTED  (1 << 0)
+
+#define DP_DSC_REV                          0x061
+# define DP_DSC_MAJOR_MASK                  (0xf << 0)
+# define DP_DSC_MINOR_MASK                  (0xf << 4)
+# define DP_DSC_MAJOR_SHIFT                 0
+# define DP_DSC_MINOR_SHIFT                 4
+
+#define DP_DSC_RC_BUF_BLK_SIZE              0x062
+# define DP_DSC_RC_BUF_BLK_SIZE_1           0x0
+# define DP_DSC_RC_BUF_BLK_SIZE_4           0x1
+# define DP_DSC_RC_BUF_BLK_SIZE_16          0x2
+# define DP_DSC_RC_BUF_BLK_SIZE_64          0x3
+
+#define DP_DSC_RC_BUF_SIZE                  0x063
+
+#define DP_DSC_SLICE_CAP_1                  0x064
+# define DP_DSC_1_PER_DP_DSC_SINK           (1 << 0)
+# define DP_DSC_2_PER_DP_DSC_SINK           (1 << 1)
+# define DP_DSC_4_PER_DP_DSC_SINK           (1 << 3)
+# define DP_DSC_6_PER_DP_DSC_SINK           (1 << 4)
+# define DP_DSC_8_PER_DP_DSC_SINK           (1 << 5)
+# define DP_DSC_10_PER_DP_DSC_SINK          (1 << 6)
+# define DP_DSC_12_PER_DP_DSC_SINK          (1 << 7)
+
+#define DP_DSC_LINE_BUF_BIT_DEPTH           0x065
+# define DP_DSC_LINE_BUF_BIT_DEPTH_MASK     (0xf << 0)
+# define DP_DSC_LINE_BUF_BIT_DEPTH_9        0x0
+# define DP_DSC_LINE_BUF_BIT_DEPTH_10       0x1
+# define DP_DSC_LINE_BUF_BIT_DEPTH_11       0x2
+# define DP_DSC_LINE_BUF_BIT_DEPTH_12       0x3
+# define DP_DSC_LINE_BUF_BIT_DEPTH_13       0x4
+# define DP_DSC_LINE_BUF_BIT_DEPTH_14       0x5
+# define DP_DSC_LINE_BUF_BIT_DEPTH_15       0x6
+# define DP_DSC_LINE_BUF_BIT_DEPTH_16       0x7
+# define DP_DSC_LINE_BUF_BIT_DEPTH_8        0x8
+
+#define DP_DSC_BLK_PREDICTION_SUPPORT       0x066
+# define DP_DSC_BLK_PREDICTION_IS_SUPPORTED (1 << 0)
+
+#define DP_DSC_MAX_BITS_PER_PIXEL_LOW       0x067   /* eDP 1.4 */
+
+#define DP_DSC_MAX_BITS_PER_PIXEL_HI        0x068   /* eDP 1.4 */
+
+#define DP_DSC_DEC_COLOR_FORMAT_CAP         0x069
+# define DP_DSC_RGB                         (1 << 0)
+# define DP_DSC_YCbCr444                    (1 << 1)
+# define DP_DSC_YCbCr422_Simple             (1 << 2)
+# define DP_DSC_YCbCr422_Native             (1 << 3)
+# define DP_DSC_YCbCr420_Native             (1 << 4)
+
+#define DP_DSC_DEC_COLOR_DEPTH_CAP          0x06A
+# define DP_DSC_8_BPC                       (1 << 1)
+# define DP_DSC_10_BPC                      (1 << 2)
+# define DP_DSC_12_BPC                      (1 << 3)
+
+#define DP_DSC_PEAK_THROUGHPUT              0x06B
+# define DP_DSC_THROUGHPUT_MODE_0_MASK      (0xf << 0)
+# define DP_DSC_THROUGHPUT_MODE_0_SHIFT     0
+# define DP_DSC_THROUGHPUT_MODE_0_340       (1 << 0)
+# define DP_DSC_THROUGHPUT_MODE_0_400       (2 << 0)
+# define DP_DSC_THROUGHPUT_MODE_0_450       (3 << 0)
+# define DP_DSC_THROUGHPUT_MODE_0_500       (4 << 0)
+# define DP_DSC_THROUGHPUT_MODE_0_550       (5 << 0)
+# define DP_DSC_THROUGHPUT_MODE_0_600       (6 << 0)
+# define DP_DSC_THROUGHPUT_MODE_0_650       (7 << 0)
+# define DP_DSC_THROUGHPUT_MODE_0_700       (8 << 0)
+# define DP_DSC_THROUGHPUT_MODE_0_750       (9 << 0)
+# define DP_DSC_THROUGHPUT_MODE_0_800       (10 << 0)
+# define DP_DSC_THROUGHPUT_MODE_0_850       (11 << 0)
+# define DP_DSC_THROUGHPUT_MODE_0_900       (12 << 0)
+# define DP_DSC_THROUGHPUT_MODE_0_950       (13 << 0)
+# define DP_DSC_THROUGHPUT_MODE_0_1000      (14 << 0)
+# define DP_DSC_THROUGHPUT_MODE_1_MASK      (0xf << 4)
+# define DP_DSC_THROUGHPUT_MODE_1_SHIFT     4
+# define DP_DSC_THROUGHPUT_MODE_1_340       (1 << 4)
+# define DP_DSC_THROUGHPUT_MODE_1_400       (2 << 4)
+# define DP_DSC_THROUGHPUT_MODE_1_450       (3 << 4)
+# define DP_DSC_THROUGHPUT_MODE_1_500       (4 << 4)
+# define DP_DSC_THROUGHPUT_MODE_1_550       (5 << 4)
+# define DP_DSC_THROUGHPUT_MODE_1_600       (6 << 4)
+# define DP_DSC_THROUGHPUT_MODE_1_650       (7 << 4)
+# define DP_DSC_THROUGHPUT_MODE_1_700       (8 << 4)
+# define DP_DSC_THROUGHPUT_MODE_1_750       (9 << 4)
+# define DP_DSC_THROUGHPUT_MODE_1_800       (10 << 4)
+# define DP_DSC_THROUGHPUT_MODE_1_850       (11 << 4)
+# define DP_DSC_THROUGHPUT_MODE_1_900       (12 << 4)
+# define DP_DSC_THROUGHPUT_MODE_1_950       (13 << 4)
+# define DP_DSC_THROUGHPUT_MODE_1_1000      (14 << 4)
+
+#define DP_DSC_MAX_SLICE_WIDTH              0x06C
+
+#define DP_DSC_SLICE_CAP_2                  0x06D
+# define DP_DSC_16_PER_DP_DSC_SINK          (1 << 0)
+# define DP_DSC_20_PER_DP_DSC_SINK          (1 << 1)
+# define DP_DSC_24_PER_DP_DSC_SINK          (1 << 2)
+
+#define DP_DSC_BITS_PER_PIXEL_INC           0x06F
+# define DP_DSC_BITS_PER_PIXEL_1_16         0x0
+# define DP_DSC_BITS_PER_PIXEL_1_8          0x1
+# define DP_DSC_BITS_PER_PIXEL_1_4          0x2
+# define DP_DSC_BITS_PER_PIXEL_1_2          0x3
+# define DP_DSC_BITS_PER_PIXEL_1            0x4
+
 #define DP_PSR_SUPPORT                      0x070   /* XXX 1.2? */
 # define DP_PSR_IS_SUPPORTED                1
 # define DP_PSR2_IS_SUPPORTED		    2	    /* eDP 1.4 */
@@ -194,7 +306,8 @@
 # define DP_PSR_SETUP_TIME_0                (6 << 1)
 # define DP_PSR_SETUP_TIME_MASK             (7 << 1)
 # define DP_PSR_SETUP_TIME_SHIFT            1
-
+# define DP_PSR2_SU_Y_COORDINATE_REQUIRED   (1 << 4)  /* eDP 1.4a */
+# define DP_PSR2_SU_GRANULARITY_REQUIRED    (1 << 5)  /* eDP 1.4b */
 /*
  * 0x80-0x8f describe downstream port capabilities, but there are two layouts
  * based on whether DP_DETAILED_CAP_INFO_AVAILABLE was set.  If it was not,
@@ -222,13 +335,20 @@
 # define DP_DS_12BPC		            2
 # define DP_DS_16BPC		            3
 
+/* DP Forward error Correction Registers */
+#define DP_FEC_CAPABILITY		    0x090    /* 1.4 */
+# define DP_FEC_CAPABLE			    (1 << 0)
+# define DP_FEC_UNCORR_BLK_ERROR_COUNT_CAP  (1 << 1)
+# define DP_FEC_CORR_BLK_ERROR_COUNT_CAP    (1 << 2)
+# define DP_FEC_BIT_ERROR_COUNT_CAP	    (1 << 3)
+
 /* link configuration */
 #define	DP_LINK_BW_SET		            0x100
 # define DP_LINK_RATE_TABLE		    0x00    /* eDP 1.4 */
 # define DP_LINK_BW_1_62		    0x06
 # define DP_LINK_BW_2_7			    0x0a
 # define DP_LINK_BW_5_4			    0x14    /* 1.2 */
-# define DP_LINK_BW_8_1			    0x1e
+# define DP_LINK_BW_8_1			    0x1e    /* 1.4 */
 
 #define DP_LANE_COUNT_SET	            0x101
 # define DP_LANE_COUNT_MASK		    0x0f
@@ -239,7 +359,9 @@
 # define DP_TRAINING_PATTERN_1		    1
 # define DP_TRAINING_PATTERN_2		    2
 # define DP_TRAINING_PATTERN_3		    3	    /* 1.2 */
+# define DP_TRAINING_PATTERN_4              7       /* 1.4 */
 # define DP_TRAINING_PATTERN_MASK	    0x3
+# define DP_TRAINING_PATTERN_MASK_1_4	    0xf
 
 /* DPCD 1.1 only. For DPCD >= 1.2 see per-lane DP_LINK_QUAL_LANEn_SET */
 # define DP_LINK_QUAL_PATTERN_11_DISABLE    (0 << 2)
@@ -336,8 +458,23 @@
 #define DP_UPSTREAM_DEVICE_DP_PWR_NEED	    0x118   /* 1.2 */
 # define DP_PWR_NOT_NEEDED		    (1 << 0)
 
+#define DP_FEC_CONFIGURATION		    0x120    /* 1.4 */
+# define DP_FEC_READY			    (1 << 0)
+# define DP_FEC_ERR_COUNT_SEL_MASK	    (7 << 1)
+# define DP_FEC_ERR_COUNT_DIS		    (0 << 1)
+# define DP_FEC_UNCORR_BLK_ERROR_COUNT	    (1 << 1)
+# define DP_FEC_CORR_BLK_ERROR_COUNT	    (2 << 1)
+# define DP_FEC_BIT_ERROR_COUNT		    (3 << 1)
+# define DP_FEC_LANE_SELECT_MASK	    (3 << 4)
+# define DP_FEC_LANE_0_SELECT		    (0 << 4)
+# define DP_FEC_LANE_1_SELECT		    (1 << 4)
+# define DP_FEC_LANE_2_SELECT		    (2 << 4)
+# define DP_FEC_LANE_3_SELECT		    (3 << 4)
+
 #define DP_AUX_FRAME_SYNC_VALUE		    0x15c   /* eDP 1.4 */
 # define DP_AUX_FRAME_SYNC_VALID	    (1 << 0)
+
+#define DP_DSC_ENABLE                       0x160   /* DP 1.4 */
 
 #define DP_PSR_EN_CFG			    0x170   /* XXX 1.2? */
 # define DP_PSR_ENABLE			    (1 << 0)
@@ -519,6 +656,16 @@
 #define DP_TEST_AUDIO_PERIOD_CH7	    0x279
 #define DP_TEST_AUDIO_PERIOD_CH8	    0x27A
 
+#define DP_FEC_STATUS			    0x280    /* 1.4 */
+# define DP_FEC_DECODE_EN_DETECTED	    (1 << 0)
+# define DP_FEC_DECODE_DIS_DETECTED	    (1 << 1)
+
+#define DP_FEC_ERROR_COUNT_LSB		    0x0281    /* 1.4 */
+
+#define DP_FEC_ERROR_COUNT_MSB		    0x0282    /* 1.4 */
+# define DP_FEC_ERROR_COUNT_MASK	    0x7F
+# define DP_FEC_ERR_COUNT_VALID		    (1 << 7)
+
 #define DP_PAYLOAD_TABLE_UPDATE_STATUS      0x2c0   /* 1.2 MST */
 # define DP_PAYLOAD_TABLE_UPDATED           (1 << 0)
 # define DP_PAYLOAD_ACT_HANDLED             (1 << 1)
@@ -536,8 +683,7 @@
 #define DP_SET_POWER                        0x600
 # define DP_SET_POWER_D0                    0x1
 # define DP_SET_POWER_D3                    0x2
-#define DP_SET_POWER_D5                     0x5
-# define DP_SET_POWER_MASK                  0x7
+# define DP_SET_POWER_MASK                  0x3
 
 #define DP_EDP_DPCD_REV			    0x700    /* eDP 1.2 */
 # define DP_EDP_11			    0x00
@@ -599,10 +745,12 @@
 #define DP_EDP_PWMGEN_BIT_COUNT             0x724
 #define DP_EDP_PWMGEN_BIT_COUNT_CAP_MIN     0x725
 #define DP_EDP_PWMGEN_BIT_COUNT_CAP_MAX     0x726
+# define DP_EDP_PWMGEN_BIT_COUNT_MASK       (0x1f << 0)
 
 #define DP_EDP_BACKLIGHT_CONTROL_STATUS     0x727
 
 #define DP_EDP_BACKLIGHT_FREQ_SET           0x728
+# define DP_EDP_BACKLIGHT_FREQ_BASE_KHZ     27000
 
 #define DP_EDP_BACKLIGHT_FREQ_CAP_MIN_MSB   0x72a
 #define DP_EDP_BACKLIGHT_FREQ_CAP_MIN_MID   0x72b
@@ -655,6 +803,16 @@
 
 #define DP_RECEIVER_ALPM_STATUS		    0x200b  /* eDP 1.4 */
 # define DP_ALPM_LOCK_TIMEOUT_ERROR	    (1 << 0)
+
+#define DP_DPRX_FEATURE_ENUMERATION_LIST    0x2210  /* DP 1.3 */
+# define DP_GTC_CAP					(1 << 0)  /* DP 1.3 */
+# define DP_SST_SPLIT_SDP_CAP				(1 << 1)  /* DP 1.4 */
+# define DP_AV_SYNC_CAP					(1 << 2)  /* DP 1.3 */
+# define DP_VSC_SDP_EXT_FOR_COLORIMETRY_SUPPORTED	(1 << 3)  /* DP 1.3 */
+# define DP_VSC_EXT_VESA_SDP_SUPPORTED			(1 << 4)  /* DP 1.4 */
+# define DP_VSC_EXT_VESA_SDP_CHAINING_SUPPORTED		(1 << 5)  /* DP 1.4 */
+# define DP_VSC_EXT_CEA_SDP_SUPPORTED			(1 << 6)  /* DP 1.4 */
+# define DP_VSC_EXT_CEA_SDP_CHAINING_SUPPORTED		(1 << 7)  /* DP 1.4 */
 
 /* HDMI CEC tunneling over AUX DP 1.3 section 5.3.3.3.1 DPCD 1.4+ */
 #define DP_CEC_TUNNELING_CAPABILITY            0x3000
@@ -834,6 +992,26 @@ drm_dp_tps3_supported(const u8 dpcd[DP_RECEIVER_CAP_SIZE])
 		dpcd[DP_MAX_LANE_COUNT] & DP_TPS3_SUPPORTED;
 }
 
+static inline bool
+drm_dp_tps4_supported(const u8 dpcd[DP_RECEIVER_CAP_SIZE])
+{
+	return dpcd[DP_DPCD_REV] >= 0x14 &&
+		dpcd[DP_MAX_DOWNSPREAD] & DP_TPS4_SUPPORTED;
+}
+
+static inline u8
+drm_dp_training_pattern_mask(const u8 dpcd[DP_RECEIVER_CAP_SIZE])
+{
+	return (dpcd[DP_DPCD_REV] >= 0x14) ? DP_TRAINING_PATTERN_MASK_1_4 :
+		DP_TRAINING_PATTERN_MASK;
+}
+
+static inline bool
+drm_dp_is_branch(const u8 dpcd[DP_RECEIVER_CAP_SIZE])
+{
+	return dpcd[DP_DOWNSTREAMPORT_PRESENT] & DP_DWN_STRM_PORT_PRESENT;
+}
+
 /*
  * DisplayPort AUX channel
  */
@@ -854,31 +1032,15 @@ struct drm_dp_aux_msg {
 	size_t size;
 };
 
-struct cec_adapter;
-struct edid;
-
-/**
- * struct drm_dp_aux_cec - DisplayPort CEC-Tunneling-over-AUX
- * @lock: mutex protecting this struct
- * @adap: the CEC adapter for CEC-Tunneling-over-AUX support.
- * @name: name of the CEC adapter
- * @parent: parent device of the CEC adapter
- * @unregister_work: unregister the CEC adapter
- */
-struct drm_dp_aux_cec {
-	struct mutex lock;
-	struct cec_adapter *adap;
-	const char *name;
-	struct device *parent;
-	struct delayed_work unregister_work;
-};
-
 /**
  * struct drm_dp_aux - DisplayPort AUX channel
  * @name: user-visible name of this AUX channel and the I2C-over-AUX adapter
  * @ddc: I2C adapter that can be used for I2C-over-AUX communication
  * @dev: pointer to struct device that is the parent for this AUX channel
+ * @crtc: backpointer to the crtc that is currently using this AUX channel
  * @hw_mutex: internal mutex used for locking transfers
+ * @crc_work: worker that captures CRCs for each frame
+ * @crc_count: counter of captured frame CRCs
  * @transfer: transfers a message representing a single AUX transaction
  *
  * The .dev field should be set to a pointer to the device that implements
@@ -914,7 +1076,10 @@ struct drm_dp_aux {
 	const char *name;
 	struct i2c_adapter ddc;
 	struct device *dev;
+	struct drm_crtc *crtc;
 	struct mutex hw_mutex;
+	struct work_struct crc_work;
+	u8 crc_count;
 	ssize_t (*transfer)(struct drm_dp_aux *aux,
 			    struct drm_dp_aux_msg *msg);
 	/**
@@ -925,10 +1090,6 @@ struct drm_dp_aux {
 	 * @i2c_defer_count: Counts I2C DEFERs, used for DP validation.
 	 */
 	unsigned i2c_defer_count;
-	/**
-	 * @cec: struct containing fields used for CEC-Tunneling-over-AUX.
-	 */
-	struct drm_dp_aux_cec cec;
 };
 
 ssize_t drm_dp_dpcd_read(struct drm_dp_aux *aux, unsigned int offset,
@@ -984,8 +1145,6 @@ struct drm_dp_link {
 int drm_dp_link_probe(struct drm_dp_aux *aux, struct drm_dp_link *link);
 int drm_dp_link_power_up(struct drm_dp_aux *aux, struct drm_dp_link *link);
 int drm_dp_link_power_down(struct drm_dp_aux *aux, struct drm_dp_link *link);
-int drm_dp_link_power_down_aux_up(struct drm_dp_aux *aux,
-	struct drm_dp_link *link);
 int drm_dp_link_configure(struct drm_dp_aux *aux, struct drm_dp_link *link);
 int drm_dp_downstream_max_clock(const u8 dpcd[DP_RECEIVER_CAP_SIZE],
 				const u8 port_cap[4]);
@@ -999,38 +1158,8 @@ void drm_dp_aux_init(struct drm_dp_aux *aux);
 int drm_dp_aux_register(struct drm_dp_aux *aux);
 void drm_dp_aux_unregister(struct drm_dp_aux *aux);
 
-#ifdef CONFIG_DRM_DP_CEC
-void drm_dp_cec_irq(struct drm_dp_aux *aux);
-void drm_dp_cec_register_connector(struct drm_dp_aux *aux, const char *name,
-				   struct device *parent);
-void drm_dp_cec_unregister_connector(struct drm_dp_aux *aux);
-void drm_dp_cec_set_edid(struct drm_dp_aux *aux, const struct edid *edid);
-void drm_dp_cec_unset_edid(struct drm_dp_aux *aux);
-#else
-static inline void drm_dp_cec_irq(struct drm_dp_aux *aux)
-{
-}
-
-static inline void drm_dp_cec_register_connector(struct drm_dp_aux *aux,
-						 const char *name,
-						 struct device *parent)
-{
-}
-
-static inline void drm_dp_cec_unregister_connector(struct drm_dp_aux *aux)
-{
-}
-
-static inline void drm_dp_cec_set_edid(struct drm_dp_aux *aux,
-				       const struct edid *edid)
-{
-}
-
-static inline void drm_dp_cec_unset_edid(struct drm_dp_aux *aux)
-{
-}
-
-#endif
+int drm_dp_start_crc(struct drm_dp_aux *aux, struct drm_crtc *crtc);
+int drm_dp_stop_crc(struct drm_dp_aux *aux);
 
 struct drm_dp_dpcd_ident {
 	u8 oui[3];
@@ -1043,12 +1172,44 @@ struct drm_dp_dpcd_ident {
 /**
  * struct drm_dp_desc - DP branch/sink device descriptor
  * @ident: DP device identification from DPCD 0x400 (sink) or 0x500 (branch).
+ * @quirks: Quirks; use drm_dp_has_quirk() to query for the quirks.
  */
 struct drm_dp_desc {
 	struct drm_dp_dpcd_ident ident;
+	u32 quirks;
 };
 
 int drm_dp_read_desc(struct drm_dp_aux *aux, struct drm_dp_desc *desc,
 		     bool is_branch);
+
+/**
+ * enum drm_dp_quirk - Display Port sink/branch device specific quirks
+ *
+ * Display Port sink and branch devices in the wild have a variety of bugs, try
+ * to collect them here. The quirks are shared, but it's up to the drivers to
+ * implement workarounds for them.
+ */
+enum drm_dp_quirk {
+	/**
+	 * @DP_DPCD_QUIRK_LIMITED_M_N:
+	 *
+	 * The device requires main link attributes Mvid and Nvid to be limited
+	 * to 16 bits.
+	 */
+	DP_DPCD_QUIRK_LIMITED_M_N,
+};
+
+/**
+ * drm_dp_has_quirk() - does the DP device have a specific quirk
+ * @desc: Device decriptor filled by drm_dp_read_desc()
+ * @quirk: Quirk to query for
+ *
+ * Return true if DP device identified by @desc has @quirk.
+ */
+static inline bool
+drm_dp_has_quirk(const struct drm_dp_desc *desc, enum drm_dp_quirk quirk)
+{
+	return desc->quirks & BIT(quirk);
+}
 
 #endif /* _DRM_DP_HELPER_H_ */

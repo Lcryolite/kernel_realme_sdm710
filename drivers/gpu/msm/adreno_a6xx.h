@@ -1,4 +1,4 @@
-/* Copyright (c) 2017-2018,2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -94,8 +94,6 @@ struct cpu_gpu_lock {
 };
 
 #define A6XX_CP_CTXRECORD_MAGIC_REF     0xAE399D6EUL
-/* Size of each CP preemption record */
-#define A6XX_CP_CTXRECORD_SIZE_IN_BYTES     (2112 * 1024)
 /* Size of the preemption counter block (in bytes) */
 #define A6XX_CP_CTXRECORD_PREEMPTION_COUNTER_SIZE   (16 * 4)
 /* Size of the user context record block (in bytes) */
@@ -103,14 +101,52 @@ struct cpu_gpu_lock {
 /* Size of the performance counter save/restore block (in bytes) */
 #define A6XX_CP_PERFCOUNTER_SAVE_RESTORE_SIZE   (4 * 1024)
 
-#define A6XX_CP_RB_CNTL_DEFAULT (((ilog2(4) << 8) & 0x1F00) | \
+#define A6XX_CP_RB_CNTL_DEFAULT ((1 << 27) | ((ilog2(4) << 8) & 0x1F00) | \
 		(ilog2(KGSL_RB_DWORDS >> 1) & 0x3F))
+
+/*
+ * timed_poll_check() - polling *gmu* register at given offset until
+ * its value changed to match expected value. The function times
+ * out and returns after given duration if register is not updated
+ * as expected.
+ *
+ * @device: Pointer to KGSL device
+ * @offset: Register offset
+ * @expected_ret: expected register value that stops polling
+ * @timout: number of jiffies to abort the polling
+ * @mask: bitmask to filter register value to match expected_ret
+ */
+static inline int timed_poll_check(struct kgsl_device *device,
+		unsigned int offset, unsigned int expected_ret,
+		unsigned int timeout, unsigned int mask)
+{
+	unsigned long t;
+	unsigned int value;
+
+	t = jiffies + msecs_to_jiffies(timeout);
+
+	do {
+		gmu_core_regread(device, offset, &value);
+		if ((value & mask) == expected_ret)
+			return 0;
+		/* Wait 100us to reduce unnecessary AHB bus traffic */
+		usleep_range(10, 100);
+	} while (!time_after(jiffies, t));
+
+	/* Double check one last time */
+	gmu_core_regread(device, offset, &value);
+	if ((value & mask) == expected_ret)
+		return 0;
+
+	return -ETIMEDOUT;
+}
 
 /* Preemption functions */
 void a6xx_preemption_trigger(struct adreno_device *adreno_dev);
 void a6xx_preemption_schedule(struct adreno_device *adreno_dev);
 void a6xx_preemption_start(struct adreno_device *adreno_dev);
 int a6xx_preemption_init(struct adreno_device *adreno_dev);
+void a6xx_preemption_close(struct adreno_device *adreno_dev);
 
 unsigned int a6xx_preemption_post_ibsubmit(struct adreno_device *adreno_dev,
 		unsigned int *cmds);
@@ -130,4 +166,10 @@ void a6xx_preemption_context_destroy(struct kgsl_context *context);
 void a6xx_snapshot(struct adreno_device *adreno_dev,
 		struct kgsl_snapshot *snapshot);
 void a6xx_crashdump_init(struct adreno_device *adreno_dev);
+int a6xx_gmu_sptprac_enable(struct adreno_device *adreno_dev);
+void a6xx_gmu_sptprac_disable(struct adreno_device *adreno_dev);
+bool a6xx_gmu_sptprac_is_on(struct adreno_device *adreno_dev);
+size_t a6xx_snapshot_preemption(struct kgsl_device *device, u8 *buf,
+		size_t remain, void *priv);
+u64 a6xx_gmu_read_ao_counter(struct kgsl_device *device);
 #endif

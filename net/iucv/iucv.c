@@ -119,7 +119,7 @@ struct iucv_irq_data {
 	u16 ippathid;
 	u8  ipflags1;
 	u8  iptype;
-	u32 res2[8];
+	u32 res2[9];
 };
 
 struct iucv_irq_list {
@@ -192,7 +192,7 @@ static char iucv_error_pathid[16] = "INVALID PATHID";
 static LIST_HEAD(iucv_handler_list);
 
 /*
- * iucv_path_table: an array of iucv_path structures.
+ * iucv_path_table: array of pointers to iucv_path structures.
  */
 static struct iucv_path **iucv_path_table;
 static unsigned long iucv_max_pathid;
@@ -578,7 +578,7 @@ static void iucv_setmask_mp(void)
  */
 static void iucv_setmask_up(void)
 {
-	cpumask_t cpumask;
+	static cpumask_t cpumask;
 	int cpu;
 
 	/* Disable all cpu but the first in cpu_irq_cpumask. */
@@ -603,7 +603,7 @@ static int iucv_enable(void)
 
 	get_online_cpus();
 	rc = -ENOMEM;
-	alloc_size = iucv_max_pathid * sizeof(struct iucv_path);
+	alloc_size = iucv_max_pathid * sizeof(*iucv_path_table);
 	iucv_path_table = kzalloc(alloc_size, GFP_KERNEL);
 	if (!iucv_path_table)
 		goto out;
@@ -639,7 +639,7 @@ static void iucv_disable(void)
 	put_online_cpus();
 }
 
-static void free_iucv_data(int cpu)
+static int iucv_cpu_dead(unsigned int cpu)
 {
 	kfree(iucv_param_irq[cpu]);
 	iucv_param_irq[cpu] = NULL;
@@ -647,9 +647,10 @@ static void free_iucv_data(int cpu)
 	iucv_param[cpu] = NULL;
 	kfree(iucv_irq_data[cpu]);
 	iucv_irq_data[cpu] = NULL;
+	return 0;
 }
 
-static int alloc_iucv_data(int cpu)
+static int iucv_cpu_prepare(unsigned int cpu)
 {
 	/* Note: GFP_DMA used to get memory below 2G */
 	iucv_irq_data[cpu] = kmalloc_node(sizeof(struct iucv_irq_data),
@@ -671,58 +672,48 @@ static int alloc_iucv_data(int cpu)
 	return 0;
 
 out_free:
-	free_iucv_data(cpu);
+	iucv_cpu_dead(cpu);
 	return -ENOMEM;
 }
 
-static int iucv_cpu_notify(struct notifier_block *self,
-				     unsigned long action, void *hcpu)
+static int iucv_cpu_online(unsigned int cpu)
 {
-	cpumask_t cpumask;
-	long cpu = (long) hcpu;
-
-	switch (action) {
-	case CPU_UP_PREPARE:
-	case CPU_UP_PREPARE_FROZEN:
-		if (alloc_iucv_data(cpu))
-			return notifier_from_errno(-ENOMEM);
-		break;
-	case CPU_UP_CANCELED:
-	case CPU_UP_CANCELED_FROZEN:
-	case CPU_DEAD:
-	case CPU_DEAD_FROZEN:
-		free_iucv_data(cpu);
-		break;
-	case CPU_ONLINE:
-	case CPU_ONLINE_FROZEN:
-	case CPU_DOWN_FAILED:
-	case CPU_DOWN_FAILED_FROZEN:
-		if (!iucv_path_table)
-			break;
-		smp_call_function_single(cpu, iucv_declare_cpu, NULL, 1);
-		break;
-	case CPU_DOWN_PREPARE:
-	case CPU_DOWN_PREPARE_FROZEN:
-		if (!iucv_path_table)
-			break;
-		cpumask_copy(&cpumask, &iucv_buffer_cpumask);
-		cpumask_clear_cpu(cpu, &cpumask);
-		if (cpumask_empty(&cpumask))
-			/* Can't offline last IUCV enabled cpu. */
-			return notifier_from_errno(-EINVAL);
-		smp_call_function_single(cpu, iucv_retrieve_cpu, NULL, 1);
-		if (cpumask_empty(&iucv_irq_cpumask))
-			smp_call_function_single(
-				cpumask_first(&iucv_buffer_cpumask),
-				iucv_allow_cpu, NULL, 1);
-		break;
-	}
-	return NOTIFY_OK;
+	if (!iucv_path_table)
+		return 0;
+	iucv_declare_cpu(NULL);
+	return 0;
 }
 
-static struct notifier_block __refdata iucv_cpu_notifier = {
-	.notifier_call = iucv_cpu_notify,
-};
+static int iucv_cpu_down_prep(unsigned int cpu)
+{
+	cpumask_var_t cpumask;
+	int ret = 0;
+
+	if (!iucv_path_table)
+		return 0;
+
+	if (!alloc_cpumask_var(&cpumask, GFP_KERNEL))
+		return -ENOMEM;
+
+	cpumask_copy(cpumask, &iucv_buffer_cpumask);
+	cpumask_clear_cpu(cpu, cpumask);
+	if (cpumask_empty(cpumask)) {
+		/* Can't offline last IUCV enabled cpu. */
+		ret = -EINVAL;
+		goto __free_cpumask;
+	}
+
+	iucv_retrieve_cpu(NULL);
+	if (!cpumask_empty(&iucv_irq_cpumask))
+		goto __free_cpumask;
+
+	smp_call_function_single(cpumask_first(&iucv_buffer_cpumask),
+				 iucv_allow_cpu, NULL, 1);
+
+__free_cpumask:
+	free_cpumask_var(cpumask);
+	return ret;
+}
 
 /**
  * iucv_sever_pathid
@@ -1158,8 +1149,7 @@ static int iucv_message_receive_iprmdata(struct iucv_path *path,
 		size = (size < 8) ? size : 8;
 		for (array = buffer; size > 0; array++) {
 			copy = min_t(size_t, size, array->length);
-			memcpy((u8 *)(addr_t) array->address,
-				rmmsg, copy);
+			memcpy(phys_to_virt(array->address), rmmsg, copy);
 			rmmsg += copy;
 			size -= copy;
 		}
@@ -2027,6 +2017,7 @@ struct iucv_interface iucv_if = {
 };
 EXPORT_SYMBOL(iucv_if);
 
+static enum cpuhp_state iucv_online;
 /**
  * iucv_init
  *
@@ -2035,7 +2026,6 @@ EXPORT_SYMBOL(iucv_if);
 static int __init iucv_init(void)
 {
 	int rc;
-	int cpu;
 
 	if (!MACHINE_IS_VM) {
 		rc = -EPROTONOSUPPORT;
@@ -2054,23 +2044,19 @@ static int __init iucv_init(void)
 		goto out_int;
 	}
 
-	cpu_notifier_register_begin();
-
-	for_each_online_cpu(cpu) {
-		if (alloc_iucv_data(cpu)) {
-			rc = -ENOMEM;
-			goto out_free;
-		}
-	}
-	rc = __register_hotcpu_notifier(&iucv_cpu_notifier);
+	rc = cpuhp_setup_state(CPUHP_NET_IUCV_PREPARE, "net/iucv:prepare",
+			       iucv_cpu_prepare, iucv_cpu_dead);
 	if (rc)
-		goto out_free;
-
-	cpu_notifier_register_done();
+		goto out_dev;
+	rc = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "net/iucv:online",
+			       iucv_cpu_online, iucv_cpu_down_prep);
+	if (rc < 0)
+		goto out_prep;
+	iucv_online = rc;
 
 	rc = register_reboot_notifier(&iucv_reboot_notifier);
 	if (rc)
-		goto out_cpu;
+		goto out_remove_hp;
 	ASCEBC(iucv_error_no_listener, 16);
 	ASCEBC(iucv_error_no_memory, 16);
 	ASCEBC(iucv_error_pathid, 16);
@@ -2084,15 +2070,11 @@ static int __init iucv_init(void)
 
 out_reboot:
 	unregister_reboot_notifier(&iucv_reboot_notifier);
-out_cpu:
-	cpu_notifier_register_begin();
-	__unregister_hotcpu_notifier(&iucv_cpu_notifier);
-out_free:
-	for_each_possible_cpu(cpu)
-		free_iucv_data(cpu);
-
-	cpu_notifier_register_done();
-
+out_remove_hp:
+	cpuhp_remove_state(iucv_online);
+out_prep:
+	cpuhp_remove_state(CPUHP_NET_IUCV_PREPARE);
+out_dev:
 	root_device_unregister(iucv_root);
 out_int:
 	unregister_external_irq(EXT_IRQ_IUCV, iucv_external_interrupt);
@@ -2110,7 +2092,6 @@ out:
 static void __exit iucv_exit(void)
 {
 	struct iucv_irq_list *p, *n;
-	int cpu;
 
 	spin_lock_irq(&iucv_queue_lock);
 	list_for_each_entry_safe(p, n, &iucv_task_queue, list)
@@ -2119,11 +2100,9 @@ static void __exit iucv_exit(void)
 		kfree(p);
 	spin_unlock_irq(&iucv_queue_lock);
 	unregister_reboot_notifier(&iucv_reboot_notifier);
-	cpu_notifier_register_begin();
-	__unregister_hotcpu_notifier(&iucv_cpu_notifier);
-	for_each_possible_cpu(cpu)
-		free_iucv_data(cpu);
-	cpu_notifier_register_done();
+
+	cpuhp_remove_state_nocalls(iucv_online);
+	cpuhp_remove_state(CPUHP_NET_IUCV_PREPARE);
 	root_device_unregister(iucv_root);
 	bus_unregister(&iucv_bus);
 	unregister_external_irq(EXT_IRQ_IUCV, iucv_external_interrupt);

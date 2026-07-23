@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2018, 2019-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -42,7 +42,7 @@ void ep_pcie_phy_init(struct ep_pcie_dev_t *dev)
 		break;
 	default:
 		EP_PCIE_ERR(dev,
-			"PCIe V%d: Unexpected phy version %d is caught!\n",
+			"PCIe V%d: Unexpected phy version %d is caught\n",
 			dev->rev, dev->phy_rev);
 	}
 
@@ -51,7 +51,7 @@ void ep_pcie_phy_init(struct ep_pcie_dev_t *dev)
 		struct ep_pcie_phy_info_t *phy_init;
 
 		EP_PCIE_DBG(dev,
-			"PCIe V%d: PHY V%d: process the sequence specified by DT.\n",
+			"PCIe V%d: PHY V%d: process the sequence specified by DT\n",
 			dev->rev, dev->phy_rev);
 
 		i =  dev->phy_init_len;
@@ -158,7 +158,7 @@ bool ep_pcie_phy_is_ready(struct ep_pcie_dev_t *dev)
 	else
 		offset = PCIE_PHY_PCS_STATUS;
 
-	if (readl_relaxed(dev->phy + offset) & BIT(6))
+	if (readl_relaxed(dev->phy + offset) & dev->phy_status_bit_mask_bit)
 		return false;
 	else
 		return true;

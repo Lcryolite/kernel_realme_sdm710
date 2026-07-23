@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -50,7 +50,7 @@ extern void *cnss_ipc_log_context;
 		if (!(_condition)) {					\
 			cnss_pr_err("ASSERT at line %d\n",		\
 				    __LINE__);				\
-			BUG_ON(1);					\
+			BUG();						\
 		}							\
 	} while (0)
 #else

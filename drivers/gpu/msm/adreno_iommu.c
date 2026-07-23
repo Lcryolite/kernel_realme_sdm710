@@ -1,5 +1,5 @@
-/* Copyright (c) 2002,2007-2017, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+/* Copyright (c) 2002,2007-2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022,2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -16,9 +16,6 @@
 #include "a3xx_reg.h"
 #include "a6xx_reg.h"
 #include "adreno_pm4types.h"
-
-#define A5XX_PFP_PER_PROCESS_UCODE_VER 0x5FF064
-#define A5XX_PM4_PER_PROCESS_UCODE_VER 0x5FF052
 
 /*
  * _wait_reg() - make CP poll on a register
@@ -821,15 +818,21 @@ static int _set_pagetable_cpu(struct adreno_ringbuffer *rb,
 static int _set_pagetable_gpu(struct adreno_ringbuffer *rb,
 			struct kgsl_pagetable *new_pt)
 {
-	static unsigned int link[PAGE_SIZE / sizeof(unsigned int)]
-		____cacheline_aligned_in_smp;
 	struct adreno_device *adreno_dev = ADRENO_RB_DEVICE(rb);
-	unsigned int *cmds = link;
+	unsigned int *link = NULL, *cmds;
 	int result;
 
+	link = kmalloc(PAGE_SIZE, GFP_KERNEL);
+	if (link == NULL)
+		return -ENOMEM;
+
+	cmds = link;
+
 	/* If we are in a fault the MMU will be reset soon */
-	if (test_bit(ADRENO_DEVICE_FAULT, &adreno_dev->priv))
+	if (test_bit(ADRENO_DEVICE_FAULT, &adreno_dev->priv)) {
+		kfree(link);
 		return 0;
+	}
 
 	cmds += adreno_iommu_set_pt_generate_cmds(rb, cmds, new_pt);
 
@@ -841,7 +844,7 @@ static int _set_pagetable_gpu(struct adreno_ringbuffer *rb,
 		 * Temp buffer not large enough for pagetable switch commands.
 		 * Increase the size allocated above.
 		 */
-		BUG();
+		WARN(1, "Temp command buffer overflow\n");
 	}
 	/*
 	 * This returns the per context timestamp but we need to
@@ -851,6 +854,7 @@ static int _set_pagetable_gpu(struct adreno_ringbuffer *rb,
 			KGSL_CMD_FLAGS_PMODE, link,
 			(unsigned int)(cmds - link));
 
+	kfree(link);
 	return result;
 }
 
@@ -858,13 +862,13 @@ static int _set_pagetable_gpu(struct adreno_ringbuffer *rb,
  * adreno_iommu_init() - Adreno iommu init
  * @adreno_dev: Adreno device
  */
-int adreno_iommu_init(struct adreno_device *adreno_dev)
+void adreno_iommu_init(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct kgsl_iommu *iommu = KGSL_IOMMU_PRIV(device);
 
 	if (kgsl_mmu_get_mmutype(device) == KGSL_MMU_TYPE_NONE)
-		return 0;
+		return;
 
 	/*
 	 * A nop is required in an indirect buffer when switching
@@ -879,27 +883,9 @@ int adreno_iommu_init(struct adreno_device *adreno_dev)
 	if (adreno_is_a420(adreno_dev))
 		device->mmu.features |= KGSL_MMU_FLUSH_TLB_ON_MAP;
 
-	/*
-	 * A5XX: per process PT is supported starting PFP 0x5FF064 me 0x5FF052
-	 * versions
-	 */
-	if (adreno_is_a5xx(adreno_dev) &&
-		!MMU_FEATURE(&device->mmu, KGSL_MMU_GLOBAL_PAGETABLE)) {
-		if ((adreno_compare_pfp_version(adreno_dev,
-				A5XX_PFP_PER_PROCESS_UCODE_VER) < 0) ||
-		    (adreno_compare_pm4_version(adreno_dev,
-				A5XX_PM4_PER_PROCESS_UCODE_VER) < 0)) {
-			KGSL_DRV_ERR(device,
-				"Invalid ucode for per process pagetables\n");
-			return -ENODEV;
-		}
-	}
-
 	/* Enable guard page MMU feature for A3xx and A4xx targets only */
 	if (adreno_is_a3xx(adreno_dev) || adreno_is_a4xx(adreno_dev))
 		device->mmu.features |= KGSL_MMU_NEED_GUARD_PAGE;
-
-	return 0;
 }
 
 /**
@@ -956,6 +942,18 @@ int adreno_iommu_set_pt_ctx(struct adreno_ringbuffer *rb,
 		_set_ctxt_cpu(rb, drawctxt);
 	else
 		result = _set_ctxt_gpu(rb, drawctxt);
+
+	/*
+	 * In case ctxt switch fails, revert the pagetable back to the
+	 * original. Not reverting the pagetable will lead to incorrect
+	 * hardware state in the ringbuffer.
+	 */
+	if (result && (new_pt != cur_pt)) {
+		if (cpu_path)
+			result = _set_pagetable_cpu(rb, cur_pt);
+		else
+			result = _set_pagetable_gpu(rb, cur_pt);
+	}
 
 	return result;
 }

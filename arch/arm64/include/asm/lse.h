@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __ASM_LSE_H
 #define __ASM_LSE_H
 
@@ -24,7 +25,7 @@ __asm__(".arch_extension	lse");
 #endif
 
 /* Move the ll/sc atomics out-of-line */
-#define __LL_SC_INLINE
+#define __LL_SC_INLINE		notrace
 #define __LL_SC_PREFIX(x)	__ll_sc_##x
 #define __LL_SC_EXPORT(x)	EXPORT_SYMBOL(__LL_SC_PREFIX(x))
 

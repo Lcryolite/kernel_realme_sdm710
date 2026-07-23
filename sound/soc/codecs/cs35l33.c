@@ -26,13 +26,11 @@
 #include <sound/soc-dapm.h>
 #include <sound/initval.h>
 #include <sound/tlv.h>
-#include <linux/gpio.h>
 #include <linux/gpio/consumer.h>
 #include <sound/cs35l33.h>
 #include <linux/pm_runtime.h>
 #include <linux/regulator/consumer.h>
 #include <linux/regulator/machine.h>
-#include <linux/of_gpio.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/of_irq.h>
@@ -831,7 +829,7 @@ static int cs35l33_probe(struct snd_soc_codec *codec)
 	return 0;
 }
 
-static struct snd_soc_codec_driver soc_codec_dev_cs35l33 = {
+static const struct snd_soc_codec_driver soc_codec_dev_cs35l33 = {
 	.probe = cs35l33_probe,
 
 	.set_bias_level = cs35l33_set_bias_level,
@@ -869,8 +867,7 @@ static int __maybe_unused cs35l33_runtime_resume(struct device *dev)
 
 	dev_dbg(dev, "%s\n", __func__);
 
-	if (cs35l33->reset_gpio)
-		gpiod_set_value_cansleep(cs35l33->reset_gpio, 0);
+	gpiod_set_value_cansleep(cs35l33->reset_gpio, 0);
 
 	ret = regulator_bulk_enable(cs35l33->num_core_supplies,
 		cs35l33->core_supplies);
@@ -881,8 +878,7 @@ static int __maybe_unused cs35l33_runtime_resume(struct device *dev)
 
 	regcache_cache_only(cs35l33->regmap, false);
 
-	if (cs35l33->reset_gpio)
-		gpiod_set_value_cansleep(cs35l33->reset_gpio, 1);
+	gpiod_set_value_cansleep(cs35l33->reset_gpio, 1);
 
 	msleep(CS35L33_BOOT_DELAY);
 
@@ -1175,7 +1171,7 @@ static int cs35l33_i2c_probe(struct i2c_client *i2c_client,
 
 	/* We could issue !RST or skip it based on AMP topology */
 	cs35l33->reset_gpio = devm_gpiod_get_optional(&i2c_client->dev,
-			"reset-gpios", GPIOD_OUT_HIGH);
+			"reset", GPIOD_OUT_HIGH);
 	if (IS_ERR(cs35l33->reset_gpio)) {
 		dev_err(&i2c_client->dev, "%s ERROR: Can't get reset GPIO\n",
 			__func__);
@@ -1191,8 +1187,7 @@ static int cs35l33_i2c_probe(struct i2c_client *i2c_client,
 		return ret;
 	}
 
-	if (cs35l33->reset_gpio)
-		gpiod_set_value_cansleep(cs35l33->reset_gpio, 1);
+	gpiod_set_value_cansleep(cs35l33->reset_gpio, 1);
 
 	msleep(CS35L33_BOOT_DELAY);
 	regcache_cache_only(cs35l33->regmap, false);
@@ -1263,8 +1258,7 @@ static int cs35l33_i2c_remove(struct i2c_client *client)
 
 	snd_soc_unregister_codec(&client->dev);
 
-	if (cs35l33->reset_gpio)
-		gpiod_set_value_cansleep(cs35l33->reset_gpio, 0);
+	gpiod_set_value_cansleep(cs35l33->reset_gpio, 0);
 
 	pm_runtime_disable(&client->dev);
 	regulator_bulk_disable(cs35l33->num_core_supplies,

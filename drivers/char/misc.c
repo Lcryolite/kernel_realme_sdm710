@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * linux/drivers/char/misc.c
  *
@@ -109,7 +110,7 @@ static const struct file_operations misc_proc_fops = {
 };
 #endif
 
-static int misc_open(struct inode * inode, struct file * file)
+static int misc_open(struct inode *inode, struct file *file)
 {
 	int minor = iminor(inode);
 	struct miscdevice *c;
@@ -125,8 +126,7 @@ static int misc_open(struct inode * inode, struct file * file)
 		}
 	}
 
-	/* Only request module for fixed minor code */
-	if (!new_fops && minor < MISC_DYNAMIC_MINOR) {
+	if (!new_fops) {
 		mutex_unlock(&misc_mtx);
 		request_module("char-major-%d-%d", MISC_MAJOR, minor);
 		mutex_lock(&misc_mtx);
@@ -137,10 +137,9 @@ static int misc_open(struct inode * inode, struct file * file)
 				break;
 			}
 		}
+		if (!new_fops)
+			goto fail;
 	}
-
-	if (!new_fops)
-		goto fail;
 
 	/*
 	 * Place the miscdevice in the file's
@@ -152,7 +151,7 @@ static int misc_open(struct inode * inode, struct file * file)
 	err = 0;
 	replace_fops(file, new_fops);
 	if (file->f_op->open)
-		err = file->f_op->open(inode,file);
+		err = file->f_op->open(inode, file);
 fail:
 	mutex_unlock(&misc_mtx);
 	return err;
@@ -184,7 +183,7 @@ static const struct file_operations misc_fops = {
  *	failure.
  */
 
-int misc_register(struct miscdevice * misc)
+int misc_register(struct miscdevice *misc)
 {
 	dev_t dev;
 	int err = 0;
@@ -196,6 +195,7 @@ int misc_register(struct miscdevice * misc)
 
 	if (is_dynamic) {
 		int i = find_first_zero_bit(misc_minors, DYNAMIC_MINORS);
+
 		if (i >= DYNAMIC_MINORS) {
 			err = -EBUSY;
 			goto out;
@@ -289,13 +289,13 @@ static int __init misc_init(void)
 		goto fail_remove;
 
 	err = -EIO;
-	if (register_chrdev(MISC_MAJOR,"misc",&misc_fops))
+	if (register_chrdev(MISC_MAJOR, "misc", &misc_fops))
 		goto fail_printk;
 	misc_class->devnode = misc_devnode;
 	return 0;
 
 fail_printk:
-	printk("unable to get major %d for misc devices\n", MISC_MAJOR);
+	pr_err("unable to get major %d for misc devices\n", MISC_MAJOR);
 	class_destroy(misc_class);
 fail_remove:
 	if (ret)

@@ -27,6 +27,7 @@
 #include <linux/wait.h>
 #include <linux/delay.h>
 #include <linux/completion.h>
+#include <linux/sched/clock.h>
 #include <linux/ipc_logging.h>
 
 #include "ipc_logging_private.h"
@@ -295,8 +296,6 @@ void ipc_log_write(void *ctxt, struct encode_context *ectxt)
 		return;
 	}
 
-	if (ilctxt->disabled)
-		return;
 	read_lock_irqsave(&context_list_lock_lha1, flags);
 	spin_lock(&ilctxt->context_lock_lhb1);
 	while (ilctxt->write_avail <= ectxt->offset)
@@ -366,8 +365,6 @@ void msg_encode_end(struct encode_context *ectxt)
 
 	/* finalize data size */
 	ectxt->hdr.size = ectxt->offset - sizeof(ectxt->hdr);
-	if (WARN_ON(ectxt->hdr.size > MAX_MSG_SIZE))
-		return;
 	memcpy(ectxt->buff, &ectxt->hdr, sizeof(ectxt->hdr));
 }
 EXPORT_SYMBOL(msg_encode_end);
@@ -510,14 +507,11 @@ int ipc_log_string(void *ilctxt, const char *fmt, ...)
 {
 	struct encode_context ectxt;
 	int avail_size, data_size, hdr_size = sizeof(struct tsv_header);
-	struct ipc_log_context *ctxt = (struct ipc_log_context *)ilctxt;
 	va_list arg_list;
 
 	if (!ilctxt)
 		return -EINVAL;
 
-	if (ctxt->disabled)
-		return -EBUSY;
 	msg_encode_start(&ectxt, TSV_TYPE_STRING);
 	tsv_timestamp_write(&ectxt);
 	tsv_qtimer_write(&ectxt);
@@ -533,32 +527,6 @@ int ipc_log_string(void *ilctxt, const char *fmt, ...)
 	return 0;
 }
 EXPORT_SYMBOL(ipc_log_string);
-
-/*
- * ipc_log_ctrl_all - disable/enable logging in all clients
- *
- * @ Data specified using format specifiers
- */
-void ipc_log_ctrl_all(bool disable)
-{
-	struct ipc_log_context *ctxt = NULL;
-	unsigned long flags;
-
-	read_lock_irqsave(&context_list_lock_lha1, flags);
-	list_for_each_entry(ctxt, &ipc_log_context_list, list) {
-		if (disable) {
-			ipc_log_string(ctxt,
-				"LOGGING DISABLED FOR ALL CLIENTS!!\n");
-			ctxt->disabled = disable;
-		} else {
-			ctxt->disabled = disable;
-			ipc_log_string(ctxt,
-				"LOGGING ENABLED FOR ALL CLIENTS!!\n");
-		}
-	}
-	read_unlock_irqrestore(&context_list_lock_lha1, flags);
-}
-EXPORT_SYMBOL(ipc_log_ctrl_all);
 
 /**
  * ipc_log_extract - Reads and deserializes log
@@ -822,7 +790,7 @@ static void *get_deserialization_func(struct ipc_log_context *ilctxt,
 }
 
 /**
- * ipc_log_context_create: Create a debug log context
+ * ipc_log_context_create: Create a debug log context if context does not exist.
  *                         Should not be called from atomic context
  *
  * @max_num_pages: Number of pages of logging space required (max. 10)
@@ -834,10 +802,22 @@ static void *get_deserialization_func(struct ipc_log_context *ilctxt,
 void *ipc_log_context_create(int max_num_pages,
 			     const char *mod_name, uint16_t user_version)
 {
-	struct ipc_log_context *ctxt;
+	struct ipc_log_context *ctxt = NULL, *tmp;
 	struct ipc_log_page *pg = NULL;
 	int page_cnt;
 	unsigned long flags;
+
+	/* check if ipc ctxt already exists */
+	read_lock_irq(&context_list_lock_lha1);
+	list_for_each_entry(tmp, &ipc_log_context_list, list)
+		if (!strcmp(tmp->name, mod_name)) {
+			ctxt = tmp;
+			break;
+		}
+	read_unlock_irq(&context_list_lock_lha1);
+
+	if (ctxt)
+		return ctxt;
 
 	ctxt = kzalloc(sizeof(struct ipc_log_context), GFP_KERNEL);
 	if (!ctxt)
@@ -849,10 +829,8 @@ void *ipc_log_context_create(int max_num_pages,
 	spin_lock_init(&ctxt->context_lock_lhb1);
 	for (page_cnt = 0; page_cnt < max_num_pages; page_cnt++) {
 		pg = kzalloc(sizeof(struct ipc_log_page), GFP_KERNEL);
-		if (!pg) {
-			pr_err("%s: cannot create ipc_log_page\n", __func__);
+		if (!pg)
 			goto release_ipc_log_context;
-		}
 		pg->hdr.log_id = (uint64_t)(uintptr_t)ctxt;
 		pg->hdr.page_num = LOG_PAGE_FLAG | page_cnt;
 		pg->hdr.ctx_offset = (int64_t)((uint64_t)(uintptr_t)ctxt -

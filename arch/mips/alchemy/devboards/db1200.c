@@ -23,13 +23,12 @@
 #include <linux/gpio.h>
 #include <linux/i2c.h>
 #include <linux/init.h>
-#include <linux/module.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/leds.h>
 #include <linux/mmc/host.h>
 #include <linux/mtd/mtd.h>
-#include <linux/mtd/nand.h>
+#include <linux/mtd/rawnand.h>
 #include <linux/mtd/partitions.h>
 #include <linux/platform_device.h>
 #include <linux/serial_8250.h>
@@ -342,29 +341,27 @@ static struct platform_device db1200_ide_dev = {
 
 /**********************************************************************/
 
+#ifdef CONFIG_MMC_AU1X
 /* SD carddetects:  they're supposed to be edge-triggered, but ack
  * doesn't seem to work (CPLD Rev 2).  Instead, the screaming one
- * is disabled and its counterpart enabled.  The 500ms timeout is
- * because the carddetect isn't debounced in hardware.
+ * is disabled and its counterpart enabled.  The 200ms timeout is
+ * because the carddetect usually triggers twice, after debounce.
  */
 static irqreturn_t db1200_mmc_cd(int irq, void *ptr)
 {
-	void(*mmc_cd)(struct mmc_host *, unsigned long);
+	disable_irq_nosync(irq);
+	return IRQ_WAKE_THREAD;
+}
 
-	if (irq == DB1200_SD0_INSERT_INT) {
-		disable_irq_nosync(DB1200_SD0_INSERT_INT);
+static irqreturn_t db1200_mmc_cdfn(int irq, void *ptr)
+{
+	mmc_detect_change(ptr, msecs_to_jiffies(200));
+
+	msleep(100);	/* debounce */
+	if (irq == DB1200_SD0_INSERT_INT)
 		enable_irq(DB1200_SD0_EJECT_INT);
-	} else {
-		disable_irq_nosync(DB1200_SD0_EJECT_INT);
+	else
 		enable_irq(DB1200_SD0_INSERT_INT);
-	}
-
-	/* link against CONFIG_MMC=m */
-	mmc_cd = symbol_get(mmc_detect_change);
-	if (mmc_cd) {
-		mmc_cd(ptr, msecs_to_jiffies(500));
-		symbol_put(mmc_detect_change);
-	}
 
 	return IRQ_HANDLED;
 }
@@ -374,13 +371,13 @@ static int db1200_mmc_cd_setup(void *mmc_host, int en)
 	int ret;
 
 	if (en) {
-		ret = request_irq(DB1200_SD0_INSERT_INT, db1200_mmc_cd,
-				  0, "sd_insert", mmc_host);
+		ret = request_threaded_irq(DB1200_SD0_INSERT_INT, db1200_mmc_cd,
+				db1200_mmc_cdfn, 0, "sd_insert", mmc_host);
 		if (ret)
 			goto out;
 
-		ret = request_irq(DB1200_SD0_EJECT_INT, db1200_mmc_cd,
-				  0, "sd_eject", mmc_host);
+		ret = request_threaded_irq(DB1200_SD0_EJECT_INT, db1200_mmc_cd,
+				db1200_mmc_cdfn, 0, "sd_eject", mmc_host);
 		if (ret) {
 			free_irq(DB1200_SD0_INSERT_INT, mmc_host);
 			goto out;
@@ -436,22 +433,19 @@ static struct led_classdev db1200_mmc_led = {
 
 static irqreturn_t pb1200_mmc1_cd(int irq, void *ptr)
 {
-	void(*mmc_cd)(struct mmc_host *, unsigned long);
+	disable_irq_nosync(irq);
+	return IRQ_WAKE_THREAD;
+}
 
-	if (irq == PB1200_SD1_INSERT_INT) {
-		disable_irq_nosync(PB1200_SD1_INSERT_INT);
+static irqreturn_t pb1200_mmc1_cdfn(int irq, void *ptr)
+{
+	mmc_detect_change(ptr, msecs_to_jiffies(200));
+
+	msleep(100);	/* debounce */
+	if (irq == PB1200_SD1_INSERT_INT)
 		enable_irq(PB1200_SD1_EJECT_INT);
-	} else {
-		disable_irq_nosync(PB1200_SD1_EJECT_INT);
+	else
 		enable_irq(PB1200_SD1_INSERT_INT);
-	}
-
-	/* link against CONFIG_MMC=m */
-	mmc_cd = symbol_get(mmc_detect_change);
-	if (mmc_cd) {
-		mmc_cd(ptr, msecs_to_jiffies(500));
-		symbol_put(mmc_detect_change);
-	}
 
 	return IRQ_HANDLED;
 }
@@ -461,13 +455,13 @@ static int pb1200_mmc1_cd_setup(void *mmc_host, int en)
 	int ret;
 
 	if (en) {
-		ret = request_irq(PB1200_SD1_INSERT_INT, pb1200_mmc1_cd, 0,
-				  "sd1_insert", mmc_host);
+		ret = request_threaded_irq(PB1200_SD1_INSERT_INT, pb1200_mmc1_cd,
+				pb1200_mmc1_cdfn, 0, "sd1_insert", mmc_host);
 		if (ret)
 			goto out;
 
-		ret = request_irq(PB1200_SD1_EJECT_INT, pb1200_mmc1_cd, 0,
-				  "sd1_eject", mmc_host);
+		ret = request_threaded_irq(PB1200_SD1_EJECT_INT, pb1200_mmc1_cd,
+				pb1200_mmc1_cdfn, 0, "sd1_eject", mmc_host);
 		if (ret) {
 			free_irq(PB1200_SD1_INSERT_INT, mmc_host);
 			goto out;
@@ -608,6 +602,7 @@ static struct platform_device pb1200_mmc1_dev = {
 	.num_resources	= ARRAY_SIZE(au1200_mmc1_res),
 	.resource	= au1200_mmc1_res,
 };
+#endif /* CONFIG_MMC_AU1X */
 
 /**********************************************************************/
 
@@ -775,7 +770,9 @@ static struct platform_device db1200_audiodma_dev = {
 static struct platform_device *db1200_devs[] __initdata = {
 	NULL,		/* PSC0, selected by S6.8 */
 	&db1200_ide_dev,
+#ifdef CONFIG_MMC_AU1X
 	&db1200_mmc0_dev,
+#endif
 	&au1200_lcd_dev,
 	&db1200_eth_dev,
 	&db1200_nand_dev,
@@ -786,7 +783,9 @@ static struct platform_device *db1200_devs[] __initdata = {
 };
 
 static struct platform_device *pb1200_devs[] __initdata = {
+#ifdef CONFIG_MMC_AU1X
 	&pb1200_mmc1_dev,
+#endif
 };
 
 /* Some peripheral base addresses differ on the PB1200 */
@@ -865,7 +864,7 @@ int __init db1200_dev_setup(void)
 	i2c_register_board_info(0, db1200_i2c_devs,
 				ARRAY_SIZE(db1200_i2c_devs));
 	spi_register_board_info(db1200_spi_devs,
-				ARRAY_SIZE(db1200_i2c_devs));
+				ARRAY_SIZE(db1200_spi_devs));
 
 	/* SWITCHES:	S6.8 I2C/SPI selector  (OFF=I2C	 ON=SPI)
 	 *		S6.7 AC97/I2S selector (OFF=AC97 ON=I2S)

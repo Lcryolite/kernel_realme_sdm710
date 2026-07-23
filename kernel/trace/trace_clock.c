@@ -18,6 +18,7 @@
 #include <linux/module.h>
 #include <linux/percpu.h>
 #include <linux/sched.h>
+#include <linux/sched/clock.h>
 #include <linux/ktime.h>
 #include <linux/trace_clock.h>
 
@@ -152,5 +153,5 @@ static atomic64_t trace_counter;
  */
 u64 notrace trace_clock_counter(void)
 {
-	return atomic64_inc_return(&trace_counter);
+	return atomic64_add_return(1, &trace_counter);
 }

@@ -32,6 +32,11 @@ First Level Node - CAM SMMU device
   Value type: <string>
   Definition: Should be "qcom,msm-cam-smmu".
 
+- qcom,camera-secure-sid
+  Usage: optional
+  Value type: boolean
+  Definition: Specifies if the sensor stream is a secure stream.
+
 ===================================================================
 Second Level Node - CAM SMMU context bank device or firmware device
 ===================================================================
@@ -44,12 +49,13 @@ Second Level Node - CAM SMMU context bank device or firmware device
   Usage: optional
   Value type: <phandle>
   Definition: Should specify the phandle of the memory region for firmware.
-    allocation
+		allocation
 
 - iommus
   Usage: required
-  Value type: <phandle>
-  Definition: Should specify the phandle of the iommu sid.
+  Value type: <phandle u32 u32>
+  Definition: first cell is phandle of the iommu, second cell is stream id
+              and third cell is SMR mask.
 
 - label
   Usage: required
@@ -60,6 +66,11 @@ Second Level Node - CAM SMMU context bank device or firmware device
   Usage: optional
   Value type: boolean
   Definition: Specifies if the context bank is a secure context bank.
+
+- qcom,secure-pixel-cb
+  Usage: optional
+  Value type: boolean
+  Definition: Specifies if the context bank is a secure pixel context bank.
 
 =============================================
 Third Level Node - CAM SMMU memory map device
@@ -83,11 +94,11 @@ Third Level Node - CAM SMMU memory map device
   Usage: required
   Value type: <u32>
   Definition: Should specify the numerical identifier for IOVA region.
-    Allowed values are: 0x00 to 0x03
-      - Firmware region: 0x00
-      - Shared region: 0x01
-      - Scratch region: 0x02
-      - IO region: 0x03
+	Allowed values are: 0x00 to 0x03
+		- Firmware region: 0x00
+		- Shared region: 0x01
+		- Scratch region: 0x02
+		- IO region: 0x03
 
 - iova-granularity
   Usage: optional
@@ -97,6 +108,7 @@ Third Level Node - CAM SMMU memory map device
 Example:
 	qcom,cam_smmu@0 {
 		compatible = "qcom,msm-cam-smmu";
+		qcom,camera-secure-sid;
 
 		msm_cam_smmu_icp {
 			compatible = "qcom,msm-cam-smmu-cb";

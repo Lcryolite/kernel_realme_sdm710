@@ -49,12 +49,19 @@ struct udp_sock {
 	unsigned int	 corkflag;	/* Cork is required */
 	__u8		 encap_type;	/* Is this an Encapsulation socket? */
 	unsigned char	 no_check6_tx:1,/* Send zero UDP6 checksums on TX? */
-			 no_check6_rx:1;/* Allow zero UDP6 checksums on RX? */
+			 no_check6_rx:1,/* Allow zero UDP6 checksums on RX? */
+			 encap_enabled:1,/* This socket enabled encap
+					  * processing; UDP tunnels and
+					  * different encapsulation layers set
+					  * this
+					  */
+			 gro_enabled:1; /* Can accept GRO packets */
 	/*
 	 * Following member retains the information to create a UDP header
 	 * when the socket is uncorked.
 	 */
 	__u16		 len;		/* total length of pending frames */
+	__u16		 gso_size;
 	/*
 	 * Fields specific to UDP-Lite.
 	 */
@@ -79,7 +86,15 @@ struct udp_sock {
 	int			(*gro_complete)(struct sock *sk,
 						struct sk_buff *skb,
 						int nhoff);
+
+	/* udp_recvmsg try to use this before splicing sk_receive_queue */
+	struct sk_buff_head	reader_queue ____cacheline_aligned_in_smp;
+
+	/* This field is dirtied by udp_recvmsg() */
+	int		forward_deficit;
 };
+
+#define UDP_MAX_SEGMENTS	(1 << 6UL)
 
 static inline struct udp_sock *udp_sk(const struct sock *sk)
 {
@@ -106,12 +121,29 @@ static inline bool udp_get_no_check6_rx(struct sock *sk)
 	return udp_sk(sk)->no_check6_rx;
 }
 
+static inline void udp_cmsg_recv(struct msghdr *msg, struct sock *sk,
+				 struct sk_buff *skb)
+{
+	int gso_size;
+
+	if (skb_shinfo(skb)->gso_type & SKB_GSO_UDP_L4) {
+		gso_size = skb_shinfo(skb)->gso_size;
+		put_cmsg(msg, SOL_UDP, UDP_GRO, sizeof(gso_size), &gso_size);
+	}
+}
+
+static inline bool udp_unexpected_gso(struct sock *sk, struct sk_buff *skb)
+{
+	return !udp_sk(sk)->gro_enabled && skb_is_gso(skb) &&
+	       skb_shinfo(skb)->gso_type & SKB_GSO_UDP_L4;
+}
+
 #define udp_portaddr_for_each_entry(__sk, list) \
 	hlist_for_each_entry(__sk, list, __sk_common.skc_portaddr_node)
 
 #define udp_portaddr_for_each_entry_rcu(__sk, list) \
 	hlist_for_each_entry_rcu(__sk, list, __sk_common.skc_portaddr_node)
 
-#define IS_UDPLITE(__sk) (udp_sk(__sk)->pcflag)
+#define IS_UDPLITE(__sk) (__sk->sk_protocol == IPPROTO_UDPLITE)
 
 #endif	/* _LINUX_UDP_H */

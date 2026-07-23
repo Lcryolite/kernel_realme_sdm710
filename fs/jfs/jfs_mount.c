@@ -184,14 +184,14 @@ int jfs_mount(struct super_block *sb)
 	}
 	jfs_info("jfs_mount: ipimap:0x%p", ipimap);
 
-	/* map further access of per fileset inodes by the fileset inode */
-	sbi->ipimap = ipimap;
-
 	/* initialize fileset inode allocation map */
 	if ((rc = diMount(ipimap))) {
 		jfs_err("jfs_mount: diMount failed w/rc = %d", rc);
 		goto err_ipimap;
 	}
+
+	/* map further access of per fileset inodes by the fileset inode */
+	sbi->ipimap = ipimap;
 
 	return rc;
 
@@ -356,7 +356,7 @@ static int chkSuper(struct super_block *sb)
 
 	/* validate fs state */
 	if (j_sb->s_state != cpu_to_le32(FM_CLEAN) &&
-	    !(sb->s_flags & MS_RDONLY)) {
+	    !sb_rdonly(sb)) {
 		jfs_err("jfs_mount: Mount Failure: File System Dirty.");
 		rc = -EINVAL;
 		goto out;

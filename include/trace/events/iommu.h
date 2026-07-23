@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * iommu trace points
  *
@@ -11,7 +12,6 @@
 #define _TRACE_IOMMU_H
 
 #include <linux/tracepoint.h>
-#include <linux/pci.h>
 #include <linux/iommu.h>
 
 struct device;
@@ -230,20 +230,6 @@ DEFINE_EVENT(iommu_tlbi, tlbi_start,
 );
 
 DEFINE_EVENT(iommu_tlbi, tlbi_end,
-
-	TP_PROTO(struct device *dev, u64 time),
-
-	TP_ARGS(dev, time)
-);
-
-DEFINE_EVENT(iommu_tlbi, tlbi_throttle_start,
-
-	TP_PROTO(struct device *dev, u64 time),
-
-	TP_ARGS(dev, time)
-);
-
-DEFINE_EVENT(iommu_tlbi, tlbi_throttle_end,
 
 	TP_PROTO(struct device *dev, u64 time),
 

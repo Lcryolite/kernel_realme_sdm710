@@ -1,4 +1,4 @@
-/* Copyright (c) 2002,2007-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2002,2007-2019, The Linux Foundation. All rights reserved.
  * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -76,6 +76,13 @@ void kgsl_get_memory_usage(char *str, size_t len, uint64_t memflags);
 
 int kgsl_sharedmem_page_alloc_user(struct kgsl_memdesc *memdesc,
 				uint64_t size);
+
+void kgsl_free_secure_page(struct page *page);
+
+int kgsl_lock_sgt(struct sg_table *sgt, uint64_t size);
+int kgsl_unlock_sgt(struct sg_table *sgt);
+
+struct page *kgsl_alloc_secure_page(void);
 
 #define MEMFLAGS(_flags, _mask, _shift) \
 	((unsigned int) (((_flags) & (_mask)) >> (_shift)))
@@ -263,7 +270,8 @@ kgsl_memdesc_use_cpu_map(const struct kgsl_memdesc *memdesc)
 static inline uint64_t
 kgsl_memdesc_footprint(const struct kgsl_memdesc *memdesc)
 {
-	return  memdesc->size + kgsl_memdesc_guard_page_size(memdesc);
+	return ALIGN(memdesc->size + kgsl_memdesc_guard_page_size(memdesc),
+		PAGE_SIZE);
 }
 
 /*

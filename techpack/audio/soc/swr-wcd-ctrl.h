@@ -34,6 +34,7 @@ enum {
 	SWR_MSTR_RESUME,
 	SWR_MSTR_UP,
 	SWR_MSTR_DOWN,
+	SWR_MSTR_SSR,
 };
 
 enum {
@@ -105,6 +106,11 @@ struct swr_mstr_ctrl {
 	struct platform_device *pdev;
 	int num_rx_chs;
 	u8 num_cfg_devs;
+	struct mutex force_down_lock;
+	int force_down_state;
+
+	struct notifier_block event_notifier;
+	struct work_struct dc_presence_work;
 };
 
 #endif /* _SWR_WCD_CTRL_H */

@@ -1,4 +1,4 @@
-/* Copyright (c) 2012, 2015-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012, 2015-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -15,7 +15,6 @@
 #include <linux/dma-mapping.h>
 #include <linux/errno.h>
 #include <linux/file.h>
-#include <linux/msm_ion.h>
 #include <linux/spinlock.h>
 #include <linux/types.h>
 #include <linux/major.h>
@@ -32,6 +31,7 @@
 #include <linux/regulator/consumer.h>
 #include <media/msm_media_info.h>
 #include <linux/videodev2.h>
+#include <linux/ion.h>
 
 #include "sde_rotator_util.h"
 #include "sde_rotator_smmu.h"
@@ -774,6 +774,13 @@ static int sde_smmu_get_domain_type(u32 flags, bool rotator)
 	return type;
 }
 
+static int sde_mdp_is_map_needed(struct sde_mdp_img_data *data)
+{
+	if (data->flags & SDE_SECURE_CAMERA_SESSION)
+		return false;
+	return true;
+}
+
 static int sde_mdp_put_img(struct sde_mdp_img_data *data, bool rotator,
 		int dir)
 {
@@ -788,25 +795,26 @@ static int sde_mdp_put_img(struct sde_mdp_img_data *data, bool rotator,
 	if (!IS_ERR_OR_NULL(data->srcp_dma_buf)) {
 		SDEROT_DBG("ion hdl=%p buf=0x%pa\n", data->srcp_dma_buf,
 							&data->addr);
-		if (data->mapped) {
+		if (sde_mdp_is_map_needed(data) && data->mapped) {
 			domain = sde_smmu_get_domain_type(data->flags,
 				rotator);
-			sde_smmu_unmap_dma_buf(data->srcp_table,
-						domain, dir,
-						data->srcp_dma_buf);
 			data->mapped = false;
 			SDEROT_DBG("unmap %pad/%lx d:%u f:%x\n", &data->addr,
 					data->len, domain, data->flags);
 		}
 		if (!data->skip_detach) {
+			data->srcp_attachment->dma_map_attrs |=
+				DMA_ATTR_DELAYED_UNMAP;
 			dma_buf_unmap_attachment(data->srcp_attachment,
-				data->srcp_table, dir);
+				data->srcp_table,
+				sde_smmu_set_dma_direction(dir));
 			dma_buf_detach(data->srcp_dma_buf,
 					data->srcp_attachment);
 			if (!(data->flags & SDE_ROT_EXT_DMA_BUF)) {
 				dma_buf_put(data->srcp_dma_buf);
 				data->srcp_dma_buf = NULL;
 			}
+			data->skip_detach = true;
 		}
 	} else {
 		return -ENOMEM;
@@ -815,26 +823,13 @@ static int sde_mdp_put_img(struct sde_mdp_img_data *data, bool rotator,
 	return 0;
 }
 
-static int sde_mdp_is_map_needed(struct sde_mdp_img_data *data)
-{
-	if (data->flags & SDE_SECURE_CAMERA_SESSION)
-		return false;
-	return true;
-}
-
 static int sde_mdp_get_img(struct sde_fb_data *img,
 		struct sde_mdp_img_data *data, struct device *dev,
 		bool rotator, int dir)
 {
 	int ret = -EINVAL;
-	unsigned long *len;
 	u32 domain;
-	dma_addr_t *start;
-	struct sde_rot_data_type *mdata = sde_rot_get_mdata();
-	struct ion_client *iclient = mdata->iclient;
 
-	start = &data->addr;
-	len = &data->len;
 	data->flags |= img->flags;
 	data->offset = img->offset;
 	if (data->flags & SDE_ROT_EXT_DMA_BUF) {
@@ -864,68 +859,25 @@ static int sde_mdp_get_img(struct sde_fb_data *img,
 			ret = PTR_ERR(data->srcp_attachment);
 			goto err_put;
 		}
-
-		SDEROT_DBG("%d attach=%p\n", __LINE__, data->srcp_attachment);
-		data->srcp_table =
-			dma_buf_map_attachment(data->srcp_attachment, dir);
-		if (IS_ERR(data->srcp_table)) {
-			SDEROT_ERR("%d Failed to map attachment\n", __LINE__);
-			ret = PTR_ERR(data->srcp_table);
-			goto err_detach;
-		}
-
-		SDEROT_DBG("%d table=%p\n", __LINE__, data->srcp_table);
-		data->addr = 0;
-		data->len = 0;
-		data->mapped = false;
-		data->skip_detach = false;
-		/* return early, mapping will be done later */
 	} else {
-		struct ion_handle *ihandle = NULL;
-		struct sg_table *sg_ptr = NULL;
-
-		do {
-			ihandle = img->handle;
-			if (IS_ERR_OR_NULL(ihandle)) {
-				ret = -EINVAL;
-				SDEROT_ERR("invalid ion handle\n");
-				break;
-			}
-
-			sg_ptr = ion_sg_table(iclient, ihandle);
-			if (sg_ptr == NULL) {
-				SDEROT_ERR("ion sg table get failed\n");
-				ret = -EINVAL;
-				break;
-			}
-
-			if (sg_ptr->nents != 1) {
-				SDEROT_ERR("ion buffer mapping failed\n");
-				ret = -EINVAL;
-				break;
-			}
-
-			if (((uint64_t)sg_dma_address(sg_ptr->sgl) >=
-					PHY_ADDR_4G - sg_ptr->sgl->length)) {
-				SDEROT_ERR("ion buffer mapped size invalid\n");
-				ret = -EINVAL;
-				break;
-			}
-
-			data->addr = sg_dma_address(sg_ptr->sgl);
-			data->len = sg_ptr->sgl->length;
-			data->mapped = true;
-			ret = 0;
-		} while (0);
-
-		if (!IS_ERR_OR_NULL(ihandle))
-			ion_free(iclient, ihandle);
-		return ret;
+		data->srcp_attachment = dma_buf_attach(
+				data->srcp_dma_buf, dev);
+		if (IS_ERR(data->srcp_attachment)) {
+			SDEROT_ERR(
+				"Failed to attach dma buf for secure camera\n");
+			ret = PTR_ERR(data->srcp_attachment);
+			goto err_put;
+		}
 	}
 
+	SDEROT_DBG("%d attach=%pK\n", __LINE__, data->srcp_attachment);
+	data->addr = 0;
+	data->len = 0;
+	data->mapped = false;
+	data->skip_detach = false;
+	/* return early, mapping will be done later */
+
 	return 0;
-err_detach:
-	dma_buf_detach(data->srcp_dma_buf, data->srcp_attachment);
 err_put:
 	if (!(data->flags & SDE_ROT_EXT_DMA_BUF)) {
 		dma_buf_put(data->srcp_dma_buf);
@@ -938,10 +890,10 @@ static int sde_mdp_map_buffer(struct sde_mdp_img_data *data, bool rotator,
 		int dir)
 {
 	int ret = -EINVAL;
-	int domain;
 	struct scatterlist *sg;
+	struct sg_table *sgt = NULL;
 	unsigned int i;
-	struct sg_table *table;
+	unsigned long flags = 0;
 
 	if (data->addr && data->len)
 		return 0;
@@ -953,29 +905,70 @@ static int sde_mdp_map_buffer(struct sde_mdp_img_data *data, bool rotator,
 	}
 
 	if (!IS_ERR_OR_NULL(data->srcp_dma_buf)) {
-		if (sde_mdp_is_map_needed(data)) {
-			domain = sde_smmu_get_domain_type(data->flags,
-					rotator);
-			ret = sde_smmu_map_dma_buf(data->srcp_dma_buf,
-					data->srcp_table, domain,
-					&data->addr, &data->len, dir);
-			if (ret < 0) {
-				SDEROT_ERR("smmu map buf failed:(%d)\n", ret);
-				goto err_unmap;
+		/*
+		 * dma_buf_map_attachment will call into
+		 * dma_map_sg_attrs, and so all cache maintenance
+		 * attribute and lazy unmap attribute will be all
+		 * provided here.
+		 */
+		data->srcp_attachment->dma_map_attrs |=
+			DMA_ATTR_DELAYED_UNMAP;
+
+		if (data->srcp_dma_buf && data->srcp_dma_buf->ops &&
+				data->srcp_dma_buf->ops->get_flags) {
+			if (data->srcp_dma_buf->ops->get_flags(
+						data->srcp_dma_buf,
+						&flags) == 0) {
+				if ((flags & ION_FLAG_CACHED) == 0) {
+					SDEROT_DBG("dmabuf is uncached type\n");
+					data->srcp_attachment->dma_map_attrs |=
+						DMA_ATTR_SKIP_CPU_SYNC;
+				}
 			}
-			SDEROT_DBG("map %pad/%lx d:%u f:%x\n",
+		}
+
+		sgt = dma_buf_map_attachment(
+				data->srcp_attachment,
+				sde_smmu_set_dma_direction(dir));
+		if (IS_ERR_OR_NULL(sgt) ||
+				IS_ERR_OR_NULL(sgt->sgl)) {
+			SDEROT_ERR("Failed to map attachment\n");
+			ret = PTR_ERR(sgt);
+			goto err_detach;
+		}
+		data->srcp_table = sgt;
+
+		data->len = 0;
+		for_each_sg(sgt->sgl, sg, sgt->nents, i) {
+			data->len += sg->length;
+		}
+
+		if (sde_mdp_is_map_needed(data)) {
+			data->addr = data->srcp_table->sgl->dma_address;
+			SDEROT_DBG("map %pad/%lx f:%x\n",
 					&data->addr,
 					data->len,
-					domain,
 					data->flags);
 			data->mapped = true;
+			ret = 0;
 		} else {
-			data->addr = sg_phys(data->srcp_table->sgl);
-			data->len = 0;
-			table = data->srcp_table;
-			for_each_sg(table->sgl, sg, table->nents, i) {
-				data->len += sg->length;
+			if (sgt->nents != 1) {
+				SDEROT_ERR(
+					"Fail ion buffer mapping for secure camera\n");
+				ret = -EINVAL;
+				goto err_unmap;
 			}
+
+			if (((uint64_t)sg_dma_address(sgt->sgl) >=
+					PHY_ADDR_4G - sgt->sgl->length)) {
+				SDEROT_ERR(
+					"ion buffer mapped size invalid, size=%d\n",
+					sgt->sgl->length);
+				ret = -EINVAL;
+				goto err_unmap;
+			}
+
+			data->addr = sg_phys(data->srcp_table->sgl);
 			ret = 0;
 		}
 	}
@@ -1000,7 +993,9 @@ static int sde_mdp_map_buffer(struct sde_mdp_img_data *data, bool rotator,
 	return ret;
 
 err_unmap:
-	dma_buf_unmap_attachment(data->srcp_attachment, data->srcp_table, dir);
+	dma_buf_unmap_attachment(data->srcp_attachment, data->srcp_table,
+			sde_smmu_set_dma_direction(dir));
+err_detach:
 	dma_buf_detach(data->srcp_dma_buf, data->srcp_attachment);
 	if (!(data->flags & SDE_ROT_EXT_DMA_BUF)) {
 		dma_buf_put(data->srcp_dma_buf);
@@ -1122,4 +1117,126 @@ int sde_mdp_data_get_and_validate_size(struct sde_mdp_data *data,
 buf_too_small:
 	sde_mdp_data_free(data, rotator, dir);
 	return ret;
+}
+
+static struct sg_table *sde_rot_dmabuf_map_tiny(
+		struct dma_buf_attachment *attach, enum dma_data_direction dir)
+{
+	struct sde_mdp_img_data *data = attach->dmabuf->priv;
+	struct sg_table *sgt;
+	unsigned int order;
+	struct page *p;
+
+	if (!data) {
+		SDEROT_ERR("NULL img data\n");
+		return NULL;
+	}
+
+	if (data->len > PAGE_SIZE) {
+		SDEROT_ERR("DMA buffer size is larger than %ld, bufsize:%ld\n",
+				PAGE_SIZE, data->len);
+		return NULL;
+	}
+
+	order = get_order(data->len);
+	p = alloc_pages(GFP_KERNEL, order);
+	if (!p) {
+		SDEROT_ERR("Fail allocating page for datasize:%ld\n",
+				data->len);
+		return NULL;
+	}
+
+	sgt = kmalloc(sizeof(*sgt), GFP_KERNEL);
+	if (!sgt)
+		goto free_alloc_pages;
+
+	/* only alloc a single page */
+	if (sg_alloc_table(sgt, 1, GFP_KERNEL)) {
+		SDEROT_ERR("fail sg_alloc_table\n");
+		goto free_sgt;
+	}
+
+	sg_set_page(sgt->sgl, p, data->len, 0);
+
+	if (dma_map_sg(attach->dev, sgt->sgl, sgt->nents, dir) == 0) {
+		SDEROT_ERR("fail dma_map_sg\n");
+		goto free_table;
+	}
+
+	SDEROT_DBG("Successful generate sg_table:%pK datalen:%ld\n",
+			sgt, data->len);
+	return sgt;
+
+free_table:
+	sg_free_table(sgt);
+free_sgt:
+	kfree(sgt);
+free_alloc_pages:
+	__free_pages(p, order);
+	return NULL;
+}
+
+static void sde_rot_dmabuf_unmap(struct dma_buf_attachment *attach,
+			struct sg_table *sgt, enum dma_data_direction dir)
+{
+	struct scatterlist *sg;
+	int i;
+
+	SDEROT_DBG("DMABUF unmap, sgt:%pK\n", sgt);
+	dma_unmap_sg(attach->dev, sgt->sgl, sgt->nents, dir);
+
+	for_each_sg(sgt->sgl, sg, sgt->nents, i) {
+		put_page(sg_page(sg));
+		__free_page(sg_page(sg));
+	}
+
+	sg_free_table(sgt);
+	kfree(sgt);
+}
+
+static void *sde_rot_dmabuf_no_map(struct dma_buf *buf, unsigned long n)
+{
+	SDEROT_WARN("NOT SUPPORTING dmabuf map\n");
+	return NULL;
+}
+
+static void sde_rot_dmabuf_no_unmap(struct dma_buf *buf, unsigned long n,
+		void *addr)
+{
+	SDEROT_WARN("NOT SUPPORTING dmabuf unmap\n");
+}
+
+static void sde_rot_dmabuf_release(struct dma_buf *buf)
+{
+	SDEROT_DBG("Release dmabuf:%pK\n", buf);
+}
+
+static int sde_rot_dmabuf_no_mmap(struct dma_buf *buf,
+		struct vm_area_struct *vma)
+{
+	SDEROT_WARN("NOT SUPPORTING dmabuf mmap\n");
+	return -EINVAL;
+}
+
+static const struct dma_buf_ops sde_rot_dmabuf_ops = {
+	.map_dma_buf	= sde_rot_dmabuf_map_tiny,
+	.unmap_dma_buf	= sde_rot_dmabuf_unmap,
+	.release	= sde_rot_dmabuf_release,
+	.map_atomic	= sde_rot_dmabuf_no_map,
+	.unmap_atomic	= sde_rot_dmabuf_no_unmap,
+	.map		= sde_rot_dmabuf_no_map,
+	.unmap		= sde_rot_dmabuf_no_unmap,
+	.mmap		= sde_rot_dmabuf_no_mmap,
+};
+
+struct dma_buf *sde_rot_get_dmabuf(struct sde_mdp_img_data *data)
+{
+	DEFINE_DMA_BUF_EXPORT_INFO(exp_info);
+
+	exp_info.ops = &sde_rot_dmabuf_ops;
+	exp_info.size = (size_t)data->len;
+	exp_info.flags = O_RDWR;
+	exp_info.priv = data;
+
+	return dma_buf_export(&exp_info);
 }

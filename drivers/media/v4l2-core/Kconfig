@@ -6,6 +6,7 @@
 config VIDEO_V4L2
 	tristate
 	depends on (I2C || I2C=n) && VIDEO_DEV
+	select RATIONAL
 	default (I2C || I2C=n) && VIDEO_DEV
 
 config VIDEO_ADV_DEBUG
@@ -53,6 +54,9 @@ config V4L2_FLASH_LED_CLASS
 	  class drivers.
 
 	  When in doubt, say N.
+
+config V4L2_FWNODE
+	tristate
 
 # Used by drivers that need Videobuf modules
 config VIDEOBUF_GEN
@@ -107,3 +111,10 @@ config VIDEOBUF2_DMA_SG
 config VIDEOBUF2_DVB
 	tristate
 	select VIDEOBUF2_CORE
+
+config V4L2_LOOPBACK
+	tristate "v4l2loopback driver"
+	---help---
+	Enable v4l2loopback support, it allows to create
+	"virtual video devices". Normal (v4l2) applications will
+	read these devices as if they were ordinary video devices.

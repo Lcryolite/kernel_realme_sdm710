@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2018, 2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -63,7 +63,7 @@ struct rndis_data_ch_info {
 };
 
 static struct workqueue_struct *ipa_data_wq;
-struct ipa_data_ch_info *ipa_data_ports[IPA_N_PORTS];
+static struct ipa_data_ch_info *ipa_data_ports[IPA_N_PORTS];
 static struct rndis_data_ch_info *rndis_data;
 /**
  * ipa_data_endless_complete() - completion callback for endless TX/RX request
@@ -1039,6 +1039,7 @@ static void bam2bam_data_suspend_work(struct work_struct *w)
 	if (ret) {
 		pr_err("%s(): Failed to register BAM wake callback.\n",
 				__func__);
+		spin_unlock_irqrestore(&port->port_lock, flags);
 		return;
 	}
 
@@ -1113,7 +1114,7 @@ void ipa_data_resume(struct data_port *gp, enum ipa_func_type func,
 				gp->in_ep_desc_backup);
 			dst_connection_idx = usb_bam_get_connection_idx(
 				usb_bam_type, IPA_P_BAM, PEER_PERIPHERAL_TO_USB,
-				USB_BAM_DEVICE, bam_pipe_num);
+				bam_pipe_num);
 		}
 		if (gp->out) {
 			gp->out->desc = gp->out_ep_desc_backup;
@@ -1121,7 +1122,7 @@ void ipa_data_resume(struct data_port *gp, enum ipa_func_type func,
 				gp->out_ep_desc_backup);
 			src_connection_idx = usb_bam_get_connection_idx(
 				usb_bam_type, IPA_P_BAM, USB_TO_PEER_PERIPHERAL,
-				USB_BAM_DEVICE, bam_pipe_num);
+				bam_pipe_num);
 		}
 		ipa_data_connect(gp, func,
 				src_connection_idx, dst_connection_idx);
@@ -1298,11 +1299,8 @@ int ipa_data_setup(enum ipa_func_type func)
 
 	if (func == USB_IPA_FUNC_RNDIS) {
 		rndis_data = kzalloc(sizeof(*rndis_data), GFP_KERNEL);
-		if (!rndis_data) {
-			pr_err("%s: fail allocate and initialize new instance\n",
-				__func__);
+		if (!rndis_data)
 			goto free_ipa_ports;
-		}
 	}
 	if (ipa_data_wq) {
 		pr_debug("ipa_data_wq is already setup.");

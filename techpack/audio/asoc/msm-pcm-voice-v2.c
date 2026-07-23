@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -29,6 +29,9 @@
 #include <dsp/q6voice.h>
 
 #include "msm-pcm-voice-v2.h"
+
+#define NUM_CHANNELS_MONO   1
+#define NUM_CHANNELS_STEREO 2
 
 static struct msm_voice voice_info[VOICE_SESSION_INDEX_MAX];
 
@@ -572,12 +575,15 @@ static int msm_voice_slowtalk_put(struct snd_kcontrol *kcontrol,
 {
 	int st_enable = ucontrol->value.integer.value[0];
 	uint32_t session_id = ucontrol->value.integer.value[1];
+	struct module_instance_info mod_inst_info;
 
+	memset(&mod_inst_info, 0, sizeof(mod_inst_info));
 	pr_debug("%s: st enable=%d session_id=%#x\n", __func__, st_enable,
 		 session_id);
 
-	voc_set_pp_enable(session_id,
-			  MODULE_ID_VOICE_MODULE_ST, st_enable);
+	mod_inst_info.module_id = MODULE_ID_VOICE_MODULE_ST;
+	mod_inst_info.instance_id = INSTANCE_ID_0;
+	voc_set_pp_enable(session_id, mod_inst_info, st_enable);
 
 	return 0;
 }
@@ -617,6 +623,38 @@ static int msm_voice_topology_disable_put(struct snd_kcontrol *kcontrol,
 
 done:
 	return ret;
+}
+
+static int msm_voice_rec_config_put(struct snd_kcontrol *kcontrol,
+				  struct snd_ctl_elem_value *ucontrol)
+{
+	int ret = 0;
+	int voc_rec_config_channels = ucontrol->value.integer.value[0];
+
+	if (voc_rec_config_channels < NUM_CHANNELS_MONO ||
+			voc_rec_config_channels > NUM_CHANNELS_STEREO) {
+		pr_err("%s: Invalid channel config (%d)\n", __func__,
+			voc_rec_config_channels);
+		ret = -EINVAL;
+		goto done;
+	}
+	voc_set_incall_capture_channel_config(voc_rec_config_channels);
+
+done:
+	pr_debug("%s: voc_rec_config_channels = %d, ret = %d\n", __func__,
+		voc_rec_config_channels, ret);
+	return ret;
+}
+
+static int msm_voice_rec_config_get(struct snd_kcontrol *kcontrol,
+				  struct snd_ctl_elem_value *ucontrol)
+{
+
+	ucontrol->value.integer.value[0] =
+		voc_get_incall_capture_channel_config();
+	pr_debug("%s: rec_config_channels = %ld\n", __func__,
+		ucontrol->value.integer.value[0]);
+	return 0;
 }
 
 static int msm_voice_cvd_version_info(struct snd_kcontrol *kcontrol,
@@ -681,6 +719,12 @@ static struct snd_kcontrol_new msm_voice_controls[] = {
 				msm_voice_mbd_put),
 };
 
+static struct snd_kcontrol_new msm_voice_rec_config_controls[] = {
+	SOC_SINGLE_MULTI_EXT("Voc Rec Config", SND_SOC_NOPM, 0,
+			     2, 0, 1, msm_voice_rec_config_get,
+			     msm_voice_rec_config_put),
+};
+
 static const struct snd_pcm_ops msm_pcm_ops = {
 	.open			= msm_pcm_open,
 	.hw_params		= msm_pcm_hw_params,
@@ -706,7 +750,8 @@ static int msm_pcm_voice_probe(struct snd_soc_platform *platform)
 {
 	snd_soc_add_platform_controls(platform, msm_voice_controls,
 					ARRAY_SIZE(msm_voice_controls));
-
+	snd_soc_add_platform_controls(platform, msm_voice_rec_config_controls,
+				    ARRAY_SIZE(msm_voice_rec_config_controls));
 	return 0;
 }
 
@@ -720,9 +765,7 @@ static int msm_pcm_probe(struct platform_device *pdev)
 {
 	int rc;
 	bool destroy_cvd = false;
-	bool vote_bms = false;
 	const char *is_destroy_cvd = "qcom,destroy-cvd";
-	const char *is_vote_bms = "qcom,vote-bms";
 
 	if (!is_voc_initialized()) {
 		pr_debug("%s: voice module not initialized yet, deferring probe()\n",
@@ -748,10 +791,6 @@ static int msm_pcm_probe(struct platform_device *pdev)
 	destroy_cvd = of_property_read_bool(pdev->dev.of_node,
 						is_destroy_cvd);
 	voc_set_destroy_cvd_flag(destroy_cvd);
-
-	vote_bms = of_property_read_bool(pdev->dev.of_node,
-					 is_vote_bms);
-	voc_set_vote_bms_flag(vote_bms);
 
 	rc = snd_soc_register_platform(&pdev->dev,
 				       &msm_soc_platform);

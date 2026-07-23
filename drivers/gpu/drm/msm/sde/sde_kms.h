@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
  * Copyright (C) 2013 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
  *
@@ -52,6 +52,18 @@
 			DRM_DEBUG(fmt, ##__VA_ARGS__); \
 		else                                                       \
 			pr_debug(fmt, ##__VA_ARGS__);                      \
+	} while (0)
+
+/**
+ * SDE_INFO - macro for kms/plane/crtc/encoder/connector logs
+ * @fmt: Pointer to format string
+ */
+#define SDE_INFO(fmt, ...)                                                \
+	do {                                                               \
+		if (unlikely(drm_debug & DRM_UT_KMS))                      \
+			DRM_INFO(fmt, ##__VA_ARGS__); \
+		else                                                       \
+			pr_info(fmt, ##__VA_ARGS__);                      \
 	} while (0)
 
 /**
@@ -160,11 +172,13 @@ enum sde_kms_sui_misr_state {
 /**
  * struct sde_kms_smmu_state_data: stores the smmu state and transition type
  * @state: current state of smmu context banks
+ * @secure_level: secure level cached from crtc
  * @transition_type: transition request type
  * @transition_error: whether there is error while transitioning the state
  */
 struct sde_kms_smmu_state_data {
 	uint32_t state;
+	uint32_t secure_level;
 	uint32_t transition_type;
 	uint32_t transition_error;
 	uint32_t sui_misr_state;
@@ -199,37 +213,6 @@ struct sde_irq {
 	struct dentry *debugfs_file;
 };
 
-/**
- * struct sde_kms_fbo - framebuffer memory object
- * @refcount: reference/usage count of this object
- * @dev: Pointer to containing drm device
- * @width: width of the framebuffer
- * @height: height of the framebuffer
- * @flags: drm framebuffer flags
- * @modifier: pixel format modifier of the framebuffer
- * @fmt: Pointer to sde format descriptor
- * @layout: sde format layout descriptor
- * @ihandle: framebuffer object ion handle
- * @dma_buf: framebuffer object dma buffer
- * @bo: per plane buffer object
- * @fb_list: llist of fb created from this buffer object
- */
-struct sde_kms_fbo {
-	atomic_t refcount;
-	struct drm_device *dev;
-	u32 width, height;
-	u32 pixel_format;
-	u32 flags;
-	u64 modifier[4];
-	int nplane;
-	const struct sde_format *fmt;
-	struct sde_hw_fmt_layout layout;
-	struct ion_handle *ihandle;
-	struct dma_buf *dma_buf;
-	struct drm_gem_object *bo[4];
-	struct list_head fb_list;
-};
-
 struct sde_kms {
 	struct msm_kms base;
 	struct drm_device *dev;
@@ -241,9 +224,7 @@ struct sde_kms {
 
 	struct msm_gem_address_space *aspace[MSM_SMMU_DOMAIN_MAX];
 	struct sde_power_client *core_client;
-	struct pm_qos_request pm_qos_cpu_req;
 
-	struct ion_client *iclient;
 	struct sde_power_event *power_event;
 
 	/* directory entry for debugfs */
@@ -251,8 +232,8 @@ struct sde_kms {
 	struct dentry *debugfs_vbif;
 
 	/* io/register spaces: */
-	void __iomem *mmio, *vbif[VBIF_MAX], *reg_dma;
-	unsigned long mmio_len, vbif_len[VBIF_MAX], reg_dma_len;
+	void __iomem *mmio, *vbif[VBIF_MAX], *reg_dma, *sid;
+	unsigned long mmio_len, vbif_len[VBIF_MAX], reg_dma_len, sid_len;
 
 	struct regulator *vdd;
 	struct regulator *mmagic;
@@ -263,6 +244,7 @@ struct sde_kms {
 	struct sde_hw_intr *hw_intr;
 	struct sde_irq irq_obj;
 	int irq_num;	/* mdss irq number */
+	bool irq_enabled;
 
 	struct sde_core_perf perf;
 
@@ -275,12 +257,14 @@ struct sde_kms {
 	struct sde_splash_data splash_data;
 	struct sde_hw_vbif *hw_vbif[VBIF_MAX];
 	struct sde_hw_mdp *hw_mdp;
+	struct sde_hw_sid *hw_sid;
 	int dsi_display_count;
 	void **dsi_displays;
 	int wb_display_count;
 	void **wb_displays;
 	int dp_display_count;
 	void **dp_displays;
+	int dp_stream_count;
 
 	bool has_danger_ctrl;
 
@@ -288,9 +272,9 @@ struct sde_kms {
 	atomic_t detach_sec_cb;
 	atomic_t detach_all_cb;
 	struct mutex secure_transition_lock;
-	struct mutex vblank_ctl_global_lock;
 
 	bool first_kickoff;
+	bool qdss_enabled;
 };
 
 struct vsync_info {
@@ -306,16 +290,6 @@ struct vsync_info {
  * Return: Whether or not the 'sdeclient' module parameter was set on boot up
  */
 bool sde_is_custom_client(void);
-
-/**
- * sde_kms_is_vbif_operation_allowed - resticts the VBIF programming
- * during secure-ui, if the sec_ui_misr feature is enabled
- *
- * @sde_kms: Pointer to sde_kms
- *
- * return: false if secure-session is in progress; true otherwise
- */
-bool sde_kms_is_vbif_operation_allowed(struct sde_kms *sde_kms);
 
 /**
  * sde_kms_power_resource_is_enabled - whether or not power resource is enabled
@@ -377,12 +351,54 @@ static inline bool sde_kms_is_secure_session_inprogress(struct sde_kms *sde_kms)
 		return false;
 
 	mutex_lock(&sde_kms->secure_transition_lock);
-	if ((sde_kms->smmu_state.state == DETACHED)
-		|| (sde_kms->smmu_state.state == DETACH_ALL_REQ))
+	if (((sde_kms->catalog->sui_ns_allowed) &&
+		(sde_kms->smmu_state.secure_level == SDE_DRM_SEC_ONLY) &&
+			((sde_kms->smmu_state.state == DETACHED_SEC) ||
+				(sde_kms->smmu_state.state == DETACH_SEC_REQ) ||
+				(sde_kms->smmu_state.state == ATTACH_SEC_REQ)))
+		|| (((sde_kms->smmu_state.state == DETACHED) ||
+			(sde_kms->smmu_state.state == DETACH_ALL_REQ) ||
+			(sde_kms->smmu_state.state == ATTACH_ALL_REQ))))
 		ret = true;
 	mutex_unlock(&sde_kms->secure_transition_lock);
 
 	return ret;
+}
+
+/**
+ * sde_kms_is_vbif_operation_allowed - resticts the VBIF programming
+ * during secure-ui, if the sec_ui_misr feature is enabled
+ *
+ * @sde_kms: Pointer to sde_kms
+ *
+ * return: false if secure-session is in progress; true otherwise
+ */
+static inline bool sde_kms_is_vbif_operation_allowed(struct sde_kms *sde_kms)
+{
+	if (!sde_kms)
+		return false;
+
+	if (!sde_kms->catalog->sui_misr_supported)
+		return true;
+
+	return !sde_kms_is_secure_session_inprogress(sde_kms);
+}
+
+/**
+ * sde_kms_is_cp_operation_allowed - resticts the CP programming
+ * during secure-ui, if the non-secure context banks are detached
+ *
+ * @sde_kms: Pointer to sde_kms
+ */
+static inline bool sde_kms_is_cp_operation_allowed(struct sde_kms *sde_kms)
+{
+	if (!sde_kms || !sde_kms->catalog)
+		return false;
+
+	if (sde_kms->catalog->sui_ns_allowed)
+		return true;
+
+	return !sde_kms_is_secure_session_inprogress(sde_kms);
 }
 
 /**
@@ -636,44 +652,6 @@ int sde_enable_vblank(struct msm_kms *kms, struct drm_crtc *crtc);
 void sde_disable_vblank(struct msm_kms *kms, struct drm_crtc *crtc);
 
 /**
- * sde_kms_fbo_create_fb - create framebuffer from given framebuffer object
- * @dev: Pointer to drm device
- * @fbo: Pointer to framebuffer object
- * return: Pointer to drm framebuffer on success; NULL on error
- */
-struct drm_framebuffer *sde_kms_fbo_create_fb(struct drm_device *dev,
-		struct sde_kms_fbo *fbo);
-
-/**
- * sde_kms_fbo_alloc - create framebuffer object with given format parameters
- * @dev: pointer to drm device
- * @width: width of framebuffer
- * @height: height of framebuffer
- * @pixel_format: pixel format of framebuffer
- * @modifier: pixel format modifier
- * @flags: DRM_MODE_FB flags
- * return: Pointer to framebuffer memory object on success; NULL on error
- */
-struct sde_kms_fbo *sde_kms_fbo_alloc(struct drm_device *dev,
-		u32 width, u32 height, u32 pixel_format,
-		u64 modifiers[4], u32 flags);
-
-/**
- * sde_kms_fbo_reference - increment reference count of given framebuffer object
- * @fbo: Pointer to framebuffer memory object
- * return: 0 on success; error code otherwise
- */
-int sde_kms_fbo_reference(struct sde_kms_fbo *fbo);
-
-/**
- * sde_kms_fbo_unreference - decrement reference count of given framebuffer
- *	object
- * @fbo: Pointer to framebuffer memory object
- * return: 0 on success; error code otherwise
- */
-void sde_kms_fbo_unreference(struct sde_kms_fbo *fbo);
-
-/**
  * smmu attach/detach functions
  * @sde_kms: poiner to sde_kms structure
  * @secure_only: if true only secure contexts are attached/detached, else
@@ -695,6 +673,13 @@ void sde_kms_timeline_status(struct drm_device *dev);
  */
 int sde_kms_handle_recovery(struct drm_encoder *encoder);
 
+/**
+ * sde_kms_release_splash_resource - release splash resource
+ * @sde_kms: poiner to sde_kms structure
+ * @crtc: crtc that splash resource to be released from
+ */
+void sde_kms_release_splash_resource(struct sde_kms *sde_kms,
+		struct drm_crtc *crtc);
 /**
  * sde_kms_trigger_early_wakeup - trigger early wake up
  * @sde_kms: pointer to sde_kms structure

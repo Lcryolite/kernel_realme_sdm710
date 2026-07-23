@@ -14,6 +14,7 @@
 #include <linux/bitmap.h>
 #include <linux/io.h>
 #include "coresight-ost.h"
+#include <linux/sched/clock.h>
 #include <linux/coresight-stm.h>
 
 #define STM_USERSPACE_HEADER_SIZE	(8)
@@ -178,6 +179,9 @@ static inline int __stm_trace(uint32_t flags, uint8_t entity_id,
 	uint32_t ch;
 	void __iomem *ch_addr;
 
+	if (!(drvdata && drvdata->master_enable))
+		return 0;
+
 	/* allocate channel and get the channel address */
 	ch = stm_channel_alloc();
 	if (unlikely(ch >= drvdata->numsp)) {
@@ -229,8 +233,8 @@ int stm_trace(uint32_t flags, uint8_t entity_id, uint8_t proto_id,
 
 	/* we don't support sizes more than 24bits (0 to 23) */
 	if (!(drvdata && drvdata->enable &&
-	      test_bit(entity_id, drvdata->entities) && size &&
-	      (size < 0x1000000)))
+	    test_bit(entity_id, drvdata->entities) &&
+	    size && (size < 0x1000000)))
 		return 0;
 
 	return __stm_trace(flags, entity_id, proto_id, data, size);

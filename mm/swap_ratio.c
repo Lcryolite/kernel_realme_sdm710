@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2016, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -17,8 +17,9 @@
 
 #define SWAP_RATIO_GROUP_START (SWAP_FLAG_PRIO_MASK - 9) /* 32758 */
 #define SWAP_RATIO_GROUP_END (SWAP_FLAG_PRIO_MASK) /* 32767 */
-#define SWAP_FAST_WRITES (SWAPFILE_CLUSTER * (SWAP_CLUSTER_MAX / 8))
-#define SWAP_SLOW_WRITES SWAPFILE_CLUSTER
+#define SWAP_FAST_WRITES	\
+	((SWAPFILE_CLUSTER * (SWAP_CLUSTER_MAX / 8)) / SWAP_BATCH)
+#define SWAP_SLOW_WRITES (SWAPFILE_CLUSTER / SWAP_BATCH)
 
 /*
  * The fast/slow swap write ratio.
@@ -54,10 +55,10 @@ static int calculate_write_pending(struct swap_info_struct *si,
 	if ((ratio < 0) || (ratio > 100))
 		return -EINVAL;
 
-	if (WARN_ON(!(si->flags & SWP_FAST)))
+	if (WARN_ON(!(si->flags & SWP_SYNCHRONOUS_IO)))
 		return -ENODEV;
 
-	if ((n->flags & SWP_FAST) || !is_same_group(si, n))
+	if ((n->flags & SWP_SYNCHRONOUS_IO) || !is_same_group(si, n))
 		return -ENODEV;
 
 	si->max_writes = ratio ? SWAP_FAST_WRITES : 0;
@@ -70,22 +71,22 @@ static int calculate_write_pending(struct swap_info_struct *si,
 	return 0;
 }
 
-static int swap_ratio_slow(struct swap_info_struct **si)
+static int swap_ratio_slow(struct swap_info_struct **si, int node)
 {
 	struct swap_info_struct *n = NULL;
 	int ret = 0;
 
 	spin_lock(&(*si)->lock);
 	spin_lock(&swap_avail_lock);
-	if (&(*si)->avail_list == plist_last(&swap_avail_head)) {
+	if (&(*si)->avail_lists[node] == plist_last(&swap_avail_heads[node])) {
 		/* just to make skip work */
 		n = *si;
 		ret = -ENODEV;
 		goto skip;
 	}
-	n = plist_next_entry(&(*si)->avail_list,
+	n = plist_next_entry(&(*si)->avail_lists[node],
 			struct swap_info_struct,
-			avail_list);
+			avail_lists[node]);
 	if (n == *si) {
 		/* No other swap device */
 		ret = -ENODEV;
@@ -96,12 +97,13 @@ static int swap_ratio_slow(struct swap_info_struct **si)
 	spin_lock(&n->lock);
 	spin_lock(&swap_avail_lock);
 
-	if ((*si)->flags & SWP_FAST) {
+	if ((*si)->flags & SWP_SYNCHRONOUS_IO) {
 		if ((*si)->write_pending) {
 			(*si)->write_pending--;
 			goto exit;
 		} else {
-			if ((n->flags & SWP_FAST) || !is_same_group(*si, n)) {
+			if ((n->flags & SWP_SYNCHRONOUS_IO) ||
+			     !is_same_group(*si, n)) {
 				/* Should never happen */
 				ret = -ENODEV;
 			} else if (n->write_pending) {
@@ -109,8 +111,8 @@ static int swap_ratio_slow(struct swap_info_struct **si)
 				 * Requeue fast device, since there are pending
 				 * writes for slow device.
 				 */
-				plist_requeue(&(*si)->avail_list,
-					&swap_avail_head);
+				plist_requeue(&(*si)->avail_lists[node],
+					&swap_avail_heads[node]);
 				n->write_pending--;
 				spin_unlock(&(*si)->lock);
 				*si = n;
@@ -125,7 +127,8 @@ static int swap_ratio_slow(struct swap_info_struct **si)
 			}
 		}
 	} else {
-		if (!(n->flags & SWP_FAST) || !is_same_group(*si, n)) {
+		if (!(n->flags & SWP_SYNCHRONOUS_IO) ||
+		      !is_same_group(*si, n)) {
 			/* Should never happen */
 			ret = -ENODEV;
 		} else if (n->write_pending) {
@@ -135,7 +138,8 @@ static int swap_ratio_slow(struct swap_info_struct **si)
 			 * before fast device.
 			 */
 			/* requeue slow device to the end */
-			plist_requeue(&(*si)->avail_list, &swap_avail_head);
+			plist_requeue(&(*si)->avail_lists[node],
+					&swap_avail_heads[node]);
 			n->write_pending--;
 			spin_unlock(&(*si)->lock);
 			*si = n;
@@ -149,8 +153,8 @@ static int swap_ratio_slow(struct swap_info_struct **si)
 					goto exit;
 				}
 				n->write_pending--;
-				plist_requeue(&(*si)->avail_list,
-					&swap_avail_head);
+				plist_requeue(&(*si)->avail_lists[node],
+					&swap_avail_heads[node]);
 				spin_unlock(&(*si)->lock);
 				*si = n;
 				goto skip;
@@ -176,7 +180,7 @@ void setup_swap_ratio(struct swap_info_struct *p, int prio)
 {
 	/* Used only if sysctl_swap_ratio_enable is set */
 	if (is_swap_ratio_group(prio)) {
-		if (p->flags & SWP_FAST)
+		if (p->flags & SWP_SYNCHRONOUS_IO)
 			p->write_pending = SWAP_FAST_WRITES;
 		else
 			p->write_pending = SWAP_SLOW_WRITES;
@@ -184,13 +188,13 @@ void setup_swap_ratio(struct swap_info_struct *p, int prio)
 	}
 }
 
-int swap_ratio(struct swap_info_struct **si)
+int swap_ratio(struct swap_info_struct **si, int node)
 {
 	if (!sysctl_swap_ratio_enable)
 		return -ENODEV;
 
 	if (is_swap_ratio_group((*si)->prio))
-		return swap_ratio_slow(si);
+		return swap_ratio_slow(si, node);
 	else
 		return -ENODEV;
 }

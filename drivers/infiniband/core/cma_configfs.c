@@ -139,8 +139,50 @@ static ssize_t default_roce_mode_store(struct config_item *item,
 
 CONFIGFS_ATTR(, default_roce_mode);
 
+static ssize_t default_roce_tos_show(struct config_item *item, char *buf)
+{
+	struct cma_device *cma_dev;
+	struct cma_dev_port_group *group;
+	ssize_t ret;
+	u8 tos;
+
+	ret = cma_configfs_params_get(item, &cma_dev, &group);
+	if (ret)
+		return ret;
+
+	tos = cma_get_default_roce_tos(cma_dev, group->port_num);
+	cma_configfs_params_put(cma_dev);
+
+	return sprintf(buf, "%u\n", tos);
+}
+
+static ssize_t default_roce_tos_store(struct config_item *item,
+				      const char *buf, size_t count)
+{
+	struct cma_device *cma_dev;
+	struct cma_dev_port_group *group;
+	ssize_t ret;
+	u8 tos;
+
+	ret = kstrtou8(buf, 0, &tos);
+	if (ret)
+		return ret;
+
+	ret = cma_configfs_params_get(item, &cma_dev, &group);
+	if (ret)
+		return ret;
+
+	ret = cma_set_default_roce_tos(cma_dev, group->port_num, tos);
+	cma_configfs_params_put(cma_dev);
+
+	return ret ? ret : strnlen(buf, count);
+}
+
+CONFIGFS_ATTR(, default_roce_tos);
+
 static struct configfs_attribute *cma_configfs_attributes[] = {
 	&attr_default_roce_mode,
+	&attr_default_roce_tos,
 	NULL,
 };
 
@@ -173,7 +215,7 @@ static int make_cma_ports(struct cma_dev_group *cma_dev_group,
 	}
 
 	for (i = 0; i < ports_num; i++) {
-		char port_str[10];
+		char port_str[11];
 
 		ports[i].port_num = i + 1;
 		snprintf(port_str, sizeof(port_str), "%u", i + 1);

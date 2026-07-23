@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2012, 2014-2017, 2019 The Linux Foundation. All rights
+/* Copyright (c) 2010-2012, 2014-2018, 2020, The Linux Foundation. All rights
  * reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -20,6 +20,7 @@
 #include <linux/debugfs.h>
 #include <linux/slab.h>
 #include <linux/mutex.h>
+#include <linux/rtmutex.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
 #include <linux/hrtimer.h>
@@ -29,7 +30,6 @@
 #include "msm_bus_core.h"
 #include "msm_bus_adhoc.h"
 
-#define CREATE_TRACE_POINTS
 #include <trace/events/trace_msm_bus.h>
 
 #define MAX_BUFF_SIZE 4096
@@ -381,7 +381,7 @@ int msm_bus_dbg_rec_transaction(const struct msm_bus_client_handle *pdata,
 			rt_mutex_unlock(&msm_bus_dbg_cllist_lock);
 			return -EINVAL;
 		}
-		cldata->file = debugfs_create_file(pdata->name, S_IRUGO,
+		cldata->file = debugfs_create_file(pdata->name, 0444,
 				clients, (void *)pdata, &client_data_fops);
 	}
 
@@ -496,7 +496,7 @@ static int msm_bus_dbg_fill_cl_buffer(const struct msm_bus_scale_pdata *pdata,
 			MSM_BUS_DBG("Client doesn't have a name\n");
 			return -EINVAL;
 		}
-		cldata->file = msm_bus_dbg_create(pdata->name, S_IRUGO,
+		cldata->file = msm_bus_dbg_create(pdata->name, 0444,
 			clients, clid);
 	}
 
@@ -593,8 +593,7 @@ static ssize_t  msm_bus_dbg_update_request_write(struct file *file,
 					" found\n");
 				found = 0;
 			}
-			if ((index < 0) ||
-					(index > cldata->pdata->num_usecases)) {
+			if (index > cldata->pdata->num_usecases) {
 				MSM_BUS_DBG("Invalid index!\n");
 				rt_mutex_unlock(&msm_bus_dbg_cllist_lock);
 				res = -EINVAL;
@@ -894,26 +893,26 @@ static int __init msm_bus_debugfs_init(void)
 		goto err;
 	}
 
-	if (debugfs_create_file("print_rules", S_IRUGO | S_IWUSR,
+	if (debugfs_create_file("print_rules", 0644,
 		rules_dbg, &val, &rules_dbg_fops) == NULL)
 		goto err;
 
-	if (debugfs_create_file("update_request", S_IRUGO | S_IWUSR,
+	if (debugfs_create_file("update_request", 0644,
 		shell_client, &val, &shell_client_en_fops) == NULL)
 		goto err;
-	if (debugfs_create_file("ib", S_IRUGO | S_IWUSR, shell_client, &val,
+	if (debugfs_create_file("ib", 0644, shell_client, &val,
 		&shell_client_ib_fops) == NULL)
 		goto err;
-	if (debugfs_create_file("ab", S_IRUGO | S_IWUSR, shell_client, &val,
+	if (debugfs_create_file("ab", 0644, shell_client, &val,
 		&shell_client_ab_fops) == NULL)
 		goto err;
-	if (debugfs_create_file("slv", S_IRUGO | S_IWUSR, shell_client,
+	if (debugfs_create_file("slv", 0644, shell_client,
 		&val, &shell_client_slv_fops) == NULL)
 		goto err;
-	if (debugfs_create_file("mas", S_IRUGO | S_IWUSR, shell_client,
+	if (debugfs_create_file("mas", 0644, shell_client,
 		&val, &shell_client_mas_fops) == NULL)
 		goto err;
-	if (debugfs_create_file("update-request", S_IRUGO | S_IWUSR,
+	if (debugfs_create_file("update-request", 0644,
 		clients, NULL, &msm_bus_dbg_update_request_fops) == NULL)
 		goto err;
 
@@ -930,28 +929,28 @@ static int __init msm_bus_debugfs_init(void)
 				MSM_BUS_DBG("Client name not found\n");
 				continue;
 			}
-			cldata->file = msm_bus_dbg_create(cldata->
-				pdata->name, S_IRUGO, clients, cldata->clid);
+			cldata->file = msm_bus_dbg_create(cldata->pdata->name,
+					0444, clients, cldata->clid);
 		} else if (cldata->handle) {
 			if (cldata->handle->name == NULL) {
 				MSM_BUS_DBG("Client doesn't have a name\n");
 				continue;
 			}
 			cldata->file = debugfs_create_file(cldata->handle->name,
-							S_IRUGO, clients,
+							0444, clients,
 							(void *)cldata->handle,
 							&client_data_fops);
 		}
 	}
 	rt_mutex_unlock(&msm_bus_dbg_cllist_lock);
 
-	if (debugfs_create_file("dump_clients", S_IRUGO | S_IWUSR,
+	if (debugfs_create_file("dump_clients", 0644,
 		clients, NULL, &msm_bus_dbg_dump_clients_fops) == NULL)
 		goto err;
 
 	mutex_lock(&msm_bus_dbg_fablist_lock);
 	list_for_each_entry(fablist, &fabdata_list, list) {
-		fablist->file = debugfs_create_file(fablist->name, S_IRUGO,
+		fablist->file = debugfs_create_file(fablist->name, 0444,
 			commit, (void *)fablist->name, &fabric_data_fops);
 		if (fablist->file == NULL) {
 			MSM_BUS_DBG("Cannot create files for commit data\n");

@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -321,6 +321,28 @@ struct sde_rot_entry {
 };
 
 /*
+ * struct sde_rot_trace_entry - structure used to pass info to trace
+ */
+struct sde_rot_trace_entry {
+	u32 wb_idx;
+	u32 flags;
+	u32 input_format;
+	u32 input_width;
+	u32 input_height;
+	u32 src_x;
+	u32 src_y;
+	u32 src_w;
+	u32 src_h;
+	u32 output_format;
+	u32 output_width;
+	u32 output_height;
+	u32 dst_x;
+	u32 dst_y;
+	u32 dst_w;
+	u32 dst_h;
+};
+
+/*
  * struct sde_rot_perf - rotator session performance configuration
  * @list: list of performance configuration under one session
  * @config: current rotation configuration
@@ -393,6 +415,7 @@ struct sde_rot_bus_data_type {
  * @regulator_enable: true if foot switch is enabled; false otherwise
  * @res_ref_cnt: reference count of how many times resource is requested
  * @rot_enable_clk_cnt: reference count of how many times clock is requested
+ * @pm_rot_enable_clk_cnt : tracks the clock enable count on pm suspend
  * @rot_clk: array of rotator and periphery clocks
  * @num_rot_clk: size of the rotator clock array
  * @rdot_limit: current read OT limit
@@ -402,6 +425,7 @@ struct sde_rot_bus_data_type {
  * @fudge_factor: fudge factor for clock calculation
  * @overhead: software overhead for offline rotation in msec
  * @min_rot_clk: minimum rotator clock rate
+ * @max_rot_clk: maximum allowed rotator clock rate
  * @sbuf_ctx: pointer to sbuf session context
  * @ops_xxx: function pointers of rotator HAL layer
  * @hw_data: private handle of rotator HAL layer
@@ -438,6 +462,7 @@ struct sde_rot_mgr {
 
 	int res_ref_cnt;
 	int rot_enable_clk_cnt;
+	int pm_rot_enable_clk_cnt;
 	struct sde_rot_clk *rot_clk;
 	int num_rot_clk;
 	u32 rdot_limit;
@@ -448,6 +473,7 @@ struct sde_rot_mgr {
 	struct sde_mult_factor fudge_factor;
 	struct sde_mult_factor overhead;
 	unsigned long min_rot_clk;
+	unsigned long max_rot_clk;
 
 	struct sde_rot_file_private *sbuf_ctx;
 

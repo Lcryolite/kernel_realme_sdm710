@@ -1,7 +1,7 @@
 Qualcomm Technologies, Inc. CPRh Regulator - KBSS Specific Bindings
 
-KBSS CPRh controllers each support one or more CPR threads that monitor the
-voltage of Kryo-B CPU subystem (KBSS) clusters that are powered by a single
+KBSS CPRh controllers each support one CPR thread that monitors the voltage
+of a single Kryo-B CPU subystem (KBSS) cluster that is powered by a single
 regulator supply. The DCVSh block interacts with the CPRh controller for full
 hardware DCVS support.
 
@@ -15,9 +15,9 @@ Required Node Structure
 =======================
 
 CPRh regulators must be described in three levels of devices nodes.  The first
-level describes the CPRh controller.  The second level describes one or more
-hardware threads managed by the controller.  The third level describes one
-regulator handled by each CPR thread.
+level describes the CPRh controller.  The second level describes one hardware
+thread managed by the controller.  The third level describes one regulator
+handled by the CPR thread.
 
 All platform independent cpr3-regulator binding guidelines defined in
 cpr3-regulator.txt also apply to cprh-kbss-regulator devices.
@@ -34,10 +34,7 @@ KBSS specific properties:
 		    "qcom,cprh-msm8998-v1-kbss-regulator",
 		    "qcom,cprh-msm8998-v2-kbss-regulator",
 		    "qcom,cprh-msm8998-kbss-regulator",
-		    "qcom,cprh-sdm660-kbss-regulator",
-		    "qcom,cprh-sdm845-v1-kbss-regulator",
-		    "qcom,cprh-sdm845-v2-kbss-regulator",
-		    "qcom,cprh-sdm845-kbss-regulator".
+		    "qcom,cprh-sdm660-kbss-regulator".
 		    If the SoC revision is not specified, then it is assumed to
 		    be the most recent revision of MSM8998, i.e. v2.
 
@@ -185,52 +182,6 @@ KBSS specific properties:
 	Definition: The initial temp band considering 0-based index at which
 		    the baseline target quotients are derived and fused.
 
-- qcom,cpr-acd-adj-down-step-limit
-	Usage:      required if qcom,cpr-acd-avg-enable is specified.
-	Value type: <u32>
-	Definition: The maximum number of PMIC steps to go down within a given
-		    corner due to all ACD adjustment recommendations. Valid
-		    values are 0 through 31.
-
-- qcom,cpr-acd-adj-up-step-limit
-	Usage:      required if qcom,cpr-acd-avg-enable is specified.
-	Value type: <u32>
-	Definition: The maximum number of PMIC steps to go up within a given
-		    corner due to all ACD adjustment recommendations. Valid
-		    values are 0 through 7
-
-- qcom,cpr-acd-adj-down-step-size
-	Usage:      required if qcom,cpr-acd-avg-enable is specified.
-	Value type: <u32>
-	Definition: Defines the step size in units of PMIC steps used for
-		    target quotient adjustment due to an ACD down recommendation.
-		    Valid values are 0 through 3.
-
-- qcom,cpr-acd-adj-up-step-size
-	Usage:      required if qcom,cpr-acd-avg-enable is specified.
-	Value type: <u32>
-	Definition: Defines the step size in units of PMIC steps used for
-		    target quotient adjustment due to an ACD up recommendation.
-		    Valid values are 0 through 3.
-
-- qcom,cpr-acd-notwait-for-cl-settled
-	Usage:      optional; meaningful only if qcom,cpr-acd-avg-enable is specified.
-	Value type: <empty>
-	Definition: Boolean flag which indicates ACD down recommendations do not
-		    need to wait for CPR closed-loop to settle.
-
-- qcom,cpr-acd-avg-fast-update
-	Usage:      optional; meaningful only if qcom,cpr-acd-avg-enable is specified.
-	Value type: <empty>
-	Definition: Boolean flag which indicates CPR should issue immediate
-		    voltage updates following ACD requests.
-
-- qcom,cpr-acd-avg-enable
-	Usage:      optional
-	Value type: <empty>
-	Definition: Boolean flag which indicates that the CPRh controller
-		    should enable the ACD AVG feature.
-
 =================================================
 Second Level Nodes - CPR Threads for a Controller
 =================================================
@@ -291,7 +242,7 @@ KBSS specific properties:
 		    qcom,cpr-speed-bins number of elements.
 
 - qcom,corner-band-allow-core-count-adjustment
-	Usage:      optional; only allowed for CPRh thread 0
+	Usage:      optional
 	Value type: <prop-encoded-array>
 	Definition: A list of integer tuples which each define the CPR core
 		    count adjustment feature enable state for each corner band
@@ -320,7 +271,7 @@ KBSS specific properties:
 		    adjustments specified for this regulator's corner bands.
 
 - qcom,corner-band-allow-temp-adjustment
-	Usage:      optional; only allowed for CPRh thread 0
+	Usage:      optional
 	Value type: <prop-encoded-array>
 	Definition: A list of integer tuples which each define the temperature
 		    adjustment feature enable state for each corner band

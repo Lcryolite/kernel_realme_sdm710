@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /* kernel/rwsem.c: R/W semaphores, public implementation
  *
  * Written by David Howells (dhowells@redhat.com).
@@ -7,6 +8,7 @@
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
+#include <linux/sched/debug.h>
 #include <linux/export.h>
 #include <linux/rwsem.h>
 #include <linux/atomic.h>
@@ -26,6 +28,22 @@ void __sched down_read(struct rw_semaphore *sem)
 }
 
 EXPORT_SYMBOL(down_read);
+
+int __sched down_read_killable(struct rw_semaphore *sem)
+{
+	might_sleep();
+	rwsem_acquire_read(&sem->dep_map, 0, 0, _RET_IP_);
+
+	if (LOCK_CONTENDED_RETURN(sem, __down_read_trylock, __down_read_killable)) {
+		rwsem_release(&sem->dep_map, 1, _RET_IP_);
+		return -EINTR;
+	}
+
+	rwsem_set_reader_owned(sem);
+	return 0;
+}
+
+EXPORT_SYMBOL(down_read_killable);
 
 /*
  * trylock for reading -- returns 1 if successful, 0 if contention
@@ -123,10 +141,8 @@ EXPORT_SYMBOL(up_write);
  */
 void downgrade_write(struct rw_semaphore *sem)
 {
-	/*
-	 * lockdep: a downgraded write will live on as a write
-	 * dependency.
-	 */
+	lock_downgrade(&sem->dep_map, _RET_IP_);
+
 	rwsem_set_reader_owned(sem);
 	__downgrade_write(sem);
 }
@@ -201,5 +217,3 @@ void up_read_non_owner(struct rw_semaphore *sem)
 EXPORT_SYMBOL(up_read_non_owner);
 
 #endif
-
-

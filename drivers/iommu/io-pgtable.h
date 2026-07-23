@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __IO_PGTABLE_H
 #define __IO_PGTABLE_H
 #include <linux/bitops.h>
@@ -77,32 +78,44 @@ struct io_pgtable_cfg {
 	 *	when the SoC is in "4GB mode" and they can only access the high
 	 *	remap of DRAM (0x1_00000000 to 0x1_ffffffff).
 	 *
-	 * IO_PGTABLE_QUIRK_QCOM_USE_UPSTREAM_HINT: Override the attributes
-	 *	set in TCR for the page table walker. Use attributes specified
-	 *	by the upstream hw instead.
+
+	 * IO_PGTABLE_QUIRK_NO_DMA: Guarantees that the tables will only ever
+	 *	be accessed by a fully cache-coherent IOMMU or CPU (e.g. for a
+	 *	software-emulated IOMMU), such that pagetable updates need not
+	 *	be treated as explicit DMA data.
 	 *
-	 * IO_PGTABLE_QUIRK_PAGE_TABLE_COHERENT: Set the page table as
-	 *	coherent.
-	 *
+
 	 * IO_PGTABLE_QUIRK_QSMMUV500_NON_SHAREABLE:
 	 *	Having page tables which are non coherent, but cached in a
 	 *	system cache requires SH=Non-Shareable. This applies to the
 	 *	qsmmuv500 model. For data buffers SH=Non-Shareable is not
 	 *	required.
+
+	 * IO_PGTABLE_QUIRK_QCOM_USE_UPSTREAM_HINT: Override the attributes
+	 *	set in TCR for the page table walker. Use attributes specified
+	 *	by the upstream hw instead.
+	 *
+	 * IO_PGTABLE_QUIRK_QCOM_USE_LLC_NWA: Override the attributes
+	 *	set in TCR for the page table walker with Write-Back,
+	 *	no Write-Allocate cacheable encoding.
+	 *
 	 */
 	#define IO_PGTABLE_QUIRK_ARM_NS		BIT(0)
 	#define IO_PGTABLE_QUIRK_NO_PERMS	BIT(1)
 	#define IO_PGTABLE_QUIRK_TLBI_ON_MAP	BIT(2)
 	#define IO_PGTABLE_QUIRK_ARM_MTK_4GB	BIT(3)
-	#define IO_PGTABLE_QUIRK_QCOM_USE_UPSTREAM_HINT	BIT(4)
-	#define IO_PGTABLE_QUIRK_PAGE_TABLE_COHERENT BIT(5)
-	#define IO_PGTABLE_QUIRK_QSMMUV500_NON_SHAREABLE BIT(6)
+	#define IO_PGTABLE_QUIRK_NO_DMA		BIT(4)
+	#define IO_PGTABLE_QUIRK_QSMMUV500_NON_SHAREABLE BIT(5)
+	#define IO_PGTABLE_QUIRK_QCOM_USE_UPSTREAM_HINT	BIT(6)
+	#define IO_PGTABLE_QUIRK_QCOM_USE_LLC_NWA	BIT(7)
 	unsigned long			quirks;
 	unsigned long			pgsize_bitmap;
 	unsigned int			ias;
 	unsigned int			oas;
 	const struct iommu_gather_ops	*tlb;
 	struct device			*iommu_dev;
+	dma_addr_t			iova_base;
+	dma_addr_t			iova_end;
 
 	/* Low-level data specific to the table format */
 	union {
@@ -141,12 +154,15 @@ struct io_pgtable_cfg {
 /**
  * struct io_pgtable_ops - Page table manipulation API for IOMMU drivers.
  *
- * @map:          Map a physically contiguous memory region.
- * @map_sg:	  Map a scatterlist.  Returns the number of bytes mapped,
- *		  or 0 on failure.  The size parameter contains the size
- *		  of the partial mapping in case of failure.
- * @unmap:        Unmap a physically contiguous memory region.
- * @iova_to_phys: Translate iova to physical address.
+ * @map:		Map a physically contiguous memory region.
+ * @map_sg:		Map a scatterlist.  Returns the number of bytes mapped,
+ *			or 0 on failure.  The size parameter contains the size
+ *			of the partial mapping in case of failure.
+ * @unmap:		Unmap a physically contiguous memory region.
+ * @iova_to_phys:	Translate iova to physical address.
+ * @is_iova_coherent:	Checks coherency of given IOVA. Returns True if coherent
+ *			and False if non-coherent.
+ * @iova_to_pte:	Translate iova to Page Table Entry (PTE).
  *
  * These functions map directly onto the iommu_ops member functions with
  * the same names.
@@ -202,14 +218,12 @@ void free_io_pgtable_ops(struct io_pgtable_ops *ops);
  * @fmt:    The page table format.
  * @cookie: An opaque token provided by the IOMMU driver and passed back to
  *          any callback routines.
- * @tlb_sync_pending: Private flag for optimising out redundant syncs.
  * @cfg:    A copy of the page table configuration.
  * @ops:    The page table operations in use for this set of page tables.
  */
 struct io_pgtable {
 	enum io_pgtable_fmt	fmt;
 	void			*cookie;
-	bool			tlb_sync_pending;
 	struct io_pgtable_cfg	cfg;
 	struct io_pgtable_ops	ops;
 };
@@ -221,7 +235,6 @@ static inline void io_pgtable_tlb_flush_all(struct io_pgtable *iop)
 	if (!iop->cfg.tlb)
 		return;
 	iop->cfg.tlb->tlb_flush_all(iop->cookie);
-	iop->tlb_sync_pending = true;
 }
 
 static inline void io_pgtable_tlb_add_flush(struct io_pgtable *iop,
@@ -230,17 +243,13 @@ static inline void io_pgtable_tlb_add_flush(struct io_pgtable *iop,
 	if (!iop->cfg.tlb)
 		return;
 	iop->cfg.tlb->tlb_add_flush(iova, size, granule, leaf, iop->cookie);
-	iop->tlb_sync_pending = true;
 }
 
 static inline void io_pgtable_tlb_sync(struct io_pgtable *iop)
 {
 	if (!iop->cfg.tlb)
 		return;
-	if (iop->tlb_sync_pending) {
-		iop->cfg.tlb->tlb_sync(iop->cookie);
-		iop->tlb_sync_pending = false;
-	}
+	iop->cfg.tlb->tlb_sync(iop->cookie);
 }
 
 /**

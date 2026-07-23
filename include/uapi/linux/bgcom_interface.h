@@ -1,15 +1,7 @@
-/* Copyright (c) 2018-2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.See the
- * GNU General Public License for more details.
- */
 #ifndef LINUX_BG_CHAR_H
+
+#include <linux/types.h>
+
 #define LINUX_BG_CHAR_H
 #define BGCOM_REG_READ  0
 #define BGCOM_AHB_READ  1
@@ -25,14 +17,17 @@
 #define BGCOM_BG_WEAR_LOAD 11
 #define BGCOM_BG_WEAR_TWM_LOAD 12
 #define BGCOM_BG_WEAR_UNLOAD 13
+#define BGCOM_BG_FETCH_TWM_DATA 14
+#define BGCOM_BG_READ_TWM_DATA 15
 #define EXCHANGE_CODE  'V'
 
 struct bg_ui_data {
-	uint64_t  __user write;
-	uint64_t  __user result;
-	uint32_t  bg_address;
-	uint32_t  cmd;
-	uint32_t  num_of_words;
+	__u64  __user write;
+	__u64  __user result;
+	__u32  bg_address;
+	__u32  cmd;
+	__u32  num_of_words;
+	__u8 __user *buffer;
 };
 
 enum bg_event_type {
@@ -88,5 +83,11 @@ enum bg_event_type {
 	struct bg_ui_data)
 #define BG_ADSP_DOWN2_BG_DONE \
 	_IOWR(EXCHANGE_CODE, BGCOM_ADSP_DOWN2_BG, \
+	struct bg_ui_data)
+#define BG_FETCH_TWM_DATA \
+	_IOWR(EXCHANGE_CODE, BGCOM_BG_FETCH_TWM_DATA, \
+	struct bg_ui_data)
+#define BG_READ_TWM_DATA \
+	_IOWR(EXCHANGE_CODE, BGCOM_BG_READ_TWM_DATA, \
 	struct bg_ui_data)
 #endif

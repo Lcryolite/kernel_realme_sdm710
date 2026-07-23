@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -20,6 +20,12 @@
 
 #define CAM_MEM_BUFQ_MAX 1024
 
+/* Enum for possible mem mgr states */
+enum cam_mem_mgr_state {
+	CAM_MEM_MGR_UNINITIALIZED,
+	CAM_MEM_MGR_INITIALIZED,
+};
+
 /*Enum for possible SMMU operations */
 enum cam_smmu_mapping_client {
 	CAM_SMMU_MAPPING_USER,
@@ -29,7 +35,6 @@ enum cam_smmu_mapping_client {
 /**
  * struct cam_mem_buf_queue
  *
- * @i_hdl:       ion handle for the buffer
  * @dma_buf:     pointer to the allocated dma_buf in the table
  * @q_lock:      mutex lock for buffer
  * @hdls:        list of mapped handles
@@ -45,7 +50,6 @@ enum cam_smmu_mapping_client {
  * @is_imported: Flag indicating if buffer is imported from an FD in user space
  */
 struct cam_mem_buf_queue {
-	struct ion_handle *i_hdl;
 	struct dma_buf *dma_buf;
 	struct mutex q_lock;
 	int32_t hdls[CAM_MEM_MMU_MAX_HANDLE];
@@ -56,7 +60,7 @@ struct cam_mem_buf_queue {
 	size_t len;
 	uint32_t flags;
 	uint64_t vaddr;
-	uint64_t kmdvaddr;
+	uintptr_t kmdvaddr;
 	bool active;
 	bool is_imported;
 };
@@ -67,14 +71,12 @@ struct cam_mem_buf_queue {
  * @m_lock: mutex lock for table
  * @bitmap: bitmap of the mem mgr utility
  * @bits: max bits of the utility
- * @client: ion client pointer
  * @bufq: array of buffers
  */
 struct cam_mem_table {
 	struct mutex m_lock;
 	void *bitmap;
 	size_t bits;
-	struct ion_client *client;
 	struct cam_mem_buf_queue bufq[CAM_MEM_BUFQ_MAX];
 };
 

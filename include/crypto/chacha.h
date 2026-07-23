@@ -15,6 +15,7 @@
 #ifndef _CRYPTO_CHACHA_H
 #define _CRYPTO_CHACHA_H
 
+#include <crypto/skcipher.h>
 #include <linux/types.h>
 #include <linux/crypto.h>
 
@@ -43,15 +44,13 @@ void hchacha_block(const u32 *in, u32 *out, int nrounds);
 
 void crypto_chacha_init(u32 *state, struct chacha_ctx *ctx, u8 *iv);
 
-int crypto_chacha20_setkey(struct crypto_tfm *tfm, const u8 *key,
+int crypto_chacha20_setkey(struct crypto_skcipher *tfm, const u8 *key,
 			   unsigned int keysize);
-int crypto_chacha12_setkey(struct crypto_tfm *tfm, const u8 *key,
+int crypto_chacha12_setkey(struct crypto_skcipher *tfm, const u8 *key,
 			   unsigned int keysize);
 
-int crypto_chacha_crypt(struct blkcipher_desc *desc, struct scatterlist *dst,
-			struct scatterlist *src, unsigned int nbytes);
-int crypto_xchacha_crypt(struct blkcipher_desc *desc, struct scatterlist *dst,
-			 struct scatterlist *src, unsigned int nbytes);
+int crypto_chacha_crypt(struct skcipher_request *req);
+int crypto_xchacha_crypt(struct skcipher_request *req);
 
 enum chacha_constants { /* expand 32-byte k */
 	CHACHA_CONSTANT_EXPA = 0x61707865U,
@@ -67,6 +66,5 @@ static inline void chacha_init_consts(u32 *state)
 	state[2]  = CHACHA_CONSTANT_2_BY;
 	state[3]  = CHACHA_CONSTANT_TE_K;
 }
-
 
 #endif /* _CRYPTO_CHACHA_H */

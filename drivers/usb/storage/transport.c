@@ -667,6 +667,13 @@ void usb_stor_invoke_transport(struct scsi_cmnd *srb, struct us_data *us)
 		need_auto_sense = 1;
 	}
 
+	/* Some devices (Kindle) require another command after SYNC CACHE */
+	if ((us->fflags & US_FL_SENSE_AFTER_SYNC) &&
+			srb->cmnd[0] == SYNCHRONIZE_CACHE) {
+		usb_stor_dbg(us, "-- sense after SYNC CACHE\n");
+		need_auto_sense = 1;
+	}
+
 	/*
 	 * If we have a failure, we're going to do a REQUEST_SENSE 
 	 * automatically.  Note that we differentiate between a command
@@ -1208,23 +1215,7 @@ int usb_stor_Bulk_transport(struct scsi_cmnd *srb, struct us_data *us)
 						US_BULK_CS_WRAP_LEN &&
 					bcs->Signature ==
 						cpu_to_le32(US_BULK_CS_SIGN)) {
-				unsigned char buf[US_BULK_CS_WRAP_LEN];
-
 				usb_stor_dbg(us, "Device skipped data phase\n");
-
-				/*
-				 * Devices skipping data phase might leave CSW data in srb's
-				 * transfer buffer. Zero it to prevent USB protocol leakage.
-				 */
-				sg = NULL;
-				offset = 0;
-				memset(buf, 0, sizeof(buf));
-				if (usb_stor_access_xfer_buf(buf,
-						US_BULK_CS_WRAP_LEN, srb, &sg,
-						&offset, TO_XFER_BUF) !=
-							US_BULK_CS_WRAP_LEN)
-					usb_stor_dbg(us, "Failed to clear CSW data\n");
-
 				scsi_set_resid(srb, transfer_length);
 				goto skipped_data_phase;
 			}

@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2017, 2019-2020 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -71,24 +71,6 @@ static u32 hfp_tx_mute;
 struct msm_pcm_pdata {
 	int perf_mode;
 };
-
-#ifdef OPLUS_FEATURE_KTV
-// Haoyun.luo@MULTIMEDIA.AUDIODRIVER.FEATURE, 2021/04/06, Add for ktv2.0
-static bool is_ktv_mode(struct msm_pcm_loopback *pcm) {
-	struct snd_soc_pcm_runtime *soc_pcm_tx =
-			pcm->capture_substream->private_data;
-	struct msm_pcm_stream_app_type_cfg cfg_data = {0};
-	int be_id = 0;
-	int ret = msm_pcm_routing_get_stream_app_type_cfg(
-		soc_pcm_tx->dai_link->id, SESSION_TYPE_RX,
-					&be_id, &cfg_data);
-	if (ret < 0) {
-		return false;
-	}
-	return (cfg_data.acdb_dev_id == 98);
-}
-#endif /* OPLUS_FEATURE_KTV */
-
 
 static void stop_pcm(struct msm_pcm_loopback *pcm);
 static int msm_pcm_loopback_get_session(struct snd_soc_pcm_runtime *rtd,
@@ -270,10 +252,6 @@ static int msm_pcm_open(struct snd_pcm_substream *substream)
 	struct asm_session_mtmx_strtr_param_window_v2_t asm_mtmx_strtr_window;
 	uint32_t param_id;
 	struct msm_pcm_pdata *pdata;
-        #ifdef OPLUS_FEATURE_KTV
-	// lijiang@MULTIMEDIA.AudioDriver.KTV, 2020/08/19, Add for ktv2.0
-	int tx_perf_mode;
-	#endif /* OPLUS_FEATURE_KTV */
 
 	ret =  msm_pcm_loopback_get_session(rtd, &pcm);
 	if (ret)
@@ -317,12 +295,7 @@ static int msm_pcm_open(struct snd_pcm_substream *substream)
 			return -ENOMEM;
 		}
 		pcm->session_id = pcm->audio_client->session;
-        #ifdef OPLUS_FEATURE_KTV
-		// QinZhichao@MULTIMEDIA.AudioDriver.KTV, 2020/03/30, Add for ktv2.0
-		pcm->audio_client->perf_mode = is_ktv_mode(pcm) ? LEGACY_PCM_MODE : pdata->perf_mode;
-        #else /* OPLUS_FEATURE_KTV */
 		pcm->audio_client->perf_mode = pdata->perf_mode;
-        #endif /* OPLUS_FEATURE_KTV */
 		ret = q6asm_open_loopback_v2(pcm->audio_client,
 					     bits_per_sample);
 		if (ret < 0) {
@@ -334,23 +307,9 @@ static int msm_pcm_open(struct snd_pcm_substream *substream)
 		}
 		event.event_func = msm_pcm_route_event_handler;
 		event.priv_data = (void *) pcm;
-
-		#ifdef OPLUS_FEATURE_KTV
-		// QinZhichao@MULTIMEDIA.AudioDriver.KTV, 2020/03/30, Add for ktv2.0
-		tx_perf_mode = is_ktv_mode(pcm) ? LEGACY_PCM_MODE : pcm->audio_client->perf_mode;
-		#endif /* OPLUS_FEATURE_KTV */
-
-		#ifndef OPLUS_FEATURE_KTV
 		msm_pcm_routing_reg_phy_stream(soc_pcm_tx->dai_link->id,
 			pcm->audio_client->perf_mode,
 			pcm->session_id, pcm->capture_substream->stream);
-		#else /* OPLUS_FEATURE_KTV */
-		// QinZhichao@MULTIMEDIA.AudioDriver.KTV, 2020/03/30, Add for ktv2.0
-		msm_pcm_routing_reg_phy_stream(soc_pcm_tx->dai_link->id,
-			tx_perf_mode,
-			pcm->session_id, pcm->capture_substream->stream);
-		#endif /* OPLUS_FEATURE_KTV */
-
 		msm_pcm_routing_reg_phy_stream_v2(soc_pcm_rx->dai_link->id,
 			pcm->audio_client->perf_mode,
 			pcm->session_id, pcm->playback_substream->stream,
@@ -481,6 +440,7 @@ static int msm_pcm_prepare(struct snd_pcm_substream *substream)
 			pcm->capture_start = 1;
 	}
 	mutex_unlock(&pcm->lock);
+
 	return ret;
 }
 
@@ -551,15 +511,13 @@ static int msm_pcm_volume_ctl_put(struct snd_kcontrol *kcontrol,
 		goto exit;
 	}
 	mutex_lock(&loopback_session_lock);
-	if (substream->ref_count > 0) {
-		prtd = substream->runtime->private_data;
-		if (!prtd) {
-			rc = -ENODEV;
-			mutex_unlock(&loopback_session_lock);
-			goto exit;
-		}
-		rc = pcm_loopback_set_volume(prtd, volume);
+	prtd = substream->runtime->private_data;
+	if (!prtd) {
+		rc = -ENODEV;
+		mutex_unlock(&loopback_session_lock);
+		goto exit;
 	}
+	rc = pcm_loopback_set_volume(prtd, volume);
 	mutex_unlock(&loopback_session_lock);
 
 exit:
@@ -587,20 +545,18 @@ static int msm_pcm_volume_ctl_get(struct snd_kcontrol *kcontrol,
 
 	substream = vol->pcm->streams[SNDRV_PCM_STREAM_PLAYBACK].substream;
 	if ((!substream) || (!substream->runtime)) {
-		pr_err("%s substream or runtime not found\n", __func__);
+		pr_debug("%s substream or runtime not found\n", __func__);
 		rc = -ENODEV;
 		goto exit;
 	}
 	mutex_lock(&loopback_session_lock);
-	if (substream->ref_count > 0) {
-		prtd = substream->runtime->private_data;
-		if (!prtd) {
-			rc = -ENODEV;
-			mutex_unlock(&loopback_session_lock);
-			goto exit;
-		}
-		ucontrol->value.integer.value[0] = prtd->volume;
+	prtd = substream->runtime->private_data;
+	if (!prtd) {
+		rc = -ENODEV;
+		mutex_unlock(&loopback_session_lock);
+		goto exit;
 	}
+	ucontrol->value.integer.value[0] = prtd->volume;
 	mutex_unlock(&loopback_session_lock);
 exit:
 	return rc;

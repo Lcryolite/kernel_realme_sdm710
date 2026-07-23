@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -63,7 +63,12 @@ struct subsys_notif_timeout {
  * struct subsys_desc - subsystem descriptor
  * @name: name of subsystem
  * @fw_name: firmware name
- * @depends_on: subsystem this subsystem depends on to operate
+ * @pon_depends_on: subsystem this subsystem wants to power-on first. If the
+ * dependednt subsystem is already powered-on, the framework won't try to power
+ * it back up again.
+ * @poff_depends_on: subsystem this subsystem wants to power-off first. If the
+ * dependednt subsystem is already powered-off, the framework won't try to power
+ * it off again.
  * @dev: parent device
  * @owner: module the descriptor belongs to
  * @shutdown: Stop a subsystem
@@ -87,7 +92,8 @@ struct subsys_notif_timeout {
 struct subsys_desc {
 	const char *name;
 	char fw_name[256];
-	const char *depends_on;
+	const char *pon_depends_on;
+	const char *poff_depends_on;
 	struct device *dev;
 	struct module *owner;
 
@@ -98,6 +104,8 @@ struct subsys_desc {
 	void (*free_memory)(const struct subsys_desc *desc);
 	irqreturn_t (*err_fatal_handler)(int irq, void *dev_id);
 	irqreturn_t (*stop_ack_handler)(int irq, void *dev_id);
+	irqreturn_t (*shutdown_ack_handler)(int irq, void *dev_id);
+	irqreturn_t (*ramdump_disable_handler)(int irq, void *dev_id);
 	irqreturn_t (*wdog_bite_handler)(int irq, void *dev_id);
 	irqreturn_t (*generic_handler)(int irq, void *dev_id);
 	int is_not_loadable;
@@ -107,9 +115,9 @@ struct subsys_desc {
 	unsigned int stop_ack_irq;
 	unsigned int wdog_bite_irq;
 	unsigned int generic_irq;
-	int force_stop_gpio;
-	int ramdump_disable_gpio;
-	int shutdown_ack_gpio;
+	int force_stop_bit;
+	int ramdump_disable_irq;
+	int shutdown_ack_irq;
 	int ramdump_disable;
 	bool no_auth;
 	bool pil_mss_memsetup;
@@ -119,6 +127,7 @@ struct subsys_desc {
 	bool system_debug;
 	bool ignore_ssr_failure;
 	const char *edge;
+	struct qcom_smem_state *state;
 #ifdef CONFIG_SETUP_SSR_NOTIF_TIMEOUTS
 	struct subsys_notif_timeout timeout_data;
 #endif /* CONFIG_SETUP_SSR_NOTIF_TIMEOUTS */
@@ -163,6 +172,8 @@ extern enum crash_status subsys_get_crash_status(struct subsys_device *dev);
 void notify_proxy_vote(struct device *device);
 void notify_proxy_unvote(struct device *device);
 void complete_err_ready(struct subsys_device *subsys);
+void complete_shutdown_ack(struct subsys_device *subsys);
+struct subsys_device *find_subsys_device(const char *str);
 extern int wait_for_shutdown_ack(struct subsys_desc *desc);
 #else
 

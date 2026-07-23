@@ -2,7 +2,7 @@ menu "Diag Support"
 
 config DIAG_CHAR
 	tristate "DIAG CHAR Interface Core"
-	default m
+	default n
 	depends on USB_CONFIGFS_F_DIAG || USB_FUNCTION_DIAG || USB_QCOM_MAEMO
 	depends on ARCH_QCOM
 	depends on POWER_RESET_QCOM
@@ -25,14 +25,14 @@ config DIAG_OVER_USB
 	  Diag traffic from the USB endpoint.
 
 config DIAGFWD_BRIDGE_CODE
-	bool "Enable QSC/9K DIAG traffic over SMUX/HSIC"
+	bool "Enable remote DIAG traffic over MHI/HSIC"
 	depends on DIAG_CHAR
-	depends on USB_QCOM_DIAG_BRIDGE || MSM_MHI
+	depends on USB_QTI_DIAG_BRIDGE || MHI_BUS
 	default y
 	help
-	  SMUX/HSIC Transport Layer for DIAG Router. When the MHI/SMUX endpoints
+	  MHI/HSIC Transport Layer for DIAG Router. When the MHI/HSIC endpoints
 	  become available, this bridge driver enables DIAG traffic over MHI
-	  and SMUX.
+	  and HSIC.
 
 config DIAG_OVER_PCIE
 	bool "Enable Diag traffic to go over PCIE"
@@ -44,12 +44,5 @@ config DIAG_OVER_PCIE
 	  and connected to use the transport. If PCIE is not configured
 	  diag will switch to usb mode and diag traffic will be routed
 	  over USB.
-
-config DIAG_USES_SMD
-	bool "Enable diag internal interface over SMD"
-	depends on DIAG_CHAR && MSM_SMD
-	help
-	  Diag over SMD enables exchanging diagnostic information between
-	  application processor and peripherals over SDM.
 
 endmenu

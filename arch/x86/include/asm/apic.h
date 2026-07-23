@@ -2,7 +2,6 @@
 #define _ASM_X86_APIC_H
 
 #include <linux/cpumask.h>
-#include <linux/pm.h>
 
 #include <asm/alternative.h>
 #include <asm/cpufeature.h>
@@ -11,8 +10,8 @@
 #include <asm/fixmap.h>
 #include <asm/mpspec.h>
 #include <asm/msr.h>
-#include <asm/idle.h>
 #include <asm/hardirq.h>
+#include <asm/io.h>
 
 #define ARCH_APICTIMER_STOPS_ON_C3	1
 
@@ -103,7 +102,7 @@ static inline void native_apic_mem_write(u32 reg, u32 v)
 
 static inline u32 native_apic_mem_read(u32 reg)
 {
-	return *((volatile u32 *)(APIC_BASE + reg));
+	return readl((void __iomem *)(APIC_BASE + reg));
 }
 
 extern void native_apic_wait_icr_idle(void);
@@ -187,7 +186,7 @@ static inline void native_apic_msr_write(u32 reg, u32 v)
 
 static inline void native_apic_msr_eoi_write(u32 reg, u32 v)
 {
-	wrmsr(APIC_BASE_MSR + (APIC_EOI >> 4), APIC_EOI_ACK, 0);
+	__wrmsr(APIC_BASE_MSR + (APIC_EOI >> 4), APIC_EOI_ACK, 0);
 }
 
 static inline u32 native_apic_msr_read(u32 reg)
@@ -245,11 +244,7 @@ static inline int x2apic_enabled(void) { return 0; }
 #define	x2apic_supported()	(0)
 #endif /* !CONFIG_X86_X2APIC */
 
-#ifdef CONFIG_X86_64
-#define	SET_APIC_ID(x)		(apic->set_apic_id(x))
-#else
-
-#endif
+struct irq_data;
 
 /*
  * Copyright 2004 James Cleverdon, IBM.
@@ -292,11 +287,12 @@ struct apic {
 	int (*phys_pkg_id)(int cpuid_apic, int index_msb);
 
 	unsigned int (*get_apic_id)(unsigned long x);
+	/* Can't be NULL on 64-bit */
 	unsigned long (*set_apic_id)(unsigned int id);
 
-	int (*cpu_mask_to_apicid_and)(const struct cpumask *cpumask,
-				      const struct cpumask *andmask,
-				      unsigned int *apicid);
+	int (*cpu_mask_to_apicid)(const struct cpumask *cpumask,
+				  struct irq_data *irqdata,
+				  unsigned int *apicid);
 
 	/* ipi */
 	void (*send_IPI)(int cpu, int vector);
@@ -323,6 +319,7 @@ struct apic {
 	 * on write for EOI.
 	 */
 	void (*eoi_write)(u32 reg, u32 v);
+	void (*native_eoi_write)(u32 reg, u32 v);
 	u64 (*icr_read)(void);
 	void (*icr_write)(u32 low, u32 high);
 	void (*wait_icr_idle)(void);
@@ -537,28 +534,12 @@ static inline int default_phys_pkg_id(int cpuid_apic, int index_msb)
 
 #endif
 
-static inline int
-flat_cpu_mask_to_apicid_and(const struct cpumask *cpumask,
-			    const struct cpumask *andmask,
-			    unsigned int *apicid)
-{
-	unsigned long cpu_mask = cpumask_bits(cpumask)[0] &
-				 cpumask_bits(andmask)[0] &
-				 cpumask_bits(cpu_online_mask)[0] &
-				 APIC_ALL_CPUS;
-
-	if (likely(cpu_mask)) {
-		*apicid = (unsigned int)cpu_mask;
-		return 0;
-	} else {
-		return -EINVAL;
-	}
-}
-
-extern int
-default_cpu_mask_to_apicid_and(const struct cpumask *cpumask,
-			       const struct cpumask *andmask,
-			       unsigned int *apicid);
+extern int flat_cpu_mask_to_apicid(const struct cpumask *cpumask,
+				   struct irq_data *irqdata,
+				   unsigned int *apicid);
+extern int default_cpu_mask_to_apicid(const struct cpumask *cpumask,
+				      struct irq_data *irqdata,
+				      unsigned int *apicid);
 
 static inline void
 flat_vector_allocation_domain(int cpu, struct cpumask *retmask,
@@ -637,7 +618,6 @@ extern void irq_exit(void);
 static inline void entering_irq(void)
 {
 	irq_enter();
-	exit_idle();
 	kvm_set_cpu_l1tf_flush_l1d();
 }
 

@@ -1,9 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0
 #
 # Makefile for Heterogenous System Architecture support for AMD GPU devices
 #
 
-ccflags-y := -Iinclude/drm -Idrivers/gpu/drm/amd/include/  \
-		-Idrivers/gpu/drm/amd/include/asic_reg
+ccflags-y := -I $(srctree)/drivers/gpu/drm/amd/include/  \
+		-I $(srctree)/drivers/gpu/drm/amd/include/asic_reg
 
 amdkfd-y	:= kfd_module.o kfd_device.o kfd_chardev.o kfd_topology.o \
 		kfd_pasid.o kfd_doorbell.o kfd_flat_memory.o \

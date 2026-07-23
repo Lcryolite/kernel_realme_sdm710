@@ -1,8 +1,9 @@
+# SPDX-License-Identifier: GPL-2.0
 #
 # link order is important here
 #
 
-ccflags-y				:= -Idrivers/ide
+ccflags-y				:= -I $(srctree)/drivers/ide
 
 ide-core-y += ide.o ide-ioctls.o ide-io.o ide-iops.o ide-lib.o ide-probe.o \
 	      ide-taskfile.o ide-pm.o ide-park.o ide-sysfs.o ide-devsets.o \

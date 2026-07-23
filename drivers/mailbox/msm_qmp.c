@@ -1,4 +1,4 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -18,10 +18,12 @@
 #include <linux/platform_device.h>
 #include <linux/mailbox_controller.h>
 #include <linux/module.h>
+#include <linux/of.h>
 #include <linux/of_irq.h>
 #include <linux/kthread.h>
 #include <linux/workqueue.h>
 #include <linux/mailbox/qmp.h>
+#include <linux/ipc_logging.h>
 
 #define QMP_MAGIC	0x4d41494c	/* MAIL */
 #define QMP_VERSION	0x1
@@ -35,6 +37,20 @@
 #define QMP_MBOX_CH_CONNECTED		0x0000FFFF
 
 #define MSG_RAM_ALIGN_BYTES 3
+
+#define QMP_IPC_LOG_PAGE_CNT 2
+#define QMP_INFO(ctxt, x, ...)						  \
+do {									  \
+	if (ctxt)							  \
+		ipc_log_string(ctxt, "[%s]: "x, __func__, ##__VA_ARGS__); \
+} while (0)
+
+#define QMP_ERR(ctxt, x, ...)						  \
+do {									  \
+	pr_err_ratelimited("[%s]: "x, __func__, ##__VA_ARGS__);		  \
+	if (ctxt)							  \
+		ipc_log_string(ctxt, "[%s]: "x, __func__, ##__VA_ARGS__); \
+} while (0)
 
 /**
  * enum qmp_local_state - definition of the local state machine
@@ -152,6 +168,7 @@ struct qmp_mbox {
 	struct completion ch_complete;
 	struct delayed_work dwork;
 	struct qmp_device *mdev;
+	bool suspend_flag;
 };
 
 /**
@@ -171,6 +188,7 @@ struct qmp_mbox {
  * @rx_work:		Work to be executed when an irq is received
  * @tx_irq_count:	Number of tx interrupts triggered
  * @rx_irq_count:	Number of rx interrupts received
+ * @ilc:		IPC logging context
  */
 struct qmp_device {
 	struct device *dev;
@@ -189,6 +207,9 @@ struct qmp_device {
 	u32 rx_irq_line;
 	u32 tx_irq_count;
 	u32 rx_irq_count;
+
+	void *ilc;
+	bool early_boot;
 };
 
 /**
@@ -245,8 +266,8 @@ static void qmp_notify_timeout(struct work_struct *work)
 		spin_unlock_irqrestore(&mbox->tx_lock, flags);
 		return;
 	}
-	pr_err("%s: qmp tx timeout for %d\n", __func__, mbox->idx_in_flight);
-	iowrite32(0, mbox->mdev->msgram + mbox->mcore_mbox_offset);
+	QMP_ERR(mbox->mdev->ilc, "tx timeout for %d\n", mbox->idx_in_flight);
+	iowrite32(0, mbox->desc + mbox->mcore_mbox_offset);
 	mbox->tx_sent = false;
 	spin_unlock_irqrestore(&mbox->tx_lock, flags);
 	mbox_chan_txdone(chan, err);
@@ -310,6 +331,7 @@ static void set_mcore_ch(struct qmp_mbox *mbox, u32 state)
 static int qmp_startup(struct mbox_chan *chan)
 {
 	struct qmp_mbox *mbox = chan->con_priv;
+	unsigned long ret;
 
 	if (!mbox)
 		return -EINVAL;
@@ -320,13 +342,18 @@ static int qmp_startup(struct mbox_chan *chan)
 		return -EAGAIN;
 	}
 
-	set_mcore_ch(mbox, QMP_MBOX_CH_CONNECTED);
-	mbox->local_state = LOCAL_CONNECTING;
+	if (mbox->local_state == LINK_CONNECTED) {
+		set_mcore_ch(mbox, QMP_MBOX_CH_CONNECTED);
+		mbox->local_state = LOCAL_CONNECTING;
+		send_irq(mbox->mdev);
+	}
 	mutex_unlock(&mbox->state_lock);
 
-	send_irq(mbox->mdev);
-	wait_for_completion_interruptible_timeout(&mbox->ch_complete,
+	ret = wait_for_completion_timeout(&mbox->ch_complete,
 					msecs_to_jiffies(QMP_TOUT_MS));
+	if (!ret)
+		return -ETIME;
+
 	return 0;
 }
 
@@ -349,14 +376,16 @@ static int qmp_send_data(struct mbox_chan *chan, void *data)
 	struct qmp_pkt *pkt = (struct qmp_pkt *)data;
 	void __iomem *addr;
 	unsigned long flags;
+	u32 size;
 	int i;
 
-	if (!mbox || !data || mbox->local_state != CHANNEL_CONNECTED)
+	if (!mbox || !data || !completion_done(&mbox->ch_complete))
 		return -EINVAL;
+
 	mdev = mbox->mdev;
 
 	spin_lock_irqsave(&mbox->tx_lock, flags);
-	addr = mdev->msgram + mbox->mcore_mbox_offset;
+	addr = mbox->desc + mbox->mcore_mbox_offset;
 	if (mbox->tx_sent) {
 		spin_unlock_irqrestore(&mbox->tx_lock, flags);
 		return -EAGAIN;
@@ -369,11 +398,15 @@ static int qmp_send_data(struct mbox_chan *chan, void *data)
 
 	memcpy32_toio(addr + sizeof(pkt->size), pkt->data, pkt->size);
 	iowrite32(pkt->size, addr);
+	/* readback to ensure write reflects in msgram */
+	size = ioread32(addr);
 	mbox->tx_sent = true;
 	for (i = 0; i < mbox->ctrl.num_chans; i++) {
 		if (chan == &mbox->ctrl.chans[i])
 			mbox->idx_in_flight = i;
 	}
+	QMP_INFO(mdev->ilc, "Copied buffer to msgram sz:%d i:%d\n",
+		 size, mbox->idx_in_flight);
 	send_irq(mdev);
 	qmp_schedule_tx_timeout(mbox);
 	spin_unlock_irqrestore(&mbox->tx_lock, flags);
@@ -391,11 +424,20 @@ static void qmp_shutdown(struct mbox_chan *chan)
 	struct qmp_mbox *mbox = chan->con_priv;
 
 	mutex_lock(&mbox->state_lock);
-	mbox->num_shutdown++;
-	if (mbox->num_shutdown < mbox->num_assigned) {
-		mutex_unlock(&mbox->state_lock);
-		return;
+	if (mbox->local_state <= LINK_CONNECTED) {
+		mbox->num_assigned--;
+		goto out;
 	}
+
+	if (mbox->local_state == LOCAL_CONNECTING) {
+		mbox->num_assigned--;
+		mbox->local_state = LINK_CONNECTED;
+		goto out;
+	}
+
+	mbox->num_shutdown++;
+	if (mbox->num_shutdown < mbox->num_assigned)
+		goto out;
 
 	if (mbox->local_state != LINK_DISCONNECTED) {
 		mbox->local_state = LOCAL_DISCONNECTING;
@@ -404,6 +446,7 @@ static void qmp_shutdown(struct mbox_chan *chan)
 	}
 	mbox->num_shutdown = 0;
 	mbox->num_assigned = 0;
+out:
 	mutex_unlock(&mbox->state_lock);
 }
 
@@ -432,18 +475,19 @@ static void qmp_recv_data(struct qmp_mbox *mbox, u32 mbox_of)
 	void __iomem *addr;
 	struct qmp_pkt *pkt;
 
-	addr = mbox->mdev->msgram + mbox_of;
+	addr = mbox->desc + mbox_of;
 	pkt = &mbox->rx_pkt;
 	pkt->size = ioread32(addr);
 
 	if (pkt->size > mbox->mcore_mbox_size)
-		pr_err("%s: Invalid mailbox packet\n", __func__);
+		QMP_ERR(mbox->mdev->ilc, "Invalid mailbox packet\n");
 	else {
 		memcpy32_fromio(pkt->data, addr + sizeof(pkt->size), pkt->size);
 		mbox_chan_received_data(&mbox->ctrl.chans[mbox->idx_in_flight],
 				pkt);
 	}
 	iowrite32(0, addr);
+	QMP_INFO(mbox->mdev->ilc, "recv sz:%d\n", pkt->size);
 	send_irq(mbox->mdev);
 }
 
@@ -514,76 +558,95 @@ static void __qmp_rx_worker(struct qmp_mbox *mbox)
 						 desc.ucore.mailbox_size,
 						 GFP_KERNEL);
 		if (!mbox->rx_pkt.data) {
-			pr_err("In %s: failed to allocate rx pkt\n", __func__);
+			QMP_ERR(mdev->ilc, "Failed to allocate rx pkt\n");
 			break;
 		}
+		QMP_INFO(mdev->ilc, "Set to link negotiation\n");
 		send_irq(mdev);
 		break;
 	case LINK_NEGOTIATION:
 		if (desc.mcore.link_state_ack != QMP_MBOX_LINK_UP ||
 				desc.mcore.link_state != QMP_MBOX_LINK_UP) {
-			pr_err("In %s: rx interrupt without negotiation ack\n",
-					__func__);
+			QMP_ERR(mdev->ilc, "RX int without negotiation ack\n");
 			break;
 		}
 		mbox->local_state = LINK_CONNECTED;
 		complete_all(&mbox->link_complete);
+		QMP_INFO(mdev->ilc, "Set to link connected\n");
+		/*
+		 * If link connection happened after hibernation
+		 * manualy trigger the channel open procedure since client
+		 * won't try to re-open the channel
+		 */
+		if (mbox->suspend_flag == true) {
+			set_mcore_ch(mbox, QMP_MBOX_CH_CONNECTED);
+			mbox->local_state = LOCAL_CONNECTING;
+			send_irq(mbox->mdev);
+		}
 		break;
 	case LINK_CONNECTED:
 		if (desc.ucore.ch_state == desc.ucore.ch_state_ack) {
-			pr_err("In %s: rx interrupt without channel open\n",
-					__func__);
+			QMP_ERR(mdev->ilc, "RX int without ch open\n");
 			break;
 		}
 		set_ucore_ch_ack(mbox, desc.ucore.ch_state);
 		send_irq(mdev);
+		QMP_INFO(mdev->ilc, "Received remote ch open\n");
 		break;
 	case LOCAL_CONNECTING:
 		if (desc.mcore.ch_state_ack == QMP_MBOX_CH_CONNECTED &&
-				desc.mcore.ch_state == QMP_MBOX_CH_CONNECTED)
+				desc.mcore.ch_state == QMP_MBOX_CH_CONNECTED) {
 			mbox->local_state = LOCAL_CONNECTED;
+			QMP_INFO(mdev->ilc, "Received local ch open ack\n");
+		}
 
 		if (desc.ucore.ch_state != desc.ucore.ch_state_ack) {
 			set_ucore_ch_ack(mbox, desc.ucore.ch_state);
 			send_irq(mdev);
+			QMP_INFO(mdev->ilc, "Received remote channel open\n");
 		}
 		if (mbox->local_state == LOCAL_CONNECTED &&
 				desc.mcore.ch_state == QMP_MBOX_CH_CONNECTED &&
 				desc.ucore.ch_state == QMP_MBOX_CH_CONNECTED) {
 			mbox->local_state = CHANNEL_CONNECTED;
 			complete_all(&mbox->ch_complete);
+			QMP_INFO(mdev->ilc, "Set to channel connected\n");
 		}
 		break;
 	case LOCAL_CONNECTED:
 		if (desc.ucore.ch_state == desc.ucore.ch_state_ack) {
-			pr_err("In %s: rx interrupt without remote channel open\n",
-					__func__);
+			QMP_ERR(mdev->ilc, "RX int without remote ch open\n");
 			break;
 		}
 		set_ucore_ch_ack(mbox, desc.ucore.ch_state);
 		mbox->local_state = CHANNEL_CONNECTED;
 		send_irq(mdev);
 		complete_all(&mbox->ch_complete);
+		QMP_INFO(mdev->ilc, "Set to channel connected\n");
 		break;
 	case CHANNEL_CONNECTED:
 		if (desc.ucore.ch_state == QMP_MBOX_CH_DISCONNECTED) {
 			set_ucore_ch_ack(mbox, desc.ucore.ch_state);
 			mbox->local_state = LOCAL_CONNECTED;
+			QMP_INFO(mdev->ilc, "REMOTE DISCONNECT\n");
 			send_irq(mdev);
 		}
 
-		msg_len = ioread32(mdev->msgram + desc.ucore.mailbox_offset);
+		msg_len = ioread32(mbox->desc + desc.ucore.mailbox_offset);
 		if (msg_len && !mbox->rx_disabled)
 			qmp_recv_data(mbox, desc.ucore.mailbox_offset);
 
 		spin_lock_irqsave(&mbox->tx_lock, flags);
 		idx = mbox->idx_in_flight;
 		if (mbox->tx_sent) {
-			msg_len = ioread32(mdev->msgram +
+			msg_len = ioread32(mbox->desc +
 						mbox->mcore_mbox_offset);
 			if (msg_len == 0) {
 				mbox->tx_sent = false;
 				cancel_delayed_work(&mbox->dwork);
+				QMP_INFO(mdev->ilc, "TX flag cleared, idx%d\n",
+					 idx);
+
 				spin_unlock_irqrestore(&mbox->tx_lock, flags);
 				mbox_chan_txdone(&mbox->ctrl.chans[idx], 0);
 				spin_lock_irqsave(&mbox->tx_lock, flags);
@@ -593,12 +656,15 @@ static void __qmp_rx_worker(struct qmp_mbox *mbox)
 		break;
 	case LOCAL_DISCONNECTING:
 		if (desc.mcore.ch_state_ack == QMP_MBOX_CH_DISCONNECTED &&
-				desc.mcore.ch_state == desc.mcore.ch_state_ack)
+			desc.mcore.ch_state == desc.mcore.ch_state_ack) {
+
 			mbox->local_state = LINK_CONNECTED;
-		reinit_completion(&mbox->ch_complete);
+			QMP_INFO(mdev->ilc, "Channel closed\n");
+			reinit_completion(&mbox->ch_complete);
+		}
 		break;
 	default:
-		pr_err("In %s: Local Channel State corrupted\n", __func__);
+		QMP_ERR(mdev->ilc, "Local Channel State corrupted\n");
 	}
 	mutex_unlock(&mbox->state_lock);
 }
@@ -800,6 +866,7 @@ static int qmp_mbox_init(struct device_node *n, struct qmp_device *mdev)
 	mbox->tx_sent = false;
 	mbox->num_assigned = 0;
 	INIT_DELAYED_WORK(&mbox->dwork, qmp_notify_timeout);
+	mbox->suspend_flag = false;
 
 	mdev_add_mbox(mdev, mbox);
 	return 0;
@@ -887,6 +954,10 @@ static int qmp_mbox_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
+	dev_set_drvdata(&pdev->dev, mdev);
+
+	mdev->ilc = ipc_log_context_create(QMP_IPC_LOG_PAGE_CNT, mdev->name, 0);
+
 	kthread_init_work(&mdev->kwork, rx_worker);
 	kthread_init_worker(&mdev->kworker);
 	mdev->task = kthread_run(kthread_worker_fn, &mdev->kworker, "qmp_%s",
@@ -897,19 +968,60 @@ static int qmp_mbox_probe(struct platform_device *pdev)
 		edge_node->name, mdev);
 	if (ret < 0) {
 		qmp_mbox_remove(pdev);
-		pr_err("%s: request irq on %d failed: %d\n", __func__,
-							mdev->rx_irq_line, ret);
+		QMP_ERR(mdev->ilc, "request irq on %d failed: %d\n",
+			mdev->rx_irq_line, ret);
 		return ret;
 	}
 	ret = enable_irq_wake(mdev->rx_irq_line);
 	if (ret < 0)
-		pr_err("%s: enable_irq_wake on %d failed: %d\n", __func__,
-							mdev->rx_irq_line, ret);
+		QMP_ERR(mdev->ilc, "enable_irq_wake on %d failed: %d\n",
+			mdev->rx_irq_line, ret);
 
-	/* Trigger RX */
-	qmp_irq_handler(0, mdev);
+	/* Trigger fake RX in case of missed interrupt */
+	if (of_property_read_bool(edge_node, "qcom,early-boot")) {
+		mdev->early_boot = true;
+		qmp_irq_handler(0, mdev);
+	}
+
 	return 0;
 }
+
+static int qmp_mbox_suspend(struct device *dev)
+{
+	return 0;
+}
+
+static int qmp_mbox_resume(struct device *dev)
+{
+	struct qmp_device *mdev = dev_get_drvdata(dev);
+	struct qmp_mbox *mbox;
+
+	list_for_each_entry(mbox, &mdev->mboxes, list) {
+		mbox->local_state = LINK_DISCONNECTED;
+		init_completion(&mbox->link_complete);
+		init_completion(&mbox->ch_complete);
+		mbox->tx_sent = false;
+		/*
+		 * set suspend flag to indicate self channel open is required
+		 * after restore operation
+		 */
+		mbox->suspend_flag = true;
+		/* Release rx packet buffer */
+		if (mbox->rx_pkt.data) {
+			devm_kfree(mdev->dev, mbox->rx_pkt.data);
+			mbox->rx_pkt.data = NULL;
+		}
+	}
+	if (mdev->early_boot)
+		qmp_irq_handler(0, mdev);
+
+	return 0;
+}
+
+static const struct dev_pm_ops qmp_mbox_pm_ops = {
+	.freeze_late = qmp_mbox_suspend,
+	.restore_early = qmp_mbox_resume,
+};
 
 static struct platform_driver qmp_mbox_driver = {
 	.probe = qmp_mbox_probe,
@@ -918,6 +1030,7 @@ static struct platform_driver qmp_mbox_driver = {
 		.name = "qmp_mbox",
 		.owner = THIS_MODULE,
 		.of_match_table = qmp_mbox_match_table,
+		.pm = &qmp_mbox_pm_ops,
 	},
 };
 

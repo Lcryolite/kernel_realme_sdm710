@@ -163,7 +163,6 @@ enum type_logger_error {
 	DISCONNECT_ERROR,
 	DIRECTORY_ERROR,
 	PARITY_ERROR,
-	PHYSICAL_ADDRESS_ERROR,
 };
 
 static void clear_gladiator_error(void __iomem *gladiator_virt_base,
@@ -201,14 +200,12 @@ static inline void print_gld_transaction(unsigned int opc)
 
 static inline void print_gld_errtype(unsigned int errtype)
 {
-	char *errors = "Disconnect, Directory, Parity, Physical address";
-
 	if (errtype == 0)
 		pr_alert("Error type: Snoop data transfer\n");
 	else if (errtype == 1)
 		pr_alert("Error type: DVM error\n");
 	else if (errtype == 3)
-		pr_alert("Error type: %s\n", errors);
+		pr_alert("Error type: Disconnect, directory, or parity error\n");
 	else
 		pr_alert("Error type: Unknown; value:%u\n", errtype);
 }
@@ -291,7 +288,7 @@ static void decode_gld_logged_error(u32 err_reg5,
 
 	log_err_type = (err_reg5 & mask_shifts->gld_errlog5_error_type_mask)
 		>> mask_shifts->gld_errlog5_error_type_shift;
-	for (i = 0 ; i <= 7 ; i++) {
+	for (i = 0 ; i <= 6 ; i++) {
 		value = log_err_type & 0x1;
 		switch (i) {
 		case DATA_TRANSFER_ERROR:
@@ -340,14 +337,7 @@ static void decode_gld_logged_error(u32 err_reg5,
 					mask_shifts);
 			decode_index_parity(err_reg5, mask_shifts);
 			break;
-		case PHYSICAL_ADDRESS_ERROR:
-			if (value == 0)
-				continue;
-			pr_alert("Error type: Physical address error\n");
-			pr_alert("Address is greater than SoC address range\n");
-			break;
 		}
-
 		log_err_type = log_err_type >> 1;
 	}
 }

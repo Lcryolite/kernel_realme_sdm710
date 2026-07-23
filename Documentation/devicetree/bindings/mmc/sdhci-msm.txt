@@ -16,9 +16,6 @@ Required properties:
 		      Required "interrupt-names" are "hc_irq" and "pwr_irq".
   - <supply-name>-supply: phandle to the regulator device tree node
 			  Required "supply-name" are "vdd" and "vdd-io".
-  - qcom,ice-clk-rates: this is an array that specifies supported Inline
-		    Crypto Engine (ICE) clock frequencies, Units - Hz.
-  - sdhc-msm-crypto: phandle to SDHC ICE node
 
 Required alias:
 - The slot number is specified via an alias with the following format
@@ -42,7 +39,7 @@ Optional Properties:
 				"DDR_1p8v" - indicates that host can support DDR mode at 1.8v.
 				"DDR_1p2v" - indicates that host can support DDR mode at 1.2v.
 	  - qcom,bus-aggr-clk-rates: this is an array that specifies the frequency for
-	  			the bus-aggr-clk which should be set corresponding to the
+				the bus-aggr-clk which should be set corresponding to the
 				frequency used from clk-rate. The Frequency of this clock
 				should be decided based on the power mode in which the
 				apps clk would run with frequency in clk-rates.
@@ -119,10 +116,9 @@ In the following, <supply> can be vdd (flash core voltage) or vdd-io (I/O voltag
 
 	- qcom,wakeup-on-idle: if configured, the mmcqd thread will call
 	  set_wake_up_idle(), thereby voting for it to be called on idle CPUs.
-	- nvmem-cells: specifies the handle to represent the SoC revision.
-	  usually it is defined by qfprom device node.
-	- nvmem-cell-names: specifies the given nvmem cell name as defined in
-	  qfprom node.
+
+	- qcom,wakeup-on-idle: if configured, the mmcqd thread will call
+	  set_wake_up_idle(), thereby voting for it to be called on idle CPUs.
 
 Example:
 
@@ -136,7 +132,6 @@ Example:
                 reg-names = "hc_mem", "core_mem";
                 interrupts = <0 123 0>, <0 138 0>;
                 interrupt-names = "hc_irq", "pwr_irq";
-		sdhc-msm-crypto = <&sdcc1_ice>;
 
 		vdd-supply = <&pm8941_l21>;
 		vdd-io-supply = <&pm8941_l13>;
@@ -150,6 +145,8 @@ Example:
 
 		qcom,devfreq,freq-table = <52000000 200000000>;
 
+		qcom,devfreq,freq-table = <52000000 200000000>;
+
 		pinctrl-names = "active", "sleep";
 		pinctrl-0 = <&sdc1_clk_on &sdc1_cmd_on &sdc1_data_on>;
 		pinctrl-1 = <&sdc1_clk_off &sdc1_cmd_on &sdc1_data_on>;
@@ -159,7 +156,6 @@ Example:
 		qcom,nonremovable;
 		qcom,large-address-bus;
 		qcom,bus-speed-mode = "HS200_1p8v", "DDR_1p8v";
-		qcom,ice-clk-rates = <300000000 150000000>;
 
 		qcom,scaling-lower-bus-speed-mode = "DDR52";
 

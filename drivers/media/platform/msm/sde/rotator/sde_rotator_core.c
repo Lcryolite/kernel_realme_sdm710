@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -28,6 +28,7 @@
 #include <soc/qcom/scm.h>
 #include <soc/qcom/secure_buffer.h>
 #include <asm/cacheflush.h>
+#include <uapi/linux/sched/types.h>
 
 #include "sde_rotator_base.h"
 #include "sde_rotator_core.h"
@@ -570,7 +571,6 @@ static int sde_rotator_import_buffer(struct sde_layer_buffer *buffer,
 		planes[i].memory_id = buffer->planes[i].fd;
 		planes[i].offset = buffer->planes[i].offset;
 		planes[i].buffer = buffer->planes[i].buffer;
-		planes[i].handle = buffer->planes[i].handle;
 		planes[i].addr = buffer->planes[i].addr;
 		planes[i].len = buffer->planes[i].len;
 	}
@@ -581,20 +581,24 @@ static int sde_rotator_import_buffer(struct sde_layer_buffer *buffer,
 	return ret;
 }
 
-static int sde_rotator_secure_session_ctrl(bool enable)
+static int _sde_rotator_secure_session_ctrl(bool enable)
 {
 	struct sde_rot_data_type *mdata = sde_rot_get_mdata();
-	uint32_t sid_info;
+	uint32_t *sid_info = NULL;
 	struct scm_desc desc = {0};
 	unsigned int resp = 0;
 	int ret = 0;
 
-	if (test_bit(SDE_CAPS_SEC_ATTACH_DETACH_SMMU,
-		mdata->sde_caps_map)) {
-		sid_info = mdata->sde_smmu[SDE_IOMMU_DOMAIN_ROT_SECURE].sid;
+	if (test_bit(SDE_CAPS_SEC_ATTACH_DETACH_SMMU, mdata->sde_caps_map)) {
+
+		sid_info = kzalloc(sizeof(uint32_t), GFP_KERNEL);
+		if (!sid_info)
+			return -ENOMEM;
+
+		sid_info[0] = mdata->sde_smmu[SDE_IOMMU_DOMAIN_ROT_SECURE].sid;
 		desc.arginfo = SCM_ARGS(4, SCM_VAL, SCM_RW, SCM_VAL, SCM_VAL);
 		desc.args[0] = SDE_ROTATOR_DEVICE;
-		desc.args[1] = SCM_BUFFER_PHYS(&sid_info);
+		desc.args[1] = SCM_BUFFER_PHYS(sid_info);
 		desc.args[2] = sizeof(uint32_t);
 
 		if (!mdata->sec_cam_en && enable) {
@@ -608,7 +612,7 @@ static int sde_rotator_secure_session_ctrl(bool enable)
 			mdata->sec_cam_en = 1;
 			sde_smmu_secure_ctrl(0);
 
-			dmac_flush_range(&sid_info, &sid_info + 1);
+			dmac_flush_range(sid_info, sid_info + 1);
 			ret = scm_call2(SCM_SIP_FNID(SCM_SVC_MP,
 					MEM_PROTECT_SD_CTRL_SWITCH), &desc);
 			resp = desc.ret[0];
@@ -618,14 +622,16 @@ static int sde_rotator_secure_session_ctrl(bool enable)
 				/* failure, attach smmu */
 				mdata->sec_cam_en = 0;
 				sde_smmu_secure_ctrl(1);
-				return -EINVAL;
+				ret = -EINVAL;
+				goto end;
 			}
 
 			SDEROT_DBG(
 			  "scm(1) sid0x%x dev0x%llx vmid0x%llx ret%d resp%x\n",
-				sid_info, desc.args[0], desc.args[3],
+				sid_info[0], desc.args[0], desc.args[3],
 				ret, resp);
-			SDEROT_EVTLOG(1, sid_info, desc.args[0], desc.args[3],
+			SDEROT_EVTLOG(1, sid_info, sid_info[0],
+					desc.args[0], desc.args[3],
 					ret, resp);
 		} else if (mdata->sec_cam_en && !enable) {
 			/*
@@ -636,38 +642,76 @@ static int sde_rotator_secure_session_ctrl(bool enable)
 			desc.args[3] = VMID_CP_PIXEL;
 			mdata->sec_cam_en = 0;
 
-			dmac_flush_range(&sid_info, &sid_info + 1);
+			dmac_flush_range(sid_info, sid_info + 1);
 			ret = scm_call2(SCM_SIP_FNID(SCM_SVC_MP,
 				MEM_PROTECT_SD_CTRL_SWITCH), &desc);
 			resp = desc.ret[0];
 
 			SDEROT_DBG(
 			  "scm(0) sid0x%x dev0x%llx vmid0x%llx ret%d resp%d\n",
-				sid_info, desc.args[0], desc.args[3],
+				sid_info[0], desc.args[0], desc.args[3],
 				ret, resp);
 
 			/* force smmu to reattach */
 			sde_smmu_secure_ctrl(1);
 
-			SDEROT_EVTLOG(0, sid_info, desc.args[0], desc.args[3],
+			SDEROT_EVTLOG(0, sid_info, sid_info[0],
+					desc.args[0], desc.args[3],
 					ret, resp);
 		}
 	} else {
 		return 0;
 	}
+
+end:
+	kfree(sid_info);
+
 	if (ret)
 		return ret;
 
 	return resp;
 }
 
+static int sde_rotator_secure_session_ctrl(bool enable)
+{
+	struct sde_rot_data_type *mdata = sde_rot_get_mdata();
+	int ret = -EINVAL;
+
+	/*
+	 * wait_for_transition and secure_session_control are filled by client
+	 * callback.
+	 */
+	if (mdata->wait_for_transition && mdata->secure_session_ctrl &&
+		mdata->callback_request) {
+		ret = mdata->wait_for_transition(mdata->sec_cam_en, enable);
+		if (ret) {
+			SDEROT_ERR("failed Secure wait for transition %d\n",
+				   ret);
+		} else {
+			if (mdata->sec_cam_en ^ enable) {
+				mdata->sec_cam_en = enable;
+				ret = mdata->secure_session_ctrl(enable);
+				if (ret)
+					mdata->sec_cam_en = 0;
+			}
+		}
+	} else if (!mdata->callback_request) {
+		ret = _sde_rotator_secure_session_ctrl(enable);
+	}
+
+	if (ret)
+		SDEROT_ERR("failed %d sde_rotator_secure_session %d\n",
+			   ret, mdata->callback_request);
+
+	return ret;
+}
 
 static int sde_rotator_map_and_check_data(struct sde_rot_entry *entry)
 {
 	int ret;
 	struct sde_layer_buffer *input;
 	struct sde_layer_buffer *output;
-	struct sde_mdp_format_params *fmt;
+	struct sde_mdp_format_params *in_fmt, *out_fmt;
 	struct sde_mdp_plane_sizes ps;
 	bool rotation;
 	bool secure;
@@ -690,6 +734,20 @@ static int sde_rotator_map_and_check_data(struct sde_rot_entry *entry)
 		goto end;
 	}
 
+	in_fmt = sde_get_format_params(input->format);
+	if (!in_fmt) {
+		SDEROT_ERR("invalid input format:%d\n", input->format);
+		ret = -EINVAL;
+		goto end;
+	}
+
+	out_fmt = sde_get_format_params(output->format);
+	if (!out_fmt) {
+		SDEROT_ERR("invalid output format:%d\n", output->format);
+		ret = -EINVAL;
+		goto end;
+	}
+
 	/* if error during map, the caller will release the data */
 	ret = sde_mdp_data_map(&entry->src_buf, true, DMA_TO_DEVICE);
 	if (ret) {
@@ -703,41 +761,27 @@ static int sde_rotator_map_and_check_data(struct sde_rot_entry *entry)
 		goto end;
 	}
 
-	fmt = sde_get_format_params(input->format);
-	if (!fmt) {
-		SDEROT_ERR("invalid input format:%d\n", input->format);
-		ret = -EINVAL;
-		goto end;
-	}
-
 	ret = sde_mdp_get_plane_sizes(
-			fmt, input->width, input->height, &ps, 0, rotation);
+			in_fmt, input->width, input->height, &ps, 0, rotation);
 	if (ret) {
 		SDEROT_ERR("fail to get input plane size ret=%d\n", ret);
 		goto end;
 	}
 
-	ret = sde_mdp_data_check(&entry->src_buf, &ps, fmt);
+	ret = sde_mdp_data_check(&entry->src_buf, &ps, in_fmt);
 	if (ret) {
 		SDEROT_ERR("fail to check input data ret=%d\n", ret);
 		goto end;
 	}
 
-	fmt = sde_get_format_params(output->format);
-	if (!fmt) {
-		SDEROT_ERR("invalid output format:%d\n", output->format);
-		ret = -EINVAL;
-		goto end;
-	}
-
-	ret = sde_mdp_get_plane_sizes(
-			fmt, output->width, output->height, &ps, 0, rotation);
+	ret = sde_mdp_get_plane_sizes(out_fmt, output->width, output->height,
+			&ps, 0, rotation);
 	if (ret) {
 		SDEROT_ERR("fail to get output plane size ret=%d\n", ret);
 		goto end;
 	}
 
-	ret = sde_mdp_data_check(&entry->dst_buf, &ps, fmt);
+	ret = sde_mdp_data_check(&entry->dst_buf, &ps, out_fmt);
 	if (ret) {
 		SDEROT_ERR("fail to check output data ret=%d\n", ret);
 		goto end;
@@ -1377,6 +1421,12 @@ static int sde_rotator_calc_perf(struct sde_rot_mgr *mgr,
 	if (mgr->min_rot_clk > perf->clk_rate)
 		perf->clk_rate = mgr->min_rot_clk;
 
+	if (mgr->max_rot_clk && (perf->clk_rate > mgr->max_rot_clk)) {
+		SDEROT_ERR("invalid clock:%ld exceeds max:%ld allowed\n",
+				perf->clk_rate, mgr->max_rot_clk);
+		return -EINVAL;
+	}
+
 	read_bw =  sde_rotator_calc_buf_bw(in_fmt, config->input.width,
 				config->input.height, max_fps);
 
@@ -1505,6 +1555,7 @@ static void sde_rotator_commit_handler(struct kthread_work *work)
 	struct sde_rot_hw_resource *hw;
 	struct sde_rot_mgr *mgr;
 	struct sched_param param = { .sched_priority = 5 };
+	struct sde_rot_trace_entry rot_trace;
 	int ret;
 
 	entry = container_of(work, struct sde_rot_entry, commit_work);
@@ -1552,6 +1603,27 @@ static void sde_rotator_commit_handler(struct kthread_work *work)
 
 	if (entry->item.ts)
 		entry->item.ts[SDE_ROTATOR_TS_COMMIT] = ktime_get();
+
+	/* Set values to pass to trace */
+	rot_trace.wb_idx = entry->item.wb_idx;
+	rot_trace.flags = entry->item.flags;
+	rot_trace.input_format = entry->item.input.format;
+	rot_trace.input_width = entry->item.input.width;
+	rot_trace.input_height = entry->item.input.height;
+	rot_trace.src_x = entry->item.src_rect.x;
+	rot_trace.src_y = entry->item.src_rect.y;
+	rot_trace.src_w = entry->item.src_rect.w;
+	rot_trace.src_h = entry->item.src_rect.h;
+	rot_trace.output_format = entry->item.output.format;
+	rot_trace.output_width = entry->item.output.width;
+	rot_trace.output_height = entry->item.output.height;
+	rot_trace.dst_x = entry->item.dst_rect.x;
+	rot_trace.dst_y = entry->item.dst_rect.y;
+	rot_trace.dst_w = entry->item.dst_rect.w;
+	rot_trace.dst_h = entry->item.dst_rect.h;
+
+	trace_rot_entry_commit(
+		entry->item.session_id, entry->item.sequence_id, &rot_trace);
 
 	ATRACE_INT("sde_smmu_ctrl", 0);
 	ret = sde_smmu_ctrl(1);
@@ -1637,6 +1709,7 @@ static void sde_rotator_done_handler(struct kthread_work *work)
 	struct sde_rot_entry_container *request;
 	struct sde_rot_hw_resource *hw;
 	struct sde_rot_mgr *mgr;
+	struct sde_rot_trace_entry rot_trace;
 	int ret;
 
 	entry = container_of(work, struct sde_rot_entry, done_work);
@@ -1670,6 +1743,27 @@ static void sde_rotator_done_handler(struct kthread_work *work)
 
 	if (entry->item.ts)
 		entry->item.ts[SDE_ROTATOR_TS_DONE] = ktime_get();
+
+	/* Set values to pass to trace */
+	rot_trace.wb_idx = entry->item.wb_idx;
+	rot_trace.flags = entry->item.flags;
+	rot_trace.input_format = entry->item.input.format;
+	rot_trace.input_width = entry->item.input.width;
+	rot_trace.input_height = entry->item.input.height;
+	rot_trace.src_x = entry->item.src_rect.x;
+	rot_trace.src_y = entry->item.src_rect.y;
+	rot_trace.src_w = entry->item.src_rect.w;
+	rot_trace.src_h = entry->item.src_rect.h;
+	rot_trace.output_format = entry->item.output.format;
+	rot_trace.output_width = entry->item.output.width;
+	rot_trace.output_height = entry->item.output.height;
+	rot_trace.dst_x = entry->item.dst_rect.x;
+	rot_trace.dst_y = entry->item.dst_rect.y;
+	rot_trace.dst_w = entry->item.dst_rect.w;
+	rot_trace.dst_h = entry->item.dst_rect.h;
+
+	trace_rot_entry_done(entry->item.session_id, entry->item.sequence_id,
+			&rot_trace);
 
 	sde_rot_mgr_lock(mgr);
 	sde_rotator_put_hw_resource(entry->commitq, entry, entry->commitq->hw);
@@ -2933,10 +3027,12 @@ static int sde_rotator_parse_dt_clk(struct platform_device *pdev,
 			sde_rotator_search_dt_clk(pdev, mgr, "iface_clk",
 				SDE_ROTATOR_CLK_MDSS_AHB, true) ||
 			sde_rotator_search_dt_clk(pdev, mgr, "axi_clk",
-				SDE_ROTATOR_CLK_MDSS_AXI, true) ||
+				SDE_ROTATOR_CLK_MDSS_AXI, false) ||
 			sde_rotator_search_dt_clk(pdev, mgr, "rot_core_clk",
-				SDE_ROTATOR_CLK_MDSS_ROT, false))
+				SDE_ROTATOR_CLK_MDSS_ROT, false)) {
 		rc = -EINVAL;
+		goto clk_err;
+	}
 
 	/*
 	 * If 'MDSS_ROT' is already present, place 'rot_clk' under
@@ -3085,11 +3181,42 @@ int sde_rotator_core_init(struct sde_rot_mgr **pmgr,
 	} else if (IS_SDE_MAJOR_MINOR_SAME(mdata->mdss_version,
 			SDE_MDP_HW_REV_300) ||
 		IS_SDE_MAJOR_MINOR_SAME(mdata->mdss_version,
+			SDE_MDP_HW_REV_320) ||
+		IS_SDE_MAJOR_MINOR_SAME(mdata->mdss_version,
 			SDE_MDP_HW_REV_400) ||
 		IS_SDE_MAJOR_MINOR_SAME(mdata->mdss_version,
-			SDE_MDP_HW_REV_410)) {
+			SDE_MDP_HW_REV_410) ||
+		IS_SDE_MAJOR_SAME(mdata->mdss_version,
+			SDE_MDP_HW_REV_500) ||
+		IS_SDE_MAJOR_MINOR_SAME(mdata->mdss_version,
+			SDE_MDP_HW_REV_620)) {
 		mgr->ops_hw_init = sde_rotator_r3_init;
 		mgr->min_rot_clk = ROT_MIN_ROT_CLK;
+
+		if (IS_SDE_MAJOR_MINOR_SAME(mdata->mdss_version,
+				SDE_MDP_HW_REV_500) ||
+		IS_SDE_MAJOR_MINOR_SAME(mdata->mdss_version,
+				SDE_MDP_HW_REV_620))
+			mgr->max_rot_clk = 460000000UL;
+		else if (IS_SDE_MAJOR_MINOR_SAME(mdata->mdss_version,
+					SDE_MDP_HW_REV_520))
+			mgr->max_rot_clk = 430000000UL;
+		else if (IS_SDE_MAJOR_MINOR_SAME(mdata->mdss_version,
+				SDE_MDP_HW_REV_530) ||
+			IS_SDE_MAJOR_MINOR_SAME(mdata->mdss_version,
+				SDE_MDP_HW_REV_540))
+			mgr->max_rot_clk = 307200000UL;
+
+		if (!(IS_SDE_MAJOR_SAME(mdata->mdss_version,
+					SDE_MDP_HW_REV_500) ||
+			IS_SDE_MAJOR_MINOR_SAME(mdata->mdss_version,
+			SDE_MDP_HW_REV_620)) &&
+				!sde_rotator_get_clk(mgr,
+					SDE_ROTATOR_CLK_MDSS_AXI)) {
+			SDEROT_ERR("unable to get mdss_axi_clk\n");
+			ret = -EINVAL;
+			goto error_map_hw_ops;
+		}
 	} else {
 		ret = -ENODEV;
 		SDEROT_ERR("unsupported sde version %x\n",
@@ -3102,6 +3229,8 @@ int sde_rotator_core_init(struct sde_rot_mgr **pmgr,
 		SDEROT_ERR("hw init failed %d\n", ret);
 		goto error_hw_init;
 	}
+
+	sde_rotator_pm_qos_add(mdata);
 
 	ret = sde_rotator_init_queue(mgr);
 	if (ret) {
@@ -3260,6 +3389,7 @@ int sde_rotator_runtime_idle(struct device *dev)
 int sde_rotator_pm_suspend(struct device *dev)
 {
 	struct sde_rot_mgr *mgr;
+	int i;
 
 	mgr = sde_rot_mgr_from_device(dev);
 
@@ -3274,8 +3404,20 @@ int sde_rotator_pm_suspend(struct device *dev)
 	sde_rotator_suspend_cancel_rot_work(mgr);
 	mgr->minimum_bw_vote = 0;
 	sde_rotator_update_perf(mgr);
+	mgr->pm_rot_enable_clk_cnt = mgr->rot_enable_clk_cnt;
+
+	if (mgr->pm_rot_enable_clk_cnt) {
+		for (i = 0; i < mgr->pm_rot_enable_clk_cnt; i++)
+			sde_rotator_clk_ctrl(mgr, false);
+
+		sde_rotator_update_clk(mgr);
+	}
+
 	ATRACE_END("pm_active");
-	SDEROT_DBG("end pm active %d\n", atomic_read(&mgr->device_suspended));
+	SDEROT_DBG("end pm active %d clk_cnt %d\n",
+	 atomic_read(&mgr->device_suspended), mgr->pm_rot_enable_clk_cnt);
+	SDEROT_EVTLOG(mgr->pm_rot_enable_clk_cnt,
+			 atomic_read(&mgr->device_suspended));
 	sde_rot_mgr_unlock(mgr);
 	return 0;
 }
@@ -3287,6 +3429,7 @@ int sde_rotator_pm_suspend(struct device *dev)
 int sde_rotator_pm_resume(struct device *dev)
 {
 	struct sde_rot_mgr *mgr;
+	int i;
 
 	mgr = sde_rot_mgr_from_device(dev);
 
@@ -3306,10 +3449,20 @@ int sde_rotator_pm_resume(struct device *dev)
 	pm_runtime_enable(dev);
 
 	sde_rot_mgr_lock(mgr);
-	SDEROT_DBG("begin pm active %d\n", atomic_read(&mgr->device_suspended));
+	SDEROT_DBG("begin pm active %d clk_cnt %d\n",
+	 atomic_read(&mgr->device_suspended), mgr->pm_rot_enable_clk_cnt);
 	ATRACE_BEGIN("pm_active");
+	SDEROT_EVTLOG(mgr->pm_rot_enable_clk_cnt,
+			 atomic_read(&mgr->device_suspended));
 	atomic_dec(&mgr->device_suspended);
 	sde_rotator_update_perf(mgr);
+
+	if (mgr->pm_rot_enable_clk_cnt) {
+		sde_rotator_update_clk(mgr);
+		for (i = 0; i < mgr->pm_rot_enable_clk_cnt; i++)
+			sde_rotator_clk_ctrl(mgr, true);
+	}
+
 	sde_rot_mgr_unlock(mgr);
 	return 0;
 }

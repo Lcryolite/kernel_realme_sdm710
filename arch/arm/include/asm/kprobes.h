@@ -16,6 +16,9 @@
 #ifndef _ARM_KPROBES_H
 #define _ARM_KPROBES_H
 
+#include <asm-generic/kprobes.h>
+
+#ifdef CONFIG_KPROBES
 #include <linux/types.h>
 #include <linux/ptrace.h>
 #include <linux/notifier.h>
@@ -51,20 +54,20 @@ int kprobe_exceptions_notify(struct notifier_block *self,
 			     unsigned long val, void *data);
 
 /* optinsn template addresses */
-extern __visible kprobe_opcode_t optprobe_template_entry;
-extern __visible kprobe_opcode_t optprobe_template_val;
-extern __visible kprobe_opcode_t optprobe_template_call;
-extern __visible kprobe_opcode_t optprobe_template_end;
-extern __visible kprobe_opcode_t optprobe_template_sub_sp;
-extern __visible kprobe_opcode_t optprobe_template_add_sp;
-extern __visible kprobe_opcode_t optprobe_template_restore_begin;
-extern __visible kprobe_opcode_t optprobe_template_restore_orig_insn;
-extern __visible kprobe_opcode_t optprobe_template_restore_end;
+extern __visible kprobe_opcode_t optprobe_template_entry[];
+extern __visible kprobe_opcode_t optprobe_template_val[];
+extern __visible kprobe_opcode_t optprobe_template_call[];
+extern __visible kprobe_opcode_t optprobe_template_end[];
+extern __visible kprobe_opcode_t optprobe_template_sub_sp[];
+extern __visible kprobe_opcode_t optprobe_template_add_sp[];
+extern __visible kprobe_opcode_t optprobe_template_restore_begin[];
+extern __visible kprobe_opcode_t optprobe_template_restore_orig_insn[];
+extern __visible kprobe_opcode_t optprobe_template_restore_end[];
 
 #define MAX_OPTIMIZED_LENGTH	4
 #define MAX_OPTINSN_SIZE				\
-	((unsigned long)&optprobe_template_end -	\
-	 (unsigned long)&optprobe_template_entry)
+	((unsigned long)optprobe_template_end -	\
+	 (unsigned long)optprobe_template_entry)
 #define RELATIVEJUMP_SIZE	4
 
 struct arch_optimized_insn {
@@ -83,4 +86,5 @@ struct arch_optimized_insn {
 	 */
 };
 
+#endif /* CONFIG_KPROBES */
 #endif /* _ARM_KPROBES_H */

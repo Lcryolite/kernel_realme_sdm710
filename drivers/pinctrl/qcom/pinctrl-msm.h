@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2013, Sony Mobile Communications AB.
- * Copyright (c) 2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -13,6 +13,8 @@
  */
 #ifndef __PINCTRL_MSM_H__
 #define __PINCTRL_MSM_H__
+
+#include <linux/pinctrl/qcom-pinctrl.h>
 
 struct pinctrl_pin_desc;
 
@@ -64,6 +66,8 @@ struct msm_function {
  * @intr_detection_width: Number of bits used for specifying interrupt type,
  *                        Should be 2 for SoCs that can detect both edges in hardware,
  *                        otherwise 1.
+ * @wake_reg:             Offset of the WAKEUP_INT_EN register from base tile
+ * @wake_bit:             Bit number for the corresponding gpio
  */
 struct msm_pingroup {
 	const char *name;
@@ -73,6 +77,9 @@ struct msm_pingroup {
 	unsigned *funcs;
 	unsigned nfuncs;
 
+#ifdef CONFIG_FRAGMENTED_GPIO_ADDRESS_SPACE
+	u32 tile_base;
+#endif
 	u32 ctl_reg;
 	u32 io_reg;
 	u32 intr_cfg_reg;
@@ -85,6 +92,8 @@ struct msm_pingroup {
 	unsigned pull_bit:5;
 	unsigned drv_bit:5;
 
+	unsigned egpio_enable:5;
+	unsigned egpio_present:5;
 	unsigned oe_bit:5;
 	unsigned in_bit:5;
 	unsigned out_bit:5;
@@ -100,6 +109,8 @@ struct msm_pingroup {
 	unsigned intr_detection_bit:5;
 	unsigned intr_detection_width:5;
 	unsigned dir_conn_en_bit:8;
+	u32 wake_reg;
+	unsigned int wake_bit;
 };
 
 /**
@@ -131,7 +142,7 @@ struct msm_pdc_mux_output {
  * @tlmm_dc:	indicates if the GPIO is routed to GIC directly
  */
 struct msm_dir_conn {
-	unsigned int gpio;
+	int gpio;
 	irq_hw_number_t hwirq;
 	bool tlmm_dc;
 };
@@ -145,6 +156,7 @@ struct msm_dir_conn {
  * @groups:     An array describing all pin groups the pin SoC supports.
  * @ngroups:    The numbmer of entries in @groups.
  * @ngpio:      The number of pingroups the driver should expose as GPIOs.
+ * @pull_no_keeper: The SoC does not support keeper bias.
  * @dir_conn:   An array describing all the pins directly connected to GIC.
  * @ndirconns:  The number of pins directly connected to GIC
  * @dir_conn_irq_base:  Direct connect interrupt base register for kpss.
@@ -162,6 +174,7 @@ struct msm_pinctrl_soc_data {
 	const struct msm_pingroup *groups;
 	unsigned ngroups;
 	unsigned ngpios;
+	bool pull_no_keeper;
 	const struct msm_dir_conn *dir_conn;
 	unsigned int n_dir_conns;
 	unsigned int dir_conn_irq_base;
@@ -170,6 +183,17 @@ struct msm_pinctrl_soc_data {
 	struct msm_gpio_mux_input *gpio_mux_in;
 	unsigned int n_gpio_mux_in;
 	unsigned int n_pdc_mux_offset;
+#ifdef CONFIG_HIBERNATION
+	u32 *dir_conn_addr;
+	u32 tile_count;
+#endif
+#ifdef CONFIG_FRAGMENTED_GPIO_ADDRESS_SPACE
+	const u32 *tile_start;
+	const u32 *tile_offsets;
+	unsigned int n_tile;
+	void __iomem **pin_base;
+	const u32 *tile_end;
+#endif
 };
 
 int msm_pinctrl_probe(struct platform_device *pdev,

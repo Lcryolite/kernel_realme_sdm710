@@ -23,6 +23,9 @@
 #include <linux/usb.h>
 #include <linux/uaccess.h>
 #include <linux/usb/serial.h>
+#include <linux/gpio/driver.h>
+#include <linux/bitops.h>
+#include <linux/mutex.h>
 
 #define DRIVER_DESC "Silicon Labs CP210x RS232 serial adaptor driver"
 
@@ -44,6 +47,9 @@ static int cp210x_tiocmset(struct tty_struct *, unsigned int, unsigned int);
 static int cp210x_tiocmset_port(struct usb_serial_port *port,
 		unsigned int, unsigned int);
 static void cp210x_break_ctl(struct tty_struct *, int);
+static int cp210x_attach(struct usb_serial *);
+static void cp210x_disconnect(struct usb_serial *);
+static void cp210x_release(struct usb_serial *);
 static int cp210x_port_probe(struct usb_serial_port *);
 static int cp210x_port_remove(struct usb_serial_port *);
 static void cp210x_dtr_rts(struct usb_serial_port *p, int on);
@@ -54,10 +60,13 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(0x0471, 0x066A) }, /* AKTAKOM ACE-1001 cable */
 	{ USB_DEVICE(0x0489, 0xE000) }, /* Pirelli Broadband S.p.A, DP-L10 SIP/GSM Mobile */
 	{ USB_DEVICE(0x0489, 0xE003) }, /* Pirelli Broadband S.p.A, DP-L10 SIP/GSM Mobile */
+	{ USB_DEVICE(0x04BF, 0x1301) }, /* TDK Corporation NC0110013M - Network Controller */
+	{ USB_DEVICE(0x04BF, 0x1303) }, /* TDK Corporation MM0110113M - i3 Micro Module */
 	{ USB_DEVICE(0x0745, 0x1000) }, /* CipherLab USB CCD Barcode Scanner 1000 */
 	{ USB_DEVICE(0x0846, 0x1100) }, /* NetGear Managed Switch M4100 series, M5300 series, M7100 series */
 	{ USB_DEVICE(0x08e6, 0x5501) }, /* Gemalto Prox-PU/CU contactless smartcard reader */
 	{ USB_DEVICE(0x08FD, 0x000A) }, /* Digianswer A/S , ZigBee/802.15.4 MAC Device */
+	{ USB_DEVICE(0x0908, 0x0070) }, /* Siemens SCALANCE LPE-9000 USB Serial Console */
 	{ USB_DEVICE(0x0908, 0x01FF) }, /* Siemens RUGGEDCOM USB Serial Console */
 	{ USB_DEVICE(0x0988, 0x0578) }, /* Teraoka AD2000 */
 	{ USB_DEVICE(0x0B00, 0x3070) }, /* Ingenico 3070 */
@@ -117,6 +126,7 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(0x10C4, 0x826B) }, /* Cygnal Integrated Products, Inc., Fasttrax GPS demonstration module */
 	{ USB_DEVICE(0x10C4, 0x8281) }, /* Nanotec Plug & Drive */
 	{ USB_DEVICE(0x10C4, 0x8293) }, /* Telegesis ETRX2USB */
+	{ USB_DEVICE(0x10C4, 0x82AA) }, /* Silicon Labs IFS-USB-DATACABLE used with Quint UPS */
 	{ USB_DEVICE(0x10C4, 0x82EF) }, /* CESINEL FALCO 6105 AC Power Supply */
 	{ USB_DEVICE(0x10C4, 0x82F1) }, /* CESINEL MEDCAL EFD Earth Fault Detector */
 	{ USB_DEVICE(0x10C4, 0x82F2) }, /* CESINEL MEDCAL ST Network Analyzer */
@@ -140,8 +150,10 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(0x10C4, 0x85EA) }, /* AC-Services IBUS-IF */
 	{ USB_DEVICE(0x10C4, 0x85EB) }, /* AC-Services CIS-IBUS */
 	{ USB_DEVICE(0x10C4, 0x85F8) }, /* Virtenio Preon32 */
+	{ USB_DEVICE(0x10C4, 0x863C) }, /* MGP Instruments PDS100 */
 	{ USB_DEVICE(0x10C4, 0x8664) }, /* AC-Services CAN-IF */
 	{ USB_DEVICE(0x10C4, 0x8665) }, /* AC-Services OBD-IF */
+	{ USB_DEVICE(0x10C4, 0x87ED) }, /* IMST USB-Stick for Smart Meter */
 	{ USB_DEVICE(0x10C4, 0x8856) },	/* CEL EM357 ZigBee USB Stick - LR */
 	{ USB_DEVICE(0x10C4, 0x8857) },	/* CEL EM357 ZigBee USB Stick */
 	{ USB_DEVICE(0x10C4, 0x88A4) }, /* MMB Networks ZigBee USB Device */
@@ -172,6 +184,7 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(0x10C4, 0xF004) }, /* Elan Digital Systems USBcount50 */
 	{ USB_DEVICE(0x10C5, 0xEA61) }, /* Silicon Labs MobiData GPRS USB Modem */
 	{ USB_DEVICE(0x10CE, 0xEA6A) }, /* Silicon Labs MobiData GPRS USB Modem 100EU */
+	{ USB_DEVICE(0x11CA, 0x0212) }, /* Verifone USB to Printer (UART, CP2102) */
 	{ USB_DEVICE(0x12B8, 0xEC60) }, /* Link G4 ECU */
 	{ USB_DEVICE(0x12B8, 0xEC62) }, /* Link G4+ ECU */
 	{ USB_DEVICE(0x13AD, 0x9999) }, /* Baltech card reader */
@@ -250,6 +263,16 @@ static const struct usb_device_id id_table[] = {
 
 MODULE_DEVICE_TABLE(usb, id_table);
 
+struct cp210x_serial_private {
+#ifdef CONFIG_GPIOLIB
+	struct gpio_chip	gc;
+	u8			config;
+	u8			gpio_mode;
+	bool			gpio_registered;
+#endif
+	u8			partnum;
+};
+
 struct cp210x_port_private {
 	__u8			bInterfaceNumber;
 	bool			has_swapped_line_ctl;
@@ -273,6 +296,9 @@ static struct usb_serial_driver cp210x_device = {
 	.unthrottle		= usb_serial_generic_unthrottle,
 	.tiocmget		= cp210x_tiocmget,
 	.tiocmset		= cp210x_tiocmset,
+	.attach			= cp210x_attach,
+	.disconnect		= cp210x_disconnect,
+	.release		= cp210x_release,
 	.port_probe		= cp210x_port_probe,
 	.port_remove		= cp210x_port_remove,
 	.dtr_rts		= cp210x_dtr_rts
@@ -315,6 +341,7 @@ static struct usb_serial_driver * const serial_drivers[] = {
 #define CP210X_SET_CHARS	0x19
 #define CP210X_GET_BAUDRATE	0x1D
 #define CP210X_SET_BAUDRATE	0x1E
+#define CP210X_VENDOR_SPECIFIC	0xFF
 
 /* CP210X_IFC_ENABLE */
 #define UART_ENABLE		0x0001
@@ -356,6 +383,22 @@ static struct usb_serial_driver * const serial_drivers[] = {
 #define CONTROL_DCD		0x0080
 #define CONTROL_WRITE_DTR	0x0100
 #define CONTROL_WRITE_RTS	0x0200
+
+/* CP210X_VENDOR_SPECIFIC values */
+#define CP210X_READ_LATCH	0x00C2
+#define CP210X_GET_PARTNUM	0x370B
+#define CP210X_GET_PORTCONFIG	0x370C
+#define CP210X_GET_DEVICEMODE	0x3711
+#define CP210X_WRITE_LATCH	0x37E1
+
+/* Part number definitions */
+#define CP210X_PARTNUM_CP2101	0x01
+#define CP210X_PARTNUM_CP2102	0x02
+#define CP210X_PARTNUM_CP2103	0x03
+#define CP210X_PARTNUM_CP2104	0x04
+#define CP210X_PARTNUM_CP2105	0x05
+#define CP210X_PARTNUM_CP2108	0x08
+#define CP210X_PARTNUM_UNKNOWN	0xFF
 
 /* CP210X_GET_COMM_STATUS returns these 0x13 bytes */
 struct cp210x_comm_status {
@@ -412,6 +455,60 @@ struct cp210x_flow_ctl {
 #define CP210X_SERIAL_RTS_ACTIVE	1
 #define CP210X_SERIAL_RTS_FLOW_CTL	2
 
+/* CP210X_VENDOR_SPECIFIC, CP210X_GET_DEVICEMODE call reads these 0x2 bytes. */
+struct cp210x_pin_mode {
+	u8	eci;
+	u8	sci;
+} __packed;
+
+#define CP210X_PIN_MODE_MODEM		0
+#define CP210X_PIN_MODE_GPIO		BIT(0)
+
+/*
+ * CP210X_VENDOR_SPECIFIC, CP210X_GET_PORTCONFIG call reads these 0xf bytes.
+ * Structure needs padding due to unused/unspecified bytes.
+ */
+struct cp210x_config {
+	__le16	gpio_mode;
+	u8	__pad0[2];
+	__le16	reset_state;
+	u8	__pad1[4];
+	__le16	suspend_state;
+	u8	sci_cfg;
+	u8	eci_cfg;
+	u8	device_cfg;
+} __packed;
+
+/* GPIO modes */
+#define CP210X_SCI_GPIO_MODE_OFFSET	9
+#define CP210X_SCI_GPIO_MODE_MASK	GENMASK(11, 9)
+
+#define CP210X_ECI_GPIO_MODE_OFFSET	2
+#define CP210X_ECI_GPIO_MODE_MASK	GENMASK(3, 2)
+
+/* CP2105 port configuration values */
+#define CP2105_GPIO0_TXLED_MODE		BIT(0)
+#define CP2105_GPIO1_RXLED_MODE		BIT(1)
+#define CP2105_GPIO1_RS485_MODE		BIT(2)
+
+/* CP210X_VENDOR_SPECIFIC, CP210X_WRITE_LATCH call writes these 0x2 bytes. */
+struct cp210x_gpio_write {
+	u8	mask;
+	u8	state;
+} __packed;
+
+/*
+ * Helper to get interface number when we only have struct usb_serial.
+ */
+static u8 cp210x_interface_num(struct usb_serial *serial)
+{
+	struct usb_host_interface *cur_altsetting;
+
+	cur_altsetting = serial->interface->cur_altsetting;
+
+	return cur_altsetting->desc.bInterfaceNumber;
+}
+
 /*
  * Reads a variable-sized block of CP210X_ registers, identified by req.
  * Returns data into buf in native USB byte order.
@@ -445,7 +542,7 @@ static int cp210x_read_reg_block(struct usb_serial_port *port, u8 req,
 		dev_err(&port->dev, "failed get req 0x%x size %d status: %d\n",
 				req, bufsize, result);
 		if (result >= 0)
-			result = -EPROTO;
+			result = -EIO;
 
 		/*
 		 * FIXME Some callers don't bother to check for error,
@@ -508,6 +605,40 @@ static int cp210x_read_u8_reg(struct usb_serial_port *port, u8 req, u8 *val)
 }
 
 /*
+ * Reads a variable-sized vendor block of CP210X_ registers, identified by val.
+ * Returns data into buf in native USB byte order.
+ */
+static int cp210x_read_vendor_block(struct usb_serial *serial, u8 type, u16 val,
+				    void *buf, int bufsize)
+{
+	void *dmabuf;
+	int result;
+
+	dmabuf = kmalloc(bufsize, GFP_KERNEL);
+	if (!dmabuf)
+		return -ENOMEM;
+
+	result = usb_control_msg(serial->dev, usb_rcvctrlpipe(serial->dev, 0),
+				 CP210X_VENDOR_SPECIFIC, type, val,
+				 cp210x_interface_num(serial), dmabuf, bufsize,
+				 USB_CTRL_GET_TIMEOUT);
+	if (result == bufsize) {
+		memcpy(buf, dmabuf, bufsize);
+		result = 0;
+	} else {
+		dev_err(&serial->interface->dev,
+			"failed to get vendor val 0x%04x size %d: %d\n", val,
+			bufsize, result);
+		if (result >= 0)
+			result = -EIO;
+	}
+
+	kfree(dmabuf);
+
+	return result;
+}
+
+/*
  * Writes any 16-bit CP210X_ register (req) whose value is passed
  * entirely in the wValue field of the USB request.
  */
@@ -558,7 +689,7 @@ static int cp210x_write_reg_block(struct usb_serial_port *port, u8 req,
 		dev_err(&port->dev, "failed set req 0x%x size %d status: %d\n",
 				req, bufsize, result);
 		if (result >= 0)
-			result = -EPROTO;
+			result = -EIO;
 	}
 
 	return result;
@@ -575,6 +706,42 @@ static int cp210x_write_u32_reg(struct usb_serial_port *port, u8 req, u32 val)
 
 	return cp210x_write_reg_block(port, req, &le32_val, sizeof(le32_val));
 }
+
+#ifdef CONFIG_GPIOLIB
+/*
+ * Writes a variable-sized vendor block of CP210X_ registers, identified by val.
+ * Data in buf must be in native USB byte order.
+ */
+static int cp210x_write_vendor_block(struct usb_serial *serial, u8 type,
+				     u16 val, void *buf, int bufsize)
+{
+	void *dmabuf;
+	int result;
+
+	dmabuf = kmemdup(buf, bufsize, GFP_KERNEL);
+	if (!dmabuf)
+		return -ENOMEM;
+
+	result = usb_control_msg(serial->dev, usb_sndctrlpipe(serial->dev, 0),
+				 CP210X_VENDOR_SPECIFIC, type, val,
+				 cp210x_interface_num(serial), dmabuf, bufsize,
+				 USB_CTRL_SET_TIMEOUT);
+
+	kfree(dmabuf);
+
+	if (result == bufsize) {
+		result = 0;
+	} else {
+		dev_err(&serial->interface->dev,
+			"failed to set vendor val 0x%04x size %d: %d\n", val,
+			bufsize, result);
+		if (result >= 0)
+			result = -EIO;
+	}
+
+	return result;
+}
+#endif
 
 /*
  * Detect CP2108 GET_LINE_CTL bug and activate workaround.
@@ -726,7 +893,7 @@ static int cp210x_get_tx_queue_byte_count(struct usb_serial_port *port,
 	} else {
 		dev_err(&port->dev, "failed to get comm status: %d\n", result);
 		if (result >= 0)
-			result = -EPROTO;
+			result = -EIO;
 	}
 
 	kfree(sts);
@@ -779,7 +946,7 @@ static void cp210x_get_termios_port(struct usb_serial_port *port,
 	tcflag_t cflag;
 	struct cp210x_flow_ctl flow_ctl;
 	u32 baud;
-	u16 bits = 0;
+	u16 bits;
 	u32 ctl_hs;
 	u32 flow_repl;
 
@@ -990,16 +1157,9 @@ static void cp210x_set_termios(struct tty_struct *tty,
 			dev_dbg(dev, "%s - data bits = 7\n", __func__);
 			break;
 		case CS8:
+		default:
 			bits |= BITS_DATA_8;
 			dev_dbg(dev, "%s - data bits = 8\n", __func__);
-			break;
-		/*case CS9:
-			bits |= BITS_DATA_9;
-			dev_dbg(dev, "%s - data bits = 9\n", __func__);
-			break;*/
-		default:
-			dev_dbg(dev, "cp210x driver does not support the number of bits requested, using 8 bit mode\n");
-			bits |= BITS_DATA_8;
 			break;
 		}
 		if (cp210x_write_u16_reg(port, CP210X_SET_LINE_CTL, bits))
@@ -1168,10 +1328,191 @@ static void cp210x_break_ctl(struct tty_struct *tty, int break_state)
 	cp210x_write_u16_reg(port, CP210X_SET_BREAK, state);
 }
 
+#ifdef CONFIG_GPIOLIB
+static int cp210x_gpio_request(struct gpio_chip *gc, unsigned int offset)
+{
+	struct usb_serial *serial = gpiochip_get_data(gc);
+	struct cp210x_serial_private *priv = usb_get_serial_data(serial);
+
+	switch (offset) {
+	case 0:
+		if (priv->config & CP2105_GPIO0_TXLED_MODE)
+			return -ENODEV;
+		break;
+	case 1:
+		if (priv->config & (CP2105_GPIO1_RXLED_MODE |
+				    CP2105_GPIO1_RS485_MODE))
+			return -ENODEV;
+		break;
+	}
+
+	return 0;
+}
+
+static int cp210x_gpio_get(struct gpio_chip *gc, unsigned int gpio)
+{
+	struct usb_serial *serial = gpiochip_get_data(gc);
+	int result;
+	u8 buf;
+
+	result = cp210x_read_vendor_block(serial, REQTYPE_INTERFACE_TO_HOST,
+					  CP210X_READ_LATCH, &buf, sizeof(buf));
+	if (result < 0)
+		return result;
+
+	return !!(buf & BIT(gpio));
+}
+
+static void cp210x_gpio_set(struct gpio_chip *gc, unsigned int gpio, int value)
+{
+	struct usb_serial *serial = gpiochip_get_data(gc);
+	struct cp210x_gpio_write buf;
+
+	if (value == 1)
+		buf.state = BIT(gpio);
+	else
+		buf.state = 0;
+
+	buf.mask = BIT(gpio);
+
+	cp210x_write_vendor_block(serial, REQTYPE_HOST_TO_INTERFACE,
+				  CP210X_WRITE_LATCH, &buf, sizeof(buf));
+}
+
+static int cp210x_gpio_direction_get(struct gpio_chip *gc, unsigned int gpio)
+{
+	/* Hardware does not support an input mode */
+	return 0;
+}
+
+static int cp210x_gpio_direction_input(struct gpio_chip *gc, unsigned int gpio)
+{
+	/* Hardware does not support an input mode */
+	return -ENOTSUPP;
+}
+
+static int cp210x_gpio_direction_output(struct gpio_chip *gc, unsigned int gpio,
+					int value)
+{
+	return 0;
+}
+
+static int cp210x_gpio_set_config(struct gpio_chip *gc, unsigned int gpio,
+				  unsigned long config)
+{
+	struct usb_serial *serial = gpiochip_get_data(gc);
+	struct cp210x_serial_private *priv = usb_get_serial_data(serial);
+	enum pin_config_param param = pinconf_to_config_param(config);
+
+	/* Succeed only if in correct mode (this can't be set at runtime) */
+	if ((param == PIN_CONFIG_DRIVE_PUSH_PULL) &&
+	    (priv->gpio_mode & BIT(gpio)))
+		return 0;
+
+	if ((param == PIN_CONFIG_DRIVE_OPEN_DRAIN) &&
+	    !(priv->gpio_mode & BIT(gpio)))
+		return 0;
+
+	return -ENOTSUPP;
+}
+
+/*
+ * This function is for configuring GPIO using shared pins, where other signals
+ * are made unavailable by configuring the use of GPIO. This is believed to be
+ * only applicable to the cp2105 at this point, the other devices supported by
+ * this driver that provide GPIO do so in a way that does not impact other
+ * signals and are thus expected to have very different initialisation.
+ */
+static int cp2105_shared_gpio_init(struct usb_serial *serial)
+{
+	struct cp210x_serial_private *priv = usb_get_serial_data(serial);
+	struct cp210x_pin_mode mode;
+	struct cp210x_config config;
+	u8 intf_num = cp210x_interface_num(serial);
+	int result;
+
+	result = cp210x_read_vendor_block(serial, REQTYPE_DEVICE_TO_HOST,
+					  CP210X_GET_DEVICEMODE, &mode,
+					  sizeof(mode));
+	if (result < 0)
+		return result;
+
+	result = cp210x_read_vendor_block(serial, REQTYPE_DEVICE_TO_HOST,
+					  CP210X_GET_PORTCONFIG, &config,
+					  sizeof(config));
+	if (result < 0)
+		return result;
+
+	/*  2 banks of GPIO - One for the pins taken from each serial port */
+	if (intf_num == 0) {
+		if (mode.eci == CP210X_PIN_MODE_MODEM)
+			return 0;
+
+		priv->config = config.eci_cfg;
+		priv->gpio_mode = (u8)((le16_to_cpu(config.gpio_mode) &
+						CP210X_ECI_GPIO_MODE_MASK) >>
+						CP210X_ECI_GPIO_MODE_OFFSET);
+		priv->gc.ngpio = 2;
+	} else if (intf_num == 1) {
+		if (mode.sci == CP210X_PIN_MODE_MODEM)
+			return 0;
+
+		priv->config = config.sci_cfg;
+		priv->gpio_mode = (u8)((le16_to_cpu(config.gpio_mode) &
+						CP210X_SCI_GPIO_MODE_MASK) >>
+						CP210X_SCI_GPIO_MODE_OFFSET);
+		priv->gc.ngpio = 3;
+	} else {
+		return -ENODEV;
+	}
+
+	priv->gc.label = "cp210x";
+	priv->gc.request = cp210x_gpio_request;
+	priv->gc.get_direction = cp210x_gpio_direction_get;
+	priv->gc.direction_input = cp210x_gpio_direction_input;
+	priv->gc.direction_output = cp210x_gpio_direction_output;
+	priv->gc.get = cp210x_gpio_get;
+	priv->gc.set = cp210x_gpio_set;
+	priv->gc.set_config = cp210x_gpio_set_config;
+	priv->gc.owner = THIS_MODULE;
+	priv->gc.parent = &serial->interface->dev;
+	priv->gc.base = -1;
+	priv->gc.can_sleep = true;
+
+	result = gpiochip_add_data(&priv->gc, serial);
+	if (!result)
+		priv->gpio_registered = true;
+
+	return result;
+}
+
+static void cp210x_gpio_remove(struct usb_serial *serial)
+{
+	struct cp210x_serial_private *priv = usb_get_serial_data(serial);
+
+	if (priv->gpio_registered) {
+		gpiochip_remove(&priv->gc);
+		priv->gpio_registered = false;
+	}
+}
+
+#else
+
+static int cp2105_shared_gpio_init(struct usb_serial *serial)
+{
+	return 0;
+}
+
+static void cp210x_gpio_remove(struct usb_serial *serial)
+{
+	/* Nothing to do */
+}
+
+#endif
+
 static int cp210x_port_probe(struct usb_serial_port *port)
 {
 	struct usb_serial *serial = port->serial;
-	struct usb_host_interface *cur_altsetting;
 	struct cp210x_port_private *port_priv;
 	int ret;
 
@@ -1179,8 +1520,7 @@ static int cp210x_port_probe(struct usb_serial_port *port)
 	if (!port_priv)
 		return -ENOMEM;
 
-	cur_altsetting = serial->interface->cur_altsetting;
-	port_priv->bInterfaceNumber = cur_altsetting->desc.bInterfaceNumber;
+	port_priv->bInterfaceNumber = cp210x_interface_num(serial);
 
 	usb_set_serial_port_data(port, port_priv);
 
@@ -1201,6 +1541,51 @@ static int cp210x_port_remove(struct usb_serial_port *port)
 	kfree(port_priv);
 
 	return 0;
+}
+
+static int cp210x_attach(struct usb_serial *serial)
+{
+	int result;
+	struct cp210x_serial_private *priv;
+
+	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
+	if (!priv)
+		return -ENOMEM;
+
+	result = cp210x_read_vendor_block(serial, REQTYPE_DEVICE_TO_HOST,
+					  CP210X_GET_PARTNUM, &priv->partnum,
+					  sizeof(priv->partnum));
+	if (result < 0) {
+		dev_warn(&serial->interface->dev,
+			 "querying part number failed\n");
+		priv->partnum = CP210X_PARTNUM_UNKNOWN;
+	}
+
+	usb_set_serial_data(serial, priv);
+
+	if (priv->partnum == CP210X_PARTNUM_CP2105) {
+		result = cp2105_shared_gpio_init(serial);
+		if (result < 0) {
+			dev_err(&serial->interface->dev,
+				"GPIO initialisation failed, continuing without GPIO support\n");
+		}
+	}
+
+	return 0;
+}
+
+static void cp210x_disconnect(struct usb_serial *serial)
+{
+	cp210x_gpio_remove(serial);
+}
+
+static void cp210x_release(struct usb_serial *serial)
+{
+	struct cp210x_serial_private *priv = usb_get_serial_data(serial);
+
+	cp210x_gpio_remove(serial);
+
+	kfree(priv);
 }
 
 module_usb_serial_driver(serial_drivers, id_table);

@@ -22,7 +22,8 @@
 #include <media/v4l2-ioctl.h>
 #include <media/v4l2-event.h>
 #include <media/videobuf2-v4l2.h>
-#include <linux/clk/msm-clk.h>
+#include <linux/clk.h>
+#include <linux/clk/qcom.h>
 
 #include "msm_fd_dev.h"
 #include "msm_fd_hw.h"
@@ -306,7 +307,7 @@ static void *msm_fd_get_userptr(struct device *alloc_ctx,
 
 	return buf;
 error:
-	kzfree(buf);
+	kfree(buf);
 	return ERR_PTR(-ENOMEM);
 }
 
@@ -1034,22 +1035,24 @@ static int msm_fd_s_ctrl(struct file *file, void *fh, struct v4l2_control *a)
 	case V4L2_CID_FD_FACE_ANGLE:
 		idx = msm_fd_get_idx_from_value(a->value, msm_fd_angle,
 			ARRAY_SIZE(msm_fd_angle));
-
-		ctx->settings.angle_index = idx;
+		if (idx < ARRAY_SIZE(msm_fd_angle))
+			ctx->settings.angle_index = idx;
 		a->value = msm_fd_angle[ctx->settings.angle_index];
 		break;
 	case V4L2_CID_FD_FACE_DIRECTION:
 		idx = msm_fd_get_idx_from_value(a->value, msm_fd_dir,
 			ARRAY_SIZE(msm_fd_dir));
 
-		ctx->settings.direction_index = idx;
+		if (idx < ARRAY_SIZE(msm_fd_dir))
+			ctx->settings.direction_index = idx;
 		a->value = msm_fd_dir[ctx->settings.direction_index];
 		break;
 	case V4L2_CID_FD_MIN_FACE_SIZE:
 		idx = msm_fd_get_idx_from_value(a->value, msm_fd_min_size,
 			ARRAY_SIZE(msm_fd_min_size));
 
-		ctx->settings.min_size_index = idx;
+		if (idx < ARRAY_SIZE(msm_fd_min_size))
+			ctx->settings.min_size_index = idx;
 		a->value = msm_fd_min_size[ctx->settings.min_size_index];
 		break;
 	case V4L2_CID_FD_DETECTION_THRESHOLD:

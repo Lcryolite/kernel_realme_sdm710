@@ -1,4 +1,4 @@
-/* Copyright (c) 2018, 2020 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -25,7 +25,7 @@
 #include <linux/io.h>
 #include "msm_vidc_internal.h"
 #include "msm_vidc_debug.h"
-
+#include "vidc_hfi_helper.h"
 
 #define CODEC_ENTRY(n, p, vsp, vpp, lp) \
 {	\
@@ -34,6 +34,20 @@
 	.vsp_cycles = vsp,	\
 	.vpp_cycles = vpp,	\
 	.low_power_cycles = lp	\
+}
+
+#define UBWC_CONFIG(sz, type, mco, mlo, hbbo, rs1, mc, ml, hbb, rs2) \
+{	\
+	.nSize = sz, \
+	.ePacketType = type, \
+	.v1.sOverrideBitInfo.bMaxChannelsOverride = mco,	\
+	.v1.sOverrideBitInfo.bMalLengthOverride = mlo,	\
+	.v1.sOverrideBitInfo.bHBBOverride = hbbo,	\
+	.v1.sOverrideBitInfo.reserved1 = rs1,	\
+	.v1.nMaxChannels = mc,	\
+	.v1.nMalLength = ml,	\
+	.v1.nHighestBankBit = hbb,	\
+	.v1.reserved2 = {rs2}	\
 }
 
 #define EFUSE_ENTRY(sa, s, m, sh, p) \
@@ -48,6 +62,70 @@
 static struct msm_vidc_codec_data default_codec_data[] =  {
 	CODEC_ENTRY(V4L2_PIX_FMT_H264, MSM_VIDC_ENCODER, 125, 675, 320),
 	CODEC_ENTRY(V4L2_PIX_FMT_H264, MSM_VIDC_DECODER, 125, 675, 320),
+};
+
+/* Update with atoll data */
+static struct msm_vidc_codec_data atoll_codec_data[] =  {
+	CODEC_ENTRY(V4L2_PIX_FMT_H264, MSM_VIDC_ENCODER, 125, 675, 320),
+	CODEC_ENTRY(V4L2_PIX_FMT_HEVC, MSM_VIDC_ENCODER, 125, 675, 320),
+	CODEC_ENTRY(V4L2_PIX_FMT_VP8, MSM_VIDC_ENCODER, 125, 675, 320),
+	CODEC_ENTRY(V4L2_PIX_FMT_TME, MSM_VIDC_ENCODER, 0, 540, 540),
+	CODEC_ENTRY(V4L2_PIX_FMT_MPEG2, MSM_VIDC_DECODER, 50, 200, 200),
+	CODEC_ENTRY(V4L2_PIX_FMT_H264, MSM_VIDC_DECODER, 50, 200, 200),
+	CODEC_ENTRY(V4L2_PIX_FMT_HEVC, MSM_VIDC_DECODER, 50, 200, 200),
+	CODEC_ENTRY(V4L2_PIX_FMT_VP8, MSM_VIDC_DECODER, 50, 200, 200),
+	CODEC_ENTRY(V4L2_PIX_FMT_VP9, MSM_VIDC_DECODER, 50, 200, 200),
+};
+
+/* Update with SM6150 data */
+static struct msm_vidc_codec_data sm6150_codec_data[] =  {
+	CODEC_ENTRY(V4L2_PIX_FMT_H264, MSM_VIDC_ENCODER, 125, 675, 320),
+	CODEC_ENTRY(V4L2_PIX_FMT_HEVC, MSM_VIDC_ENCODER, 125, 675, 320),
+	CODEC_ENTRY(V4L2_PIX_FMT_VP8, MSM_VIDC_ENCODER, 125, 675, 320),
+	CODEC_ENTRY(V4L2_PIX_FMT_TME, MSM_VIDC_ENCODER, 0, 540, 540),
+	CODEC_ENTRY(V4L2_PIX_FMT_MPEG2, MSM_VIDC_DECODER, 50, 200, 200),
+	CODEC_ENTRY(V4L2_PIX_FMT_H264, MSM_VIDC_DECODER, 50, 200, 200),
+	CODEC_ENTRY(V4L2_PIX_FMT_HEVC, MSM_VIDC_DECODER, 50, 200, 200),
+	CODEC_ENTRY(V4L2_PIX_FMT_VP8, MSM_VIDC_DECODER, 50, 200, 200),
+	CODEC_ENTRY(V4L2_PIX_FMT_VP9, MSM_VIDC_DECODER, 50, 200, 200),
+};
+
+/* Update with trinket data */
+static struct msm_vidc_codec_data trinket_codec_data[] =  {
+	CODEC_ENTRY(V4L2_PIX_FMT_H264, MSM_VIDC_ENCODER, 125, 675, 320),
+	CODEC_ENTRY(V4L2_PIX_FMT_HEVC, MSM_VIDC_ENCODER, 125, 675, 320),
+	CODEC_ENTRY(V4L2_PIX_FMT_VP8, MSM_VIDC_ENCODER, 125, 675, 320),
+	CODEC_ENTRY(V4L2_PIX_FMT_TME, MSM_VIDC_ENCODER, 0, 540, 540),
+	CODEC_ENTRY(V4L2_PIX_FMT_MPEG2, MSM_VIDC_DECODER, 50, 200, 200),
+	CODEC_ENTRY(V4L2_PIX_FMT_H264, MSM_VIDC_DECODER, 50, 200, 200),
+	CODEC_ENTRY(V4L2_PIX_FMT_HEVC, MSM_VIDC_DECODER, 50, 200, 200),
+	CODEC_ENTRY(V4L2_PIX_FMT_VP8, MSM_VIDC_DECODER, 50, 200, 200),
+	CODEC_ENTRY(V4L2_PIX_FMT_VP9, MSM_VIDC_DECODER, 50, 200, 200),
+};
+
+/* Update with 855 data */
+static struct msm_vidc_codec_data sm8150_codec_data[] =  {
+	CODEC_ENTRY(V4L2_PIX_FMT_H264, MSM_VIDC_ENCODER, 10, 675, 320),
+	CODEC_ENTRY(V4L2_PIX_FMT_HEVC, MSM_VIDC_ENCODER, 10, 675, 320),
+	CODEC_ENTRY(V4L2_PIX_FMT_VP8, MSM_VIDC_ENCODER, 10, 675, 320),
+	CODEC_ENTRY(V4L2_PIX_FMT_TME, MSM_VIDC_ENCODER, 0, 540, 540),
+	CODEC_ENTRY(V4L2_PIX_FMT_MPEG2, MSM_VIDC_DECODER, 10, 200, 200),
+	CODEC_ENTRY(V4L2_PIX_FMT_H264, MSM_VIDC_DECODER, 10, 200, 200),
+	CODEC_ENTRY(V4L2_PIX_FMT_HEVC, MSM_VIDC_DECODER, 10, 200, 200),
+	CODEC_ENTRY(V4L2_PIX_FMT_VP8, MSM_VIDC_DECODER, 10, 200, 200),
+	CODEC_ENTRY(V4L2_PIX_FMT_VP9, MSM_VIDC_DECODER, 10, 200, 200),
+};
+
+static struct msm_vidc_codec_data sdmmagpie_codec_data[] =  {
+	CODEC_ENTRY(V4L2_PIX_FMT_H264, MSM_VIDC_ENCODER, 10, 675, 320),
+	CODEC_ENTRY(V4L2_PIX_FMT_HEVC, MSM_VIDC_ENCODER, 10, 675, 320),
+	CODEC_ENTRY(V4L2_PIX_FMT_VP8, MSM_VIDC_ENCODER, 10, 675, 320),
+	CODEC_ENTRY(V4L2_PIX_FMT_TME, MSM_VIDC_ENCODER, 0, 540, 540),
+	CODEC_ENTRY(V4L2_PIX_FMT_MPEG2, MSM_VIDC_DECODER, 10, 200, 200),
+	CODEC_ENTRY(V4L2_PIX_FMT_H264, MSM_VIDC_DECODER, 10, 200, 200),
+	CODEC_ENTRY(V4L2_PIX_FMT_HEVC, MSM_VIDC_DECODER, 10, 200, 200),
+	CODEC_ENTRY(V4L2_PIX_FMT_VP8, MSM_VIDC_DECODER, 10, 200, 200),
+	CODEC_ENTRY(V4L2_PIX_FMT_VP9, MSM_VIDC_DECODER, 10, 200, 200),
 };
 
 static struct msm_vidc_codec_data sdm845_codec_data[] =  {
@@ -101,7 +179,7 @@ static struct msm_vidc_common_data default_common_data[] = {
 	},
 };
 
-static struct msm_vidc_common_data sdm845_common_data[] = {
+static struct msm_vidc_common_data atoll_common_data[] = {
 	{
 		.key = "qcom,never-unload-fw",
 		.value = 1,
@@ -115,24 +193,261 @@ static struct msm_vidc_common_data sdm845_common_data[] = {
 		.value = 1,
 	},
 	{
-		.key = "qcom,domain-attr-cache-pagetables",
-		.value = 1,
-	},
-	{
 		.key = "qcom,max-secure-instances",
-		.value = 2,
+		.value = 3,
 	},
 	{
 		.key = "qcom,max-hw-load",
-		.value = 3110400,	/* 4096x2160@90 */
+		.value = 1944000,
 	},
 	{
 		.key = "qcom,max-hq-mbs-per-frame",
 		.value = 8160,
 	},
 	{
-		.key = "qcom,max-hq-frames-per-sec",
+		.key = "qcom,max-hq-mbs-per-sec",
+		.value = 244800,  /* 1920 x 1088 @ 30 fps */
+	},
+	{
+		.key = "qcom,max-b-frame-size",
+		.value = 8160,
+	},
+	{
+		.key = "qcom,max-b-frames-per-sec",
 		.value = 60,
+	},
+	{
+		.key = "qcom,power-collapse-delay",
+		.value = 1500,
+	},
+	{
+		.key = "qcom,hw-resp-timeout",
+		.value = 1000,
+	},
+	{
+		.key = "qcom,dcvs",
+		.value = 1,
+	},
+	{
+		.key = "qcom,fw-cycles",
+		.value = 733003,
+	},
+	{
+		.key = "qcom,fw-vpp-cycles",
+		.value = 225975,
+	},
+};
+
+static struct msm_vidc_common_data atoll_common_data_v1[] = {
+	{
+		.key = "qcom,never-unload-fw",
+		.value = 1,
+	},
+	{
+		.key = "qcom,sw-power-collapse",
+		.value = 1,
+	},
+	{
+		.key = "qcom,domain-attr-non-fatal-faults",
+		.value = 1,
+	},
+	{
+		.key = "qcom,max-secure-instances",
+		.value = 3,
+	},
+	{
+		.key = "qcom,max-hw-load",
+		.value = 1216800, /* UHD@30 +1080@30 */
+	},
+	{
+		.key = "qcom,max-hq-mbs-per-frame",
+		.value = 8160,
+	},
+	{
+		.key = "qcom,max-hq-mbs-per-sec",
+		.value = 244800,  /* 1920 x 1088 @ 30 fps */
+	},
+	{
+		.key = "qcom,max-b-frame-size",
+		.value = 8160,
+	},
+	{
+		.key = "qcom,max-b-frames-per-sec",
+		.value = 60,
+	},
+	{
+		.key = "qcom,power-collapse-delay",
+		.value = 1500,
+	},
+	{
+		.key = "qcom,hw-resp-timeout",
+		.value = 1000,
+	},
+	{
+		.key = "qcom,dcvs",
+		.value = 1,
+	},
+	{
+		.key = "qcom,fw-cycles",
+		.value = 733003,
+	},
+	{
+		.key = "qcom,fw-vpp-cycles",
+		.value = 225975,
+	},
+};
+
+static struct msm_vidc_common_data sm6150_common_data[] = {
+	{
+		.key = "qcom,never-unload-fw",
+		.value = 1,
+	},
+	{
+		.key = "qcom,sw-power-collapse",
+		.value = 1,
+	},
+	{
+		.key = "qcom,domain-attr-non-fatal-faults",
+		.value = 1,
+	},
+	{
+		.key = "qcom,max-secure-instances",
+		.value = 3,
+	},
+	{
+		.key = "qcom,max-hw-load",
+		.value = 1944000,
+	},
+	{
+		.key = "qcom,max-hq-mbs-per-frame",
+		.value = 8160,
+	},
+	{
+		.key = "qcom,max-hq-mbs-per-sec",
+		.value = 244800,  /* 1920 x 1088 @ 30 fps */
+	},
+	{
+		.key = "qcom,max-b-frame-size",
+		.value = 8160,
+	},
+	{
+		.key = "qcom,max-b-frames-per-sec",
+		.value = 60,
+	},
+	{
+		.key = "qcom,power-collapse-delay",
+		.value = 1500,
+	},
+	{
+		.key = "qcom,hw-resp-timeout",
+		.value = 1000,
+	},
+	{
+		.key = "qcom,dcvs",
+		.value = 1,
+	},
+	{
+		.key = "qcom,fw-cycles",
+		.value = 733003,
+	},
+	{
+		.key = "qcom,fw-vpp-cycles",
+		.value = 225975,
+	},
+};
+
+static struct msm_vidc_common_data trinket_common_data[] = {
+	{
+		.key = "qcom,never-unload-fw",
+		.value = 1,
+	},
+	{
+		.key = "qcom,sw-power-collapse",
+		.value = 1,
+	},
+	{
+		.key = "qcom,domain-attr-non-fatal-faults",
+		.value = 1,
+	},
+	{
+		.key = "qcom,max-secure-instances",
+		.value = 6,
+	},
+	{
+		.key = "qcom,max-hw-load",
+		.value = 1944000,
+	},
+	{
+		.key = "qcom,max-hq-mbs-per-frame",
+		.value = 8160,
+	},
+	{
+		.key = "qcom,max-hq-mbs-per-sec",
+		.value = 244800,  /* 1920 x 1088 @ 30 fps */
+	},
+	{
+		.key = "qcom,max-b-frame-size",
+		.value = 8160,
+	},
+	{
+		.key = "qcom,max-b-frames-per-sec",
+		.value = 60,
+	},
+	{
+		.key = "qcom,power-collapse-delay",
+		.value = 1500,
+	},
+	{
+		.key = "qcom,hw-resp-timeout",
+		.value = 1000,
+	},
+	{
+		.key = "qcom,dcvs",
+		.value = 1,
+	},
+	{
+		.key = "qcom,fw-cycles",
+		.value = 733003,
+	},
+	{
+		.key = "qcom,fw-vpp-cycles",
+		.value = 225975,
+	},
+};
+
+static struct msm_vidc_common_data sm8150_common_data[] = {
+	{
+		.key = "qcom,never-unload-fw",
+		.value = 1,
+	},
+	{
+		.key = "qcom,sw-power-collapse",
+		.value = 1,
+	},
+	{
+		.key = "qcom,domain-attr-non-fatal-faults",
+		.value = 1,
+	},
+	{
+		.key = "qcom,max-secure-instances",
+		.value = 3,
+	},
+	{
+		.key = "qcom,max-hw-load",
+		.value = 3916800,       /*
+					 * 1920x1088/256 MBs@480fps. It is less
+					 * any other usecases (ex:
+					 * 3840x2160@120fps, 4096x2160@96ps,
+					 * 7680x4320@30fps)
+					 */
+	},
+	{
+		.key = "qcom,max-hq-mbs-per-frame",
+		.value = 8160,
+	},
+	{
+		.key = "qcom,max-hq-mbs-per-sec",
+		.value = 244800,  /* 1920 x 1088 @ 30 fps */
 	},
 	{
 		.key = "qcom,max-b-frame-size",
@@ -155,7 +470,224 @@ static struct msm_vidc_common_data sdm845_common_data[] = {
 		.value = 0,
 	},
 	{
-		.key = "qcom,enable-idle-indicator",
+		.key = "qcom,domain-cvp",
+		.value = 1,
+	},
+	{
+		.key = "qcom,decode-batching",
+		.value = 0,
+	},
+	{
+		.key = "qcom,dcvs",
+		.value = 1,
+	},
+	{
+		.key = "qcom,fw-cycles",
+		.value = 760000,
+	},
+	{
+		.key = "qcom,fw-vpp-cycles",
+		.value = 166667,
+	},
+};
+
+static struct msm_vidc_common_data sdmmagpie_common_data_v0[] = {
+	{
+		.key = "qcom,never-unload-fw",
+		.value = 1,
+	},
+	{
+		.key = "qcom,sw-power-collapse",
+		.value = 1,
+	},
+	{
+		.key = "qcom,domain-attr-non-fatal-faults",
+		.value = 1,
+	},
+	{
+		.key = "qcom,max-secure-instances",
+		.value = 3,
+	},
+	{
+		.key = "qcom,max-hw-load",
+		.value = 3110400,	/* 4096x2160@90 */
+	},
+	{
+		.key = "qcom,max-hq-mbs-per-frame",
+		.value = 8160,
+	},
+	{
+		.key = "qcom,max-hq-mbs-per-sec",
+		.value = 244800,  /* 1920 x 1088 @ 30 fps */
+	},
+	{
+		.key = "qcom,max-b-frame-size",
+		.value = 8160,
+	},
+	{
+		.key = "qcom,max-b-frames-per-sec",
+		.value = 60,
+	},
+	{
+		.key = "qcom,power-collapse-delay",
+		.value = 1500,
+	},
+	{
+		.key = "qcom,hw-resp-timeout",
+		.value = 1000,
+	},
+	{
+		.key = "qcom,debug-timeout",
+		.value = 0,
+	},
+	{
+		.key = "qcom,domain-cvp",
+		.value = 1,
+	},
+	{
+		.key = "qcom,decode-batching",
+		.value = 0,
+	},
+	{
+		.key = "qcom,dcvs",
+		.value = 1,
+	},
+	{
+		.key = "qcom,fw-cycles",
+		.value = 760000,
+	},
+	{
+		.key = "qcom,fw-vpp-cycles",
+		.value = 166667,
+	},
+};
+
+static struct msm_vidc_common_data sdmmagpie_common_data_v1[] = {
+	{
+		.key = "qcom,never-unload-fw",
+		.value = 1,
+	},
+	{
+		.key = "qcom,sw-power-collapse",
+		.value = 1,
+	},
+	{
+		.key = "qcom,domain-attr-non-fatal-faults",
+		.value = 1,
+	},
+	{
+		.key = "qcom,max-secure-instances",
+		.value = 3,
+	},
+	{
+		.key = "qcom,max-hw-load",
+		.value = 1281600,	/* 4k@30 Decode + 1080p@30 Encode */
+	},
+	{
+		.key = "qcom,max-hq-mbs-per-frame",
+		.value = 8160,
+	},
+	{
+		.key = "qcom,max-hq-mbs-per-sec",
+		.value = 244800,  /* 1920 x 1088 @ 30 fps */
+	},
+	{
+		.key = "qcom,max-b-frame-size",
+		.value = 8160,
+	},
+	{
+		.key = "qcom,max-b-frames-per-sec",
+		.value = 60,
+	},
+	{
+		.key = "qcom,power-collapse-delay",
+		.value = 1500,
+	},
+	{
+		.key = "qcom,hw-resp-timeout",
+		.value = 1000,
+	},
+	{
+		.key = "qcom,debug-timeout",
+		.value = 0,
+	},
+	{
+		.key = "qcom,domain-cvp",
+		.value = 1,
+	},
+	{
+		.key = "qcom,decode-batching",
+		.value = 0,
+	},
+	{
+		.key = "qcom,dcvs",
+		.value = 1,
+	},
+	{
+		.key = "qcom,fw-cycles",
+		.value = 760000,
+	},
+	{
+		.key = "qcom,fw-vpp-cycles",
+		.value = 166667,
+	},
+};
+
+static struct msm_vidc_common_data sdm845_common_data[] = {
+	{
+		.key = "qcom,never-unload-fw",
+		.value = 1,
+	},
+	{
+		.key = "qcom,sw-power-collapse",
+		.value = 1,
+	},
+	{
+		.key = "qcom,domain-attr-non-fatal-faults",
+		.value = 1,
+	},
+	{
+		.key = "qcom,domain-attr-cache-pagetables",
+		.value = 1,
+	},
+	{
+		.key = "qcom,max-secure-instances",
+		.value = 3,
+	},
+	{
+		.key = "qcom,max-hw-load",
+		.value = 3110400,	/* 4096x2160@90 */
+	},
+	{
+		.key = "qcom,max-hq-mbs-per-frame",
+		.value = 8160,
+	},
+	{
+		.key = "qcom,max-hq-mbs-per-sec",
+		.value = 244800,  /* 1920 x 1088 @ 30 fps */
+	},
+	{
+		.key = "qcom,max-b-frame-size",
+		.value = 8160,
+	},
+	{
+		.key = "qcom,max-b-frames-per-sec",
+		.value = 60,
+	},
+	{
+		.key = "qcom,power-collapse-delay",
+		.value = 500,
+	},
+	{
+		.key = "qcom,hw-resp-timeout",
+		.value = 250,
+	},
+	{
+		.key = "qcom,debug-timeout",
+		.value = 0,
+	},
+	{
+		.key = "qcom,dcvs",
 		.value = 1,
 	},
 };
@@ -174,24 +706,20 @@ static struct msm_vidc_common_data sdm670_common_data_v0[] = {
 		.value = 1,
 	},
 	{
-		.key = "qcom,domain-attr-cache-pagetables",
-		.value = 1,
-	},
-	{
 		.key = "qcom,max-secure-instances",
-		.value = 5,
+		.value = 6,
 	},
 	{
 		.key = "qcom,max-hw-load",
-		.value = 2241480,
+		.value = 1944000,
 	},
 	{
 		.key = "qcom,max-hq-mbs-per-frame",
 		.value = 8160,
 	},
 	{
-		.key = "qcom,max-hq-frames-per-sec",
-		.value = 60,
+		.key = "qcom,max-hq-mbs-per-sec",
+		.value = 244800,  /* 1920 x 1088 @ 30 fps */
 	},
 	{
 		.key = "qcom,max-b-frame-size",
@@ -203,14 +731,14 @@ static struct msm_vidc_common_data sdm670_common_data_v0[] = {
 	},
 	{
 		.key = "qcom,power-collapse-delay",
-		.value = 1500,
+		.value = 500,
 	},
 	{
 		.key = "qcom,hw-resp-timeout",
-		.value = 1000,
+		.value = 250,
 	},
 	{
-		.key = "qcom,enable-idle-indicator",
+		.key = "qcom,dcvs",
 		.value = 1,
 	},
 };
@@ -229,12 +757,8 @@ static struct msm_vidc_common_data sdm670_common_data_v1[] = {
 		.value = 1,
 	},
 	{
-		.key = "qcom,domain-attr-cache-pagetables",
-		.value = 1,
-	},
-	{
 		.key = "qcom,max-secure-instances",
-		.value = 5,
+		.value = 6,
 	},
 	{
 		.key = "qcom,max-hw-load",
@@ -245,8 +769,8 @@ static struct msm_vidc_common_data sdm670_common_data_v1[] = {
 		.value = 8160,
 	},
 	{
-		.key = "qcom,max-hq-frames-per-sec",
-		.value = 60,
+		.key = "qcom,max-hq-mbs-per-sec",
+		.value = 244800,  /* 1920 x 1088 @ 30 fps */
 	},
 	{
 		.key = "qcom,max-b-frame-size",
@@ -258,14 +782,14 @@ static struct msm_vidc_common_data sdm670_common_data_v1[] = {
 	},
 	{
 		.key = "qcom,power-collapse-delay",
-		.value = 1500,
+		.value = 500,
 	},
 	{
 		.key = "qcom,hw-resp-timeout",
-		.value = 1000,
+		.value = 250,
 	},
 	{
-		.key = "qcom,enable-idle-indicator",
+		.key = "qcom,dcvs",
 		.value = 1,
 	},
 };
@@ -274,17 +798,156 @@ static struct msm_vidc_efuse_data sdm670_efuse_data[] = {
 	EFUSE_ENTRY(0x007801A0, 4, 0x00008000, 0x0f, SKU_VERSION),
 };
 
+static struct msm_vidc_efuse_data sdmmagpie_efuse_data[] = {
+	EFUSE_ENTRY(0x00786018, 4, 0x00000400, 0x0a, SKU_VERSION),
+};
+
+static struct msm_vidc_efuse_data atoll_efuse_data[] = {
+	EFUSE_ENTRY(0x007801D4, 4, 0x08000000, 0x1b, SKU_VERSION),
+};
+
+static struct msm_vidc_ubwc_config trinket_ubwc_data[] = {
+	UBWC_CONFIG(sizeof(struct msm_vidc_ubwc_config_v1),
+		HFI_PROPERTY_SYS_UBWC_CONFIG, 0, 1, 0, 0, 0, 64, 0, 0),
+};
+
+static struct msm_vidc_ubwc_config sdmshrike_ubwc_data[] = {
+	UBWC_CONFIG(sizeof(struct msm_vidc_ubwc_config),
+		HFI_PROPERTY_SYS_UBWC_CONFIG, 1, 0, 1, 0, 8, 0, 16, 0),
+};
+
+static struct msm_vidc_image_capability default_heic_image_capability = {
+	{512, 8192}, {512, 8192}
+};
+
+static struct msm_vidc_image_capability default_hevc_image_capability = {
+	{512, 512}, {512, 512}
+};
+
 static struct msm_vidc_platform_data default_data = {
 	.codec_data = default_codec_data,
 	.codec_data_length =  ARRAY_SIZE(default_codec_data),
 	.common_data = default_common_data,
 	.common_data_length =  ARRAY_SIZE(default_common_data),
+	.ubwc_config = 0,
+	.ubwc_config_length = 0,
 	.csc_data.vpe_csc_custom_bias_coeff = vpe_csc_custom_bias_coeff,
 	.csc_data.vpe_csc_custom_matrix_coeff = vpe_csc_custom_matrix_coeff,
 	.csc_data.vpe_csc_custom_limit_coeff = vpe_csc_custom_limit_coeff,
 	.efuse_data = NULL,
 	.efuse_data_length = 0,
+	.heic_image_capability = &default_heic_image_capability,
+	.hevc_image_capability = &default_hevc_image_capability,
 	.sku_version = 0,
+	.vpu_ver = VPU_VERSION_5,
+};
+
+static struct msm_vidc_platform_data atoll_data = {
+	.codec_data = atoll_codec_data,
+	.codec_data_length =  ARRAY_SIZE(atoll_codec_data),
+	.common_data = atoll_common_data,
+	.common_data_length =  ARRAY_SIZE(atoll_common_data),
+	.ubwc_config = NULL,
+	.ubwc_config_length = 0,
+	.csc_data.vpe_csc_custom_bias_coeff = vpe_csc_custom_bias_coeff,
+	.csc_data.vpe_csc_custom_matrix_coeff = vpe_csc_custom_matrix_coeff,
+	.csc_data.vpe_csc_custom_limit_coeff = vpe_csc_custom_limit_coeff,
+	.efuse_data = atoll_efuse_data,
+	.efuse_data_length = ARRAY_SIZE(atoll_efuse_data),
+	.heic_image_capability = &default_heic_image_capability,
+	.hevc_image_capability = &default_hevc_image_capability,
+	.sku_version = 0,
+	.vpu_ver = VPU_VERSION_4,
+};
+
+static struct msm_vidc_platform_data sm6150_data = {
+	.codec_data = sm6150_codec_data,
+	.codec_data_length =  ARRAY_SIZE(sm6150_codec_data),
+	.common_data = sm6150_common_data,
+	.common_data_length =  ARRAY_SIZE(sm6150_common_data),
+	.ubwc_config = 0,
+	.ubwc_config_length = 0,
+	.csc_data.vpe_csc_custom_bias_coeff = vpe_csc_custom_bias_coeff,
+	.csc_data.vpe_csc_custom_matrix_coeff = vpe_csc_custom_matrix_coeff,
+	.csc_data.vpe_csc_custom_limit_coeff = vpe_csc_custom_limit_coeff,
+	.efuse_data = NULL,
+	.efuse_data_length = 0,
+	.heic_image_capability = NULL,
+	.hevc_image_capability = NULL,
+	.sku_version = 0,
+	.vpu_ver = VPU_VERSION_4,
+};
+
+static struct msm_vidc_platform_data trinket_data = {
+	.codec_data = trinket_codec_data,
+	.codec_data_length =  ARRAY_SIZE(trinket_codec_data),
+	.common_data = trinket_common_data,
+	.common_data_length =  ARRAY_SIZE(trinket_common_data),
+	.ubwc_config = trinket_ubwc_data,
+	.ubwc_config_length = ARRAY_SIZE(trinket_ubwc_data),
+	.csc_data.vpe_csc_custom_bias_coeff = vpe_csc_custom_bias_coeff,
+	.csc_data.vpe_csc_custom_matrix_coeff = vpe_csc_custom_matrix_coeff,
+	.csc_data.vpe_csc_custom_limit_coeff = vpe_csc_custom_limit_coeff,
+	.efuse_data = NULL,
+	.efuse_data_length = 0,
+	.heic_image_capability = &default_heic_image_capability,
+	.hevc_image_capability = &default_hevc_image_capability,
+	.sku_version = 0,
+	.vpu_ver = VPU_VERSION_4,
+};
+
+static struct msm_vidc_platform_data sm8150_data = {
+	.codec_data = sm8150_codec_data,
+	.codec_data_length =  ARRAY_SIZE(sm8150_codec_data),
+	.common_data = sm8150_common_data,
+	.common_data_length =  ARRAY_SIZE(sm8150_common_data),
+	.ubwc_config = 0,
+	.ubwc_config_length = 0,
+	.csc_data.vpe_csc_custom_bias_coeff = vpe_csc_custom_bias_coeff,
+	.csc_data.vpe_csc_custom_matrix_coeff = vpe_csc_custom_matrix_coeff,
+	.csc_data.vpe_csc_custom_limit_coeff = vpe_csc_custom_limit_coeff,
+	.efuse_data = NULL,
+	.efuse_data_length = 0,
+	.heic_image_capability = &default_heic_image_capability,
+	.hevc_image_capability = &default_hevc_image_capability,
+	.sku_version = 0,
+	.vpu_ver = VPU_VERSION_5,
+};
+
+static struct msm_vidc_platform_data sdmshrike_data = {
+	.codec_data = sm8150_codec_data,
+	.codec_data_length =  ARRAY_SIZE(sm8150_codec_data),
+	.common_data = sm8150_common_data,
+	.common_data_length =  ARRAY_SIZE(sm8150_common_data),
+	.ubwc_config = sdmshrike_ubwc_data,
+	.ubwc_config_length = ARRAY_SIZE(sdmshrike_ubwc_data),
+	.csc_data.vpe_csc_custom_bias_coeff = vpe_csc_custom_bias_coeff,
+	.csc_data.vpe_csc_custom_matrix_coeff = vpe_csc_custom_matrix_coeff,
+	.csc_data.vpe_csc_custom_limit_coeff = vpe_csc_custom_limit_coeff,
+	.efuse_data = NULL,
+	.efuse_data_length = 0,
+	.heic_image_capability = &default_heic_image_capability,
+	.hevc_image_capability = &default_hevc_image_capability,
+	.sku_version = 0,
+	.vpu_ver = VPU_VERSION_5,
+};
+
+static struct msm_vidc_platform_data sdmmagpie_data = {
+	.codec_data = sdmmagpie_codec_data,
+	.codec_data_length =  ARRAY_SIZE(sdmmagpie_codec_data),
+	.common_data = sdmmagpie_common_data_v0,
+	.common_data_length =  ARRAY_SIZE(sdmmagpie_common_data_v0),
+	.ubwc_config = 0,
+	.ubwc_config_length = 0,
+	.csc_data.vpe_csc_custom_bias_coeff = vpe_csc_custom_bias_coeff,
+	.csc_data.vpe_csc_custom_matrix_coeff = vpe_csc_custom_matrix_coeff,
+	.csc_data.vpe_csc_custom_limit_coeff = vpe_csc_custom_limit_coeff,
+	.efuse_data = sdmmagpie_efuse_data,
+	.efuse_data_length = ARRAY_SIZE(sdmmagpie_efuse_data),
+	.heic_image_capability = &default_heic_image_capability,
+	.hevc_image_capability = &default_hevc_image_capability,
+	.sku_version = 0,
+	.vpu_ver = VPU_VERSION_5,
 };
 
 static struct msm_vidc_platform_data sdm845_data = {
@@ -292,12 +955,17 @@ static struct msm_vidc_platform_data sdm845_data = {
 	.codec_data_length =  ARRAY_SIZE(sdm845_codec_data),
 	.common_data = sdm845_common_data,
 	.common_data_length =  ARRAY_SIZE(sdm845_common_data),
+	.ubwc_config = 0,
+	.ubwc_config_length = 0,
 	.csc_data.vpe_csc_custom_bias_coeff = vpe_csc_custom_bias_coeff,
 	.csc_data.vpe_csc_custom_matrix_coeff = vpe_csc_custom_matrix_coeff,
 	.csc_data.vpe_csc_custom_limit_coeff = vpe_csc_custom_limit_coeff,
 	.efuse_data = NULL,
 	.efuse_data_length = 0,
+	.heic_image_capability = NULL,
+	.hevc_image_capability = NULL,
 	.sku_version = 0,
+	.vpu_ver = VPU_VERSION_4,
 };
 
 static struct msm_vidc_platform_data sdm670_data = {
@@ -305,25 +973,50 @@ static struct msm_vidc_platform_data sdm670_data = {
 	.codec_data_length =  ARRAY_SIZE(sdm670_codec_data),
 	.common_data = sdm670_common_data_v0,
 	.common_data_length =  ARRAY_SIZE(sdm670_common_data_v0),
+	.ubwc_config = 0,
+	.ubwc_config_length = 0,
 	.csc_data.vpe_csc_custom_bias_coeff = vpe_csc_custom_bias_coeff,
 	.csc_data.vpe_csc_custom_matrix_coeff = vpe_csc_custom_matrix_coeff,
 	.csc_data.vpe_csc_custom_limit_coeff = vpe_csc_custom_limit_coeff,
 	.efuse_data = sdm670_efuse_data,
 	.efuse_data_length = ARRAY_SIZE(sdm670_efuse_data),
+	.heic_image_capability = NULL,
+	.hevc_image_capability = NULL,
 	.sku_version = 0,
+	.vpu_ver = VPU_VERSION_4,
 };
 
 static const struct of_device_id msm_vidc_dt_match[] = {
+	{
+		.compatible = "qcom,atoll-vidc",
+		.data = &atoll_data,
+	},
+	{
+		.compatible = "qcom,sm6150-vidc",
+		.data = &sm6150_data,
+	},
+	{
+		.compatible = "qcom,trinket-vidc",
+		.data = &trinket_data,
+	},
+	{
+		.compatible = "qcom,sm8150-vidc",
+		.data = &sm8150_data,
+	},
+	{
+		.compatible = "qcom,sdmshrike-vidc",
+		.data = &sdmshrike_data,
+	},
+	{
+		.compatible = "qcom,sdmmagpie-vidc",
+		.data = &sdmmagpie_data,
+	},
 	{
 		.compatible = "qcom,sdm845-vidc",
 		.data = &sdm845_data,
 	},
 	{
 		.compatible = "qcom,sdm670-vidc",
-		.data = &sdm670_data,
-	},
-	{
-		.compatible = "qcom,qcs605-vidc",
 		.data = &sdm670_data,
 	},
 	{},
@@ -403,20 +1096,31 @@ void *vidc_get_drv_data(struct device *dev)
 			driver_data->common_data_length =
 					ARRAY_SIZE(sdm670_common_data_v1);
 		}
-	} else if (!strcmp(match->compatible, "qcom,qcs605-vidc")) {
+	} else if (!strcmp(match->compatible, "qcom,sdmmagpie-vidc")) {
 		rc = msm_vidc_read_efuse(driver_data, dev);
-		if (rc) {
-			dprintk(VIDC_ERR,
-				"msm_vidc_read_efuse failed\n");
-				goto exit;
-		}
+		if (rc)
+			goto exit;
 
 		if (driver_data->sku_version == SKU_VERSION_1) {
-			driver_data->common_data = sdm670_common_data_v1;
+			driver_data->common_data = sdmmagpie_common_data_v1;
 			driver_data->common_data_length =
-			ARRAY_SIZE(sdm670_common_data_v1);
+					ARRAY_SIZE(sdmmagpie_common_data_v1);
 		}
-		driver_data->enable_max_resolution = true;
+	} else if (!strcmp(match->compatible, "qcom,atoll-vidc")) {
+		rc = msm_vidc_read_efuse(driver_data, dev);
+		if (rc)
+			goto exit;
+
+		if (driver_data->sku_version == SKU_VERSION_1) {
+			/* atoll SKU does not differentiate for any param in
+			 * devicetree.Keeping the same index for different SKU
+			 * so as to parse same DT node.
+			 */
+			driver_data->sku_version = 0;
+			driver_data->common_data = atoll_common_data_v1;
+			driver_data->common_data_length =
+					ARRAY_SIZE(atoll_common_data_v1);
+		}
 	}
 
 exit:

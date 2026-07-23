@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, 2017 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015, 2018 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -33,6 +33,7 @@
 #define SWRM_COMP_PARAMS_AUTO_ENUM_SLAVES	0x00F00000
 #define SWRM_COMP_PARAMS_DATA_LANES		0x07000000
 
+#define SWRM_COMP_MASTER_ID			(SWRM_BASE_ADDRESS+0x104)
 
 #define SWRM_INTERRUPT_STATUS		(SWRM_BASE_ADDRESS+0x00000200)
 #define SWRM_INTERRUPT_STATUS_RMSK		0x1FFFD
@@ -113,6 +114,8 @@
 
 #define SWRM_INTERRUPT_CLEAR		(SWRM_BASE_ADDRESS+0x00000208)
 
+#define SWR_MSTR_RX_SWRM_CPU_INTERRUPT_EN	(SWRM_BASE_ADDRESS+0x00000210)
+
 #define SWRM_CMD_FIFO_WR_CMD		(SWRM_BASE_ADDRESS + 0x00000300)
 #define SWRM_CMD_FIFO_WR_CMD_MASK	0xFFFFFFFF
 #define SWRM_CMD_FIFO_RD_CMD		(SWRM_BASE_ADDRESS + 0x00000304)
@@ -178,13 +181,52 @@
 #define SWRM_DP_PORT_CTRL_OFFSET1_SHFT		0x08
 #define SWRM_DP_PORT_CTRL_SAMPLE_INTERVAL	0x00
 
+#define SWRM_DP_PORT_CTRL_2_BANK(n, m)	(SWRM_BASE_ADDRESS + \
+							0x00001128 + \
+							0x100*(n-1) + \
+							0x40*m)
+
+#define SWRM_DP_BLOCK_CTRL_1(n)		(SWRM_BASE_ADDRESS + \
+							0x0000112C + \
+							0x100*(n-1))
+
+#define SWRM_DP_BLOCK_CTRL2_BANK(n, m)	(SWRM_BASE_ADDRESS + \
+							0x00001130 + \
+							0x100*(n-1) + \
+							0x40*m)
+
+#define SWRM_DP_PORT_HCTRL_BANK(n, m)	(SWRM_BASE_ADDRESS + \
+							0x00001134 + \
+							0x100*(n-1) + \
+							0x40*m)
+
+#define SWRM_DP_BLOCK_CTRL3_BANK(n, m)	(SWRM_BASE_ADDRESS + \
+							0x00001138 + \
+							0x100*(n-1) + \
+							0x40*m)
+
+
+#define SWRM_DIN_DPn_PCM_PORT_CTRL(n) (SWRM_BASE_ADDRESS + \
+						0x00001054 + 0x100*(n-1))
+
+#define SWRM_MAX_REGISTER SWRM_DIN_DPn_PCM_PORT_CTRL(7)
+
 /* Soundwire Slave Register definition */
 
 #define SWRS_BASE_ADDRESS			0x00
 
 #define SWRS_DP_REG_OFFSET(port, bank)		((0x100*port)+(0x10*bank))
 
+#define SWRS_SCP_INT_STATUS_CLEAR_1             0x40
+#define SWRS_SCP_INT_STATUS_MASK_1		0x41
+
+#define SWRS_SCP_CONTROL				0x44
+#define SWRS_DP_BLOCK_CONTROL_1(n)		(SWRS_BASE_ADDRESS + 0x103 + \
+						0x100 * n)
+
 #define SWRS_DP_CHANNEL_ENABLE_BANK(n, m)	(SWRS_BASE_ADDRESS + 0x120 + \
+						 SWRS_DP_REG_OFFSET(n, m))
+#define SWRS_DP_BLOCK_CONTROL_2_BANK(n, m)	(SWRS_BASE_ADDRESS + 0x121 + \
 						 SWRS_DP_REG_OFFSET(n, m))
 #define SWRS_DP_SAMPLE_CONTROL_1_BANK(n, m)	(SWRS_BASE_ADDRESS + 0x122 + \
 						 SWRS_DP_REG_OFFSET(n, m))
@@ -195,6 +237,8 @@
 #define SWRS_DP_HCONTROL_BANK(n, m)		(SWRS_BASE_ADDRESS + 0x126 + \
 						 SWRS_DP_REG_OFFSET(n, m))
 #define SWRS_DP_BLOCK_CONTROL_3_BANK(n, m)	(SWRS_BASE_ADDRESS + 0x127 + \
+						 SWRS_DP_REG_OFFSET(n, m))
+#define SWRS_DP_LANE_CONTROL_BANK(n, m) (SWRS_BASE_ADDRESS + 0x128 + \
 						 SWRS_DP_REG_OFFSET(n, m))
 #define SWRS_SCP_FRAME_CTRL_BANK(m)		(SWRS_BASE_ADDRESS + 0x60 + \
 						 0x10*m)

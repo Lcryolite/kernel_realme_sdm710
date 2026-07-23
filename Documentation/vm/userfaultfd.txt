@@ -54,18 +54,39 @@ uffdio_api.features and uffdio_api.ioctls two 64bit bitmasks of
 respectively all the available features of the read(2) protocol and
 the generic ioctl available.
 
-Once the userfaultfd has been enabled the UFFDIO_REGISTER ioctl should
-be invoked (if present in the returned uffdio_api.ioctls bitmask) to
-register a memory range in the userfaultfd by setting the
+The uffdio_api.features bitmask returned by the UFFDIO_API ioctl
+defines what memory types are supported by the userfaultfd and what
+events, except page fault notifications, may be generated:
+
+- The UFFD_FEATURE_EVENT_* flags indicate that various other events
+  other than page faults are supported. These events are described in more
+  detail below in the Non-cooperative userfaultfd section.
+
+- UFFD_FEATURE_MISSING_HUGETLBFS and UFFD_FEATURE_MISSING_SHMEM
+  indicate that the kernel supports UFFDIO_REGISTER_MODE_MISSING
+  registrations for hugetlbfs and shared memory (covering all shmem APIs,
+  i.e. tmpfs, IPCSHM, /dev/zero, MAP_SHARED, memfd_create,
+  etc) virtual memory areas, respectively.
+
+- UFFD_FEATURE_MINOR_HUGETLBFS indicates that the kernel supports
+  UFFDIO_REGISTER_MODE_MINOR registration for hugetlbfs virtual memory
+  areas. UFFD_FEATURE_MINOR_SHMEM is the analogous feature indicating
+  support for shmem virtual memory areas.
+
+The userland application should set the feature flags it intends to use
+when invoking the UFFDIO_API ioctl, to request that those features be
+enabled if supported.
+
+Once the userfaultfd API has been enabled the UFFDIO_REGISTER
+ioctl should be invoked (if present in the returned uffdio_api.ioctls
+bitmask) to register a memory range in the userfaultfd by setting the
 uffdio_register structure accordingly. The uffdio_register.mode
 bitmask will specify to the kernel which kind of faults to track for
-the range (UFFDIO_REGISTER_MODE_MISSING would track missing
-pages). The UFFDIO_REGISTER ioctl will return the
+the range. The UFFDIO_REGISTER ioctl will return the
 uffdio_register.ioctls bitmask of ioctls that are suitable to resolve
 userfaults on the range registered. Not all ioctls will necessarily be
-supported for all memory types depending on the underlying virtual
-memory backend (anonymous memory vs tmpfs vs real filebacked
-mappings).
+supported for all memory types (e.g. anonymous memory vs. shmem vs.
+hugetlbfs), or all types of intercepted faults.
 
 Userland can use the uffdio_register.ioctls to manage the virtual
 address space in the background (to add or potentially also remove
@@ -73,13 +94,60 @@ memory from the userfaultfd registered range). This means a userfault
 could be triggering just before userland maps in the background the
 user-faulted page.
 
-The primary ioctl to resolve userfaults is UFFDIO_COPY. That
-atomically copies a page into the userfault registered range and wakes
-up the blocked userfaults (unless uffdio_copy.mode &
-UFFDIO_COPY_MODE_DONTWAKE is set). Other ioctl works similarly to
-UFFDIO_COPY. They're atomic as in guaranteeing that nothing can see an
-half copied page since it'll keep userfaulting until the copy has
-finished.
+Resolving Userfaults
+--------------------
+
+There are three basic ways to resolve userfaults:
+
+- UFFDIO_COPY atomically copies some existing page contents from
+  userspace.
+
+- UFFDIO_ZEROPAGE atomically zeros the new page.
+
+- UFFDIO_CONTINUE maps an existing, previously-populated page.
+
+These operations are atomic in the sense that they guarantee nothing can
+see a half-populated page, since readers will keep userfaulting until the
+operation has finished.
+
+By default, these wake up userfaults blocked on the range in question.
+They support a UFFDIO_*_MODE_DONTWAKE mode flag, which indicates
+that waking will be done separately at some later time.
+
+Which ioctl to choose depends on the kind of page fault, and what we'd
+like to do to resolve it:
+
+- For UFFDIO_REGISTER_MODE_MISSING faults, the fault needs to be
+  resolved by either providing a new page (UFFDIO_COPY), or mapping
+  the zero page (UFFDIO_ZEROPAGE). By default, the kernel would map
+  the zero page for a missing fault. With userfaultfd, userspace can
+  decide what content to provide before the faulting thread continues.
+
+- For UFFDIO_REGISTER_MODE_MINOR faults, there is an existing page (in
+  the page cache). Userspace has the option of modifying the page's
+  contents before resolving the fault. Once the contents are correct
+  (modified or not), userspace asks the kernel to map the page and let the
+  faulting thread continue with UFFDIO_CONTINUE.
+
+Notes:
+
+- You can tell which kind of fault occurred by examining
+  pagefault.flags within the uffd_msg, checking for the
+  UFFD_PAGEFAULT_FLAG_* flags.
+
+- None of the page-delivering ioctls default to the range that you
+  registered with.  You must fill in all fields for the appropriate
+  ioctl struct including the range.
+
+- You get the address of the access that triggered the missing page
+  event out of a struct uffd_msg that you read in the thread from the
+  uffd.  You can supply as many pages as you want with these IOCTLs.
+  Keep in mind that unless you used DONTWAKE then the first of any of
+  those IOCTLs wakes up the faulting thread.
+
+- Be sure to test for all errors including
+  (pollfd[0].revents & POLLERR).  This can happen, e.g. when ranges
+  supplied were incorrect.
 
 == QEMU/KVM ==
 
@@ -129,7 +197,7 @@ migration thread in the QEMU running in the destination node will
 receive the page that triggered the userfault and it'll map it as
 usual with the UFFDIO_COPY|ZEROPAGE (without actually knowing if it
 was spontaneously sent by the source or if it was an urgent page
-requested through an userfault).
+requested through a userfault).
 
 By the time the userfaults start, the QEMU in the destination node
 doesn't need to keep any per-page state bitmap relative to the live
@@ -142,3 +210,68 @@ course the bitmap is updated accordingly. It's also useful to avoid
 sending the same page twice (in case the userfault is read by the
 postcopy thread just before UFFDIO_COPY|ZEROPAGE runs in the migration
 thread).
+
+== Non-cooperative userfaultfd ==
+
+When the userfaultfd is monitored by an external manager, the manager
+must be able to track changes in the process virtual memory
+layout. Userfaultfd can notify the manager about such changes using
+the same read(2) protocol as for the page fault notifications. The
+manager has to explicitly enable these events by setting appropriate
+bits in uffdio_api.features passed to UFFDIO_API ioctl:
+
+UFFD_FEATURE_EVENT_FORK - enable userfaultfd hooks for fork(). When
+this feature is enabled, the userfaultfd context of the parent process
+is duplicated into the newly created process. The manager receives
+UFFD_EVENT_FORK with file descriptor of the new userfaultfd context in
+the uffd_msg.fork.
+
+UFFD_FEATURE_EVENT_REMAP - enable notifications about mremap()
+calls. When the non-cooperative process moves a virtual memory area to
+a different location, the manager will receive UFFD_EVENT_REMAP. The
+uffd_msg.remap will contain the old and new addresses of the area and
+its original length.
+
+UFFD_FEATURE_EVENT_REMOVE - enable notifications about
+madvise(MADV_REMOVE) and madvise(MADV_DONTNEED) calls. The event
+UFFD_EVENT_REMOVE will be generated upon these calls to madvise. The
+uffd_msg.remove will contain start and end addresses of the removed
+area.
+
+UFFD_FEATURE_EVENT_UNMAP - enable notifications about memory
+unmapping. The manager will get UFFD_EVENT_UNMAP with uffd_msg.remove
+containing start and end addresses of the unmapped area.
+
+Although the UFFD_FEATURE_EVENT_REMOVE and UFFD_FEATURE_EVENT_UNMAP
+are pretty similar, they quite differ in the action expected from the
+userfaultfd manager. In the former case, the virtual memory is
+removed, but the area is not, the area remains monitored by the
+userfaultfd, and if a page fault occurs in that area it will be
+delivered to the manager. The proper resolution for such page fault is
+to zeromap the faulting address. However, in the latter case, when an
+area is unmapped, either explicitly (with munmap() system call), or
+implicitly (e.g. during mremap()), the area is removed and in turn the
+userfaultfd context for such area disappears too and the manager will
+not get further userland page faults from the removed area. Still, the
+notification is required in order to prevent manager from using
+UFFDIO_COPY on the unmapped area.
+
+Unlike userland page faults which have to be synchronous and require
+explicit or implicit wakeup, all the events are delivered
+asynchronously and the non-cooperative process resumes execution as
+soon as manager executes read(). The userfaultfd manager should
+carefully synchronize calls to UFFDIO_COPY with the events
+processing. To aid the synchronization, the UFFDIO_COPY ioctl will
+return -ENOSPC when the monitored process exits at the time of
+UFFDIO_COPY, and -ENOENT, when the non-cooperative process has changed
+its virtual memory layout simultaneously with outstanding UFFDIO_COPY
+operation.
+
+The current asynchronous model of the event delivery is optimal for
+single threaded non-cooperative userfaultfd manager implementations. A
+synchronous event delivery model can be added later as a new
+userfaultfd feature to facilitate multithreading enhancements of the
+non cooperative manager, for example to allow UFFDIO_COPY ioctls to
+run in parallel to the event reception. Single threaded
+implementations should continue to use the current async event
+delivery model instead.

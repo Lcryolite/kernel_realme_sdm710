@@ -1,4 +1,4 @@
-/* Copyright (c) 2012, 2017-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012, 2017-2018, 2020, The Linux Foundation. All rights reserved.
  *
  * Description: CoreSight Trace Memory Controller driver
  *
@@ -16,10 +16,13 @@
 #include <linux/init.h>
 #include <linux/types.h>
 #include <linux/device.h>
+#include <linux/idr.h>
 #include <linux/io.h>
 #include <linux/err.h>
 #include <linux/fs.h>
 #include <linux/miscdevice.h>
+#include <linux/mutex.h>
+#include <linux/property.h>
 #include <linux/uaccess.h>
 #include <linux/slab.h>
 #include <linux/dma-mapping.h>
@@ -28,6 +31,8 @@
 #include <linux/of.h>
 #include <linux/coresight.h>
 #include <linux/amba/bus.h>
+#include <linux/iommu.h>
+#include <asm/dma-iommu.h>
 #include <soc/qcom/memory_dump.h>
 
 #include "coresight-priv.h"
@@ -150,11 +155,39 @@ void tmc_disable_hw(struct tmc_drvdata *drvdata)
 	writel_relaxed(0x0, drvdata->base + TMC_CTL);
 }
 
+u32 tmc_get_memwidth_mask(struct tmc_drvdata *drvdata)
+{
+	u32 mask = 0;
+
+	/*
+	 * When moving RRP or an offset address forward, the new values must
+	 * be byte-address aligned to the width of the trace memory databus
+	 * _and_ to a frame boundary (16 byte), whichever is the biggest. For
+	 * example, for 32-bit, 64-bit and 128-bit wide trace memory, the four
+	 * LSBs must be 0s. For 256-bit wide trace memory, the five LSBs must
+	 * be 0s.
+	 */
+	switch (drvdata->memwidth) {
+	case TMC_MEM_INTF_WIDTH_32BITS:
+	/* fallthrough */
+	case TMC_MEM_INTF_WIDTH_64BITS:
+	/* fallthrough */
+	case TMC_MEM_INTF_WIDTH_128BITS:
+		mask = GENMASK(31, 4);
+		break;
+	case TMC_MEM_INTF_WIDTH_256BITS:
+		mask = GENMASK(31, 5);
+		break;
+	}
+
+	return mask;
+}
+
 static int tmc_read_prepare(struct tmc_drvdata *drvdata)
 {
 	int ret = 0;
 
-	if (!drvdata->enable)
+	if (!drvdata->enable || !drvdata->csdev->enable)
 		return -EPERM;
 
 	switch (drvdata->config_type) {
@@ -170,7 +203,7 @@ static int tmc_read_prepare(struct tmc_drvdata *drvdata)
 	}
 
 	if (!ret)
-		dev_info(drvdata->dev, "TMC read start\n");
+		dev_dbg(drvdata->dev, "TMC read start\n");
 
 	return ret;
 }
@@ -178,6 +211,9 @@ static int tmc_read_prepare(struct tmc_drvdata *drvdata)
 static int tmc_read_unprepare(struct tmc_drvdata *drvdata)
 {
 	int ret = 0;
+
+	if (!drvdata->csdev->enable)
+		return -EPERM;
 
 	switch (drvdata->config_type) {
 	case TMC_CONFIG_TYPE_ETB:
@@ -192,7 +228,7 @@ static int tmc_read_unprepare(struct tmc_drvdata *drvdata)
 	}
 
 	if (!ret)
-		dev_info(drvdata->dev, "TMC read end\n");
+		dev_dbg(drvdata->dev, "TMC read end\n");
 
 	return ret;
 }
@@ -213,49 +249,47 @@ static int tmc_open(struct inode *inode, struct file *file)
 	return 0;
 }
 
+static inline ssize_t tmc_get_sysfs_trace(struct tmc_drvdata *drvdata,
+					  loff_t pos, size_t len, char **bufpp)
+{
+	switch (drvdata->config_type) {
+	case TMC_CONFIG_TYPE_ETB:
+	case TMC_CONFIG_TYPE_ETF:
+		return tmc_etb_get_sysfs_trace(drvdata, pos, len, bufpp);
+	case TMC_CONFIG_TYPE_ETR:
+		return tmc_etr_get_sysfs_trace(drvdata, pos, len, bufpp);
+	}
+
+	return -EINVAL;
+}
+
 static ssize_t tmc_read(struct file *file, char __user *data, size_t len,
 			loff_t *ppos)
 {
+	char *bufp;
+	ssize_t actual;
 	struct tmc_drvdata *drvdata = container_of(file->private_data,
 						   struct tmc_drvdata, miscdev);
-	char *bufp;
 
 	mutex_lock(&drvdata->mem_lock);
 
-	bufp = drvdata->buf + *ppos;
-
-	if (*ppos + len > drvdata->len)
-		len = drvdata->len - *ppos;
-
-	if (drvdata->config_type == TMC_CONFIG_TYPE_ETR) {
-		if (drvdata->memtype == TMC_ETR_MEM_TYPE_CONTIG) {
-			if (bufp == (char *)(drvdata->vaddr + drvdata->size))
-				bufp = drvdata->vaddr;
-			else if (bufp > (char *)(drvdata->vaddr +
-				 drvdata->size))
-				bufp -= drvdata->size;
-			if ((bufp + len) > (char *)(drvdata->vaddr +
-			     drvdata->size))
-				len = (char *)(drvdata->vaddr + drvdata->size) -
-				      bufp;
-		} else {
-			tmc_etr_sg_compute_read(drvdata, ppos, &bufp, &len);
-		}
+	actual = tmc_get_sysfs_trace(drvdata, *ppos, len, &bufp);
+	if (actual <= 0) {
+		mutex_unlock(&drvdata->mem_lock);
+		return 0;
 	}
 
-	if (copy_to_user(data, bufp, len)) {
+	if (copy_to_user(data, bufp, actual)) {
 		dev_dbg(drvdata->dev, "%s: copy_to_user failed\n", __func__);
 		mutex_unlock(&drvdata->mem_lock);
 		return -EFAULT;
 	}
 
-	*ppos += len;
-
-	dev_dbg(drvdata->dev, "%s: %zu bytes copied, %d bytes left\n",
-		__func__, len, (int)(drvdata->len - *ppos));
+	*ppos += actual;
+	dev_dbg(drvdata->dev, "%zu bytes copied\n", actual);
 
 	mutex_unlock(&drvdata->mem_lock);
-	return len;
+	return actual;
 }
 
 static int tmc_release(struct inode *inode, struct file *file)
@@ -313,20 +347,25 @@ static enum tmc_mem_intf_width tmc_get_memwidth(u32 devid)
 	return memwidth;
 }
 
-#define coresight_tmc_simple_func(name, offset)			\
-	coresight_simple_func(struct tmc_drvdata, NULL, name, offset)
+#define coresight_tmc_reg(name, offset)			\
+	coresight_simple_reg32(struct tmc_drvdata, name, offset)
+#define coresight_tmc_reg64(name, lo_off, hi_off)	\
+	coresight_simple_reg64(struct tmc_drvdata, name, lo_off, hi_off)
 
-coresight_tmc_simple_func(rsz, TMC_RSZ);
-coresight_tmc_simple_func(sts, TMC_STS);
-coresight_tmc_simple_func(rrp, TMC_RRP);
-coresight_tmc_simple_func(rwp, TMC_RWP);
-coresight_tmc_simple_func(trg, TMC_TRG);
-coresight_tmc_simple_func(ctl, TMC_CTL);
-coresight_tmc_simple_func(ffsr, TMC_FFSR);
-coresight_tmc_simple_func(ffcr, TMC_FFCR);
-coresight_tmc_simple_func(mode, TMC_MODE);
-coresight_tmc_simple_func(pscr, TMC_PSCR);
-coresight_tmc_simple_func(devid, CORESIGHT_DEVID);
+coresight_tmc_reg(rsz, TMC_RSZ);
+coresight_tmc_reg(sts, TMC_STS);
+coresight_tmc_reg(trg, TMC_TRG);
+coresight_tmc_reg(ctl, TMC_CTL);
+coresight_tmc_reg(ffsr, TMC_FFSR);
+coresight_tmc_reg(ffcr, TMC_FFCR);
+coresight_tmc_reg(mode, TMC_MODE);
+coresight_tmc_reg(pscr, TMC_PSCR);
+coresight_tmc_reg(axictl, TMC_AXICTL);
+coresight_tmc_reg(authstatus, TMC_AUTHSTATUS);
+coresight_tmc_reg(devid, CORESIGHT_DEVID);
+coresight_tmc_reg64(rrp, TMC_RRP, TMC_RRPHI);
+coresight_tmc_reg64(rwp, TMC_RWP, TMC_RWPHI);
+coresight_tmc_reg64(dba, TMC_DBALO, TMC_DBAHI);
 
 static struct attribute *coresight_tmc_mgmt_attrs[] = {
 	&dev_attr_rsz.attr,
@@ -340,6 +379,9 @@ static struct attribute *coresight_tmc_mgmt_attrs[] = {
 	&dev_attr_mode.attr,
 	&dev_attr_pscr.attr,
 	&dev_attr_devid.attr,
+	&dev_attr_dba.attr,
+	&dev_attr_axictl.attr,
+	&dev_attr_authstatus.attr,
 	NULL,
 };
 
@@ -369,41 +411,6 @@ static ssize_t trigger_cntr_store(struct device *dev,
 }
 static DEVICE_ATTR_RW(trigger_cntr);
 
-static ssize_t mem_size_show(struct device *dev,
-			     struct device_attribute *attr,
-			     char *buf)
-{
-	struct tmc_drvdata *drvdata = dev_get_drvdata(dev->parent);
-	unsigned long val = drvdata->mem_size;
-
-	return scnprintf(buf, PAGE_SIZE, "%#lx\n", val);
-}
-
-static ssize_t mem_size_store(struct device *dev,
-			      struct device_attribute *attr,
-			      const char *buf, size_t size)
-{
-	struct tmc_drvdata *drvdata = dev_get_drvdata(dev->parent);
-	unsigned long val;
-
-	mutex_lock(&drvdata->mem_lock);
-	if (kstrtoul(buf, 16, &val)) {
-		mutex_unlock(&drvdata->mem_lock);
-		return -EINVAL;
-	}
-
-	if (drvdata->enable) {
-		mutex_unlock(&drvdata->mem_lock);
-		pr_err("ETR is in use, disable it to change the mem_size\n");
-		return -EINVAL;
-	}
-
-	drvdata->mem_size = val;
-	mutex_unlock(&drvdata->mem_lock);
-	return size;
-}
-static DEVICE_ATTR_RW(mem_size);
-
 static ssize_t out_mode_show(struct device *dev,
 			     struct device_attribute *attr, char *buf)
 {
@@ -418,9 +425,33 @@ static ssize_t out_mode_store(struct device *dev,
 			      const char *buf, size_t size)
 {
 	struct tmc_drvdata *drvdata = dev_get_drvdata(dev->parent);
-	char str[11] = "";
-	unsigned long flags;
+	char str[10] = "";
 	int ret;
+
+	if (strlen(buf) >= 10)
+		return -EINVAL;
+	if (sscanf(buf, "%s", str) != 1)
+		return -EINVAL;
+	ret = tmc_etr_switch_mode(drvdata, str);
+	return ret ? ret : size;
+}
+static DEVICE_ATTR_RW(out_mode);
+
+static ssize_t pcie_path_show(struct device *dev,
+			     struct device_attribute *attr, char *buf)
+{
+	struct tmc_drvdata *drvdata = dev_get_drvdata(dev->parent);
+
+	return scnprintf(buf, PAGE_SIZE, "%s\n",
+			str_tmc_etr_pcie_path[drvdata->pcie_path]);
+}
+
+static ssize_t pcie_path_store(struct device *dev,
+			      struct device_attribute *attr,
+			      const char *buf, size_t size)
+{
+	struct tmc_drvdata *drvdata = dev_get_drvdata(dev->parent);
+	char str[10] = "";
 
 	if (strlen(buf) >= 10)
 		return -EINVAL;
@@ -428,67 +459,23 @@ static ssize_t out_mode_store(struct device *dev,
 		return -EINVAL;
 
 	mutex_lock(&drvdata->mem_lock);
-	if (!strcmp(str, str_tmc_etr_out_mode[TMC_ETR_OUT_MODE_MEM])) {
-		if (drvdata->out_mode == TMC_ETR_OUT_MODE_MEM)
-			goto out;
-
-		spin_lock_irqsave(&drvdata->spinlock, flags);
-		if (!drvdata->enable) {
-			drvdata->out_mode = TMC_ETR_OUT_MODE_MEM;
-			spin_unlock_irqrestore(&drvdata->spinlock, flags);
-			goto out;
-		}
-		__tmc_etr_disable_to_bam(drvdata);
-		tmc_etr_enable_hw(drvdata);
-		drvdata->out_mode = TMC_ETR_OUT_MODE_MEM;
-		spin_unlock_irqrestore(&drvdata->spinlock, flags);
-
-		coresight_cti_map_trigout(drvdata->cti_flush, 3, 0);
-		coresight_cti_map_trigin(drvdata->cti_reset, 2, 0);
-
-		tmc_etr_bam_disable(drvdata);
-		usb_qdss_close(drvdata->usbch);
-	} else if (!strcmp(str, str_tmc_etr_out_mode[TMC_ETR_OUT_MODE_USB])) {
-		if (drvdata->out_mode == TMC_ETR_OUT_MODE_USB)
-			goto out;
-
-		spin_lock_irqsave(&drvdata->spinlock, flags);
-		if (!drvdata->enable) {
-			drvdata->out_mode = TMC_ETR_OUT_MODE_USB;
-			spin_unlock_irqrestore(&drvdata->spinlock, flags);
-			goto out;
-		}
-		if (drvdata->reading) {
-			ret = -EBUSY;
-			goto err1;
-		}
-		tmc_etr_disable_hw(drvdata);
-		drvdata->out_mode = TMC_ETR_OUT_MODE_USB;
-		spin_unlock_irqrestore(&drvdata->spinlock, flags);
-
-		coresight_cti_unmap_trigout(drvdata->cti_flush, 3, 0);
-		coresight_cti_unmap_trigin(drvdata->cti_reset, 2, 0);
-
-		tmc_etr_byte_cntr_stop(drvdata->byte_cntr);
-
-		drvdata->usbch = usb_qdss_open("qdss", drvdata,
-					       usb_notifier);
-		if (IS_ERR(drvdata->usbch)) {
-			dev_err(drvdata->dev, "usb_qdss_open failed\n");
-			ret = PTR_ERR(drvdata->usbch);
-			goto err0;
-		}
+	if (drvdata->enable) {
+		mutex_unlock(&drvdata->mem_lock);
+		pr_err("ETR is in use, disable it to switch the pcie path\n");
+		return -EINVAL;
 	}
-out:
+
+	if (!strcmp(str, str_tmc_etr_pcie_path[TMC_ETR_PCIE_SW_PATH]))
+		drvdata->pcie_path = TMC_ETR_PCIE_SW_PATH;
+	else if (!strcmp(str, str_tmc_etr_pcie_path[TMC_ETR_PCIE_HW_PATH]))
+		drvdata->pcie_path = TMC_ETR_PCIE_HW_PATH;
+	else
+		size = -EINVAL;
+
 	mutex_unlock(&drvdata->mem_lock);
 	return size;
-err1:
-	spin_unlock_irqrestore(&drvdata->spinlock, flags);
-err0:
-	mutex_unlock(&drvdata->mem_lock);
-	return ret;
 }
-static DEVICE_ATTR_RW(out_mode);
+static DEVICE_ATTR_RW(pcie_path);
 
 static ssize_t available_out_modes_show(struct device *dev,
 				       struct device_attribute *attr,
@@ -505,48 +492,6 @@ static ssize_t available_out_modes_show(struct device *dev,
 	return len;
 }
 static DEVICE_ATTR_RO(available_out_modes);
-
-static ssize_t mem_type_show(struct device *dev,
-			     struct device_attribute *attr,
-			     char *buf)
-{
-	struct tmc_drvdata *drvdata = dev_get_drvdata(dev->parent);
-
-	return scnprintf(buf, PAGE_SIZE, "%s\n",
-			str_tmc_etr_mem_type[drvdata->mem_type]);
-}
-
-static ssize_t mem_type_store(struct device *dev,
-			      struct device_attribute *attr,
-			      const char *buf,
-			      size_t size)
-{
-	struct tmc_drvdata *drvdata = dev_get_drvdata(dev->parent);
-	char str[11] = "";
-
-	if (strlen(buf) >= 10)
-		return -EINVAL;
-	if (sscanf(buf, "%s", str) != 1)
-		return -EINVAL;
-
-	mutex_lock(&drvdata->mem_lock);
-	if (drvdata->enable) {
-		mutex_unlock(&drvdata->mem_lock);
-		pr_err("ETR is in use, disable it to switch the mode\n");
-		return -EINVAL;
-	}
-	if (!strcmp(str, str_tmc_etr_mem_type[TMC_ETR_MEM_TYPE_CONTIG]))
-		drvdata->mem_type = TMC_ETR_MEM_TYPE_CONTIG;
-	else if (!strcmp(str, str_tmc_etr_mem_type[TMC_ETR_MEM_TYPE_SG]))
-		drvdata->mem_type = TMC_ETR_MEM_TYPE_SG;
-	else
-		size = -EINVAL;
-
-	mutex_unlock(&drvdata->mem_lock);
-
-	return size;
-}
-static DEVICE_ATTR_RW(mem_type);
 
 static ssize_t block_size_show(struct device *dev,
 			     struct device_attribute *attr,
@@ -576,8 +521,8 @@ static ssize_t block_size_store(struct device *dev,
 	if (!drvdata->byte_cntr)
 		return -EINVAL;
 
-	if (val && val < 16) {
-		pr_err("Assign minimum block size of 16 bytes\n");
+	if (val && val < 4096) {
+		pr_err("Assign minimum block size of 4096 bytes\n");
 		return -EINVAL;
 	}
 
@@ -589,18 +534,102 @@ static ssize_t block_size_store(struct device *dev,
 }
 static DEVICE_ATTR_RW(block_size);
 
+static int tmc_iommu_init(struct tmc_drvdata *drvdata)
+{
+	struct device_node *node = drvdata->dev->of_node;
+	int s1_bypass;
+	int ret = 0;
+
+	if (!of_property_read_bool(node, "iommus"))
+		return 0;
+
+	drvdata->iommu_mapping = arm_iommu_create_mapping(&amba_bustype,
+							0, (SZ_1G * 2ULL));
+	if (IS_ERR(drvdata->iommu_mapping)) {
+		dev_err(drvdata->dev, "Create mapping failed, err = %d\n", ret);
+		ret = PTR_ERR(drvdata->iommu_mapping);
+		goto iommu_map_err;
+	}
+
+	s1_bypass = of_property_read_bool(node, "qcom,smmu-s1-bypass");
+	ret = iommu_domain_set_attr(drvdata->iommu_mapping->domain,
+			DOMAIN_ATTR_S1_BYPASS, &s1_bypass);
+	if (ret) {
+		dev_err(drvdata->dev, "IOMMU set s1 bypass (%d) failed (%d)\n",
+			s1_bypass, ret);
+		goto iommu_attach_fail;
+	}
+
+	ret = arm_iommu_attach_device(drvdata->dev, drvdata->iommu_mapping);
+	if (ret) {
+		dev_err(drvdata->dev, "Attach device failed, err = %d\n", ret);
+		goto iommu_attach_fail;
+	}
+
+	return ret;
+
+iommu_attach_fail:
+	arm_iommu_release_mapping(drvdata->iommu_mapping);
+iommu_map_err:
+	drvdata->iommu_mapping = NULL;
+	return ret;
+}
+
+static void tmc_iommu_deinit(struct tmc_drvdata *drvdata)
+{
+	if (!drvdata->iommu_mapping)
+		return;
+
+	arm_iommu_detach_device(drvdata->dev);
+	arm_iommu_release_mapping(drvdata->iommu_mapping);
+
+	drvdata->iommu_mapping = NULL;
+}
+
+static ssize_t buffer_size_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct tmc_drvdata *drvdata = dev_get_drvdata(dev->parent);
+
+	return sprintf(buf, "%#x\n", drvdata->size);
+}
+
+static ssize_t buffer_size_store(struct device *dev,
+				 struct device_attribute *attr,
+				 const char *buf, size_t size)
+{
+	int ret;
+	unsigned long val;
+	struct tmc_drvdata *drvdata = dev_get_drvdata(dev->parent);
+
+	/* Only permitted for TMC-ETRs */
+	if (drvdata->config_type != TMC_CONFIG_TYPE_ETR)
+		return -EPERM;
+
+	ret = kstrtoul(buf, 0, &val);
+	if (ret)
+		return ret;
+	/* The buffer size should be page aligned */
+	if (val & (PAGE_SIZE - 1))
+		return -EINVAL;
+	drvdata->size = val;
+	return size;
+}
+
+static DEVICE_ATTR_RW(buffer_size);
+
 static struct attribute *coresight_tmc_etf_attrs[] = {
 	&dev_attr_trigger_cntr.attr,
 	NULL,
 };
 
 static struct attribute *coresight_tmc_etr_attrs[] = {
-	&dev_attr_mem_size.attr,
-	&dev_attr_mem_type.attr,
 	&dev_attr_trigger_cntr.attr,
+	&dev_attr_buffer_size.attr,
+	&dev_attr_block_size.attr,
 	&dev_attr_out_mode.attr,
 	&dev_attr_available_out_modes.attr,
-	&dev_attr_block_size.attr,
+	&dev_attr_pcie_path.attr,
 	NULL,
 };
 
@@ -628,6 +657,63 @@ const struct attribute_group *coresight_tmc_etr_groups[] = {
 	&coresight_tmc_mgmt_group,
 	NULL,
 };
+
+static inline bool tmc_etr_can_use_sg(struct tmc_drvdata *drvdata)
+{
+	return fwnode_property_present(drvdata->dev->fwnode,
+				       "arm,scatter-gather");
+}
+
+static inline bool tmc_etr_has_non_secure_access(struct tmc_drvdata *drvdata)
+{
+	u32 auth = readl_relaxed(drvdata->base + TMC_AUTHSTATUS);
+
+	return (auth & TMC_AUTH_NSID_MASK) == 0x3;
+}
+
+/* Detect and initialise the capabilities of a TMC ETR */
+static int tmc_etr_setup_caps(struct tmc_drvdata *drvdata,
+			     u32 devid, void *dev_caps)
+{
+	int rc;
+
+	u32 dma_mask = 0;
+
+	if (!tmc_etr_has_non_secure_access(drvdata))
+		return -EACCES;
+
+	/* Set the unadvertised capabilities */
+	tmc_etr_init_caps(drvdata, (u32)(unsigned long)dev_caps);
+
+	if (!(devid & TMC_DEVID_NOSCAT) && tmc_etr_can_use_sg(drvdata))
+		tmc_etr_set_cap(drvdata, TMC_ETR_SG);
+
+	/* Check if the AXI address width is available */
+	if (devid & TMC_DEVID_AXIAW_VALID)
+		dma_mask = ((devid >> TMC_DEVID_AXIAW_SHIFT) &
+				TMC_DEVID_AXIAW_MASK);
+
+	/*
+	 * Unless specified in the device configuration, ETR uses a 40-bit
+	 * AXI master in place of the embedded SRAM of ETB/ETF.
+	 */
+	switch (dma_mask) {
+	case 32:
+	case 40:
+	case 44:
+	case 48:
+	case 52:
+		dev_info(drvdata->dev, "Detected dma mask %dbits\n", dma_mask);
+		break;
+	default:
+		dma_mask = 40;
+	}
+
+	rc = dma_set_mask_and_coherent(drvdata->dev, DMA_BIT_MASK(dma_mask));
+	if (rc)
+		dev_err(drvdata->dev, "Failed to setup DMA mask: %d\n", rc);
+	return rc;
+}
 
 static int tmc_probe(struct amba_device *adev, const struct amba_id *id)
 {
@@ -672,6 +758,8 @@ static int tmc_probe(struct amba_device *adev, const struct amba_id *id)
 	devid = readl_relaxed(drvdata->base + CORESIGHT_DEVID);
 	drvdata->config_type = BMVAL(devid, 6, 7);
 	drvdata->memwidth = tmc_get_memwidth(devid);
+	/* This device is not associated with a session */
+	drvdata->pid = -1;
 
 	if (drvdata->config_type == TMC_CONFIG_TYPE_ETR) {
 		ret = of_property_read_u32(np, "arm,buffer-size",
@@ -679,15 +767,16 @@ static int tmc_probe(struct amba_device *adev, const struct amba_id *id)
 		if (ret)
 			drvdata->size = SZ_1M;
 
-		if (of_property_read_bool(np, "arm,sg-enable"))
-			drvdata->memtype  = TMC_ETR_MEM_TYPE_SG;
-		else
-			drvdata->memtype  = TMC_ETR_MEM_TYPE_CONTIG;
-		drvdata->mem_size = drvdata->size;
-		drvdata->mem_type = drvdata->memtype;
 		drvdata->out_mode = TMC_ETR_OUT_MODE_MEM;
+		drvdata->pcie_path = TMC_ETR_PCIE_HW_PATH;
 	} else {
 		drvdata->size = readl_relaxed(drvdata->base + TMC_RSZ) * 4;
+	}
+
+	ret = tmc_iommu_init(drvdata);
+	if (ret) {
+		dev_err(dev, "TMC SMMU init failed, err =%d\n", ret);
+		goto out;
 	}
 
 	ctidata = of_get_coresight_cti_data(dev, adev->dev.of_node);
@@ -695,12 +784,18 @@ static int tmc_probe(struct amba_device *adev, const struct amba_id *id)
 		dev_err(dev, "invalid cti data\n");
 	} else if (ctidata && ctidata->nr_ctis == 2) {
 		drvdata->cti_flush = coresight_cti_get(ctidata->names[0]);
-		if (IS_ERR(drvdata->cti_flush))
-			dev_err(dev, "failed to get flush cti\n");
+		if (IS_ERR(drvdata->cti_flush)) {
+			dev_err(dev, "failed to get flush cti, defer probe\n");
+			tmc_iommu_deinit(drvdata);
+			return -EPROBE_DEFER;
+		}
 
 		drvdata->cti_reset = coresight_cti_get(ctidata->names[1]);
-		if (IS_ERR(drvdata->cti_reset))
-			dev_err(dev, "failed to get reset cti\n");
+		if (IS_ERR(drvdata->cti_reset)) {
+			dev_err(dev, "failed to get reset cti, defer probe\n");
+			tmc_iommu_deinit(drvdata);
+			return -EPROBE_DEFER;
+		}
 	}
 
 	ret = of_get_coresight_csr_name(adev->dev.of_node, &drvdata->csr_name);
@@ -709,7 +804,8 @@ static int tmc_probe(struct amba_device *adev, const struct amba_id *id)
 	} else{
 		drvdata->csr = coresight_csr_get(drvdata->csr_name);
 		if (IS_ERR(drvdata->csr)) {
-			dev_err(dev, "failed to get csr, defer probe\n");
+			dev_dbg(dev, "failed to get csr, defer probe\n");
+			tmc_iommu_deinit(drvdata);
 			return -EPROBE_DEFER;
 		}
 	}
@@ -718,14 +814,20 @@ static int tmc_probe(struct amba_device *adev, const struct amba_id *id)
 
 	desc.pdata = pdata;
 	desc.dev = dev;
-	if (drvdata->config_type == TMC_CONFIG_TYPE_ETB) {
+
+	switch (drvdata->config_type) {
+	case TMC_CONFIG_TYPE_ETB:
 		desc.type = CORESIGHT_DEV_TYPE_SINK;
 		desc.ops = &tmc_etb_cs_ops;
 		desc.groups = coresight_tmc_etf_groups;
 		desc.subtype.sink_subtype = CORESIGHT_DEV_SUBTYPE_SINK_BUFFER;
-	} else if (drvdata->config_type == TMC_CONFIG_TYPE_ETR) {
+		break;
+	case TMC_CONFIG_TYPE_ETR:
 		desc.type = CORESIGHT_DEV_TYPE_SINK;
 		desc.ops = &tmc_etr_cs_ops;
+		ret = tmc_etr_setup_caps(drvdata, devid, id->data);
+		if (ret)
+			goto out_iommu_deinit;
 		desc.groups = coresight_tmc_etr_groups;
 		desc.subtype.sink_subtype = CORESIGHT_DEV_SUBTYPE_SINK_BUFFER;
 
@@ -733,45 +835,74 @@ static int tmc_probe(struct amba_device *adev, const struct amba_id *id)
 
 		ret = tmc_etr_bam_init(adev, drvdata);
 		if (ret)
-			goto out;
-		/*
-		 * ETR configuration uses a 40-bit AXI master in place of
-		 * the embedded SRAM of ETB/ETF.
-		 */
-		ret = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(40));
-		if (ret)
-			goto out;
-	} else {
+			goto out_iommu_deinit;
+		idr_init(&drvdata->idr);
+		mutex_init(&drvdata->idr_mutex);
+
+		if (of_property_read_bool(drvdata->dev->of_node,
+			"qcom,qdss-ipa-support"))
+			ret = tmc_etr_ipa_init(adev, drvdata);
+			if (ret)
+				goto out_iommu_deinit;
+		break;
+	case TMC_CONFIG_TYPE_ETF:
 		desc.type = CORESIGHT_DEV_TYPE_LINKSINK;
 		desc.ops = &tmc_etf_cs_ops;
 		desc.groups = coresight_tmc_etf_groups;
 		desc.subtype.link_subtype = CORESIGHT_DEV_SUBTYPE_LINK_FIFO;
+		break;
+	default:
+		pr_err("%s: Unsupported TMC config\n", pdata->name);
+		ret = -EINVAL;
+		goto out_iommu_deinit;
 	}
 
 	drvdata->csdev = coresight_register(&desc);
 	if (IS_ERR(drvdata->csdev)) {
 		ret = PTR_ERR(drvdata->csdev);
-		goto out;
+		goto out_iommu_deinit;
 	}
 
 	drvdata->miscdev.name = pdata->name;
 	drvdata->miscdev.minor = MISC_DYNAMIC_MINOR;
 	drvdata->miscdev.fops = &tmc_fops;
 	ret = misc_register(&drvdata->miscdev);
-	if (ret)
+	if (ret) {
+		tmc_iommu_deinit(drvdata);
 		coresight_unregister(drvdata->csdev);
+	}
 
 	if (!ret)
 		pm_runtime_put(&adev->dev);
 
+	return ret;
+
+out_iommu_deinit:
+	tmc_iommu_deinit(drvdata);
 out:
 	return ret;
 }
 
-static struct amba_id tmc_ids[] = {
+static const struct amba_id tmc_ids[] = {
 	{
 		.id     = 0x0003b961,
 		.mask   = 0x0003ffff,
+	},
+	{
+		/* Coresight SoC 600 TMC-ETR/ETS */
+		.id	= 0x000bb9e8,
+		.mask	= 0x000fffff,
+		.data	= (void *)(unsigned long)CORESIGHT_SOC_600_ETR_CAPS,
+	},
+	{
+		/* Coresight SoC 600 TMC-ETB */
+		.id	= 0x000bb9e9,
+		.mask	= 0x000fffff,
+	},
+	{
+		/* Coresight SoC 600 TMC-ETF */
+		.id	= 0x000bb9ea,
+		.mask	= 0x000fffff,
 	},
 	{ 0, 0},
 };

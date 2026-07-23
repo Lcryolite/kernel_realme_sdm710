@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * ARMv7 Cortex-A8 and Cortex-A9 Performance Events handling code.
  *
@@ -1225,9 +1226,25 @@ static int armv7_pmu_idle_notifier(struct notifier_block *nb,
 
 static int armv7_probe_pmu(struct arm_pmu *arm_pmu)
 {
-	return smp_call_function_any(&arm_pmu->supported_cpus,
+	int ret;
+	struct armv7_pmu_idle_nb *pmu_idle_nb;
+
+	pmu_idle_nb = devm_kzalloc(&arm_pmu->plat_device->dev,
+				sizeof(*pmu_idle_nb), GFP_KERNEL);
+	if (!pmu_idle_nb)
+		return -ENOMEM;
+
+	ret = smp_call_function_any(&arm_pmu->supported_cpus,
 				     armv7_read_num_pmnc_events,
 				     &arm_pmu->num_events, 1);
+	if (ret)
+		return ret;
+
+	pmu_idle_nb->cpu_pmu = arm_pmu;
+	pmu_idle_nb->perf_cpu_idle_nb.notifier_call = armv7_pmu_idle_notifier;
+	idle_notifier_register(&pmu_idle_nb->perf_cpu_idle_nb);
+
+	return 0;
 }
 
 static int armv7_a8_pmu_init(struct arm_pmu *cpu_pmu)
@@ -2072,24 +2089,8 @@ static const struct pmu_probe_info armv7_pmu_probe_table[] = {
 
 static int armv7_pmu_device_probe(struct platform_device *pdev)
 {
-	int ret;
-	struct armv7_pmu_idle_nb *pmu_idle_nb;
-
-	pmu_idle_nb = devm_kzalloc(&pdev->dev, sizeof(*pmu_idle_nb),
-				    GFP_KERNEL);
-	if (!pmu_idle_nb)
-		return -ENOMEM;
-
-	ret = arm_pmu_device_probe(pdev, armv7_pmu_of_device_ids,
+	return arm_pmu_device_probe(pdev, armv7_pmu_of_device_ids,
 				    armv7_pmu_probe_table);
-	if (ret)
-		return ret;
-
-	pmu_idle_nb->cpu_pmu = (struct arm_pmu *) platform_get_drvdata(pdev);
-	pmu_idle_nb->perf_cpu_idle_nb.notifier_call = armv7_pmu_idle_notifier;
-	idle_notifier_register(&pmu_idle_nb->perf_cpu_idle_nb);
-
-	return 0;
 }
 
 static struct platform_driver armv7_pmu_driver = {
@@ -2100,9 +2101,5 @@ static struct platform_driver armv7_pmu_driver = {
 	.probe		= armv7_pmu_device_probe,
 };
 
-static int __init register_armv7_pmu_driver(void)
-{
-	return platform_driver_register(&armv7_pmu_driver);
-}
-device_initcall(register_armv7_pmu_driver);
+builtin_platform_driver(armv7_pmu_driver);
 #endif	/* CONFIG_CPU_V7 */

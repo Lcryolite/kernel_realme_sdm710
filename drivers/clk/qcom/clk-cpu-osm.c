@@ -19,6 +19,7 @@
 #include <linux/init.h>
 #include <linux/io.h>
 #include <linux/err.h>
+#include <asm/smp_plat.h>
 #include <linux/errno.h>
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
@@ -31,10 +32,7 @@
 #include <linux/sched.h>
 #include <linux/cpufreq.h>
 #include <linux/slab.h>
-#include <linux/delay.h>
-#include <linux/regulator/consumer.h>
-#include <dt-bindings/clock/qcom,cpucc-sdm845.h>
-#include <dt-bindings/regulator/qcom,rpmh-regulator.h>
+#include <dt-bindings/clock/qcom,cpucc-sm8150.h>
 
 #include "common.h"
 #include "clk-regmap.h"
@@ -44,11 +42,9 @@
 #define OSM_INIT_RATE			300000000UL
 #define XO_RATE				19200000UL
 #define OSM_TABLE_SIZE			40
-#define SINGLE_CORE			1
-#define MAX_CLUSTER_CNT			3
-#define MAX_MEM_ACC_VAL_PER_LEVEL	3
+#define OSM_TABLE_REDUCED_SIZE		12
+#define SINGLE_CORE_COUNT		1
 #define CORE_COUNT_VAL(val)		((val & GENMASK(18, 16)) >> 16)
-#define CURRENT_LVAL(val)		((val & GENMASK(23, 16)) >> 16)
 
 #define OSM_REG_SIZE			32
 
@@ -56,29 +52,19 @@
 #define FREQ_REG			0x110
 #define VOLT_REG			0x114
 #define CORE_DCVS_CTRL			0xbc
-#define PSTATE_STATUS			0x700
 
-#define DCVS_PERF_STATE_DESIRED_REG_0_V1	0x780
-#define DCVS_PERF_STATE_DESIRED_REG_0_V2	0x920
-#define DCVS_PERF_STATE_DESIRED_REG(n, v1) \
-	(((v1) ? DCVS_PERF_STATE_DESIRED_REG_0_V1 \
-		: DCVS_PERF_STATE_DESIRED_REG_0_V2) + 4 * (n))
+#define DCVS_PERF_STATE_DESIRED_REG_0	0x920
+#define DCVS_PERF_STATE_DESIRED_REG(n) \
+	(DCVS_PERF_STATE_DESIRED_REG_0 + 4 * (n))
 
-#define OSM_CYCLE_COUNTER_STATUS_REG_0_V1	0x7d0
-#define OSM_CYCLE_COUNTER_STATUS_REG_0_V2	0x9c0
-#define OSM_CYCLE_COUNTER_STATUS_REG(n, v1) \
-	(((v1) ? OSM_CYCLE_COUNTER_STATUS_REG_0_V1 \
-		: OSM_CYCLE_COUNTER_STATUS_REG_0_V2) + 4 * (n))
-
-static DEFINE_VDD_REGS_INIT(vdd_l3_mx_ao, 1);
-static DEFINE_VDD_REGS_INIT(vdd_pwrcl_mx_ao, 1);
+#define OSM_CYCLE_COUNTER_STATUS_REG_0	0x9c0
+#define OSM_CYCLE_COUNTER_STATUS_REG(n) \
+	(OSM_CYCLE_COUNTER_STATUS_REG_0 + 4 * (n))
 
 struct osm_entry {
 	u16 virtual_corner;
 	u16 open_loop_volt;
-	unsigned long frequency;
-	u32 lval;
-	u16 ccount;
+	long frequency;
 };
 
 struct clk_osm {
@@ -92,14 +78,18 @@ struct clk_osm {
 	u32 num_entries;
 	u32 cluster_num;
 	u32 core_num;
-	unsigned long rate;
+	u32 osm_table_size;
 	u64 total_cycle_counter;
 	u32 prev_cycle_counter;
-	u32 max_core_count;
-	u32 mx_turbo_freq;
+	unsigned long rate;
+	cpumask_t related_cpus;
 };
 
-static bool is_sdm845v1;
+static bool is_sdmshrike;
+static bool is_sm6150;
+static bool is_sdmmagpie;
+static bool is_trinket;
+static bool is_atoll;
 
 static inline struct clk_osm *to_clk_osm(struct clk_hw *_hw)
 {
@@ -143,52 +133,21 @@ static inline bool is_better_rate(unsigned long req, unsigned long best,
 	return (req <= new && new < best) || (best < req && best < new);
 }
 
-static int clk_osm_search_table(struct osm_entry *table, int entries,
-				unsigned long rate)
-{
-	int index;
-
-	for (index = 0; index < entries; index++) {
-		if (rate == table[index].frequency)
-			return index;
-	}
-
-	return -EINVAL;
-}
-
-static int clk_osm_set_rate(struct clk_hw *hw, unsigned long rate,
-				unsigned long parent_rate)
-{
-	struct clk_osm *c = to_clk_osm(hw);
-
-	c->rate = rate;
-
-	return 0;
-}
-
-static unsigned long clk_osm_recalc_rate(struct clk_hw *hw,
-				unsigned long parent_rate)
-{
-	struct clk_osm *c = to_clk_osm(hw);
-
-	return c->rate;
-}
-
-static int clk_osm_determine_rate(struct clk_hw *hw,
-				struct clk_rate_request *req)
+static long clk_osm_round_rate(struct clk_hw *hw, unsigned long rate,
+				unsigned long *parent_rate)
 {
 	int i;
 	unsigned long rrate = 0;
-	unsigned long rate = req->rate;
+
+	if (!hw)
+		return -EINVAL;
 
 	/*
 	 * If the rate passed in is 0, return the first frequency in the
 	 * FMAX table.
 	 */
-	if (!rate) {
-		req->rate = hw->init->rate_max[0];
-		return 0;
-	}
+	if (!rate)
+		return hw->init->rate_max[0];
 
 	for (i = 0; i < hw->init->num_rate_max; i++) {
 		if (is_better_rate(rate, rrate, hw->init->rate_max[i])) {
@@ -198,158 +157,96 @@ static int clk_osm_determine_rate(struct clk_hw *hw,
 		}
 	}
 
-	req->rate = rrate;
+	pr_debug("%s: rate %lu, rrate %ld, Rate max %ld\n", __func__, rate,
+						rrate, hw->init->rate_max[i]);
 
-	pr_debug("clk:%s rate %lu, rrate %lu, Rate max %lu index %u\n",
-			hw->init->name, rate, rrate, hw->init->rate_max[i], i);
-
-	return 0;
+	return rrate;
 }
 
-static int clk_cpu_set_rate(struct clk_hw *hw, unsigned long rate,
+static int clk_osm_search_table(struct osm_entry *table, int entries, long rate)
+{
+	int index = 0;
+
+	for (index = 0; index < entries; index++) {
+		if (rate == table[index].frequency)
+			return index;
+	}
+
+	return -EINVAL;
+}
+
+const struct clk_ops clk_ops_cpu_osm = {
+	.round_rate = clk_osm_round_rate,
+	.list_rate = clk_osm_list_rate,
+	.debug_init = clk_debug_measure_add,
+};
+
+static int clk_core_set_rate(struct clk_hw *hw, unsigned long rate,
 						unsigned long parent_rate)
 {
 	struct clk_osm *c = to_clk_osm(hw);
-	struct clk_hw *p_hw = clk_hw_get_parent(hw);
-	struct clk_osm *parent = to_clk_osm(p_hw);
-	int core_num, index = 0;
 
-	if (!c || !parent)
+	if (!c)
 		return -EINVAL;
 
-	index = clk_osm_search_table(parent->osm_table,
-					parent->num_entries, rate);
-	if (index < 0) {
-		pr_err("cannot set %s to %lu\n", clk_hw_get_name(hw), rate);
-		return -EINVAL;
-	}
-
-	core_num = parent->per_core_dcvs ? c->core_num : 0;
-	clk_osm_write_reg(parent, index,
-				DCVS_PERF_STATE_DESIRED_REG(core_num,
-							is_sdm845v1));
-
-	/* Make sure the write goes through before proceeding */
-	clk_osm_mb(parent);
-
+	c->rate = rate;
 	return 0;
 }
 
-static int clk_pwrcl_set_rate(struct clk_hw *hw, unsigned long rate,
-						unsigned long parent_rate)
-{
-	struct clk_hw *p_hw = clk_hw_get_parent(hw);
-	struct clk_osm *parent = to_clk_osm(p_hw);
-	int ret, index = 0, count = 40;
-	u32 curr_lval;
-
-	ret = clk_cpu_set_rate(hw, rate, parent_rate);
-	if (ret)
-		return ret;
-
-	index = clk_osm_search_table(parent->osm_table,
-					parent->num_entries, rate);
-	if (index < 0)
-		return -EINVAL;
-
-	/*
-	 * Poll the CURRENT_FREQUENCY value of the PSTATE_STATUS register to
-	 * check if the L_VAL has been updated.
-	 */
-	while (count-- > 0) {
-		curr_lval = CURRENT_LVAL(clk_osm_read_reg(parent,
-								PSTATE_STATUS));
-		if (curr_lval <= parent->osm_table[index].lval)
-			return 0;
-		udelay(50);
-	}
-	pr_err("cannot set %s to %lu\n", clk_hw_get_name(hw), rate);
-	return -ETIMEDOUT;
-}
-
-static unsigned long clk_cpu_recalc_rate(struct clk_hw *hw,
+static unsigned long clk_core_recalc_rate(struct clk_hw *hw,
 					unsigned long parent_rate)
 {
 	struct clk_osm *c = to_clk_osm(hw);
-	struct clk_hw *p_hw = clk_hw_get_parent(hw);
-	struct clk_osm *parent = to_clk_osm(p_hw);
-	int core_num, index = 0;
 
-	if (!c || !parent)
+	if (!c)
 		return -EINVAL;
 
-	core_num = parent->per_core_dcvs ? c->core_num : 0;
-	index = clk_osm_read_reg(parent,
-				DCVS_PERF_STATE_DESIRED_REG(core_num,
-							is_sdm845v1));
-	return parent->osm_table[index].frequency;
+	return c->rate;
 }
 
-static int clk_cpu_determine_rate(struct clk_hw *hw,
-				struct clk_rate_request *req)
+static long clk_core_round_rate(struct clk_hw *hw, unsigned long rate,
+				unsigned long *parent_rate)
 {
-	struct clk_hw *parent_hw = clk_hw_get_parent(hw);
-	unsigned long rate = req->rate;
-
-	req->rate = clk_hw_round_rate(parent_hw, rate);
-
-	return 0;
+	return rate;
 }
+
+static const struct clk_ops clk_ops_core = {
+	.set_rate = clk_core_set_rate,
+	.round_rate = clk_core_round_rate,
+	.recalc_rate = clk_core_recalc_rate,
+};
 
 static int l3_clk_set_rate(struct clk_hw *hw, unsigned long rate,
 				    unsigned long parent_rate)
 {
 	struct clk_osm *cpuclk = to_clk_osm(hw);
-	struct clk_rate_request req;
 	int index = 0;
-	int count = 40;
-	u32 curr_lval;
+	unsigned long r_rate;
 
 	if (!cpuclk)
 		return -EINVAL;
 
-	req.rate = rate;
-	clk_osm_determine_rate(hw, &req);
+	r_rate = clk_osm_round_rate(hw, rate, NULL);
 
-	if (rate != req.rate) {
+	if (rate != r_rate) {
 		pr_err("invalid requested rate=%ld\n", rate);
 		return -EINVAL;
 	}
 
 	/* Convert rate to table index */
 	index = clk_osm_search_table(cpuclk->osm_table,
-				     cpuclk->num_entries, req.rate);
+				     cpuclk->num_entries, r_rate);
 	if (index < 0) {
 		pr_err("cannot set %s to %lu\n", clk_hw_get_name(hw), rate);
 		return -EINVAL;
 	}
 	pr_debug("rate: %lu --> index %d\n", rate, index);
 
-	clk_osm_write_reg(cpuclk, index,
-				DCVS_PERF_STATE_DESIRED_REG(0, is_sdm845v1));
+	clk_osm_write_reg(cpuclk, index, DCVS_PERF_STATE_DESIRED_REG(0));
 
 	/* Make sure the write goes through before proceeding */
 	clk_osm_mb(cpuclk);
 
-	/*
-	 * Poll the CURRENT_FREQUENCY value of the PSTATE_STATUS register to
-	 * check if the L_VAL has been updated.
-	 */
-	if (cpuclk->rate >= cpuclk->mx_turbo_freq &&
-					rate < cpuclk->mx_turbo_freq) {
-		while (count-- > 0) {
-			curr_lval = CURRENT_LVAL(clk_osm_read_reg(cpuclk,
-								PSTATE_STATUS));
-			if (curr_lval <= cpuclk->osm_table[index].lval) {
-				cpuclk->rate = rate;
-				return 0;
-			}
-			usleep_range(50, 100);
-		}
-		pr_err("cannot set %s to %lu\n", clk_hw_get_name(hw), rate);
-		return -ETIMEDOUT;
-	}
-	cpuclk->rate = rate;
 	return 0;
 }
 
@@ -362,8 +259,7 @@ static unsigned long l3_clk_recalc_rate(struct clk_hw *hw,
 	if (!cpuclk)
 		return -EINVAL;
 
-	index = clk_osm_read_reg(cpuclk,
-				DCVS_PERF_STATE_DESIRED_REG(0, is_sdm845v1));
+	index = clk_osm_read_reg(cpuclk, DCVS_PERF_STATE_DESIRED_REG(0));
 
 	pr_debug("%s: Index %d, freq %ld\n", __func__, index,
 				cpuclk->osm_table[index].frequency);
@@ -372,33 +268,12 @@ static unsigned long l3_clk_recalc_rate(struct clk_hw *hw,
 	return cpuclk->osm_table[index].frequency;
 }
 
-static const struct clk_ops clk_ops_l3_osm = {
-	.determine_rate = clk_osm_determine_rate,
+
+const static struct clk_ops clk_ops_l3_osm = {
+	.round_rate = clk_osm_round_rate,
 	.list_rate = clk_osm_list_rate,
 	.recalc_rate = l3_clk_recalc_rate,
 	.set_rate = l3_clk_set_rate,
-	.debug_init = clk_debug_measure_add,
-};
-
-static const struct clk_ops clk_ops_pwrcl_core = {
-	.set_rate = clk_pwrcl_set_rate,
-	.determine_rate = clk_cpu_determine_rate,
-	.recalc_rate = clk_cpu_recalc_rate,
-	.debug_init = clk_debug_measure_add,
-};
-
-static const struct clk_ops clk_ops_perfcl_core = {
-	.set_rate = clk_cpu_set_rate,
-	.determine_rate = clk_cpu_determine_rate,
-	.recalc_rate = clk_cpu_recalc_rate,
-	.debug_init = clk_debug_measure_add,
-};
-
-static const struct clk_ops clk_ops_cpu_osm = {
-	.set_rate = clk_osm_set_rate,
-	.recalc_rate = clk_osm_recalc_rate,
-	.list_rate = clk_osm_list_rate,
-	.determine_rate = clk_osm_determine_rate,
 	.debug_init = clk_debug_measure_add,
 };
 
@@ -407,19 +282,22 @@ static struct clk_init_data osm_clks_init[] = {
 		.name = "l3_clk",
 		.parent_names = (const char *[]){ "bi_tcxo_ao" },
 		.num_parents = 1,
-		.flags = CLK_CHILD_NO_RATE_PROP,
 		.ops = &clk_ops_l3_osm,
-		.vdd_class = &vdd_l3_mx_ao,
 	},
 	[1] = {
 		.name = "pwrcl_clk",
 		.parent_names = (const char *[]){ "bi_tcxo_ao" },
 		.num_parents = 1,
 		.ops = &clk_ops_cpu_osm,
-		.vdd_class = &vdd_pwrcl_mx_ao,
 	},
 	[2] = {
 		.name = "perfcl_clk",
+		.parent_names = (const char *[]){ "bi_tcxo_ao" },
+		.num_parents = 1,
+		.ops = &clk_ops_cpu_osm,
+	},
+	[3] = {
+		.name = "perfpcl_clk",
 		.parent_names = (const char *[]){ "bi_tcxo_ao" },
 		.num_parents = 1,
 		.ops = &clk_ops_cpu_osm,
@@ -428,18 +306,19 @@ static struct clk_init_data osm_clks_init[] = {
 
 static struct clk_osm l3_clk = {
 	.cluster_num = 0,
-	.max_core_count = 4,
+	.osm_table_size = OSM_TABLE_SIZE,
 	.hw.init = &osm_clks_init[0],
 };
 
 static DEFINE_CLK_VOTER(l3_cluster0_vote_clk, l3_clk, 0);
 static DEFINE_CLK_VOTER(l3_cluster1_vote_clk, l3_clk, 0);
+static DEFINE_CLK_VOTER(l3_cluster2_vote_clk, l3_clk, 0);
 static DEFINE_CLK_VOTER(l3_misc_vote_clk, l3_clk, 0);
 static DEFINE_CLK_VOTER(l3_gpu_vote_clk, l3_clk, 0);
 
 static struct clk_osm pwrcl_clk = {
 	.cluster_num = 1,
-	.max_core_count = 4,
+	.osm_table_size = OSM_TABLE_SIZE,
 	.hw.init = &osm_clks_init[1],
 };
 
@@ -451,8 +330,7 @@ static struct clk_osm cpu0_pwrcl_clk = {
 		.name = "cpu0_pwrcl_clk",
 		.parent_names = (const char *[]){ "pwrcl_clk" },
 		.num_parents = 1,
-		.flags = CLK_SET_RATE_PARENT,
-		.ops = &clk_ops_pwrcl_core,
+		.ops = &clk_ops_core,
 	},
 };
 
@@ -464,8 +342,7 @@ static struct clk_osm cpu1_pwrcl_clk = {
 		.name = "cpu1_pwrcl_clk",
 		.parent_names = (const char *[]){ "pwrcl_clk" },
 		.num_parents = 1,
-		.flags = CLK_SET_RATE_PARENT,
-		.ops = &clk_ops_pwrcl_core,
+		.ops = &clk_ops_core,
 	},
 };
 
@@ -477,8 +354,7 @@ static struct clk_osm cpu2_pwrcl_clk = {
 		.name = "cpu2_pwrcl_clk",
 		.parent_names = (const char *[]){ "pwrcl_clk" },
 		.num_parents = 1,
-		.flags = CLK_SET_RATE_PARENT,
-		.ops = &clk_ops_pwrcl_core,
+		.ops = &clk_ops_core,
 	},
 };
 
@@ -490,8 +366,7 @@ static struct clk_osm cpu3_pwrcl_clk = {
 		.name = "cpu3_pwrcl_clk",
 		.parent_names = (const char *[]){ "pwrcl_clk" },
 		.num_parents = 1,
-		.flags = CLK_SET_RATE_PARENT,
-		.ops = &clk_ops_pwrcl_core,
+		.ops = &clk_ops_core,
 	},
 };
 
@@ -503,8 +378,7 @@ static struct clk_osm cpu4_pwrcl_clk = {
 		.name = "cpu4_pwrcl_clk",
 		.parent_names = (const char *[]){ "pwrcl_clk" },
 		.num_parents = 1,
-		.flags = CLK_SET_RATE_PARENT,
-		.ops = &clk_ops_pwrcl_core,
+		.ops = &clk_ops_core,
 	},
 };
 
@@ -516,17 +390,15 @@ static struct clk_osm cpu5_pwrcl_clk = {
 		.name = "cpu5_pwrcl_clk",
 		.parent_names = (const char *[]){ "pwrcl_clk" },
 		.num_parents = 1,
-		.flags = CLK_SET_RATE_PARENT,
-		.ops = &clk_ops_pwrcl_core,
+		.ops = &clk_ops_core,
 	},
 };
 
 static struct clk_osm perfcl_clk = {
 	.cluster_num = 2,
-	.max_core_count = 4,
+	.osm_table_size = OSM_TABLE_SIZE,
 	.hw.init = &osm_clks_init[2],
 };
-
 
 static struct clk_osm cpu4_perfcl_clk = {
 	.core_num = 0,
@@ -536,8 +408,7 @@ static struct clk_osm cpu4_perfcl_clk = {
 		.name = "cpu4_perfcl_clk",
 		.parent_names = (const char *[]){ "perfcl_clk" },
 		.num_parents = 1,
-		.flags = CLK_SET_RATE_PARENT,
-		.ops = &clk_ops_perfcl_core,
+		.ops = &clk_ops_core,
 	},
 };
 
@@ -549,8 +420,7 @@ static struct clk_osm cpu5_perfcl_clk = {
 		.name = "cpu5_perfcl_clk",
 		.parent_names = (const char *[]){ "perfcl_clk" },
 		.num_parents = 1,
-		.flags = CLK_SET_RATE_PARENT,
-		.ops = &clk_ops_perfcl_core,
+		.ops = &clk_ops_core,
 	},
 };
 
@@ -562,8 +432,7 @@ static struct clk_osm cpu6_perfcl_clk = {
 		.name = "cpu6_perfcl_clk",
 		.parent_names = (const char *[]){ "perfcl_clk" },
 		.num_parents = 1,
-		.flags = CLK_SET_RATE_PARENT,
-		.ops = &clk_ops_perfcl_core,
+		.ops = &clk_ops_core,
 	},
 };
 
@@ -575,32 +444,52 @@ static struct clk_osm cpu7_perfcl_clk = {
 		.name = "cpu7_perfcl_clk",
 		.parent_names = (const char *[]){ "perfcl_clk" },
 		.num_parents = 1,
-		.flags = CLK_SET_RATE_PARENT,
-		.ops = &clk_ops_perfcl_core,
+		.ops = &clk_ops_core,
+	},
+};
+
+static struct clk_osm perfpcl_clk = {
+	.cluster_num = 3,
+	.osm_table_size = OSM_TABLE_SIZE,
+	.hw.init = &osm_clks_init[3],
+};
+
+static struct clk_osm cpu7_perfpcl_clk = {
+	.core_num = 0,
+	.total_cycle_counter = 0,
+	.prev_cycle_counter = 0,
+	.hw.init = &(struct clk_init_data){
+		.name = "cpu7_perfpcl_clk",
+		.parent_names = (const char *[]){ "perfpcl_clk" },
+		.num_parents = 1,
+		.ops = &clk_ops_core,
 	},
 };
 
 static struct clk_hw *osm_qcom_clk_hws[] = {
-	[L3_CLK] = &l3_clk.hw,
 	[L3_CLUSTER0_VOTE_CLK] = &l3_cluster0_vote_clk.hw,
 	[L3_CLUSTER1_VOTE_CLK] = &l3_cluster1_vote_clk.hw,
+	[L3_CLUSTER2_VOTE_CLK] = &l3_cluster2_vote_clk.hw,
 	[L3_MISC_VOTE_CLK] = &l3_misc_vote_clk.hw,
 	[L3_GPU_VOTE_CLK] = &l3_gpu_vote_clk.hw,
-	[PWRCL_CLK] = &pwrcl_clk.hw,
+	[L3_CLK] = &l3_clk.hw,
 	[CPU0_PWRCL_CLK] = &cpu0_pwrcl_clk.hw,
 	[CPU1_PWRCL_CLK] = &cpu1_pwrcl_clk.hw,
 	[CPU2_PWRCL_CLK] = &cpu2_pwrcl_clk.hw,
 	[CPU3_PWRCL_CLK] = &cpu3_pwrcl_clk.hw,
-	[PERFCL_CLK] = &perfcl_clk.hw,
+	[PWRCL_CLK] = &pwrcl_clk.hw,
 	[CPU4_PERFCL_CLK] = &cpu4_perfcl_clk.hw,
 	[CPU5_PERFCL_CLK] = &cpu5_perfcl_clk.hw,
 	[CPU6_PERFCL_CLK] = &cpu6_perfcl_clk.hw,
-	[CPU7_PERFCL_CLK] = &cpu7_perfcl_clk.hw,
+	[PERFCL_CLK] = &perfcl_clk.hw,
+	[CPU7_PERFPCL_CLK] = &cpu7_perfpcl_clk.hw,
+	[PERFPCL_CLK] = &perfpcl_clk.hw,
+	[CPU7_PERFCL_CLK] = NULL,
 	[CPU4_PWRCL_CLK] = NULL,
 	[CPU5_PWRCL_CLK] = NULL,
 };
 
-static struct clk_osm *clk_cpu_map[] = {
+struct clk_osm *clk_cpu_map[] = {
 	&cpu0_pwrcl_clk,
 	&cpu1_pwrcl_clk,
 	&cpu2_pwrcl_clk,
@@ -608,7 +497,7 @@ static struct clk_osm *clk_cpu_map[] = {
 	&cpu4_perfcl_clk,
 	&cpu5_perfcl_clk,
 	&cpu6_perfcl_clk,
-	&cpu7_perfcl_clk,
+	&cpu7_perfpcl_clk,
 };
 
 static struct clk_osm *logical_cpu_to_clk(int cpu)
@@ -626,13 +515,17 @@ static struct clk_osm *logical_cpu_to_clk(int cpu)
 		cell = of_get_property(cpu_node, "reg", NULL);
 		if (!cell) {
 			pr_err("%s: missing reg property\n",
-			       cpu_node->full_name);
+						cpu_node->full_name);
 			of_node_put(cpu_node);
 			return NULL;
 		}
 
 		hwid = of_read_number(cell, of_n_addr_cells(cpu_node));
-		hwid = (hwid >> 8) & 0xff;
+		if (is_trinket)
+			hwid = get_logical_index(hwid);
+		else
+			hwid = (hwid >> 8) & 0xff;
+
 		of_node_put(cpu_node);
 		if (hwid >= ARRAY_SIZE(clk_cpu_map)) {
 			pr_err("unsupported CPU number - %d (hw_id - %llu)\n",
@@ -681,7 +574,7 @@ static struct clk_osm *osm_configure_policy(struct cpufreq_policy *policy)
 		if (parent != c_parent)
 			continue;
 
-		cpumask_set_cpu(cpu, policy->cpus);
+		cpumask_set_cpu(cpu, &c->related_cpus);
 		if (n->core_num == 0)
 			first = n;
 	}
@@ -690,23 +583,12 @@ static struct clk_osm *osm_configure_policy(struct cpufreq_policy *policy)
 }
 
 static void
-osm_set_index(struct clk_osm *c, unsigned int index)
+osm_set_index(struct clk_osm *c, unsigned int index, unsigned int num)
 {
-	struct clk_hw *p_hw = clk_hw_get_parent(&c->hw);
-	struct clk_osm *parent = to_clk_osm(p_hw);
-	unsigned long rate = 0;
+	clk_osm_write_reg(c, index, DCVS_PERF_STATE_DESIRED_REG(num));
 
-	if (index >= OSM_TABLE_SIZE) {
-		pr_err("Passing an index (%u) that's greater than max (%d)\n",
-					index, OSM_TABLE_SIZE - 1);
-		return;
-	}
-
-	rate = parent->osm_table[index].frequency;
-	if (!rate)
-		return;
-
-	clk_set_rate(c->hw.clk, clk_round_rate(c->hw.clk, rate));
+	/* Make sure the write goes through before proceeding */
+	clk_osm_mb(c);
 }
 
 static int
@@ -714,8 +596,26 @@ osm_cpufreq_target_index(struct cpufreq_policy *policy, unsigned int index)
 {
 	struct clk_osm *c = policy->driver_data;
 
-	osm_set_index(c, index);
+	osm_set_index(c, index, c->core_num);
+	arch_set_freq_scale(policy->related_cpus,
+			    policy->freq_table[index].frequency,
+			    policy->cpuinfo.max_freq);
 	return 0;
+}
+
+static unsigned int
+osm_cpufreq_fast_switch(struct cpufreq_policy *policy, unsigned int target_freq)
+{
+	int index;
+
+	index = cpufreq_frequency_table_target(policy, target_freq,
+							CPUFREQ_RELATION_L);
+	if (index < 0)
+		return 0;
+
+	osm_cpufreq_target_index(policy, index);
+
+	return policy->freq_table[index].frequency;
 }
 
 static unsigned int osm_cpufreq_get(unsigned int cpu)
@@ -729,7 +629,7 @@ static unsigned int osm_cpufreq_get(unsigned int cpu)
 
 	c = policy->driver_data;
 	index = clk_osm_read_reg(c,
-			DCVS_PERF_STATE_DESIRED_REG(c->core_num, is_sdm845v1));
+			DCVS_PERF_STATE_DESIRED_REG(c->core_num));
 	return policy->freq_table[index].frequency;
 }
 
@@ -739,8 +639,7 @@ static int osm_cpufreq_cpu_init(struct cpufreq_policy *policy)
 	struct clk_osm *c, *parent;
 	struct clk_hw *p_hw;
 	int ret;
-	unsigned int i, prev_cc = 0;
-	unsigned int xo_kHz;
+	unsigned int i;
 
 	c = osm_configure_policy(policy);
 	if (!c) {
@@ -757,18 +656,11 @@ static int osm_cpufreq_cpu_init(struct cpufreq_policy *policy)
 	parent = to_clk_osm(p_hw);
 	c->vbase = parent->vbase;
 
-	p_hw = clk_hw_get_parent(p_hw);
-	if (!p_hw) {
-		pr_err("no xo clock for CPU%d\n", policy->cpu);
-		return -ENODEV;
-	}
-	xo_kHz = clk_hw_get_rate(p_hw) / 1000;
-
-	table = kcalloc(OSM_TABLE_SIZE + 1, sizeof(*table), GFP_KERNEL);
+	table = kcalloc(parent->osm_table_size + 1, sizeof(*table), GFP_KERNEL);
 	if (!table)
 		return -ENOMEM;
 
-	for (i = 0; i < OSM_TABLE_SIZE; i++) {
+	for (i = 0; i < parent->osm_table_size; i++) {
 		u32 data, src, div, lval, core_count;
 
 		data = clk_osm_read_reg(c, FREQ_REG + i * OSM_REG_SIZE);
@@ -777,21 +669,18 @@ static int osm_cpufreq_cpu_init(struct cpufreq_policy *policy)
 		lval = data & GENMASK(7, 0);
 		core_count = CORE_COUNT_VAL(data);
 
+		/* Save the frequencies in terms of KHz */
 		if (!src)
 			table[i].frequency = OSM_INIT_RATE / 1000;
 		else
-			table[i].frequency = xo_kHz * lval;
+			table[i].frequency = (XO_RATE * lval) / 1000;
 		table[i].driver_data = table[i].frequency;
 
-		if (core_count != parent->max_core_count)
+		if (core_count == SINGLE_CORE_COUNT)
 			table[i].frequency = CPUFREQ_ENTRY_INVALID;
 
-		/*
-		 * Two of the same frequencies with the same core counts means
-		 * end of table.
-		 */
-		if (i > 0 && table[i - 1].driver_data == table[i].driver_data
-					&& prev_cc == core_count) {
+		/* Two of the same frequencies means end of table */
+		if (i > 0 && table[i - 1].driver_data == table[i].driver_data) {
 			struct cpufreq_frequency_table *prev = &table[i - 1];
 
 			if (prev->frequency == CPUFREQ_ENTRY_INVALID) {
@@ -801,7 +690,6 @@ static int osm_cpufreq_cpu_init(struct cpufreq_policy *policy)
 
 			break;
 		}
-		prev_cc = core_count;
 	}
 	table[i].frequency = CPUFREQ_TABLE_END;
 
@@ -811,7 +699,12 @@ static int osm_cpufreq_cpu_init(struct cpufreq_policy *policy)
 		goto err;
 	}
 
+	policy->dvfs_possible_from_any_cpu = true;
+	policy->fast_switch_possible = true;
 	policy->driver_data = c;
+
+	cpumask_copy(policy->cpus, &c->related_cpus);
+
 	return 0;
 
 err:
@@ -840,6 +733,7 @@ static struct cpufreq_driver qcom_osm_cpufreq_driver = {
 	.get		= osm_cpufreq_get,
 	.init		= osm_cpufreq_cpu_init,
 	.exit		= osm_cpufreq_cpu_exit,
+	.fast_switch	= osm_cpufreq_fast_switch,
 	.name		= "osm-cpufreq",
 	.attr		= osm_cpufreq_attr,
 	.boost_enabled	= true,
@@ -936,6 +830,7 @@ static int derive_device_list(struct device **device_list,
 			return -ENODEV;
 		}
 		device_list[i] = &pdev->dev;
+		of_node_put(dev_node);
 	}
 	return 0;
 }
@@ -994,7 +889,8 @@ static void populate_opp_table(struct platform_device *pdev)
 					dev_name(cpu_dev));
 	}
 
-	populate_l3_opp_table(np, "l3-devs");
+	if (!is_trinket)
+		populate_l3_opp_table(np, "l3-devs");
 }
 
 static u64 clk_osm_get_cpu_cycle_counter(int cpu)
@@ -1019,7 +915,7 @@ static u64 clk_osm_get_cpu_cycle_counter(int cpu)
 	 */
 	core_num = parent->per_core_dcvs ? c->core_num : 0;
 	val = clk_osm_read_reg_no_log(parent,
-			OSM_CYCLE_COUNTER_STATUS_REG(core_num, is_sdm845v1));
+				OSM_CYCLE_COUNTER_STATUS_REG(core_num));
 
 	if (val < c->prev_cycle_counter) {
 		/* Handle counter overflow */
@@ -1038,15 +934,12 @@ static u64 clk_osm_get_cpu_cycle_counter(int cpu)
 
 static int clk_osm_read_lut(struct platform_device *pdev, struct clk_osm *c)
 {
-	u32 data, src, lval, i, j = OSM_TABLE_SIZE;
-	struct clk_vdd_class *vdd = osm_clks_init[c->cluster_num].vdd_class;
+	u32 data, src, lval, i, j = c->osm_table_size;
 
-	for (i = 0; i < OSM_TABLE_SIZE; i++) {
+	for (i = 0; i < c->osm_table_size; i++) {
 		data = clk_osm_read_reg(c, FREQ_REG + i * OSM_REG_SIZE);
 		src = ((data & GENMASK(31, 30)) >> 30);
 		lval = (data & GENMASK(7, 0));
-		c->osm_table[i].ccount = CORE_COUNT_VAL(data);
-		c->osm_table[i].lval = lval;
 
 		if (!src)
 			c->osm_table[i].frequency = OSM_INIT_RATE;
@@ -1063,10 +956,9 @@ static int clk_osm_read_lut(struct platform_device *pdev, struct clk_osm *c)
 			 c->osm_table[i].virtual_corner,
 			 c->osm_table[i].open_loop_volt);
 
-		if (i > 0 && j == OSM_TABLE_SIZE &&
+		if (i > 0 && j == c->osm_table_size &&
 				c->osm_table[i].frequency ==
-					c->osm_table[i - 1].frequency &&
-			c->osm_table[i].ccount == c->osm_table[i - 1].ccount)
+				c->osm_table[i - 1].frequency)
 			j = i;
 	}
 
@@ -1075,28 +967,6 @@ static int clk_osm_read_lut(struct platform_device *pdev, struct clk_osm *c)
 						       GFP_KERNEL);
 	if (!osm_clks_init[c->cluster_num].rate_max)
 		return -ENOMEM;
-
-	if (vdd) {
-		vdd->level_votes = devm_kcalloc(&pdev->dev, j,
-					sizeof(*vdd->level_votes), GFP_KERNEL);
-		if (!vdd->level_votes)
-			return -ENOMEM;
-
-		vdd->vdd_uv = devm_kcalloc(&pdev->dev, j, sizeof(*vdd->vdd_uv),
-								GFP_KERNEL);
-		if (!vdd->vdd_uv)
-			return -ENOMEM;
-
-		for (i = 0; i < j; i++) {
-			if (c->osm_table[i].frequency < c->mx_turbo_freq)
-				vdd->vdd_uv[i] = RPMH_REGULATOR_LEVEL_NOM;
-			else
-				vdd->vdd_uv[i] = RPMH_REGULATOR_LEVEL_TURBO;
-		}
-		vdd->num_levels = j;
-		vdd->cur_level = j;
-		vdd->use_max_uV = true;
-	}
 
 	for (i = 0; i < j; i++)
 		osm_clks_init[c->cluster_num].rate_max[i] =
@@ -1110,20 +980,23 @@ static int clk_osm_resources_init(struct platform_device *pdev)
 {
 	struct resource *res;
 
-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
-						"osm_l3_base");
-	if (!res) {
-		dev_err(&pdev->dev,
-			"Unable to get platform resource for osm_l3_base");
-		return -ENOMEM;
-	}
+	if (!is_trinket) {
+		res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
+							"osm_l3_base");
+		if (!res) {
+			dev_err(&pdev->dev,
+				"Unable to get platform resource for osm_l3_base");
+			return -ENOMEM;
+		}
 
-	l3_clk.pbase = (unsigned long)res->start;
-	l3_clk.vbase = devm_ioremap(&pdev->dev, res->start, resource_size(res));
+		l3_clk.pbase = (unsigned long)res->start;
+		l3_clk.vbase = devm_ioremap(&pdev->dev, res->start,
+							resource_size(res));
 
-	if (!l3_clk.vbase) {
-		dev_err(&pdev->dev, "Unable to map osm_l3_base base\n");
-		return -ENOMEM;
+		if (!l3_clk.vbase) {
+			dev_err(&pdev->dev, "Unable to map osm_l3_base base\n");
+			return -ENOMEM;
+		}
 	}
 
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
@@ -1159,113 +1032,112 @@ static int clk_osm_resources_init(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 
+	if (is_sdmshrike || is_sm6150 || is_sdmmagpie ||
+		is_trinket || is_atoll)
+		return 0;
+
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
+						"osm_perfpcl_base");
+	if (!res) {
+		dev_err(&pdev->dev,
+			"Unable to get platform resource for osm_perfpcl_base");
+		return -ENOMEM;
+	}
+
+	perfpcl_clk.pbase = (unsigned long)res->start;
+	perfpcl_clk.vbase = devm_ioremap(&pdev->dev, res->start,
+						  resource_size(res));
+
+	if (!perfpcl_clk.vbase) {
+		dev_err(&pdev->dev, "Unable to map osm_perfpcl_base base\n");
+		return -ENOMEM;
+	}
+
 	return 0;
 }
 
-static void clk_cpu_osm_driver_sdm670_fixup(void)
+static void clk_cpu_osm_driver_sm6150_fixup(void)
 {
 	osm_qcom_clk_hws[CPU4_PERFCL_CLK] = NULL;
 	osm_qcom_clk_hws[CPU5_PERFCL_CLK] = NULL;
+	osm_qcom_clk_hws[CPU7_PERFPCL_CLK] = NULL;
+	osm_qcom_clk_hws[PERFPCL_CLK] = NULL;
+	osm_qcom_clk_hws[L3_CLUSTER2_VOTE_CLK] = NULL;
 	osm_qcom_clk_hws[CPU4_PWRCL_CLK] = &cpu4_pwrcl_clk.hw;
 	osm_qcom_clk_hws[CPU5_PWRCL_CLK] = &cpu5_pwrcl_clk.hw;
-
-	clk_cpu_map[4] = &cpu4_pwrcl_clk;
-	clk_cpu_map[5] = &cpu5_pwrcl_clk;
+	osm_qcom_clk_hws[CPU7_PERFCL_CLK] = &cpu7_perfcl_clk.hw;
 
 	cpu6_perfcl_clk.core_num = 0;
 	cpu7_perfcl_clk.core_num = 1;
 
-	pwrcl_clk.max_core_count = 6;
-	perfcl_clk.max_core_count = 2;
+	clk_cpu_map[4] = &cpu4_pwrcl_clk;
+	clk_cpu_map[5] = &cpu5_pwrcl_clk;
+	clk_cpu_map[7] = &cpu7_perfcl_clk;
 }
 
-/* Request MX supply if configured in device tree */
-static int clk_cpu_osm_request_mx_supply(struct device *dev)
+static void clk_cpu_osm_driver_trinket_fixup(void)
 {
-	u32 *array;
-	int rc;
+	pwrcl_clk.osm_table_size = OSM_TABLE_REDUCED_SIZE;
+	perfcl_clk.osm_table_size = OSM_TABLE_REDUCED_SIZE;
 
-	if (!of_find_property(dev->of_node, "qcom,mx-turbo-freq", NULL)) {
-		osm_clks_init[l3_clk.cluster_num].vdd_class = NULL;
-		osm_clks_init[pwrcl_clk.cluster_num].vdd_class = NULL;
-		return 0;
-	}
+	osm_qcom_clk_hws[L3_CLUSTER0_VOTE_CLK] = NULL,
+	osm_qcom_clk_hws[L3_CLUSTER1_VOTE_CLK] = NULL,
+	osm_qcom_clk_hws[L3_CLUSTER2_VOTE_CLK] = NULL,
+	osm_qcom_clk_hws[L3_MISC_VOTE_CLK] = NULL,
+	osm_qcom_clk_hws[L3_GPU_VOTE_CLK] = NULL,
+	osm_qcom_clk_hws[L3_CLK] = NULL,
+	osm_qcom_clk_hws[CPU7_PERFPCL_CLK] = NULL,
+	osm_qcom_clk_hws[PERFPCL_CLK] = NULL,
+	osm_qcom_clk_hws[CPU4_PWRCL_CLK] = NULL,
+	osm_qcom_clk_hws[CPU5_PWRCL_CLK] = NULL,
+	osm_qcom_clk_hws[CPU7_PERFCL_CLK] = &cpu7_perfcl_clk.hw;
+	clk_cpu_map[7] = &cpu7_perfcl_clk;
+}
 
-	vdd_l3_mx_ao.regulator[0] = devm_regulator_get(dev, "vdd_l3_mx_ao");
-	if (IS_ERR(vdd_l3_mx_ao.regulator[0])) {
-		rc = PTR_ERR(vdd_l3_mx_ao.regulator[0]);
-		if (rc != -EPROBE_DEFER)
-			dev_err(dev, "Unable to get vdd_l3_mx_ao regulator, rc=%d\n",
-				rc);
-		return rc;
-	}
+static void clk_cpu_osm_driver_sdmshrike_fixup(void)
+{
+	osm_qcom_clk_hws[CPU7_PERFPCL_CLK] = NULL;
+	osm_qcom_clk_hws[PERFPCL_CLK] = NULL;
+	osm_qcom_clk_hws[L3_CLUSTER2_VOTE_CLK] = NULL;
+	osm_qcom_clk_hws[CPU7_PERFCL_CLK] = &cpu7_perfcl_clk.hw;
 
-	vdd_pwrcl_mx_ao.regulator[0] = devm_regulator_get(dev,
-							"vdd_pwrcl_mx_ao");
-	if (IS_ERR(vdd_pwrcl_mx_ao.regulator[0])) {
-		rc = PTR_ERR(vdd_pwrcl_mx_ao.regulator[0]);
-		if (rc != -EPROBE_DEFER)
-			dev_err(dev, "Unable to get vdd_pwrcl_mx_ao regulator, rc=%d\n",
-				rc);
-		return rc;
-	}
-
-	array = kcalloc(MAX_CLUSTER_CNT, sizeof(*array), GFP_KERNEL);
-	if (!array)
-		return -ENOMEM;
-
-	rc = of_property_read_u32_array(dev->of_node, "qcom,mx-turbo-freq",
-					array, MAX_CLUSTER_CNT);
-	if (rc) {
-		dev_err(dev, "unable to read qcom,mx-turbo-freq property, rc=%d\n",
-			rc);
-		kfree(array);
-		return rc;
-	}
-
-	l3_clk.mx_turbo_freq = array[l3_clk.cluster_num];
-	pwrcl_clk.mx_turbo_freq = array[pwrcl_clk.cluster_num];
-	perfcl_clk.mx_turbo_freq = array[perfcl_clk.cluster_num];
-
-	kfree(array);
-
-	return 0;
+	clk_cpu_map[7] = &cpu7_perfcl_clk;
 }
 
 static int clk_cpu_osm_driver_probe(struct platform_device *pdev)
 {
-	int rc = 0, i, cpu;
+	int rc = 0, i;
 	u32 val;
 	int num_clks = ARRAY_SIZE(osm_qcom_clk_hws);
-	struct clk *ext_xo_clk, *clk;
-	struct clk_osm *osm_clk;
-	struct device *dev = &pdev->dev;
+	struct clk *clk;
 	struct clk_onecell_data *clk_data;
-	struct cpu_cycle_counter_cb cb = {
+	struct cpu_cycle_counter_cb cycle_counter_cb = {
 		.get_cpu_cycle_counter = clk_osm_get_cpu_cycle_counter,
 	};
 
-	/*
-	 * Require the RPM-XO clock to be registered before OSM.
-	 * The cpuss_gpll0_clk_src is listed to be configured by BL.
-	 */
-	ext_xo_clk = devm_clk_get(dev, "xo_ao");
-	if (IS_ERR(ext_xo_clk)) {
-		if (PTR_ERR(ext_xo_clk) != -EPROBE_DEFER)
-			dev_err(dev, "Unable to get xo clock\n");
-		return PTR_ERR(ext_xo_clk);
-	}
+	is_trinket = of_device_is_compatible(pdev->dev.of_node,
+				"qcom,clk-cpu-osm-trinket");
 
-	is_sdm845v1 = of_device_is_compatible(pdev->dev.of_node,
-					"qcom,clk-cpu-osm");
+	is_sdmmagpie = of_device_is_compatible(pdev->dev.of_node,
+				"qcom,clk-cpu-osm-sdmmagpie");
 
-	if (of_device_is_compatible(pdev->dev.of_node,
-					 "qcom,clk-cpu-osm-sdm670"))
-		clk_cpu_osm_driver_sdm670_fixup();
+	is_sm6150 = of_device_is_compatible(pdev->dev.of_node,
+				"qcom,clk-cpu-osm-sm6150") ||
+		of_device_is_compatible(pdev->dev.of_node,
+				"qcom,clk-cpu-osm-sdm670");
 
-	rc = clk_cpu_osm_request_mx_supply(dev);
-	if (rc)
-		return rc;
+	is_sdmshrike = of_device_is_compatible(pdev->dev.of_node,
+				"qcom,clk-cpu-osm-sdmshrike");
+
+	is_atoll = of_device_is_compatible(pdev->dev.of_node,
+				"qcom,clk-cpu-osm-atoll");
+
+	if (is_sdmshrike)
+		clk_cpu_osm_driver_sdmshrike_fixup();
+	else if (is_sm6150 || is_sdmmagpie || is_atoll)
+		clk_cpu_osm_driver_sm6150_fixup();
+	else if (is_trinket)
+		clk_cpu_osm_driver_trinket_fixup();
 
 	clk_data = devm_kzalloc(&pdev->dev, sizeof(struct clk_onecell_data),
 								GFP_KERNEL);
@@ -1296,11 +1168,13 @@ static int clk_cpu_osm_driver_probe(struct platform_device *pdev)
 	if (val & BIT(0))
 		perfcl_clk.per_core_dcvs = true;
 
-	rc = clk_osm_read_lut(pdev, &l3_clk);
-	if (rc) {
-		dev_err(&pdev->dev, "Unable to read OSM LUT for L3, rc=%d\n",
-			rc);
-		return rc;
+	if (!is_trinket) {
+		rc = clk_osm_read_lut(pdev, &l3_clk);
+		if (rc) {
+			dev_err(&pdev->dev, "Unable to read OSM LUT for L3, rc=%d\n",
+				rc);
+			return rc;
+		}
 	}
 
 	rc = clk_osm_read_lut(pdev, &pwrcl_clk);
@@ -1317,9 +1191,22 @@ static int clk_cpu_osm_driver_probe(struct platform_device *pdev)
 		return rc;
 	}
 
-	spin_lock_init(&l3_clk.lock);
+	if (!is_sdmshrike && !is_sm6150 && !is_sdmmagpie &&
+		!is_trinket && !is_atoll) {
+		rc = clk_osm_read_lut(pdev, &perfpcl_clk);
+		if (rc) {
+			dev_err(&pdev->dev, "Unable to read OSM LUT for perf plus cluster, rc=%d\n",
+				rc);
+			return rc;
+		}
+	}
+
+	if (!is_trinket)
+		spin_lock_init(&l3_clk.lock);
 	spin_lock_init(&pwrcl_clk.lock);
 	spin_lock_init(&perfcl_clk.lock);
+	if (!is_trinket)
+		spin_lock_init(&perfpcl_clk.lock);
 
 	/* Register OSM l3, pwr and perf clocks with Clock Framework */
 	for (i = 0; i < num_clks; i++) {
@@ -1344,29 +1231,23 @@ static int clk_cpu_osm_driver_probe(struct platform_device *pdev)
 
 	get_online_cpus();
 
-	WARN(clk_prepare_enable(l3_cluster0_vote_clk.hw.clk),
+	if (!is_trinket) {
+		WARN(clk_prepare_enable(l3_cluster0_vote_clk.hw.clk),
 			"clk: Failed to enable cluster0 clock for L3\n");
-	WARN(clk_prepare_enable(l3_cluster1_vote_clk.hw.clk),
+		WARN(clk_prepare_enable(l3_cluster1_vote_clk.hw.clk),
 			"clk: Failed to enable cluster1 clock for L3\n");
-	WARN(clk_prepare_enable(l3_misc_vote_clk.hw.clk),
+		WARN(clk_prepare_enable(l3_cluster2_vote_clk.hw.clk),
+			"clk: Failed to enable cluster2 clock for L3\n");
+		WARN(clk_prepare_enable(l3_misc_vote_clk.hw.clk),
 			"clk: Failed to enable misc clock for L3\n");
-	WARN(clk_prepare_enable(l3_gpu_vote_clk.hw.clk),
-			"clk: Failed to enable iocoherent bwmon clock for L3\n");
-
-	/*
-	 * Call clk_prepare_enable for the silver clock explicitly in order to
-	 * place an implicit vote on MX
-	 */
-	for_each_online_cpu(cpu) {
-		osm_clk = logical_cpu_to_clk(cpu);
-		if (!osm_clk)
-			return -EINVAL;
-		clk_prepare_enable(osm_clk->hw.clk);
+		WARN(clk_prepare_enable(l3_gpu_vote_clk.hw.clk),
+			"clk: Failed to enable gpu clock for L3\n");
 	}
+
 	populate_opp_table(pdev);
 
 	of_platform_populate(pdev->dev.of_node, NULL, NULL, &pdev->dev);
-	register_cpu_cycle_counter_cb(&cb);
+	register_cpu_cycle_counter_cb(&cycle_counter_cb);
 	put_online_cpus();
 
 	rc = cpufreq_register_driver(&qcom_osm_cpufreq_driver);
@@ -1389,8 +1270,12 @@ exit:
 
 static const struct of_device_id match_table[] = {
 	{ .compatible = "qcom,clk-cpu-osm" },
-	{ .compatible = "qcom,clk-cpu-osm-v2" },
 	{ .compatible = "qcom,clk-cpu-osm-sdm670" },
+	{ .compatible = "qcom,clk-cpu-osm-sm6150" },
+	{ .compatible = "qcom,clk-cpu-osm-sdmmagpie" },
+	{ .compatible = "qcom,clk-cpu-osm-trinket" },
+	{ .compatible = "qcom,clk-cpu-osm-sdmshrike" },
+	{ .compatible = "qcom,clk-cpu-osm-atoll" },
 	{}
 };
 

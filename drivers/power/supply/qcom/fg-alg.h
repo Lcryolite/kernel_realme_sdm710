@@ -1,4 +1,4 @@
-/* Copyright (c) 2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -13,17 +13,25 @@
 #ifndef __FG_ALG_H__
 #define __FG_ALG_H__
 
+#include <linux/of_batterydata.h>
+#include "step-chg-jeita.h"
+
 #define BUCKET_COUNT		8
 #define BUCKET_SOC_PCT		(256 / BUCKET_COUNT)
 #define MAX_CC_STEPS		20
 #define MAX_TTF_SAMPLES		10
 
+#define is_between(left, right, value) \
+		(((left) >= (right) && (left) >= (value) \
+			&& (value) >= (right)) \
+		|| ((left) <= (right) && (left) <= (value) \
+			&& (value) <= (right)))
 struct cycle_counter {
 	void		*data;
+	char		str_buf[BUCKET_COUNT * 8];
 	bool		started[BUCKET_COUNT];
 	u16		count[BUCKET_COUNT];
 	u8		last_soc[BUCKET_COUNT];
-	char		str_buf[BUCKET_COUNT * 8];
 	int		id;
 	int		last_bucket;
 	struct mutex	lock;
@@ -41,19 +49,26 @@ struct cl_params {
 	int	max_cap_limit;
 	int	min_cap_limit;
 	int	skew_decipct;
+	int	min_delta_batt_soc;
+	int	ibat_flt_thr_ma;
+	bool	cl_wt_enable;
 };
 
 struct cap_learning {
 	void			*data;
 	int			init_cc_soc_sw;
 	int			cc_soc_max;
+	int			init_batt_soc;
+	int			init_batt_soc_cp;
 	int64_t			nom_cap_uah;
 	int64_t			init_cap_uah;
 	int64_t			final_cap_uah;
 	int64_t			learned_cap_uah;
+	int64_t			delta_cap_uah;
 	bool			active;
 	struct mutex		lock;
 	struct cl_params	dt;
+	bool (*ok_to_begin)(void *data);
 	int (*get_learned_capacity)(void *data, int64_t *learned_cap_uah);
 	int (*store_learned_capacity)(void *data, int64_t learned_cap_uah);
 	int (*get_cc_soc)(void *data, int *cc_soc_sw);
@@ -63,11 +78,14 @@ struct cap_learning {
 enum ttf_mode {
 	TTF_MODE_NORMAL = 0,
 	TTF_MODE_QNOVO,
+	TTF_MODE_VBAT_STEP_CHG,
+	TTF_MODE_OCV_STEP_CHG,
 };
 
 enum ttf_param {
 	TTF_MSOC = 0,
 	TTF_VBAT,
+	TTF_OCV,
 	TTF_IBAT,
 	TTF_FCC,
 	TTF_MODE,
@@ -76,7 +94,7 @@ enum ttf_param {
 	TTF_VFLOAT,
 	TTF_CHG_TYPE,
 	TTF_CHG_STATUS,
-	TTF_VALID,
+	TTF_TTE_VALID,
 };
 
 struct ttf_circ_buf {
@@ -95,12 +113,22 @@ struct ttf_pt {
 	s32 y;
 };
 
+struct step_chg_data {
+	int ocv;
+	int soc;
+};
+
 struct ttf {
 	void			*data;
 	struct ttf_circ_buf	ibatt;
 	struct ttf_circ_buf	vbatt;
 	struct ttf_cc_step_data	cc_step;
 	struct mutex		lock;
+	struct step_chg_data	*step_chg_data;
+	struct range_data	*step_chg_cfg;
+	bool			step_chg_cfg_valid;
+	bool			ocv_step_chg_cfg_valid;
+	int			step_chg_num_params;
 	int			mode;
 	int			last_ttf;
 	int			input_present;
@@ -110,6 +138,17 @@ struct ttf {
 	struct delayed_work	ttf_work;
 	int (*get_ttf_param)(void *data, enum ttf_param, int *val);
 	int (*awake_voter)(void *data, bool vote);
+};
+
+struct soh_profile {
+	struct device_node *bp_node;
+	struct power_supply *bms_psy;
+	struct soh_range *soh_data;
+	int batt_id_kohms;
+	int profile_count;
+	int last_soh;
+	int last_batt_age_level;
+	bool initialized;
 };
 
 int restore_cycle_count(struct cycle_counter *counter);
@@ -130,5 +169,7 @@ void ttf_update(struct ttf *ttf, bool input_present);
 int ttf_get_time_to_empty(struct ttf *ttf, int *val);
 int ttf_get_time_to_full(struct ttf *ttf, int *val);
 int ttf_tte_init(struct ttf *ttf);
+int soh_profile_init(struct device *dev, struct soh_profile *sp);
+int soh_profile_update(struct soh_profile *sp, int soh);
 
 #endif

@@ -440,7 +440,7 @@
 &keypad {
 	samsung,keypad-num-rows = <3>;
 	samsung,keypad-num-columns = <2>;
-	linux,keypad-no-autorepeat;
+	linux,input-no-autorepeat;
 	wakeup-source;
 	pinctrl-0 = <&keypad_rows &keypad_cols>;
 	pinctrl-names = "default";
@@ -488,7 +488,6 @@
 	pinctrl-names = "default";
 	status = "okay";
 
-	num-slots = <1>;
 	broken-cd;
 	card-detect-delay = <200>;
 	samsung,dw-mshc-ciu-div = <3>;
@@ -539,9 +538,5 @@
 };
 
 &serial_3 {
-	status = "okay";
-};
-
-&watchdog {
 	status = "okay";
 };

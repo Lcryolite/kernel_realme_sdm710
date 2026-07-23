@@ -36,7 +36,7 @@
  *       for this trip point
  *    d. if the trend is THERMAL_TREND_DROP_FULL, use lower limit
  *       for this trip point
- * If the temperature is lower than a hysteresis temperature,
+ * If the temperature is lower than a trip point,
  *    a. if the trend is THERMAL_TREND_RAISING, do nothing
  *    b. if the trend is THERMAL_TREND_DROPPING, use lower cooling
  *       state for this trip point, if the cooling state already
@@ -53,12 +53,6 @@ static unsigned long get_target_state(struct thermal_instance *instance,
 	unsigned long cur_state;
 	unsigned long next_target;
 
-	/*
-	 * If the throttle condition is not reached and there is no
-	 * previous mitigaiton request, then there is nothing to compute.
-	 */
-	if (!throttle && instance->target == THERMAL_NO_TARGET)
-		return THERMAL_NO_TARGET;
 	/*
 	 * We keep this instance the way it is by default.
 	 * Otherwise, we use the current state of the
@@ -80,14 +74,6 @@ static unsigned long get_target_state(struct thermal_instance *instance,
 
 		return next_target;
 	}
-
-	/*
-	 * If there is no new throttle request and if the thermal zone
-	 * wasn't requesting any previous mitigation, then skip the
-	 * evaluation.
-	 */
-	if (instance->target == THERMAL_NO_TARGET && !throttle)
-		return next_target;
 
 	switch (trend) {
 	case THERMAL_TREND_RAISING:
@@ -135,7 +121,7 @@ static void update_passive_instance(struct thermal_zone_device *tz,
 	 * If value is +1, activate a passive instance.
 	 * If value is -1, deactivate a passive instance.
 	 */
-	if (type == THERMAL_TRIP_PASSIVE || type == THERMAL_TRIPS_NONE)
+	if (type == THERMAL_TRIP_PASSIVE || (int)type == THERMAL_TRIPS_NONE)
 		tz->passive += value;
 }
 
@@ -164,9 +150,8 @@ static void thermal_zone_trip_update(struct thermal_zone_device *tz, int trip)
 
 	trend = get_tz_trend(tz, trip);
 
-	dev_dbg(&tz->device,
-		"Trip%d[type=%d,temp=%d,hyst=%d]:trend=%d,throttle=%d\n",
-		trip, trip_type, trip_temp, hyst_temp, trend, throttle);
+	dev_dbg(&tz->device, "Trip%d[type=%d,temp=%d]:trend=%d,throttle=%d\n",
+				trip, trip_type, trip_temp, trend, throttle);
 
 	mutex_lock(&tz->lock);
 
@@ -230,8 +215,7 @@ static void thermal_zone_trip_update(struct thermal_zone_device *tz, int trip)
 /**
  * step_wise_throttle - throttles devices associated with the given zone
  * @tz - thermal_zone_device
- * @trip - the trip point
- * @trip_type - type of the trip point
+ * @trip - trip point index
  *
  * Throttling Logic: This uses the trend of the thermal zone to throttle.
  * If the thermal zone is 'heating up' this throttles all the cooling

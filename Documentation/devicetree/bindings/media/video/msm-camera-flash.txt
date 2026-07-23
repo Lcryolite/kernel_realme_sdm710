@@ -47,13 +47,13 @@ First Level Node - CAM FLASH device
   Usage: optional
   Value type: <u32>
   Definition: should contain i2c slave address, device id address
-		      and expected id read value.
+		and expected id read value.
 
 - cci-master
   Usage: optional
   Value type: <u32>
   Definition: should contain i2c master id to be used for this camera
-              flash.
+		flash.
 
 - max-current
   Usage: optional
@@ -64,6 +64,11 @@ First Level Node - CAM FLASH device
   Usage: optional
   Value type: <u32>
   Definition: Max duration in ms flash can glow.
+
+- wled-flash-support
+  Usage: optional
+  Value type: <boolean>
+  Definition: To identity wled flash hardware support.
 
 - gpios
   Usage: optional
@@ -109,7 +114,8 @@ led_flash_rear: qcom,camera-flash@0 {
 		flash-source = <&pmi8998_flash0 &pmi8998_flash1>;
 		torch-source = <&pmi8998_torch0 &pmi8998_torch1>;
 		switch-source = <&pmi8998_switch0>;
-        qcom,slave-id = <0x00 0x00 0x0011>;
+		wled-flash-support;
+		qcom,slave-id = <0x00 0x00 0x0011>;
 		qcom,cci-master = <0>;
 		gpios = <&msmgpio 23 0>,
 			<&msmgpio 24 0>;
@@ -123,30 +129,4 @@ led_flash_rear: qcom,camera-flash@0 {
 			"FLASH_NOW";
 		qcom,max-current = <1500>;
 		qcom,max-duration = <1200>;
-	};
-
-
-Example:
-
-flash0: qcom,camera-flash {
-		cell-index = <0>;
-		compatible = "qcom,qm215-gpio-flash";
-		qcom,flash-type = <2>;
-		gpios = <&tlmm 34 0>;
-			<&tlmm 33 0>;
-		qcom,gpio-req-tbl-num = <0 1>;
-		qcom,gpio-req-tbl-flags = <1 0>;
-		qcom,gpio-flash-en = <0>;
-		qcom,gpio-flash-now = <1>;
-		qcom,gpio-req-tbl-label = "CAM_FLASH",
-			"CAM_TORCH";
-		status = "ok";
-	};
-
-led_flash0: qcom,camera-led-flash {
-		cell-index = <0>;
-		compatible = "qcom,camera-led-flash";
-		qcom,flash-type = <3>;
-		qcom,flash-source = <&flash_BC847>;
-		qcom,torch-source = <&flash_BC847>;
 	};

@@ -11,10 +11,6 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
- *
  * The full GNU General Public License is included in this distribution in the
  * file called LICENSE.
  *
@@ -40,18 +36,6 @@
 #include "hw.h"
 #include "table.h"
 
-static u32 _rtl92s_phy_calculate_bit_shift(u32 bitmask)
-{
-	u32 i;
-
-	for (i = 0; i <= 31; i++) {
-		if (((bitmask >> i) & 0x1) == 1)
-			break;
-	}
-
-	return i;
-}
-
 u32 rtl92s_phy_query_bb_reg(struct ieee80211_hw *hw, u32 regaddr, u32 bitmask)
 {
 	struct rtl_priv *rtlpriv = rtl_priv(hw);
@@ -61,7 +45,7 @@ u32 rtl92s_phy_query_bb_reg(struct ieee80211_hw *hw, u32 regaddr, u32 bitmask)
 		 regaddr, bitmask);
 
 	originalvalue = rtl_read_dword(rtlpriv, regaddr);
-	bitshift = _rtl92s_phy_calculate_bit_shift(bitmask);
+	bitshift = calculate_bit_shift(bitmask);
 	returnvalue = (originalvalue & bitmask) >> bitshift;
 
 	RT_TRACE(rtlpriv, COMP_RF, DBG_TRACE, "BBR MASK=0x%x Addr[0x%x]=0x%x\n",
@@ -83,7 +67,7 @@ void rtl92s_phy_set_bb_reg(struct ieee80211_hw *hw, u32 regaddr, u32 bitmask,
 
 	if (bitmask != MASKDWORD) {
 		originalvalue = rtl_read_dword(rtlpriv, regaddr);
-		bitshift = _rtl92s_phy_calculate_bit_shift(bitmask);
+		bitshift = calculate_bit_shift(bitmask);
 		data = ((originalvalue & (~bitmask)) | (data << bitshift));
 	}
 
@@ -191,7 +175,7 @@ u32 rtl92s_phy_query_rf_reg(struct ieee80211_hw *hw, enum radio_path rfpath,
 
 	original_value = _rtl92s_phy_rf_serial_read(hw, rfpath, regaddr);
 
-	bitshift = _rtl92s_phy_calculate_bit_shift(bitmask);
+	bitshift = calculate_bit_shift(bitmask);
 	readback_value = (original_value & bitmask) >> bitshift;
 
 	spin_unlock(&rtlpriv->locks.rf_lock);
@@ -222,7 +206,7 @@ void rtl92s_phy_set_rf_reg(struct ieee80211_hw *hw, enum radio_path rfpath,
 	if (bitmask != RFREG_OFFSET_MASK) {
 		original_value = _rtl92s_phy_rf_serial_read(hw, rfpath,
 							    regaddr);
-		bitshift = _rtl92s_phy_calculate_bit_shift(bitmask);
+		bitshift = calculate_bit_shift(bitmask);
 		data = ((original_value & (~bitmask)) | (data << bitshift));
 	}
 
@@ -239,7 +223,6 @@ void rtl92s_phy_set_rf_reg(struct ieee80211_hw *hw, enum radio_path rfpath,
 void rtl92s_phy_scan_operation_backup(struct ieee80211_hw *hw,
 				      u8 operation)
 {
-	struct rtl_priv *rtlpriv = rtl_priv(hw);
 	struct rtl_hal *rtlhal = rtl_hal(rtl_priv(hw));
 
 	if (!is_hal_stop(rtlhal)) {
@@ -251,8 +234,7 @@ void rtl92s_phy_scan_operation_backup(struct ieee80211_hw *hw,
 			rtl92s_phy_set_fw_cmd(hw, FW_CMD_RESUME_DM_BY_SCAN);
 			break;
 		default:
-			RT_TRACE(rtlpriv, COMP_ERR, DBG_EMERG,
-				 "Unknown operation\n");
+			pr_err("Unknown operation\n");
 			break;
 		}
 	}
@@ -292,8 +274,8 @@ void rtl92s_phy_set_bw_mode(struct ieee80211_hw *hw,
 		rtl_write_byte(rtlpriv, BW_OPMODE, reg_bw_opmode);
 		break;
 	default:
-		RT_TRACE(rtlpriv, COMP_ERR, DBG_EMERG,
-			 "unknown bandwidth: %#X\n", rtlphy->current_chan_bw);
+		pr_err("unknown bandwidth: %#X\n",
+		       rtlphy->current_chan_bw);
 		break;
 	}
 
@@ -317,8 +299,8 @@ void rtl92s_phy_set_bw_mode(struct ieee80211_hw *hw,
 			rtl_write_byte(rtlpriv, RFPGA0_ANALOGPARAMETER2, 0x18);
 		break;
 	default:
-		RT_TRACE(rtlpriv, COMP_ERR, DBG_EMERG,
-			 "unknown bandwidth: %#X\n", rtlphy->current_chan_bw);
+		pr_err("unknown bandwidth: %#X\n",
+		       rtlphy->current_chan_bw);
 		break;
 	}
 
@@ -334,7 +316,7 @@ static bool _rtl92s_phy_set_sw_chnl_cmdarray(struct swchnlcmd *cmdtable,
 	struct swchnlcmd *pcmd;
 
 	if (cmdtable == NULL) {
-		RT_ASSERT(false, "cmdtable cannot be NULL\n");
+		WARN_ONCE(true, "rtl8192se: cmdtable cannot be NULL\n");
 		return false;
 	}
 
@@ -378,8 +360,8 @@ static bool _rtl92s_phy_sw_chnl_step_by_step(struct ieee80211_hw *hw,
 
 	rfdependcmdcnt = 0;
 
-	RT_ASSERT((channel >= 1 && channel <= 14),
-		  "invalid channel for Zebra: %d\n", channel);
+	WARN_ONCE((channel < 1 || channel > 14),
+		  "rtl8192se: invalid channel for Zebra: %d\n", channel);
 
 	_rtl92s_phy_set_sw_chnl_cmdarray(rfdependcmd, rfdependcmdcnt++,
 					 MAX_RFDEPENDCMD_CNT, CMDID_RF_WRITEREG,
@@ -441,9 +423,8 @@ static bool _rtl92s_phy_sw_chnl_step_by_step(struct ieee80211_hw *hw,
 			}
 			break;
 		default:
-			RT_TRACE(rtlpriv, COMP_ERR, DBG_EMERG,
-				 "switch case %#x not processed\n",
-				 currentcmd->cmdid);
+			pr_err("switch case %#x not processed\n",
+			       currentcmd->cmdid);
 			break;
 		}
 
@@ -648,8 +629,8 @@ bool rtl92s_phy_set_rf_power_state(struct ieee80211_hw *hw,
 			_rtl92se_phy_set_rf_sleep(hw);
 			break;
 	default:
-		RT_TRACE(rtlpriv, COMP_ERR, DBG_EMERG,
-			 "switch case %#x not processed\n", rfpwr_state);
+		pr_err("switch case %#x not processed\n",
+		       rfpwr_state);
 		bresult = false;
 		break;
 	}
@@ -941,8 +922,7 @@ static bool _rtl92s_phy_bb_config_parafile(struct ieee80211_hw *hw)
 	}
 
 	if (!rtstatus) {
-		RT_TRACE(rtlpriv, COMP_INIT, DBG_EMERG,
-			 "Write BB Reg Fail!!\n");
+		pr_err("Write BB Reg Fail!!\n");
 		goto phy_BB8190_Config_ParaFile_Fail;
 	}
 
@@ -955,8 +935,7 @@ static bool _rtl92s_phy_bb_config_parafile(struct ieee80211_hw *hw)
 						 BASEBAND_CONFIG_PHY_REG);
 	}
 	if (!rtstatus) {
-		RT_TRACE(rtlpriv, COMP_INIT, DBG_EMERG,
-			 "_rtl92s_phy_bb_config_parafile(): BB_PG Reg Fail!!\n");
+		pr_err("_rtl92s_phy_bb_config_parafile(): BB_PG Reg Fail!!\n");
 		goto phy_BB8190_Config_ParaFile_Fail;
 	}
 
@@ -1081,12 +1060,10 @@ bool rtl92s_phy_bb_config(struct ieee80211_hw *hw)
 	    (rtlphy->rf_type == RF_1T2R && rf_num != 2) ||
 	    (rtlphy->rf_type == RF_2T2R && rf_num != 2) ||
 	    (rtlphy->rf_type == RF_2T2R_GREEN && rf_num != 2)) {
-		RT_TRACE(rtlpriv, COMP_INIT, DBG_EMERG,
-			 "RF_Type(%x) does not match RF_Num(%x)!!\n",
-			 rtlphy->rf_type, rf_num);
-		RT_TRACE(rtlpriv, COMP_INIT, DBG_EMERG,
-			 "path1 0x%x, path2 0x%x, pathmap 0x%x\n",
-			 path1, path2, pathmap);
+		pr_err("RF_Type(%x) does not match RF_Num(%x)!!\n",
+		       rtlphy->rf_type, rf_num);
+		pr_err("path1 0x%x, path2 0x%x, pathmap 0x%x\n",
+		       path1, path2, pathmap);
 	}
 
 	return rtstatus;
@@ -1225,7 +1202,7 @@ void rtl92s_phy_chk_fwcmd_iodone(struct ieee80211_hw *hw)
 	} while (--pollingcnt);
 
 	if (pollingcnt == 0)
-		RT_TRACE(rtlpriv, COMP_ERR, DBG_EMERG, "Set FW Cmd fail!!\n");
+		pr_err("Set FW Cmd fail!!\n");
 }
 
 

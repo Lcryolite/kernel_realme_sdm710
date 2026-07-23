@@ -572,6 +572,8 @@ int mwifiex_send_addba(struct mwifiex_private *priv, int tid, u8 *peer_mac)
 
 	mwifiex_dbg(priv->adapter, CMD, "cmd: %s: tid %d\n", __func__, tid);
 
+	memset(&add_ba_req, 0, sizeof(add_ba_req));
+
 	if ((GET_BSS_ROLE(priv) == MWIFIEX_BSS_ROLE_STA) &&
 	    ISSUPP_TDLS_ENABLED(priv->adapter->fw_cap_info) &&
 	    priv->adapter->is_hw_11ac_capable &&
@@ -654,11 +656,13 @@ int mwifiex_send_delba(struct mwifiex_private *priv, int tid, u8 *peer_mac,
 void mwifiex_11n_delba(struct mwifiex_private *priv, int tid)
 {
 	struct mwifiex_rx_reorder_tbl *rx_reor_tbl_ptr;
+	unsigned long flags;
 
+	spin_lock_irqsave(&priv->rx_reorder_tbl_lock, flags);
 	if (list_empty(&priv->rx_reorder_tbl_ptr)) {
 		dev_dbg(priv->adapter->dev,
 			"mwifiex_11n_delba: rx_reorder_tbl_ptr empty\n");
-		return;
+		goto exit;
 	}
 
 	list_for_each_entry(rx_reor_tbl_ptr, &priv->rx_reorder_tbl_ptr, list) {
@@ -667,9 +671,11 @@ void mwifiex_11n_delba(struct mwifiex_private *priv, int tid)
 				"Send delba to tid=%d, %pM\n",
 				tid, rx_reor_tbl_ptr->ta);
 			mwifiex_send_delba(priv, tid, rx_reor_tbl_ptr->ta, 0);
-			return;
+			goto exit;
 		}
 	}
+exit:
+	spin_unlock_irqrestore(&priv->rx_reorder_tbl_lock, flags);
 }
 
 /*
@@ -765,14 +771,9 @@ void mwifiex_del_tx_ba_stream_tbl_by_ra(struct mwifiex_private *priv, u8 *ra)
 		return;
 
 	spin_lock_irqsave(&priv->tx_ba_stream_tbl_lock, flags);
-	list_for_each_entry_safe(tbl, tmp, &priv->tx_ba_stream_tbl_ptr, list) {
-		if (!memcmp(tbl->ra, ra, ETH_ALEN)) {
-			spin_unlock_irqrestore(&priv->tx_ba_stream_tbl_lock,
-					       flags);
+	list_for_each_entry_safe(tbl, tmp, &priv->tx_ba_stream_tbl_ptr, list)
+		if (!memcmp(tbl->ra, ra, ETH_ALEN))
 			mwifiex_11n_delete_tx_ba_stream_tbl_entry(priv, tbl);
-			spin_lock_irqsave(&priv->tx_ba_stream_tbl_lock, flags);
-		}
-	}
 	spin_unlock_irqrestore(&priv->tx_ba_stream_tbl_lock, flags);
 
 	return;
@@ -877,7 +878,7 @@ mwifiex_send_delba_txbastream_tbl(struct mwifiex_private *priv, u8 tid)
  */
 void mwifiex_update_ampdu_txwinsize(struct mwifiex_adapter *adapter)
 {
-	u8 i;
+	u8 i, j;
 	u32 tx_win_size;
 	struct mwifiex_private *priv;
 
@@ -908,8 +909,8 @@ void mwifiex_update_ampdu_txwinsize(struct mwifiex_adapter *adapter)
 		if (tx_win_size != priv->add_ba_param.tx_win_size) {
 			if (!priv->media_connected)
 				continue;
-			for (i = 0; i < MAX_NUM_TID; i++)
-				mwifiex_send_delba_txbastream_tbl(priv, i);
+			for (j = 0; j < MAX_NUM_TID; j++)
+				mwifiex_send_delba_txbastream_tbl(priv, j);
 		}
 	}
 }

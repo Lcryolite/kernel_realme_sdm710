@@ -1,6 +1,6 @@
 * Qualcomm Technologies, Inc. MSM EEPROM
 
-EEPROM is an one time programmed(OTP) device that stores the calibration data
+EEPROM is a one time programmed(OTP) device that stores the calibration data
 use for camera sensor. It may either be integrated in the sensor module or in
 the sensor itself. As a result, the power, clock and GPIOs may be the same as
 the camera sensor. The following describes the page block map, power supply,
@@ -104,6 +104,12 @@ First Level Node - CAM EEPROM device
   Value type: <u32>
   Definition: should contain the mount angle of the camera sensor.
 
+- cci-device
+  Usage: required
+  Value type: <u32>
+  Definition: should contain i2c device id to be used for this camera
+	sensor
+
 - cci-master
   Usage: required
   Value type: <u32>
@@ -137,7 +143,7 @@ First Level Node - CAM EEPROM device
 
 Example:
 
-	eprom0: qcom,eeprom@0 {
+	eeprom0: qcom,eeprom@0 {
 	        cell-index = <0>;
 		reg = <0x0>;
 		compatible = "qcom,eeprom";
@@ -161,6 +167,7 @@ Example:
 			"CAM_STANDBY";
 		sensor-position = <0>;
 		sensor-mode = <0>;
+		cci-device = <0>;
 		cci-master = <0>;
 		status = "ok";
 		clocks = <&clock_camcc CAM_CC_MCLK0_CLK>;
@@ -388,6 +395,12 @@ First Level Node - CAM EEPROM device
   Value type: <u32>
   Definition: should contain the mount angle of the camera sensor.
 
+- cci-device
+  Usage: required
+  Value type: <u32>
+  Definition: should contain i2c device id to be used for this camera
+	sensor
+
 - cci-master
   Usage: required
   Value type: <u32>
@@ -480,6 +493,7 @@ Example:
 			"CAM_STANDBY";
 		sensor-position = <0>;
 		sensor-mode = <0>;
+		cci-device = <0>;
 		cci-master = <0>;
 		status = "ok";
 		clocks = <&clock_camcc CAM_CC_MCLK0_CLK>;

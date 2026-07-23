@@ -82,10 +82,10 @@ void msm_isp_process_stats_irq(struct vfe_device *vfe_dev,
 	uint32_t stats_comp_mask = 0, stats_irq_mask = 0;
 	uint32_t num_stats_comp_mask =
 		vfe_dev->hw_info->stats_hw_info->num_stats_comp_mask;
-	stats_comp_mask = vfe_dev->hw_info->vfe_ops.stats_ops.
-		get_comp_mask(irq_status0, irq_status1);
-	stats_irq_mask = vfe_dev->hw_info->vfe_ops.stats_ops.
-		get_wm_mask(irq_status0, irq_status1);
+	stats_comp_mask = vfe_dev->hw_info->vfe_ops.stats_ops.get_comp_mask(
+				irq_status0, irq_status1);
+	stats_irq_mask = vfe_dev->hw_info->vfe_ops.stats_ops.get_wm_mask(
+				irq_status0, irq_status1);
 	if (!(stats_comp_mask || stats_irq_mask))
 		return;
 	ISP_DBG("%s: status: 0x%x\n", __func__, irq_status0);
@@ -119,8 +119,9 @@ void msm_isp_process_stats_irq(struct vfe_device *vfe_dev,
 		buf_event.frame_id =
 			vfe_dev->axi_data.src_info[VFE_PIX_0].frame_id;
 		buf_event.input_intf = VFE_PIX_0;
-		pingpong_status = vfe_dev->hw_info->
-			vfe_ops.stats_ops.get_pingpong_status(vfe_dev);
+		pingpong_status =
+		vfe_dev->hw_info->vfe_ops.stats_ops.get_pingpong_status(
+			vfe_dev);
 
 		for (i = 0; i < vfe_dev->hw_info->stats_hw_info->num_stats_type;
 			i++) {
@@ -136,8 +137,8 @@ void msm_isp_process_stats_irq(struct vfe_device *vfe_dev,
 				rc = vfe_dev->buf_mgr->ops->buf_divert(
 					vfe_dev->buf_mgr, done_buf->bufq_handle,
 					done_buf->buf_idx, &ts->buf_time,
-					vfe_dev->axi_data.
-					src_info[VFE_PIX_0].frame_id);
+					vfe_dev->axi_data.src_info[
+					VFE_PIX_0].frame_id);
 				if (rc != 0)
 					continue;
 
@@ -187,8 +188,8 @@ int msm_isp_stats_create_stream(struct vfe_device *vfe_dev,
 		return rc;
 	}
 
-	stats_idx = vfe_dev->hw_info->vfe_ops.stats_ops.
-		get_stats_idx(stream_req_cmd->stats_type);
+	stats_idx = vfe_dev->hw_info->vfe_ops.stats_ops.get_stats_idx(
+			stream_req_cmd->stats_type);
 
 	if (stats_idx >= vfe_dev->hw_info->stats_hw_info->num_stats_type) {
 		pr_err("%s Invalid stats index %d", __func__, stats_idx);
@@ -266,8 +267,8 @@ int msm_isp_request_stats_stream(struct vfe_device *vfe_dev, void *arg)
 	stream_info->framedrop_period = framedrop_period - 1;
 
 	if (!stream_info->composite_flag)
-		vfe_dev->hw_info->vfe_ops.stats_ops.
-			cfg_wm_irq_mask(vfe_dev, stream_info);
+		vfe_dev->hw_info->vfe_ops.stats_ops.cfg_wm_irq_mask(vfe_dev,
+				stream_info);
 
 	if (stream_info->init_stats_frame_drop == 0)
 		vfe_dev->hw_info->vfe_ops.stats_ops.cfg_wm_reg(vfe_dev,
@@ -303,8 +304,8 @@ int msm_isp_release_stats_stream(struct vfe_device *vfe_dev, void *arg)
 	}
 
 	if (!stream_info->composite_flag)
-		vfe_dev->hw_info->vfe_ops.stats_ops.
-			clear_wm_irq_mask(vfe_dev, stream_info);
+		vfe_dev->hw_info->vfe_ops.stats_ops.clear_wm_irq_mask(vfe_dev,
+						stream_info);
 
 	vfe_dev->hw_info->vfe_ops.stats_ops.clear_wm_reg(vfe_dev, stream_info);
 	memset(stream_info, 0, sizeof(struct msm_vfe_stats_stream));

@@ -185,14 +185,6 @@ static int tfp410_connector_get_modes(struct drm_connector *connector)
 	return ret;
 }
 
-static int tfp410_connector_mode_valid(struct drm_connector *connector,
-		  struct drm_display_mode *mode)
-{
-	struct tilcdc_drm_private *priv = connector->dev->dev_private;
-	/* our only constraints are what the crtc can generate: */
-	return tilcdc_crtc_mode_valid(priv->crtc, mode);
-}
-
 static struct drm_encoder *tfp410_connector_best_encoder(
 		struct drm_connector *connector)
 {
@@ -202,7 +194,6 @@ static struct drm_encoder *tfp410_connector_best_encoder(
 
 static const struct drm_connector_funcs tfp410_connector_funcs = {
 	.destroy            = tfp410_connector_destroy,
-	.dpms               = drm_atomic_helper_connector_dpms,
 	.detect             = tfp410_connector_detect,
 	.fill_modes         = drm_helper_probe_single_connector_modes,
 	.reset              = drm_atomic_helper_connector_reset,
@@ -212,7 +203,6 @@ static const struct drm_connector_funcs tfp410_connector_funcs = {
 
 static const struct drm_connector_helper_funcs tfp410_connector_helper_funcs = {
 	.get_modes          = tfp410_connector_get_modes,
-	.mode_valid         = tfp410_connector_mode_valid,
 	.best_encoder       = tfp410_connector_best_encoder,
 };
 
@@ -248,8 +238,6 @@ static struct drm_connector *tfp410_connector_create(struct drm_device *dev,
 	ret = drm_mode_connector_attach_encoder(connector, encoder);
 	if (ret)
 		goto fail;
-
-	drm_connector_register(connector);
 
 	return connector;
 

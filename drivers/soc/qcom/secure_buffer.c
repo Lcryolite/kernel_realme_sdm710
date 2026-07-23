@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2011 Google, Inc
- * Copyright (c) 2011-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -20,6 +20,7 @@
 #include <linux/scatterlist.h>
 #include <linux/slab.h>
 #include <linux/dma-mapping.h>
+#include <linux/cma.h>
 #include <soc/qcom/scm.h>
 #include <soc/qcom/secure_buffer.h>
 
@@ -81,14 +82,9 @@ static int secure_buffer_change_chunk(u32 chunks,
 	kmap_flush_unused();
 	kmap_atomic_flush_unused();
 
-	if (!is_scm_armv8()) {
-		ret = scm_call(SCM_SVC_MP, MEM_PROTECT_LOCK_ID2,
-				&request, sizeof(request), &resp, sizeof(resp));
-	} else {
-		ret = scm_call2(SCM_SIP_FNID(SCM_SVC_MP,
-				MEM_PROTECT_LOCK_ID2_FLAT), &desc);
-		resp = desc.ret[0];
-	}
+	ret = scm_call2(SCM_SIP_FNID(SCM_SVC_MP,
+			MEM_PROTECT_LOCK_ID2_FLAT), &desc);
+	resp = desc.ret[0];
 
 	return ret;
 }
@@ -114,7 +110,7 @@ static int secure_buffer_change_table(struct sg_table *table, int lock)
 		u64 tmp = sg_dma_address(sg);
 
 		WARN((tmp >> 32) & 0xffffffff,
-			"%s: there are ones in the upper 32 bits of the sg at %p! They will be truncated! Address: 0x%llx\n",
+			"%s: there are ones in the upper 32 bits of the sg at %pK! They will be truncated! Address: 0x%llx\n",
 			__func__, sg, tmp);
 		if (unlikely(!size || (size % V2_CHUNK_SIZE))) {
 			WARN(1,
@@ -268,6 +264,11 @@ static int batched_hyp_assign(struct sg_table *table, struct scm_desc *desc)
 		if (ret) {
 			pr_info("%s: Failed to assign memory protection, ret = %d\n",
 				__func__, ret);
+			/*
+			 * Make it clear to clients that the memory may no
+			 * longer be in a usable state.
+			 */
+			ret = -EADDRNOTAVAIL;
 			break;
 		}
 
@@ -278,10 +279,17 @@ static int batched_hyp_assign(struct sg_table *table, struct scm_desc *desc)
 	return ret;
 }
 
-int hyp_assign_table(struct sg_table *table,
+/*
+ *  When -EAGAIN is returned it is safe for the caller to try to call
+ *  __hyp_assign_table again.
+ *
+ *  When -EADDRNOTAVAIL is returned the memory may no longer be in
+ *  a usable state and should no longer be accessed by the HLOS.
+ */
+static int __hyp_assign_table(struct sg_table *table,
 			u32 *source_vm_list, int source_nelems,
 			int *dest_vmids, int *dest_perms,
-			int dest_nelems)
+			int dest_nelems, bool try_lock)
 {
 	int ret = 0;
 	struct scm_desc desc = {0};
@@ -313,7 +321,14 @@ int hyp_assign_table(struct sg_table *table,
 		goto out_free_source;
 	}
 
-	mutex_lock(&secure_buffer_mutex);
+	if (try_lock) {
+		if (!mutex_trylock(&secure_buffer_mutex)) {
+			ret = -EAGAIN;
+			goto out_free_dest;
+		}
+	} else {
+		mutex_lock(&secure_buffer_mutex);
+	}
 
 	desc.args[2] = virt_to_phys(source_vm_copy);
 	desc.args[3] = source_vm_copy_size;
@@ -332,12 +347,30 @@ int hyp_assign_table(struct sg_table *table,
 	ret = batched_hyp_assign(table, &desc);
 
 	mutex_unlock(&secure_buffer_mutex);
+out_free_dest:
 	kfree(dest_vm_copy);
 out_free_source:
 	kfree(source_vm_copy);
 	return ret;
 }
-EXPORT_SYMBOL(hyp_assign_table);
+
+int hyp_assign_table(struct sg_table *table,
+			u32 *source_vm_list, int source_nelems,
+			int *dest_vmids, int *dest_perms,
+			int dest_nelems)
+{
+	return __hyp_assign_table(table, source_vm_list, source_nelems,
+				  dest_vmids, dest_perms, dest_nelems, false);
+}
+
+int try_hyp_assign_table(struct sg_table *table,
+			u32 *source_vm_list, int source_nelems,
+			int *dest_vmids, int *dest_perms,
+			int dest_nelems)
+{
+	return __hyp_assign_table(table, source_vm_list, source_nelems,
+				  dest_vmids, dest_perms, dest_nelems, true);
+}
 
 int hyp_assign_phys(phys_addr_t addr, u64 size, u32 *source_vm_list,
 			int source_nelems, int *dest_vmids,
@@ -359,6 +392,33 @@ int hyp_assign_phys(phys_addr_t addr, u64 size, u32 *source_vm_list,
 	return ret;
 }
 EXPORT_SYMBOL(hyp_assign_phys);
+
+int cma_hyp_assign_phys(struct device *dev, u32 *source_vm_list,
+				int source_nelems, int *dest_vmids,
+					int *dest_perms, int dest_nelems)
+{
+	phys_addr_t addr;
+	u64 size;
+	struct cma *cma = NULL;
+	int ret;
+
+	if (dev && dev->cma_area)
+		cma = dev->cma_area;
+
+	if (cma) {
+		addr = cma_get_base(cma);
+		size = (size_t)cma_get_size(cma);
+	} else {
+		return -ENOMEM;
+	}
+
+	ret = hyp_assign_phys(addr, size, source_vm_list,
+				source_nelems, dest_vmids,
+					dest_perms, dest_nelems);
+
+	return ret;
+}
+EXPORT_SYMBOL(cma_hyp_assign_phys);
 
 const char *msm_secure_vmid_to_string(int secure_vmid)
 {
@@ -397,8 +457,16 @@ const char *msm_secure_vmid_to_string(int secure_vmid)
 		return "VMID_CP_SPSS_SP_SHARED";
 	case VMID_CP_SPSS_HLOS_SHARED:
 		return "VMID_CP_SPSS_HLOS_SHARED";
+	case VMID_CP_CAMERA_ENCODE:
+		return "VMID_CP_CAMERA_ENCODE";
+	case VMID_CP_CDSP:
+		return "VMID_CP_CDSP";
+	case VMID_CP_DSP_EXT:
+		return "VMID_CP_DSP_EXT";
 	case VMID_INVAL:
 		return "VMID_INVAL";
+	case VMID_NAV:
+		return "VMID_NAV";
 	default:
 		return "Unknown VMID";
 	}

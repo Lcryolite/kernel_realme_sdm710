@@ -722,7 +722,7 @@ int raydium_esd_check(void)
 	}
 exit:
 	mutex_unlock(&g_raydium_ts->lock);
-	pr_debug("[touch] raydium_esd_check\n");
+	pr_debug("[touch]%s\n", __func__);
 	return i32_ret;
 }
 #endif
@@ -871,7 +871,7 @@ static void raydium_dump_data_work(struct work_struct *work)
 
 	/* set mode */
 	memset(u8_w_data, 0x00, RAYDIUM_FT_CMD_LENGTH);
-	pr_debug("[touch] raydium_dump_data_work\n");
+	pr_debug("[touch]%s\n", __func__);
 
 	disable_irq_nosync(g_raydium_ts->irq);
 	g_raydium_ts->irq_enabled = false;
@@ -965,7 +965,7 @@ int raydium_notify_function(unsigned short u16_display_mode)
 	}
 exit:
 	mutex_unlock(&g_raydium_ts->lock);
-	pr_debug("[touch] raydium_notify_function\n");
+	pr_debug("[touch]%s\n", __func__);
 	return i32_ret;
 }
 #endif

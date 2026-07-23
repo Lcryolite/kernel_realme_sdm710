@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *  linux/include/asm/setup.h
  *
@@ -16,7 +17,9 @@
 
 #include <linux/types.h>
 
-#define COMMAND_LINE_SIZE 2048
+#ifdef CONFIG_COMMAND_LINE_SIZE
+#define COMMAND_LINE_SIZE CONFIG_COMMAND_LINE_SIZE
+#endif
 
 /* The list ends with an ATAG_NONE node. */
 #define ATAG_NONE	0x00000000

@@ -1,5 +1,4 @@
-/*
- * Copyright (C) 2007 Google, Inc.
+/* Copyright (C) 2007 Google, Inc.
  * Copyright (c) 2007-2017, The Linux Foundation. All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
@@ -10,7 +9,6 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
  */
 
 #ifndef __MSM_CLK_PROVIDER_H

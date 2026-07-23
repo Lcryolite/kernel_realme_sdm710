@@ -8,6 +8,7 @@
 #include <net/af_unix.h>
 #include <net/scm.h>
 #include <linux/init.h>
+#include <linux/sched/signal.h>
 
 #include "scm.h"
 
@@ -101,24 +102,11 @@ static inline bool too_many_unix_fds(struct task_struct *p)
 	return false;
 }
 
-#define MAX_RECURSION_LEVEL 4
-
 int unix_attach_fds(struct scm_cookie *scm, struct sk_buff *skb)
 {
 	int i;
-	unsigned char max_level = 0;
 
 	if (too_many_unix_fds(current))
-		return -ETOOMANYREFS;
-
-	for (i = scm->fp->count - 1; i >= 0; i--) {
-		struct sock *sk = unix_get_socket(scm->fp->fp[i]);
-
-		if (sk)
-			max_level = max(max_level,
-					unix_sk(sk)->recursion_level);
-	}
-	if (unlikely(max_level > MAX_RECURSION_LEVEL))
 		return -ETOOMANYREFS;
 
 	/*
@@ -132,7 +120,7 @@ int unix_attach_fds(struct scm_cookie *scm, struct sk_buff *skb)
 
 	for (i = scm->fp->count - 1; i >= 0; i--)
 		unix_inflight(scm->fp->user, scm->fp->fp[i]);
-	return max_level;
+	return 0;
 }
 EXPORT_SYMBOL(unix_attach_fds);
 

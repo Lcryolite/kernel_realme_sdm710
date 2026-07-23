@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -23,7 +23,6 @@ struct sde_hw_wb;
 struct sde_hw_wb_cfg {
 	struct sde_hw_fmt_layout dest;
 	enum sde_intf_mode intf_mode;
-	struct traffic_shaper_cfg ts_cfg;
 	struct sde_rect roi;
 	bool is_secure;
 };
@@ -127,6 +126,27 @@ struct sde_hw_wb_ops {
 	 */
 	void (*setup_cdp)(struct sde_hw_wb *ctx,
 			struct sde_hw_wb_cdp_cfg *cfg);
+
+	/**
+	 * bind_pingpong_blk - enable/disable the connection with pp
+	 * @ctx: Pointer to wb context
+	 * @enable: enable/disable connection
+	 * @pp: pingpong blk id
+	 */
+	void (*bind_pingpong_blk)(struct sde_hw_wb *ctx,
+			bool enable,
+			const enum sde_pingpong pp);
+
+	/**
+	 * program_cwb_ctrl - program cwb block configp
+	 * @ctx: Pointer to wb context
+	 * @pp_idx: Current CWB block index to poram
+	 * @data_src: Source CWB/PingPong block index
+	 * @dspp_out: Tap dspp output or default LM output
+	 * @enable: enable or disable the CWB path to tap the output
+	 */
+	void (*program_cwb_ctrl)(struct sde_hw_wb *ctx, const enum sde_cwb cwb,
+		const enum sde_cwb data_src, bool dspp_out, bool enable);
 };
 
 /**
@@ -139,6 +159,7 @@ struct sde_hw_wb_ops {
  * @wb_hw_caps: hardware capabilities
  * @ops: function pointers
  * @hw_mdp: MDP top level hardware block
+ * @cwb_hw: CWB control hwio details
  */
 struct sde_hw_wb {
 	struct sde_hw_blk base;
@@ -154,6 +175,7 @@ struct sde_hw_wb {
 	struct sde_hw_wb_ops ops;
 
 	struct sde_hw_mdp *hw_mdp;
+	struct sde_hw_blk_reg_map cwb_hw;
 };
 
 /**

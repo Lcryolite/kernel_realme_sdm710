@@ -39,7 +39,7 @@ struct regulator_stub {
 };
 
 static int regulator_stub_set_voltage(struct regulator_dev *rdev, int min_uV,
-				  int max_uV, unsigned *selector)
+				  int max_uV, unsigned int *selector)
 {
 	struct regulator_stub *vreg_priv = rdev_get_drvdata(rdev);
 
@@ -55,7 +55,7 @@ static int regulator_stub_get_voltage(struct regulator_dev *rdev)
 }
 
 static int regulator_stub_list_voltage(struct regulator_dev *rdev,
-				    unsigned selector)
+				    unsigned int selector)
 {
 	struct regulation_constraints *constraints = rdev->constraints;
 
@@ -282,7 +282,7 @@ static struct platform_driver regulator_stub_driver = {
 	},
 };
 
-int __init regulator_stub_init(void)
+static int __init regulator_stub_init(void)
 {
 	static int registered;
 

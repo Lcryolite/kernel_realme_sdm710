@@ -7,6 +7,8 @@
  * published by the Free Software Foundation.
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/module.h>
 #include <linux/syscalls.h>
 #include <linux/skbuff.h>
@@ -34,7 +36,7 @@ static int __bpf_mt_check_bytecode(struct sock_filter *insns, __u16 len,
 	program.filter = insns;
 
 	if (bpf_prog_create(ret, &program)) {
-		pr_info("bpf: check failed: parse error\n");
+		pr_info_ratelimited("check failed: parse error\n");
 		return -EINVAL;
 	}
 
@@ -60,7 +62,6 @@ static int __bpf_mt_check_path(const char *path, struct bpf_prog **ret)
 
 	*ret = bpf_prog_get_type_path(path, BPF_PROG_TYPE_SOCKET_FILTER);
 	return PTR_ERR_OR_ZERO(*ret);
-
 }
 
 static int bpf_mt_check(const struct xt_mtchk_param *par)
@@ -125,6 +126,7 @@ static struct xt_match bpf_mt_reg[] __read_mostly = {
 		.match		= bpf_mt,
 		.destroy	= bpf_mt_destroy,
 		.matchsize	= sizeof(struct xt_bpf_info),
+		.usersize	= offsetof(struct xt_bpf_info, filter),
 		.me		= THIS_MODULE,
 	},
 	{
@@ -135,6 +137,7 @@ static struct xt_match bpf_mt_reg[] __read_mostly = {
 		.match		= bpf_mt_v1,
 		.destroy	= bpf_mt_destroy_v1,
 		.matchsize	= sizeof(struct xt_bpf_info_v1),
+		.usersize	= offsetof(struct xt_bpf_info_v1, filter),
 		.me		= THIS_MODULE,
 	},
 };

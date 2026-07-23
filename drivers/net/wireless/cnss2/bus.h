@@ -26,6 +26,7 @@
 #define QCA6390_DEVICE_ID		0x1101
 #define QCN7605_VENDOR_ID               0x17CB
 #define QCN7605_DEVICE_ID               0x1102
+#define QCA6490_DEVICE_ID		0x1103
 
 #define QCN7605_USB_VENDOR_ID             0x05C6
 #define QCN7605_STANDALONE_PRODUCT_ID    0x9900

@@ -72,6 +72,18 @@ static inline int __of_attach_node_sysfs(struct device_node *np)
 static inline void __of_detach_node_sysfs(struct device_node *np) {}
 #endif
 
+#if defined(CONFIG_OF_UNITTEST) && defined(CONFIG_OF_OVERLAY)
+extern void __init unittest_unflatten_overlay_base(void);
+#else
+static inline void unittest_unflatten_overlay_base(void) {};
+#endif
+
+extern void *__unflatten_device_tree(const void *blob,
+			      struct device_node *dad,
+			      struct device_node **mynodes,
+			      void *(*dt_alloc)(u64 size, u64 align),
+			      bool detached);
+
 /**
  * General utilities for working with live trees.
  *
@@ -81,6 +93,9 @@ static inline void __of_detach_node_sysfs(struct device_node *np) {}
  */
 struct property *__of_prop_dup(const struct property *prop, gfp_t allocflags);
 __printf(2, 3) struct device_node *__of_node_dup(const struct device_node *np, const char *fmt, ...);
+
+struct device_node *__of_find_node_by_full_path(struct device_node *node,
+						const char *path);
 
 extern const void *__of_get_property(const struct device_node *np,
 				     const char *name, int *lenp);
@@ -95,7 +110,6 @@ extern int __of_update_property(struct device_node *np,
 extern void __of_update_property_sysfs(struct device_node *np,
 		struct property *newprop, struct property *oldprop);
 
-extern void __of_attach_node(struct device_node *np);
 extern int __of_attach_node_sysfs(struct device_node *np);
 extern void __of_detach_node(struct device_node *np);
 extern void __of_detach_node_sysfs(struct device_node *np);
@@ -105,8 +119,6 @@ extern void __of_sysfs_remove_bin_file(struct device_node *np,
 
 /* illegal phandle value (set when unresolved) */
 #define OF_PHANDLE_ILLEGAL	0xdeadbeef
-
-extern void __init of_populate_phandle_cache_early(void);
 
 /* iterators for transactions, used for overlays */
 /* forward iterator */

@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -21,6 +21,7 @@
 #include "ufs-debugfs.h"
 #include "unipro.h"
 #include "ufshci.h"
+#include "ufshcd.h"
 
 enum field_width {
 	BYTE	= 1,
@@ -100,6 +101,16 @@ static const int err_inject_query_err_codes[] = {
 	0xFF,
 };
 
+static const int err_inject_hibern8_err_codes[] = {
+	-EIO,
+	-ETIMEDOUT,
+	-1,
+	PWR_REMOTE,
+	PWR_BUSY,
+	PWR_ERROR_CAP,
+	PWR_FATAL_ERROR,
+};
+
 static struct ufsdbg_err_scenario err_scen_arr[] = {
 	{
 		"ERR_INJECT_INTR",
@@ -125,6 +136,16 @@ static struct ufsdbg_err_scenario err_scen_arr[] = {
 		"ERR_INJECT_QUERY",
 		err_inject_query_err_codes,
 		ARRAY_SIZE(err_inject_query_err_codes),
+	},
+	{
+		"ERR_INJECT_HIBERN8_ENTER",
+		err_inject_hibern8_err_codes,
+		ARRAY_SIZE(err_inject_hibern8_err_codes),
+	},
+	{
+		"ERR_INJECT_HIBERN8_EXIT",
+		err_inject_hibern8_err_codes,
+		ARRAY_SIZE(err_inject_hibern8_err_codes),
 	},
 };
 
@@ -281,6 +302,8 @@ void ufsdbg_error_inject_dispatcher(struct ufs_hba *hba,
 	case ERR_INJECT_UIC:
 	case ERR_INJECT_DME_ATTR:
 	case ERR_INJECT_QUERY:
+	case ERR_INJECT_HIBERN8_ENTER:
+	case ERR_INJECT_HIBERN8_EXIT:
 		goto should_fail;
 	default:
 		dev_err(hba->dev, "%s: unsupported error scenario\n",
@@ -897,6 +920,7 @@ static int ufsdbg_dump_device_desc_show(struct seq_file *file, void *data)
 	if (!err) {
 		int i;
 		struct desc_field_offset *tmp;
+
 		for (i = 0; i < ARRAY_SIZE(device_desc_field_name); ++i) {
 			tmp = &device_desc_field_name[i];
 
@@ -1059,9 +1083,7 @@ static int ufsdbg_power_mode_show(struct seq_file *file, void *data)
 		"L - number of lanes\n"
 		"M - power mode:\n"
 		"\t1 = fast mode\n"
-		"\t2 = slow mode\n"
 		"\t4 = fast-auto mode\n"
-		"\t5 = slow-auto mode\n"
 		"first letter is for RX, second letter is for TX.\n\n");
 
 	return 0;
@@ -1069,16 +1091,14 @@ static int ufsdbg_power_mode_show(struct seq_file *file, void *data)
 
 static bool ufsdbg_power_mode_validate(struct ufs_pa_layer_attr *pwr_mode)
 {
-	if (pwr_mode->gear_rx < UFS_PWM_G1 || pwr_mode->gear_rx > UFS_PWM_G7 ||
-	    pwr_mode->gear_tx < UFS_PWM_G1 || pwr_mode->gear_tx > UFS_PWM_G7 ||
+	if (pwr_mode->gear_rx < UFS_HS_G1 || pwr_mode->gear_rx > UFS_HS_G4 ||
+	    pwr_mode->gear_tx < UFS_HS_G1 || pwr_mode->gear_tx > UFS_HS_G4 ||
 	    pwr_mode->lane_rx < 1 || pwr_mode->lane_rx > 2 ||
 	    pwr_mode->lane_tx < 1 || pwr_mode->lane_tx > 2 ||
-	    (pwr_mode->pwr_rx != FAST_MODE && pwr_mode->pwr_rx != SLOW_MODE &&
-	     pwr_mode->pwr_rx != FASTAUTO_MODE &&
-	     pwr_mode->pwr_rx != SLOWAUTO_MODE) ||
-	    (pwr_mode->pwr_tx != FAST_MODE && pwr_mode->pwr_tx != SLOW_MODE &&
-	     pwr_mode->pwr_tx != FASTAUTO_MODE &&
-	     pwr_mode->pwr_tx != SLOWAUTO_MODE)) {
+	    (pwr_mode->pwr_rx != FAST_MODE &&
+	     pwr_mode->pwr_rx != FASTAUTO_MODE) ||
+	    (pwr_mode->pwr_tx != FAST_MODE &&
+	     pwr_mode->pwr_tx != FASTAUTO_MODE)) {
 		pr_err("%s: power parameters are not valid\n", __func__);
 		return false;
 	}
@@ -1184,14 +1204,67 @@ out:
 static int ufsdbg_config_pwr_mode(struct ufs_hba *hba,
 		struct ufs_pa_layer_attr *desired_pwr_mode)
 {
-	int ret;
+	int ret = 0;
+	bool scale_up = false;
+	u32 scale_down_gear = ufshcd_vops_get_scale_down_gear(hba);
 
 	pm_runtime_get_sync(hba->dev);
+	/* let's not get into low power until clock scaling is completed */
+	hba->ufs_stats.clk_hold.ctx = DBGFS_CFG_PWR_MODE;
+	ufshcd_hold(hba, false);
+	down_write(&hba->lock);
 	ufshcd_scsi_block_requests(hba);
-	ret = ufshcd_wait_for_doorbell_clr(hba, DOORBELL_CLR_TOUT_US);
-	if (!ret)
+	if (ufshcd_wait_for_doorbell_clr(hba, DOORBELL_CLR_TOUT_US)) {
+		ret = -EBUSY;
+		goto out;
+	}
+
+	/* Gear scaling needs to be taken care of along with clk scaling */
+	if (desired_pwr_mode->gear_tx != hba->pwr_info.gear_tx ||
+	    desired_pwr_mode->gear_rx != hba->pwr_info.gear_rx) {
+
+		if (desired_pwr_mode->gear_tx > scale_down_gear ||
+		    desired_pwr_mode->gear_rx > scale_down_gear)
+			scale_up = true;
+
+		if (!scale_up) {
+			ret = ufshcd_change_power_mode(hba, desired_pwr_mode);
+			if (ret)
+				goto out;
+		}
+
+		/*
+		 * If auto hibern8 is supported then put the link in
+		 * hibern8 manually, this is to avoid auto hibern8
+		 * racing during clock frequency scaling sequence.
+		 */
+		if (ufshcd_is_auto_hibern8_supported(hba) &&
+		    hba->hibern8_on_idle.is_enabled) {
+			ret = ufshcd_uic_hibern8_enter(hba);
+			if (ret)
+				goto out;
+		}
+
+		ret = ufshcd_scale_clks(hba, scale_up);
+		if (ret)
+			goto out;
+
+		if (ufshcd_is_auto_hibern8_supported(hba) &&
+		    hba->hibern8_on_idle.is_enabled)
+			ret = ufshcd_uic_hibern8_exit(hba);
+
+		if (scale_up) {
+			ret = ufshcd_change_power_mode(hba, desired_pwr_mode);
+			if (ret)
+				ufshcd_scale_clks(hba, false);
+		}
+	} else {
 		ret = ufshcd_change_power_mode(hba, desired_pwr_mode);
+	}
+out:
+	up_write(&hba->lock);
 	ufshcd_scsi_unblock_requests(hba);
+	ufshcd_release(hba, false);
 	pm_runtime_put_sync(hba->dev);
 
 	return ret;
@@ -1705,6 +1778,12 @@ void ufsdbg_add_debugfs(struct ufs_hba *hba)
 		goto err;
 	}
 
+	if (!debugfs_create_bool("crash_on_err",
+		0600, hba->debugfs_files.debugfs_root,
+		&hba->crash_on_err))
+		goto err;
+
+
 	ufsdbg_setup_fault_injection(hba);
 
 	ufshcd_vops_add_debugfs(hba, hba->debugfs_files.debugfs_root);
@@ -1723,5 +1802,4 @@ void ufsdbg_remove_debugfs(struct ufs_hba *hba)
 	ufshcd_vops_remove_debugfs(hba);
 	debugfs_remove_recursive(hba->debugfs_files.debugfs_root);
 	kfree(hba->ufs_stats.tag_stats);
-
 }

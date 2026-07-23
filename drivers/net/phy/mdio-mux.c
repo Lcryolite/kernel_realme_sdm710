@@ -13,7 +13,6 @@
 #include <linux/module.h>
 #include <linux/phy.h>
 
-#define DRV_VERSION "1.0"
 #define DRV_DESCRIPTION "MDIO bus multiplexer driver"
 
 struct mdio_mux_child_bus;
@@ -86,7 +85,19 @@ out:
 
 static int parent_count;
 
+static void mdio_mux_uninit_children(struct mdio_mux_parent_bus *pb)
+{
+	struct mdio_mux_child_bus *cb = pb->children;
+
+	while (cb) {
+		mdiobus_unregister(cb->mii_bus);
+		mdiobus_free(cb->mii_bus);
+		cb = cb->next;
+	}
+}
+
 int mdio_mux_init(struct device *dev,
+		  struct device_node *mux_node,
 		  int (*switch_fn)(int cur, int desired, void *data),
 		  void **mux_handle,
 		  void *data,
@@ -99,11 +110,11 @@ int mdio_mux_init(struct device *dev,
 	struct mdio_mux_parent_bus *pb;
 	struct mdio_mux_child_bus *cb;
 
-	if (!dev->of_node)
+	if (!mux_node)
 		return -ENODEV;
 
 	if (!mux_bus) {
-		parent_bus_node = of_parse_phandle(dev->of_node,
+		parent_bus_node = of_parse_phandle(mux_node,
 						   "mdio-parent-bus", 0);
 
 		if (!parent_bus_node)
@@ -121,7 +132,7 @@ int mdio_mux_init(struct device *dev,
 	}
 
 	pb = devm_kzalloc(dev, sizeof(*pb), GFP_KERNEL);
-	if (pb == NULL) {
+	if (!pb) {
 		ret_val = -ENOMEM;
 		goto err_pb_kz;
 	}
@@ -133,20 +144,21 @@ int mdio_mux_init(struct device *dev,
 	pb->mii_bus = parent_bus;
 
 	ret_val = -ENODEV;
-	for_each_available_child_of_node(dev->of_node, child_bus_node) {
-		u32 v;
+	for_each_available_child_of_node(mux_node, child_bus_node) {
+		int v;
 
 		r = of_property_read_u32(child_bus_node, "reg", &v);
-		if (r)
+		if (r) {
+			dev_err(dev,
+				"Error: Failed to find reg for child %pOF\n",
+				child_bus_node);
 			continue;
+		}
 
 		cb = devm_kzalloc(dev, sizeof(*cb), GFP_KERNEL);
-		if (cb == NULL) {
-			dev_err(dev,
-				"Error: Failed to allocate memory for child\n");
+		if (!cb) {
 			ret_val = -ENOMEM;
-			of_node_put(child_bus_node);
-			break;
+			goto err_loop;
 		}
 		cb->bus_number = v;
 		cb->parent = pb;
@@ -154,9 +166,7 @@ int mdio_mux_init(struct device *dev,
 		cb->mii_bus = mdiobus_alloc();
 		if (!cb->mii_bus) {
 			ret_val = -ENOMEM;
-			devm_kfree(dev, cb);
-			of_node_put(child_bus_node);
-			break;
+			goto err_loop;
 		}
 		cb->mii_bus->priv = cb;
 
@@ -169,7 +179,14 @@ int mdio_mux_init(struct device *dev,
 		r = of_mdiobus_register(cb->mii_bus, child_bus_node);
 		if (r) {
 			mdiobus_free(cb->mii_bus);
+			if (r == -EPROBE_DEFER) {
+				ret_val = r;
+				goto err_loop;
+			}
 			devm_kfree(dev, cb);
+			dev_err(dev,
+				"Error: Failed to register MDIO bus for child %pOF\n",
+				child_bus_node);
 		} else {
 			cb->next = pb->children;
 			pb->children = cb;
@@ -177,11 +194,15 @@ int mdio_mux_init(struct device *dev,
 	}
 	if (pb->children) {
 		*mux_handle = pb;
-		dev_info(dev, "Version " DRV_VERSION "\n");
 		return 0;
 	}
 
+	dev_err(dev, "Error: No acceptable child buses found\n");
 	devm_kfree(dev, pb);
+
+err_loop:
+	mdio_mux_uninit_children(pb);
+	of_node_put(child_bus_node);
 err_pb_kz:
 	put_device(&parent_bus->dev);
 err_parent_bus:
@@ -193,19 +214,12 @@ EXPORT_SYMBOL_GPL(mdio_mux_init);
 void mdio_mux_uninit(void *mux_handle)
 {
 	struct mdio_mux_parent_bus *pb = mux_handle;
-	struct mdio_mux_child_bus *cb = pb->children;
 
-	while (cb) {
-		mdiobus_unregister(cb->mii_bus);
-		mdiobus_free(cb->mii_bus);
-		cb = cb->next;
-	}
-
+	mdio_mux_uninit_children(pb);
 	put_device(&pb->mii_bus->dev);
 }
 EXPORT_SYMBOL_GPL(mdio_mux_uninit);
 
 MODULE_DESCRIPTION(DRV_DESCRIPTION);
-MODULE_VERSION(DRV_VERSION);
 MODULE_AUTHOR("David Daney");
 MODULE_LICENSE("GPL");

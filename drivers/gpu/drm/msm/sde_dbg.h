@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -47,6 +47,12 @@ enum sde_dbg_evtlog_flag {
 enum sde_dbg_dump_flag {
 	SDE_DBG_DUMP_IN_LOG = BIT(0),
 	SDE_DBG_DUMP_IN_MEM = BIT(1),
+};
+
+enum sde_dbg_dump_context {
+	SDE_DBG_DUMP_PROC_CTX,
+	SDE_DBG_DUMP_IRQ_CTX,
+	SDE_DBG_DUMP_CLK_ENABLED_CTX,
 };
 
 #ifdef CONFIG_DRM_SDE_EVTLOG_DEBUG
@@ -137,8 +143,8 @@ extern struct sde_dbg_evtlog *sde_dbg_base_evtlog;
  *		Including the special name "panic" will trigger a panic after
  *		the dumping work has completed.
  */
-#define SDE_DBG_DUMP(...) sde_dbg_dump(false, __func__, ##__VA_ARGS__, \
-		SDE_DBG_DUMP_DATA_LIMITER)
+#define SDE_DBG_DUMP(...) sde_dbg_dump(SDE_DBG_DUMP_PROC_CTX, __func__, \
+		##__VA_ARGS__, SDE_DBG_DUMP_DATA_LIMITER)
 
 /**
  * SDE_DBG_DUMP_WQ - trigger dumping of all sde_dbg facilities, queuing the work
@@ -148,8 +154,19 @@ extern struct sde_dbg_evtlog *sde_dbg_base_evtlog;
  *		Including the special name "panic" will trigger a panic after
  *		the dumping work has completed.
  */
-#define SDE_DBG_DUMP_WQ(...) sde_dbg_dump(true, __func__, ##__VA_ARGS__, \
-		SDE_DBG_DUMP_DATA_LIMITER)
+#define SDE_DBG_DUMP_WQ(...) sde_dbg_dump(SDE_DBG_DUMP_IRQ_CTX, __func__, \
+		##__VA_ARGS__, SDE_DBG_DUMP_DATA_LIMITER)
+
+/**
+ * SDE_DBG_DUMP_CLK_EN - trigger dumping of all sde_dbg facilities, without clk
+ * @va_args:	list of named register dump ranges and regions to dump, as
+ *		registered previously through sde_dbg_reg_register_base and
+ *		sde_dbg_reg_register_dump_range.
+ *		Including the special name "panic" will trigger a panic after
+ *		the dumping work has completed.
+ */
+#define SDE_DBG_DUMP_CLK_EN(...) sde_dbg_dump(SDE_DBG_DUMP_CLK_ENABLED_CTX, \
+		__func__, ##__VA_ARGS__, SDE_DBG_DUMP_DATA_LIMITER)
 
 /**
  * SDE_DBG_EVT_CTRL - trigger a different driver events
@@ -157,8 +174,6 @@ extern struct sde_dbg_evtlog *sde_dbg_base_evtlog;
  */
 #define SDE_DBG_CTRL(...) sde_dbg_ctrl(__func__, ##__VA_ARGS__, \
 		SDE_DBG_DUMP_DATA_LIMITER)
-
-#if defined(CONFIG_DEBUG_FS)
 
 /**
  * sde_evtlog_init - allocate a new event log object
@@ -208,11 +223,12 @@ bool sde_evtlog_is_enabled(struct sde_dbg_evtlog *evtlog, u32 flag);
  * @evtlog_buf:		target buffer to print into
  * @evtlog_buf_size:	size of target buffer
  * @update_last_entry:	whether or not to stop at most recent entry
+ * @full_dump:          whether to dump full or to limit print entries
  * Returns:		number of bytes written to buffer
  */
 ssize_t sde_evtlog_dump_to_buffer(struct sde_dbg_evtlog *evtlog,
 		char *evtlog_buf, ssize_t evtlog_buf_size,
-		bool update_last_entry);
+		bool update_last_entry, bool full_dump);
 
 /**
  * sde_dbg_init_dbg_buses - initialize debug bus dumping support for the chipset
@@ -234,7 +250,7 @@ int sde_dbg_init(struct device *dev, struct sde_dbg_power_ctrl *power_ctrl);
  * @debugfs_root:	debugfs root in which to create sde debug entries
  * Returns:	0 or -ERROR
  */
-int sde_dbg_debugfs_register(struct dentry *debugfs_root);
+int sde_dbg_debugfs_register(struct device *dev);
 
 /**
  * sde_dbg_destroy - destroy the global sde debug facilities
@@ -253,7 +269,7 @@ void sde_dbg_destroy(void);
  *		the dumping work has completed.
  * Returns:	none
  */
-void sde_dbg_dump(bool queue_work, const char *name, ...);
+void sde_dbg_dump(enum sde_dbg_dump_context mode, const char *name, ...);
 
 /**
  * sde_dbg_ctrl - trigger specific actions for the driver with debugging
@@ -336,11 +352,17 @@ void sde_evtlog_set_filter(struct sde_dbg_evtlog *evtlog, char *filter);
 int sde_evtlog_get_filter(struct sde_dbg_evtlog *evtlog, int index,
 		char *buf, size_t bufsz);
 
+#ifndef CONFIG_DRM_SDE_RSC
+static inline void sde_rsc_debug_dump(u32 mux_sel)
+{
+}
+#else
 /**
  * sde_rsc_debug_dump - sde rsc debug dump status
  * @mux_sel:	select mux on rsc debug bus
  */
 void sde_rsc_debug_dump(u32 mux_sel);
+#endif
 
 /**
  * dsi_ctrl_debug_dump - dump dsi debug dump status
@@ -348,102 +370,5 @@ void sde_rsc_debug_dump(u32 mux_sel);
  * @size:	size of the debug bus control array
  */
 void dsi_ctrl_debug_dump(u32 *entries, u32 size);
-
-#else
-static inline struct sde_dbg_evtlog *sde_evtlog_init(void)
-{
-	return NULL;
-}
-
-static inline void sde_evtlog_destroy(struct sde_dbg_evtlog *evtlog)
-{
-}
-
-static inline void sde_evtlog_log(struct sde_dbg_evtlog *evtlog,
-		const char *name, int line, int flag, ...)
-{
-}
-
-static inline void sde_evtlog_dump_all(struct sde_dbg_evtlog *evtlog)
-{
-}
-
-static inline bool sde_evtlog_is_enabled(struct sde_dbg_evtlog *evtlog,
-		u32 flag)
-{
-	return false;
-}
-
-static inline ssize_t sde_evtlog_dump_to_buffer(struct sde_dbg_evtlog *evtlog,
-		char *evtlog_buf, ssize_t evtlog_buf_size,
-		bool update_last_entry)
-{
-	return 0;
-}
-
-static inline void sde_dbg_init_dbg_buses(u32 hwversion)
-{
-}
-
-static inline int sde_dbg_init(struct device *dev,
-		struct sde_dbg_power_ctrl *power_ctrl)
-{
-	return 0;
-}
-
-static inline int sde_dbg_debugfs_register(struct dentry *debugfs_root)
-{
-	return 0;
-}
-
-static inline void sde_dbg_destroy(void)
-{
-}
-
-static inline void sde_dbg_dump(bool queue_work, const char *name, ...)
-{
-}
-
-static inline void sde_dbg_ctrl(const char *name, ...)
-{
-}
-
-static inline int sde_dbg_reg_register_base(const char *name,
-		void __iomem *base, size_t max_offset)
-{
-	return 0;
-}
-
-static inline void sde_dbg_reg_register_dump_range(const char *base_name,
-		const char *range_name, u32 offset_start, u32 offset_end,
-		uint32_t xin_id)
-{
-}
-
-static inline void sde_dbg_set_sde_top_offset(u32 blk_off)
-{
-}
-
-static inline void sde_evtlog_set_filter(
-		struct sde_dbg_evtlog *evtlog, char *filter)
-{
-}
-
-static inline int sde_evtlog_get_filter(struct sde_dbg_evtlog *evtlog,
-		int index, char *buf, size_t bufsz)
-{
-	return -EINVAL;
-}
-
-static inline void sde_rsc_debug_dump(u32 mux_sel)
-{
-}
-
-static inline void dsi_ctrl_debug_dump(u32 entries, u32 size)
-{
-}
-
-#endif /* defined(CONFIG_DEBUG_FS) */
-
 
 #endif /* SDE_DBG_H_ */

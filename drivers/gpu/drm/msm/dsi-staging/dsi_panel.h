@@ -19,7 +19,7 @@
 #include <linux/types.h>
 #include <linux/bitops.h>
 #include <linux/errno.h>
-#include <linux/leds.h>
+#include <linux/backlight.h>
 #include <drm/drm_panel.h>
 #include <drm/msm_drm.h>
 
@@ -27,15 +27,8 @@
 #include "dsi_ctrl_hw.h"
 #include "dsi_clk.h"
 #include "dsi_pwr.h"
+#include "dsi_parser.h"
 #include "msm_drv.h"
-
-#ifdef VENDOR_EDIT
-#include <linux/dsi_oppo_support.h>
-struct oppo_brightness_alpha {
-	u32 brightness;
-	u32 alpha;
-};
-#endif /*VENDOR_EDIT*/
 
 #define MAX_BL_LEVEL 4096
 #define MAX_BL_SCALE_LEVEL 1024
@@ -55,6 +48,7 @@ enum dsi_backlight_type {
 	DSI_BACKLIGHT_PWM = 0,
 	DSI_BACKLIGHT_WLED,
 	DSI_BACKLIGHT_DCS,
+	DSI_BACKLIGHT_EXTERNAL,
 	DSI_BACKLIGHT_UNKNOWN,
 	DSI_BACKLIGHT_MAX,
 };
@@ -77,6 +71,12 @@ enum dsi_dms_mode {
 	DSI_DMS_MODE_RES_SWITCH_IMMEDIATE,
 };
 
+enum dsi_panel_physical_type {
+	DSI_DISPLAY_PANEL_TYPE_LCD = 0,
+	DSI_DISPLAY_PANEL_TYPE_OLED,
+	DSI_DISPLAY_PANEL_TYPE_MAX,
+};
+
 struct dsi_dfps_capabilities {
 	enum dsi_dfps_type type;
 	u32 min_refresh_rate;
@@ -90,6 +90,9 @@ struct dsi_dyn_clk_caps {
 	bool dyn_clk_support;
 	u32 *bit_clk_list;
 	u32 bit_clk_list_len;
+	bool skip_phy_timing_update;
+	enum dsi_dyn_clk_feature_type type;
+	bool maintain_const_fps;
 };
 
 struct dsi_pinctrl_info {
@@ -111,20 +114,21 @@ struct dsi_backlight_config {
 	u32 bl_min_level;
 	u32 bl_max_level;
 	u32 brightness_max_level;
+	u32 brightness_default_level;
 	u32 bl_level;
 	u32 bl_scale;
 	u32 bl_scale_ad;
+	bool bl_inverted_dbv;
 
 	int en_gpio;
 	/* PWM params */
-	bool pwm_pmi_control;
-	u32 pwm_pmic_bank;
+	struct pwm_device *pwm_bl;
+	bool pwm_enabled;
 	u32 pwm_period_usecs;
-	int pwm_gpio;
 
 	/* WLED params */
 	struct led_trigger *wled;
-	struct backlight_device *bd;
+	struct backlight_device *raw_bd;
 };
 
 struct dsi_reset_seq {
@@ -146,12 +150,13 @@ enum esd_check_status_mode {
 	ESD_MODE_REG_READ,
 	ESD_MODE_SW_BTA,
 	ESD_MODE_PANEL_TE,
+	ESD_MODE_SW_SIM_SUCCESS,
+	ESD_MODE_SW_SIM_FAILURE,
 	ESD_MODE_MAX
 };
 
 struct drm_panel_esd_config {
 	bool esd_enabled;
-	bool cmd_channel;
 
 	enum esd_check_status_mode status_mode;
 	struct dsi_panel_cmd_set status_cmd;
@@ -163,26 +168,9 @@ struct drm_panel_esd_config {
 	u32 groups;
 };
 
-enum dsi_panel_type {
-	DSI_PANEL = 0,
-	EXT_BRIDGE,
-	DSI_PANEL_TYPE_MAX,
-};
-
-/* Extended Panel config for panels with additional gpios */
-struct dsi_panel_exd_config {
-	int display_1p8_en;
-	int led_5v_en;
-	int switch_power;
-	int led_en1;
-	int led_en2;
-	int oenab;
-	int selab;
-};
-
 struct dsi_panel {
 	const char *name;
-	enum dsi_panel_type type;
+	const char *type;
 	struct device_node *panel_of_node;
 	struct mipi_dsi_device mipi_device;
 
@@ -195,6 +183,7 @@ struct dsi_panel {
 	struct dsi_video_engine_cfg video_config;
 	struct dsi_cmd_engine_cfg cmd_config;
 	enum dsi_op_mode panel_mode;
+	bool panel_mode_switch_enabled;
 
 	struct dsi_dfps_capabilities dfps_caps;
 	struct dsi_dyn_clk_caps dyn_clk_caps;
@@ -202,6 +191,7 @@ struct dsi_panel {
 
 	struct dsi_display_mode *cur_mode;
 	u32 num_timing_nodes;
+	u32 num_display_modes;
 
 	struct dsi_regulator_info power_info;
 	struct dsi_backlight_config bl_config;
@@ -210,29 +200,29 @@ struct dsi_panel {
 	struct drm_panel_hdr_properties hdr_props;
 	struct drm_panel_esd_config esd_config;
 
+	struct dsi_parser_utils utils;
+
 	bool lp11_init;
-	bool ulps_enabled;
+	bool ulps_feature_enabled;
 	bool ulps_suspend_enabled;
 	bool allow_phy_power_off;
 	atomic_t esd_recovery_pending;
 
 	bool panel_initialized;
 	bool te_using_watchdog_timer;
+	u32 qsync_min_fps;
 
 	char dsc_pps_cmd[DSI_CMD_PPS_SIZE];
 	enum dsi_dms_mode dms_mode;
 
 	bool sync_broadcast_en;
-#ifdef VENDOR_EDIT
-	bool is_hbm_enabled;
-	bool need_power_on_backlight;
-#endif
-	struct dsi_panel_exd_config exd_config;
+	int power_mode;
+	enum dsi_panel_physical_type panel_type;
 };
 
 static inline bool dsi_panel_ulps_feature_enabled(struct dsi_panel *panel)
 {
-	return panel->ulps_enabled;
+	return panel->ulps_feature_enabled;
 }
 
 static inline bool dsi_panel_initialized(struct dsi_panel *panel)
@@ -250,10 +240,16 @@ static inline void dsi_panel_release_panel_lock(struct dsi_panel *panel)
 	mutex_unlock(&panel->panel_lock);
 }
 
+static inline bool dsi_panel_is_type_oled(struct dsi_panel *panel)
+{
+	return (panel->panel_type == DSI_DISPLAY_PANEL_TYPE_OLED);
+}
+
 struct dsi_panel *dsi_panel_get(struct device *parent,
 				struct device_node *of_node,
-				int topology_override,
-				enum dsi_panel_type type);
+				struct device_node *parser_node,
+				const char *type,
+				int topology_override);
 
 int dsi_panel_trigger_esd_attack(struct dsi_panel *panel);
 
@@ -263,8 +259,7 @@ int dsi_panel_drv_init(struct dsi_panel *panel, struct mipi_dsi_host *host);
 
 int dsi_panel_drv_deinit(struct dsi_panel *panel);
 
-int dsi_panel_get_mode_count(struct dsi_panel *panel,
-		struct device_node *of_node);
+int dsi_panel_get_mode_count(struct dsi_panel *panel);
 
 void dsi_panel_put_mode(struct dsi_display_mode *mode);
 
@@ -311,8 +306,21 @@ int dsi_panel_set_backlight(struct dsi_panel *panel, u32 bl_lvl);
 
 int dsi_panel_update_pps(struct dsi_panel *panel);
 
+int dsi_panel_send_qsync_on_dcs(struct dsi_panel *panel,
+		int ctrl_idx);
+int dsi_panel_send_qsync_off_dcs(struct dsi_panel *panel,
+		int ctrl_idx);
+
 int dsi_panel_send_roi_dcs(struct dsi_panel *panel, int ctrl_idx,
 		struct dsi_rect *roi);
+
+int dsi_panel_pre_mode_switch_to_video(struct dsi_panel *panel);
+
+int dsi_panel_pre_mode_switch_to_cmd(struct dsi_panel *panel);
+
+int dsi_panel_mode_switch_to_cmd(struct dsi_panel *panel);
+
+int dsi_panel_mode_switch_to_vid(struct dsi_panel *panel);
 
 int dsi_panel_switch(struct dsi_panel *panel);
 
@@ -320,16 +328,14 @@ int dsi_panel_post_switch(struct dsi_panel *panel);
 
 void dsi_dsc_pclk_param_calc(struct msm_display_dsc_info *dsc, int intf_width);
 
+void dsi_panel_bl_handoff(struct dsi_panel *panel);
+
 struct dsi_panel *dsi_panel_ext_bridge_get(struct device *parent,
 				struct device_node *of_node,
 				int topology_override);
 
-int dsi_panel_parse_esd_reg_read_configs(struct dsi_panel *panel,
-				struct device_node *of_node);
+int dsi_panel_parse_esd_reg_read_configs(struct dsi_panel *panel);
 
 void dsi_panel_ext_bridge_put(struct dsi_panel *panel);
-#ifdef VENDOR_EDIT
-int dsi_panel_tx_cmd_set(struct dsi_panel *panel,
-			   enum dsi_cmd_set_type type);
-#endif
+
 #endif /* _DSI_PANEL_H_ */

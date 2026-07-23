@@ -1052,7 +1052,7 @@ static void pvc_setup(struct net_device *dev)
 {
 	dev->type = ARPHRD_DLCI;
 	dev->flags = IFF_POINTOPOINT;
-	dev->hard_header_len = 10;
+	dev->hard_header_len = 0;
 	dev->addr_len = 2;
 	netif_keep_dst(dev);
 }
@@ -1060,7 +1060,6 @@ static void pvc_setup(struct net_device *dev)
 static const struct net_device_ops pvc_ops = {
 	.ndo_open       = pvc_open,
 	.ndo_stop       = pvc_close,
-	.ndo_change_mtu = hdlc_change_mtu,
 	.ndo_start_xmit = pvc_xmit,
 	.ndo_do_ioctl   = pvc_ioctl,
 };
@@ -1103,6 +1102,9 @@ static int fr_add_pvc(struct net_device *frad, unsigned int dlci, int type)
 	}
 	dev->netdev_ops = &pvc_ops;
 	dev->mtu = HDLC_MAX_MTU;
+	dev->min_mtu = 68;
+	dev->max_mtu = HDLC_MAX_MTU;
+	dev->needed_headroom = 10;
 	dev->priv_flags |= IFF_NO_QUEUE;
 	dev->ml_priv = pvc;
 
@@ -1112,7 +1114,7 @@ static int fr_add_pvc(struct net_device *frad, unsigned int dlci, int type)
 		return -EIO;
 	}
 
-	dev->destructor = free_netdev;
+	dev->needs_free_netdev = true;
 	*get_dev_p(pvc, type) = dev;
 	if (!used) {
 		state(hdlc)->dce_changed = 1;

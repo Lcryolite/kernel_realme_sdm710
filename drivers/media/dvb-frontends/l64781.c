@@ -496,7 +496,7 @@ static void l64781_release(struct dvb_frontend* fe)
 	kfree(state);
 }
 
-static struct dvb_frontend_ops l64781_ops;
+static const struct dvb_frontend_ops l64781_ops;
 
 struct dvb_frontend* l64781_attach(const struct l64781_config* config,
 				   struct i2c_adapter* i2c)
@@ -571,7 +571,7 @@ error:
 	return NULL;
 }
 
-static struct dvb_frontend_ops l64781_ops = {
+static const struct dvb_frontend_ops l64781_ops = {
 	.delsys = { SYS_DVBT },
 	.info = {
 		.name = "LSI L64781 DVB-T",
@@ -606,4 +606,4 @@ MODULE_DESCRIPTION("LSI L64781 DVB-T Demodulator driver");
 MODULE_AUTHOR("Holger Waechtler, Marko Kohtala");
 MODULE_LICENSE("GPL");
 
-EXPORT_SYMBOL(l64781_attach);
+EXPORT_SYMBOL_GPL(l64781_attach);

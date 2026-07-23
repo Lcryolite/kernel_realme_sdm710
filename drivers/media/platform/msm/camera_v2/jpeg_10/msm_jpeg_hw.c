@@ -947,4 +947,3 @@ void msm_jpeg_io_dump(void *base, int size)
 	if (line_str[0] != '\0')
 		JPEG_DBG_HIGH("%s\n", line_str);
 }
-

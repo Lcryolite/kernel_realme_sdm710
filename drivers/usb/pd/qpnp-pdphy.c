@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2017, Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -72,12 +72,9 @@
 
 #define USB_PDPHY_RX_BUFFER		0x80
 
-#define USB_PDPHY_SEC_ACCESS		0xD0
-#define USB_PDPHY_TRIM_3		0xF3
-
 /* VDD regulator */
-#define VDD_PDPHY_VOL_MIN		3088000 /* uV */
-#define VDD_PDPHY_VOL_MAX		3088000 /* uV */
+#define VDD_PDPHY_VOL_MIN		2800000 /* uV */
+#define VDD_PDPHY_VOL_MAX		3300000 /* uV */
 #define VDD_PDPHY_HPM_LOAD		3000 /* uA */
 
 /* Message Spec Rev field */
@@ -102,6 +99,8 @@ struct usb_pdphy {
 	int msg_tx_failed_irq;
 	int msg_tx_discarded_irq;
 	int msg_rx_discarded_irq;
+	bool sig_rx_wake_enabled;
+	bool msg_rx_wake_enabled;
 
 	void (*signal_cb)(struct usbpd *pd, enum pd_sig_type sig);
 	void (*msg_rx_cb)(struct usbpd *pd, enum pd_sop_type sop,
@@ -252,11 +251,13 @@ void pdphy_enable_irq(struct usb_pdphy *pdphy, bool enable)
 	if (enable) {
 		enable_irq(pdphy->sig_tx_irq);
 		enable_irq(pdphy->sig_rx_irq);
-		enable_irq_wake(pdphy->sig_rx_irq);
+		pdphy->sig_rx_wake_enabled =
+			!enable_irq_wake(pdphy->sig_rx_irq);
 		enable_irq(pdphy->msg_tx_irq);
 		if (!pdphy->in_test_data_mode) {
 			enable_irq(pdphy->msg_rx_irq);
-			enable_irq_wake(pdphy->msg_rx_irq);
+			pdphy->msg_rx_wake_enabled =
+				!enable_irq_wake(pdphy->msg_rx_irq);
 		}
 		enable_irq(pdphy->msg_tx_failed_irq);
 		enable_irq(pdphy->msg_tx_discarded_irq);
@@ -266,11 +267,16 @@ void pdphy_enable_irq(struct usb_pdphy *pdphy, bool enable)
 
 	disable_irq(pdphy->sig_tx_irq);
 	disable_irq(pdphy->sig_rx_irq);
-	disable_irq_wake(pdphy->sig_rx_irq);
+	if (pdphy->sig_rx_wake_enabled) {
+		disable_irq_wake(pdphy->sig_rx_irq);
+		pdphy->sig_rx_wake_enabled = false;
+	}
 	disable_irq(pdphy->msg_tx_irq);
-	if (!pdphy->in_test_data_mode) {
+	if (!pdphy->in_test_data_mode)
 		disable_irq(pdphy->msg_rx_irq);
+	if (pdphy->msg_rx_wake_enabled) {
 		disable_irq_wake(pdphy->msg_rx_irq);
+		pdphy->msg_rx_wake_enabled = false;
 	}
 	disable_irq(pdphy->msg_tx_failed_irq);
 	disable_irq(pdphy->msg_tx_discarded_irq);
@@ -340,6 +346,14 @@ int pd_phy_update_roles(enum data_role dr, enum power_role pr)
 		 (pr == PR_SRC ? MSG_CONFIG_PORT_POWER_ROLE : 0)));
 }
 EXPORT_SYMBOL(pd_phy_update_roles);
+
+int pd_phy_update_frame_filter(u8 frame_filter_val)
+{
+	struct usb_pdphy *pdphy = __pdphy;
+
+	return pdphy_reg_write(pdphy, USB_PDPHY_FRAME_FILTER, frame_filter_val);
+}
+EXPORT_SYMBOL(pd_phy_update_frame_filter);
 
 int pd_phy_open(struct pd_phy_params *params)
 {
@@ -467,6 +481,7 @@ int pd_phy_write(u16 hdr, const u8 *data, size_t data_len, enum pd_sop_type sop)
 	int ret;
 	size_t total_len = data_len + USB_PDPHY_MSG_HDR_LEN;
 	struct usb_pdphy *pdphy = __pdphy;
+	unsigned int msg_rx_cnt;
 
 	dev_dbg(pdphy->dev, "%s: hdr %x frame sop_type %d\n",
 			__func__, hdr, sop);
@@ -479,6 +494,8 @@ int pd_phy_write(u16 hdr, const u8 *data, size_t data_len, enum pd_sop_type sop)
 		pr_err("%s: pdphy not found\n", __func__);
 		return -ENODEV;
 	}
+
+	msg_rx_cnt = pdphy->msg_rx_cnt;
 
 	if (!pdphy->is_opened) {
 		dev_dbg(pdphy->dev, "%s: pdphy disabled\n", __func__);
@@ -530,6 +547,11 @@ int pd_phy_write(u16 hdr, const u8 *data, size_t data_len, enum pd_sop_type sop)
 		val |= TX_CONTROL_RETRY_COUNT(2);
 	else
 		val |= TX_CONTROL_RETRY_COUNT(3);
+
+	if (msg_rx_cnt != pdphy->msg_rx_cnt) {
+		dev_err(pdphy->dev, "%s: RX message arrived\n", __func__);
+		return -EBUSY;
+	}
 
 	ret = pdphy_reg_write(pdphy, USB_PDPHY_TX_CONTROL, val);
 	if (ret)
@@ -707,7 +729,7 @@ static irqreturn_t pdphy_msg_rx_irq(int irq, void *data)
 		goto done;
 
 	frame_type = rx_status & RX_FRAME_TYPE;
-	if (frame_type != SOP_MSG) {
+	if (frame_type == SOPII_MSG) {
 		dev_err(pdphy->dev, "%s:unsupported frame type %d\n",
 			__func__, frame_type);
 		goto done;
@@ -720,7 +742,7 @@ static irqreturn_t pdphy_msg_rx_irq(int irq, void *data)
 	/* ack to change ownership of rx buffer back to PDPHY RX HW */
 	pdphy_reg_write(pdphy, USB_PDPHY_RX_ACKNOWLEDGE, 0);
 
-	if (((buf[0] & 0xf) == PD_MSG_BIST) && size >= 5) { /* BIST */
+	if (((buf[0] & 0xf) == PD_MSG_BIST) && !(buf[1] & 0x80) && size >= 5) {
 		u8 mode = buf[5] >> 4; /* [31:28] of 1st data object */
 
 		pd_phy_bist_mode(mode);
@@ -848,14 +870,6 @@ static int pdphy_probe(struct platform_device *pdev)
 		pdphy_msg_rx_discarded_irq, NULL,
 		(IRQF_TRIGGER_RISING | IRQF_ONESHOT));
 	if (ret < 0)
-		return ret;
-
-	ret = pdphy_reg_write(pdphy, USB_PDPHY_SEC_ACCESS, 0xA5);
-	if (ret)
-		return ret;
-
-	ret = pdphy_reg_write(pdphy, USB_PDPHY_TRIM_3, 0x2);
-	if (ret)
 		return ret;
 
 	/* usbpd_create() could call back to us, so have __pdphy ready */

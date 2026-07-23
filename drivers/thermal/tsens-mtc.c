@@ -59,7 +59,7 @@ int tsens_mtc_reset_history_counter(unsigned int zone)
 		pr_debug("tsens : zone =%d reg=%x\n", zone, reg_cntl);
 	}
 
-	/*Disble the bit to start counter*/
+	/*Disable the bit to start counter*/
 	writel_relaxed(reg_cntl & ~(1 << TSENS_RESET_HISTORY_SHIFT),
 				(sensor_addr + (zone * TSENS_SN_ADDR_OFFSET)));
 	reg_cntl = readl_relaxed((sensor_addr +
@@ -76,8 +76,7 @@ int tsens_set_mtc_zone_sw_mask(unsigned int zone, unsigned int th1_enable,
 	unsigned int reg_cntl;
 	void __iomem *sensor_addr;
 	struct tsens_device *tmdev = NULL;
-	u32 ver_major;
-	u32 ver_minor;
+	u32 ver_major, ver_minor;
 
 	if (zone > TSENS_NUM_MTC_ZONES_SUPPORT)
 		return -EINVAL;
@@ -130,8 +129,7 @@ int tsens_get_mtc_zone_log(unsigned int zone, void *zone_log)
 	int *zlog = (int *)zone_log;
 	void __iomem *sensor_addr;
 	struct tsens_device *tmdev = NULL;
-	u32 ver_major;
-	u32 ver_minor;
+	u32 ver_major, ver_minor;
 
 	if (zone > TSENS_NUM_MTC_ZONES_SUPPORT)
 		return -EINVAL;

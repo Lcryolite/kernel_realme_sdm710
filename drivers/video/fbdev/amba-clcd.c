@@ -10,27 +10,22 @@
  *
  *  ARM PrimeCell PL110 Color LCD Controller
  */
-#include <linux/dma-mapping.h>
-#include <linux/module.h>
-#include <linux/kernel.h>
-#include <linux/errno.h>
-#include <linux/string.h>
-#include <linux/slab.h>
+#include <linux/amba/bus.h>
+#include <linux/amba/clcd.h>
+#include <linux/backlight.h>
+#include <linux/clk.h>
 #include <linux/delay.h>
-#include <linux/mm.h>
+#include <linux/dma-mapping.h>
 #include <linux/fb.h>
 #include <linux/init.h>
 #include <linux/ioport.h>
 #include <linux/list.h>
-#include <linux/amba/bus.h>
-#include <linux/amba/clcd.h>
-#include <linux/bitops.h>
-#include <linux/clk.h>
-#include <linux/hardirq.h>
-#include <linux/of.h>
+#include <linux/mm.h>
+#include <linux/module.h>
 #include <linux/of_address.h>
 #include <linux/of_graph.h>
-#include <linux/backlight.h>
+#include <linux/slab.h>
+#include <linux/string.h>
 #include <video/display_timing.h>
 #include <video/of_display_timing.h>
 #include <video/videomode.h>
@@ -629,15 +624,10 @@ static int clcdfb_snprintf_mode(char *buf, int size, struct fb_videomode *mode)
 			mode->refresh);
 }
 
-static int clcdfb_of_get_backlight(struct device_node *endpoint,
+static int clcdfb_of_get_backlight(struct device_node *panel,
 				   struct clcd_panel *clcd_panel)
 {
-	struct device_node *panel;
 	struct device_node *backlight;
-
-	panel = of_graph_get_remote_port_parent(endpoint);
-	if (!panel)
-		return -ENODEV;
 
 	/* Look up the optional backlight phandle */
 	backlight = of_parse_phandle(panel, "backlight", 0);
@@ -651,18 +641,13 @@ static int clcdfb_of_get_backlight(struct device_node *endpoint,
 	return 0;
 }
 
-static int clcdfb_of_get_mode(struct device *dev, struct device_node *endpoint,
-		struct clcd_panel *clcd_panel)
+static int clcdfb_of_get_mode(struct device *dev, struct device_node *panel,
+			      struct clcd_panel *clcd_panel)
 {
 	int err;
-	struct device_node *panel;
 	struct fb_videomode *mode;
 	char *name;
 	int len;
-
-	panel = of_graph_get_remote_port_parent(endpoint);
-	if (!panel)
-		return -ENODEV;
 
 	/* Only directly connected DPI panels supported for now */
 	if (of_device_is_compatible(panel, "panel-dpi"))
@@ -769,7 +754,7 @@ static int clcdfb_of_init_tft_panel(struct clcd_fb *fb, u32 r0, u32 g0, u32 b0)
 
 static int clcdfb_of_init_display(struct clcd_fb *fb)
 {
-	struct device_node *endpoint;
+	struct device_node *endpoint, *panel;
 	int err;
 	unsigned int bpp;
 	u32 max_bandwidth;
@@ -786,19 +771,25 @@ static int clcdfb_of_init_display(struct clcd_fb *fb)
 	if (!endpoint)
 		return -ENODEV;
 
+	panel = of_graph_get_remote_port_parent(endpoint);
+	if (!panel) {
+		err = -ENODEV;
+		goto out_endpoint_put;
+	}
+
 	if (fb->vendor->init_panel) {
-		err = fb->vendor->init_panel(fb, endpoint);
+		err = fb->vendor->init_panel(fb, panel);
 		if (err)
 			return err;
 	}
 
-	err = clcdfb_of_get_backlight(endpoint, fb->panel);
+	err = clcdfb_of_get_backlight(panel, fb->panel);
 	if (err)
-		return err;
+		goto out_panel_put;
 
-	err = clcdfb_of_get_mode(&fb->dev->dev, endpoint, fb->panel);
+	err = clcdfb_of_get_mode(&fb->dev->dev, panel, fb->panel);
 	if (err)
-		return err;
+		goto out_panel_put;
 
 	err = of_property_read_u32(fb->dev->dev.of_node, "max-memory-bandwidth",
 			&max_bandwidth);
@@ -827,11 +818,21 @@ static int clcdfb_of_init_display(struct clcd_fb *fb)
 
 	if (of_property_read_u32_array(endpoint,
 			"arm,pl11x,tft-r0g0b0-pads",
-			tft_r0b0g0, ARRAY_SIZE(tft_r0b0g0)) != 0)
-		return -ENOENT;
+			tft_r0b0g0, ARRAY_SIZE(tft_r0b0g0)) != 0) {
+		err = -ENOENT;
+		goto out_panel_put;
+	}
+
+	of_node_put(panel);
+	of_node_put(endpoint);
 
 	return clcdfb_of_init_tft_panel(fb, tft_r0b0g0[0],
 					tft_r0b0g0[1],  tft_r0b0g0[2]);
+out_panel_put:
+	of_node_put(panel);
+out_endpoint_put:
+	of_node_put(endpoint);
+	return err;
 }
 
 static int clcdfb_of_vram_setup(struct clcd_fb *fb)
@@ -1049,7 +1050,7 @@ static struct clcd_vendor_data vendor_nomadik = {
 	.init_panel = nomadik_clcd_init_panel,
 };
 
-static struct amba_id clcdfb_id_table[] = {
+static const struct amba_id clcdfb_id_table[] = {
 	{
 		.id	= 0x00041110,
 		.mask	= 0x000ffffe,

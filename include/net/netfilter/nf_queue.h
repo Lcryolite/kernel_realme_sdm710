@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _NF_QUEUE_H
 #define _NF_QUEUE_H
 
@@ -10,6 +11,7 @@ struct nf_queue_entry {
 	struct list_head	list;
 	struct sk_buff		*skb;
 	unsigned int		id;
+	unsigned int		hook_index;	/* index in hook_entries->hook[] */
 
 	struct nf_hook_state	state;
 	u16			size; /* sizeof(entry) + saved route keys */
@@ -23,18 +25,12 @@ struct nf_queue_entry {
 struct nf_queue_handler {
 	int		(*outfn)(struct nf_queue_entry *entry,
 				 unsigned int queuenum);
-	void		(*nf_hook_drop)(struct net *net,
-					const struct nf_hook_entry *hooks);
+	unsigned int	(*nf_hook_drop)(struct net *net);
 };
 
 void nf_register_queue_handler(struct net *net, const struct nf_queue_handler *qh);
 void nf_unregister_queue_handler(struct net *net);
 void nf_reinject(struct nf_queue_entry *entry, unsigned int verdict);
-
-#ifdef OPLUS_FEATURE_WIFI_LIMMITBGSPEED
-void nf_register_queue_imq_handler(const struct nf_queue_handler *qh);
-void nf_unregister_queue_imq_handler(void);
-#endif /* OPLUS_FEATURE_WIFI_LIMMITBGSPEED */
 
 bool nf_queue_entry_get_refs(struct nf_queue_entry *entry);
 void nf_queue_entry_release_refs(struct nf_queue_entry *entry);

@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2014,2019 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2017, 2019 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -73,10 +73,9 @@ static void print_boot_stats(void)
 			readl_relaxed(&boot_stats->bootloader_start));
 	pr_info("KPI: Bootloader end count = %u\n",
 			readl_relaxed(&boot_stats->bootloader_end));
-	pr_info("KPI: Bootloader display count = %u\n",
-			readl_relaxed(&boot_stats->bootloader_display));
 	pr_info("KPI: Bootloader load kernel count = %u\n",
-			readl_relaxed(&boot_stats->bootloader_load_kernel));
+			readl_relaxed(&boot_stats->load_kernel_done) -
+			readl_relaxed(&boot_stats->load_kernel_start));
 	pr_info("KPI: Kernel MPM timestamp = %u\n",
 			readl_relaxed(mpm_counter_base));
 	pr_info("KPI: Kernel MPM Clock frequency = %u\n",

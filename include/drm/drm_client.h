@@ -102,7 +102,7 @@ struct drm_client_dev {
 };
 
 int drm_client_init(struct drm_device *dev, struct drm_client_dev *client,
-		   const char *name, const struct drm_client_funcs *funcs);
+		    const char *name, const struct drm_client_funcs *funcs);
 void drm_client_register(struct drm_client_dev *client);
 void drm_client_release(struct drm_client_dev *client);
 
@@ -171,6 +171,21 @@ void drm_bootsplash_client_register(struct drm_device *dev);
 #define drm_client_for_each_modeset(modeset, client) \
 	for (({ lockdep_assert_held(&(client)->modeset_mutex); }), \
 	     modeset = (client)->modesets; modeset->crtc; modeset++)
+
+/**
+ * drm_client_for_each_connector_iter - connector_list iterator macro
+ * @connector: &struct drm_connector pointer used as cursor
+ * @iter: &struct drm_connector_list_iter
+ *
+ * This iterates the connectors that are useable for internal clients (excludes
+ * writeback connectors).
+ *
+ * For more info see drm_for_each_connector_iter().
+ */
+#define drm_client_for_each_connector_iter(connector, iter) \
+        drm_for_each_connector_iter(connector, iter) \
+                if ((connector->connector_type != DRM_MODE_CONNECTOR_WRITEBACK)\
+		&& (connector->connector_type != DRM_MODE_CONNECTOR_VIRTUAL))
 
 int drm_client_debugfs_init(struct drm_minor *minor);
 

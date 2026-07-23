@@ -12,6 +12,7 @@
 #define pr_fmt(fmt) KMSG_COMPONENT ": " fmt
 
 #include <linux/module.h>
+#include <linux/sched/stat.h>
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/errno.h>
@@ -28,7 +29,7 @@
 #include <linux/platform_device.h>
 #include <asm/appldata.h>
 #include <asm/vtimer.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/io.h>
 #include <asm/smp.h>
 
@@ -49,10 +50,9 @@ static struct platform_device *appldata_pdev;
  */
 static const char appldata_proc_name[APPLDATA_PROC_NAME_LENGTH] = "appldata";
 static int appldata_timer_handler(struct ctl_table *ctl, int write,
-				  void __user *buffer, size_t *lenp, loff_t *ppos);
+				  void *buffer, size_t *lenp, loff_t *ppos);
 static int appldata_interval_handler(struct ctl_table *ctl, int write,
-					 void __user *buffer,
-					 size_t *lenp, loff_t *ppos);
+				     void *buffer, size_t *lenp, loff_t *ppos);
 
 static struct ctl_table_header *appldata_sysctl_header;
 static struct ctl_table appldata_table[] = {
@@ -202,7 +202,7 @@ static void __appldata_vtimer_setup(int cmd)
  */
 static int
 appldata_timer_handler(struct ctl_table *ctl, int write,
-			   void __user *buffer, size_t *lenp, loff_t *ppos)
+			   void *buffer, size_t *lenp, loff_t *ppos)
 {
 	unsigned int len;
 	char buf[2];
@@ -244,7 +244,7 @@ out:
  */
 static int
 appldata_interval_handler(struct ctl_table *ctl, int write,
-			   void __user *buffer, size_t *lenp, loff_t *ppos)
+			   void *buffer, size_t *lenp, loff_t *ppos)
 {
 	unsigned int len;
 	int interval;
@@ -288,7 +288,7 @@ out:
  */
 static int
 appldata_generic_handler(struct ctl_table *ctl, int write,
-			   void __user *buffer, size_t *lenp, loff_t *ppos)
+			   void *buffer, size_t *lenp, loff_t *ppos)
 {
 	struct appldata_ops *ops = NULL, *tmp_ops;
 	unsigned int len;

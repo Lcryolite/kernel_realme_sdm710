@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2015, Sony Mobile Communications Inc.
- * Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2013,2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -96,6 +96,7 @@ struct qcom_smsm {
 
 	struct smsm_entry *entries;
 	struct smsm_host *hosts;
+	int irq;
 };
 
 /**
@@ -336,6 +337,9 @@ static int smsm_irq_map(struct irq_domain *d,
 	irq_set_chip_and_handler(irq, &smsm_irq_chip, handle_level_irq);
 	irq_set_chip_data(irq, entry);
 	irq_set_nested_thread(irq, 1);
+	irq_set_noprobe(irq);
+	irq_set_parent(irq, entry->smsm->irq);
+	irq_set_status_flags(irq, IRQ_DISABLE_UNLAZY);
 
 	return 0;
 }
@@ -397,15 +401,14 @@ static int smsm_inbound_entry(struct qcom_smsm *smsm,
 			      struct device_node *node)
 {
 	int ret;
-	int irq;
 
-	irq = irq_of_parse_and_map(node, 0);
-	if (!irq) {
+	smsm->irq = irq_of_parse_and_map(node, 0);
+	if (!smsm->irq) {
 		dev_err(smsm->dev, "failed to parse smsm interrupt\n");
 		return -EINVAL;
 	}
 
-	ret = devm_request_threaded_irq(smsm->dev, irq,
+	ret = devm_request_threaded_irq(smsm->dev, smsm->irq,
 					NULL, smsm_intr,
 					IRQF_ONESHOT,
 					"smsm", (void *)entry);
@@ -445,14 +448,15 @@ static int smsm_get_size_info(struct qcom_smsm *smsm)
 	} *info;
 
 	info = qcom_smem_get(QCOM_SMEM_HOST_ANY, SMEM_SMSM_SIZE_INFO, &size);
-	if (PTR_ERR(info) == -ENOENT || size != sizeof(*info)) {
+	if (IS_ERR(info) && PTR_ERR(info) != -ENOENT) {
+		if (PTR_ERR(info) != -EPROBE_DEFER)
+			dev_err(smsm->dev, "unable to retrieve smsm size info\n");
+		return PTR_ERR(info);
+	} else if (IS_ERR(info) || size != sizeof(*info)) {
 		dev_warn(smsm->dev, "no smsm size info, using defaults\n");
 		smsm->num_entries = SMSM_DEFAULT_NUM_ENTRIES;
 		smsm->num_hosts = SMSM_DEFAULT_NUM_HOSTS;
 		return 0;
-	} else if (IS_ERR(info)) {
-		dev_err(smsm->dev, "unable to retrieve smsm size info\n");
-		return PTR_ERR(info);
 	}
 
 	smsm->num_entries = info->num_entries;
@@ -501,7 +505,10 @@ static int qcom_smsm_probe(struct platform_device *pdev)
 	if (!smsm->hosts)
 		return -ENOMEM;
 
-	local_node = of_find_node_with_property(pdev->dev.of_node, "#qcom,smem-state-cells");
+	for_each_child_of_node(pdev->dev.of_node, local_node) {
+		if (of_find_property(local_node, "#qcom,smem-state-cells", NULL))
+			break;
+	}
 	if (!local_node) {
 		dev_err(&pdev->dev, "no state entry\n");
 		return -EINVAL;

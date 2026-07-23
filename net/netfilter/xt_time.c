@@ -168,7 +168,7 @@ time_mt(const struct sk_buff *skb, struct xt_action_param *par)
 	 * may happen that the same packet matches both rules if
 	 * it arrived at the right moment before 13:00.
 	 */
-	if (skb->tstamp.tv64 == 0)
+	if (skb->tstamp == 0)
 		__net_timestamp((struct sk_buff *)skb);
 
 	stamp = ktime_to_ns(skb->tstamp);
@@ -235,13 +235,13 @@ static int time_mt_check(const struct xt_mtchk_param *par)
 
 	if (info->daytime_start > XT_TIME_MAX_DAYTIME ||
 	    info->daytime_stop > XT_TIME_MAX_DAYTIME) {
-		pr_info("invalid argument - start or "
-			"stop time greater than 23:59:59\n");
+		pr_info_ratelimited("invalid argument - start or stop time greater than 23:59:59\n");
 		return -EDOM;
 	}
 
 	if (info->flags & ~XT_TIME_ALL_FLAGS) {
-		pr_info("unknown flags 0x%x\n", info->flags & ~XT_TIME_ALL_FLAGS);
+		pr_info_ratelimited("unknown flags 0x%x\n",
+				    info->flags & ~XT_TIME_ALL_FLAGS);
 		return -EINVAL;
 	}
 

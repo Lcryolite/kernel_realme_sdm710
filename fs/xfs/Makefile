@@ -16,8 +16,8 @@
 # Inc.,  51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #
 
-ccflags-y += -I$(src)			# needed for trace events
-ccflags-y += -I$(src)/libxfs
+ccflags-y += -I $(srctree)/$(src)		# needed for trace events
+ccflags-y += -I $(srctree)/$(src)/libxfs
 
 ccflags-$(CONFIG_XFS_DEBUG) += -g
 
@@ -79,6 +79,7 @@ xfs-y				+= xfs_aops.o \
 				   xfs_extent_busy.o \
 				   xfs_file.o \
 				   xfs_filestream.o \
+				   xfs_fsmap.o \
 				   xfs_fsops.o \
 				   xfs_globals.o \
 				   xfs_icache.o \
@@ -97,8 +98,7 @@ xfs-y				+= xfs_aops.o \
 				   xfs_sysfs.o \
 				   xfs_trans.o \
 				   xfs_xattr.o \
-				   kmem.o \
-				   uuid.o
+				   kmem.o
 
 # low-level transaction/log code
 xfs-y				+= xfs_log.o \

@@ -97,7 +97,7 @@ static const struct of_device_id ebi_match[] = {
 static int ap_flash_init(struct platform_device *pdev)
 {
 	struct device_node *ebi;
-	static void __iomem *ebi_base;
+	void __iomem *ebi_base;
 	u32 val;
 	int ret;
 
@@ -107,6 +107,7 @@ static int ap_flash_init(struct platform_device *pdev)
 		return -ENODEV;
 	}
 	ebi_base = of_iomap(ebi, 0);
+	of_node_put(ebi);
 	if (!ebi_base)
 		return -ENODEV;
 
@@ -221,6 +222,7 @@ int of_flash_probe_versatile(struct platform_device *pdev,
 
 		versatile_flashprot = (enum versatile_flashprot)devid->data;
 		rmap = syscon_node_to_regmap(sysnp);
+		of_node_put(sysnp);
 		if (IS_ERR(rmap))
 			return PTR_ERR(rmap);
 
@@ -252,4 +254,3 @@ int of_flash_probe_versatile(struct platform_device *pdev,
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(of_flash_probe_versatile);

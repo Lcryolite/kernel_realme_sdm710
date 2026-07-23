@@ -1,4 +1,4 @@
-Qualcomm Technologies, Inc Shared Memory TTY Driver (smdtty)
+Qualcomm Technologies, Inc. Shared Memory TTY Driver (smdtty)
 
 [Root level node]
 Required properties:
@@ -37,4 +37,3 @@ Example:
 			qcom,smdtty-dev-name = "LOOPBACK_TTY";
 		};
 	};
-

@@ -20,37 +20,20 @@ ifeq ($(KERNEL_BUILD), 0)
 		export
 		INCS    +=  -include $(AUDIO_ROOT)/config/sdm845autoconf.h
 	endif
-	ifeq ($(CONFIG_ARCH_SDM670), y)
-		include $(AUDIO_ROOT)/config/sdm710auto.conf
+	ifeq ($(CONFIG_ARCH_SDM660), y)
+		include $(AUDIO_ROOT)/config/sdm660auto.conf
 		export
-		INCS    +=  -include $(AUDIO_ROOT)/config/sdm710autoconf.h
+		INCS    +=  -include $(AUDIO_ROOT)/config/sdm660autoconf.h
+	endif
+	ifeq ($(CONFIG_ARCH_SDM670), y)
+		include $(AUDIO_ROOT)/config/sdm670auto.conf
+		export
+		INCS    +=  -include $(AUDIO_ROOT)/config/sdm670autoconf.h
 	endif
 	ifeq ($(CONFIG_ARCH_SDM450), y)
-		include $(AUDIO_ROOT)/config/sdm450auto.conf
+		include $(AUDIO_ROOT)/config/sdm670auto.conf
 		export
-		INCS    +=  -include $(AUDIO_ROOT)/config/sdm450autoconf.h
-	endif
-	ifeq ($(CONFIG_ARCH_SDM439), y)
-		include $(AUDIO_ROOT)/config/sdm450auto.conf
-		export
-		INCS    +=  -include $(AUDIO_ROOT)/config/sdm450autoconf.h
-	endif
-	ifeq ($(CONFIG_ARCH_MSM8917), y)
-		include $(AUDIO_ROOT)/config/sdm450auto.conf
-		export
-		INCS    +=  -include $(AUDIO_ROOT)/config/sdm450autoconf.h
-	endif
-	ifeq ($(CONFIG_ARCH_MSM8909), y)
-		ifeq ($(CONFIG_MSM_BGCOM), y)
-			include $(AUDIO_ROOT)/config/msm8909auto.conf
-			export
-			INCS    +=  -include $(AUDIO_ROOT)/config/msm8909autoconf.h
-		endif
-		ifeq ($(CONFIG_MSM_8905), m)
-			include $(AUDIO_ROOT)/config/msm8905auto.conf
-			export
-			INCS    +=  -include $(AUDIO_ROOT)/config/msm8905autoconf.h
-		endif
+		INCS    +=  -include $(AUDIO_ROOT)/config/sdm670autoconf.h
 	endif
 endif
 
@@ -90,12 +73,7 @@ ifdef CONFIG_SND_SOC_DIGITAL_CDC
 	DIGITAL_CDC_OBJS += msm-digital-cdc.o
 	DIGITAL_CDC_OBJS += msm-digital-cdc-regmap.o
 endif
-
-ifdef CONFIG_SND_SOC_DIGITAL_CDC_LEGACY
-	DIGITAL_CDC_OBJS += msm-digital-cdc-legacy.o
-	DIGITAL_CDC_OBJS += msm-digital-cdc-legacy-regmap.o
-endif
-LINUX_INC +=	-Iinclude/linux
+LINUX_INC +=	-I$(srctree)/include/linux
 
 INCS +=		$(COMMON_INC) \
 		$(UAPI_INC)
@@ -137,14 +115,13 @@ KBUILD_EXTRA_SYMBOLS +=$(OUT)/obj/vendor/qcom/opensource/audio-kernel/asoc/codec
 KBUILD_EXTRA_SYMBOLS +=$(OUT)/obj/vendor/qcom/opensource/audio-kernel/soc/Module.symvers
 endif
 
+ifeq ($(CONFIG_SND_SOC_GCOV), y)
+GCOV_PROFILE := y
+endif
+
 # Module information used by KBuild framework
 obj-$(CONFIG_SND_SOC_ANALOG_CDC) += analog_cdc_dlkm.o
 analog_cdc_dlkm-y := $(ANALOG_CDC_OBJS)
 
 obj-$(CONFIG_SND_SOC_DIGITAL_CDC) += digital_cdc_dlkm.o
 digital_cdc_dlkm-y := $(DIGITAL_CDC_OBJS)
-
-obj-$(CONFIG_SND_SOC_DIGITAL_CDC_LEGACY) += digital_cdc_dlkm.o
-digital_cdc_dlkm-y := $(DIGITAL_CDC_OBJS)
-# inject some build related information
-DEFINES += -DBUILD_TIMESTAMP=\"$(shell date -u +'%Y-%m-%dT%H:%M:%SZ')\"

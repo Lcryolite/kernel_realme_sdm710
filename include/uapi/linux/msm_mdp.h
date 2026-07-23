@@ -7,7 +7,6 @@
 #include <linux/types.h>
 #endif
 #include <linux/fb.h>
-#include <stdbool.h>
 
 #define MSMFB_IOCTL_MAGIC 'm'
 #define MSMFB_GRP_DISP          _IOW(MSMFB_IOCTL_MAGIC, 1, unsigned int)
@@ -117,8 +116,11 @@
 #define MDSS_MDP_HW_REV_114	MDSS_MDP_REV(1, 14, 0) /* 8937 v1.0 */
 #define MDSS_MDP_HW_REV_115	MDSS_MDP_REV(1, 15, 0) /* msmgold */
 #define MDSS_MDP_HW_REV_116	MDSS_MDP_REV(1, 16, 0) /* msmtitanium */
+#define MDSS_MDP_HW_REV_117	MDSS_MDP_REV(1, 17, 0) /* qcs405 */
 #define MDSS_MDP_HW_REV_300	MDSS_MDP_REV(3, 0, 0)  /* msmcobalt */
 #define MDSS_MDP_HW_REV_301	MDSS_MDP_REV(3, 0, 1)  /* msmcobalt v1.0 */
+#define MDSS_MDP_HW_REV_320	MDSS_MDP_REV(3, 2, 0)  /* sdm660 */
+#define MDSS_MDP_HW_REV_330	MDSS_MDP_REV(3, 3, 0)  /* sdm630 */
 
 enum {
 	NOTIFY_UPDATE_INIT,
@@ -1276,8 +1278,6 @@ enum {
 	metadata_op_get_caps,
 	metadata_op_crc,
 	metadata_op_get_ion_fd,
-	metadata_op_secure_bl_set,
-	metadata_op_secure_reg,
 	metadata_op_max
 };
 
@@ -1312,8 +1312,6 @@ struct msmfb_metadata {
 		struct mdss_hw_caps caps;
 		uint8_t secure_en;
 		int fbmem_ionfd;
-		bool sec_bl_update_en;
-		bool sec_reg_on;
 	} data;
 };
 

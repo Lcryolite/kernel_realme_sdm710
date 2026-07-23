@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014-2015,2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2015,2017-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -336,8 +336,8 @@ static void qbam_error_callback(struct sps_event_notify *notify)
 {
 	struct qbam_channel *qbam_chan	= notify->user;
 
-	qbam_err(qbam_chan->qbam_dev, "error: qbam_error_callback(pipe:%d\n)",
-		 qbam_chan->bam_pipe.index);
+	qbam_err(qbam_chan->qbam_dev, "error: %s(pipe:%d\n)",
+		 __func__, qbam_chan->bam_pipe.index);
 }
 
 static int qbam_connect_chan(struct qbam_channel *qbam_chan)
@@ -541,8 +541,8 @@ static void qbam_issue_pending(struct dma_chan *chan)
 	mutex_lock(&qbam_chan->lock);
 	if (!qbam_chan->pending_desc.sgl) {
 		qbam_err(qbam_dev,
-		   "error qbam_issue_pending() no pending descriptor pipe:%d\n",
-		   qbam_chan->bam_pipe.index);
+		   "error %s() no pending descriptor pipe:%d\n",
+		   __func__, qbam_chan->bam_pipe.index);
 		mutex_unlock(&qbam_chan->lock);
 		return;
 	}

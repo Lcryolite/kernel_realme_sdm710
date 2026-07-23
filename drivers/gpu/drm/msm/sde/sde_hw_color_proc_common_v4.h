@@ -1,4 +1,4 @@
-/* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -28,6 +28,7 @@ enum {
 	gamut_mode_5,
 	gamut_mode_13a,
 	gamut_mode_13b,
+	gamut_mode_17b,
 };
 
 #define GC_C0_OFF 0x4
@@ -78,9 +79,9 @@ enum {
 
 #define PA_HIST_EN BIT(16)
 
-#define PA_SKIN_EN BIT(7)
+#define PA_SKIN_EN BIT(5)
 #define PA_FOL_EN BIT(6)
-#define PA_SKY_EN BIT(5)
+#define PA_SKY_EN BIT(7)
 
 #define PA_HUE_MASK (BIT(12) - 1)
 #define PA_SAT_MASK (BIT(16) - 1)
@@ -103,5 +104,26 @@ enum {
 
 #define SIXZONE_ADJ_CURVE_P1_OFF 0x4
 #define SIXZONE_THRESHOLDS_OFF 0x8
+
+#define MEMCOL_SIZE0 20
+#define MEMCOL_SIZE1 8
+#define MEMCOL_PWL0_OFF 0x0
+#define MEMCOL_PWL2_OFF 0x3C
+#define MEMCOL_HOLD_SIZE 0x4
+
+#define MEMCOL_PROT_VAL_EN BIT(24)
+#define MEMCOL_PROT_SAT_EN BIT(23)
+#define MEMCOL_PROT_HUE_EN BIT(22)
+#define MEMCOL_PROT_CONT_EN BIT(18)
+#define MEMCOL_PROT_SIXZONE_EN BIT(17)
+#define MEMCOL_PROT_BLEND_EN BIT(3)
+
+#define MEMCOL_PROT_MASK \
+	(MEMCOL_PROT_VAL_EN | MEMCOL_PROT_SAT_EN | \
+	MEMCOL_PROT_HUE_EN | MEMCOL_PROT_CONT_EN | \
+	MEMCOL_PROT_SIXZONE_EN | MEMCOL_PROT_BLEND_EN)
+
+#define SSPP 0
+#define DSPP 1
 
 #endif /* _SDE_HW_COLOR_PROC_COMMON_V4_H_ */

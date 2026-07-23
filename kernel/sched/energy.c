@@ -22,10 +22,11 @@
 #include <linux/of.h>
 #include <linux/printk.h>
 #include <linux/sched.h>
-#include <linux/sched_energy.h>
+#include <linux/sched/topology.h>
+#include <linux/sched/energy.h>
 #include <linux/stddef.h>
+#include <linux/arch_topology.h>
 #include <linux/cpu.h>
-#include <linux/cpuset.h>
 #include <linux/pm_opp.h>
 #include <linux/platform_device.h>
 
@@ -49,16 +50,20 @@ static void free_resources(void)
 		}
 	}
 }
+static bool sge_ready;
 
-static int update_topology;
-
-/*
- * Ideally this should be arch specific implementation,
- * let's define here to help rebuild sched_domain with new capacities.
- */
-int arch_update_cpu_topology(void)
+void check_max_cap_vs_cpu_scale(int cpu, struct sched_group_energy *sge)
 {
-	return update_topology;
+	unsigned long max_cap, cpu_scale;
+
+	max_cap = sge->cap_states[sge->nr_cap_states - 1].cap;
+	cpu_scale = topology_get_cpu_scale(NULL, cpu);
+
+	if (max_cap == cpu_scale)
+		return;
+
+	pr_debug("CPU%d max energy model capacity=%ld != cpu_scale=%ld\n", cpu,
+		max_cap, cpu_scale);
 }
 
 void init_sched_energy_costs(void)
@@ -146,8 +151,11 @@ void init_sched_energy_costs(void)
 
 			sge_array[cpu][sd_level] = sge;
 		}
+
+		check_max_cap_vs_cpu_scale(cpu, sge_array[cpu][SD_LEVEL0]);
 	}
 
+	sge_ready = true;
 	pr_info("Sched-energy-costs installed from DT\n");
 	return;
 
@@ -162,10 +170,11 @@ static int sched_energy_probe(struct platform_device *pdev)
 	int cpu;
 	unsigned long *max_frequencies = NULL;
 	int ret;
-	bool is_sge_valid = false;
 
 	if (!sched_is_energy_aware())
 		return 0;
+	if (!sge_ready)
+		return -EPROBE_DEFER;
 
 	max_frequencies = kmalloc_array(nr_cpu_ids, sizeof(unsigned long),
 					GFP_KERNEL);
@@ -181,7 +190,7 @@ static int sched_energy_probe(struct platform_device *pdev)
 	for_each_possible_cpu(cpu) {
 		struct device *cpu_dev;
 		struct dev_pm_opp *opp;
-		int efficiency = arch_get_cpu_efficiency(cpu);
+		int efficiency = topology_get_cpu_efficiency(cpu);
 
 		max_efficiency = max(efficiency, max_efficiency);
 
@@ -196,7 +205,6 @@ static int sched_energy_probe(struct platform_device *pdev)
 
 		max_frequencies[cpu] = ULONG_MAX;
 
-		rcu_read_lock();
 		opp = dev_pm_opp_find_freq_floor(cpu_dev,
 						 &max_frequencies[cpu]);
 		if (IS_ERR_OR_NULL(opp)) {
@@ -204,9 +212,8 @@ static int sched_energy_probe(struct platform_device *pdev)
 				ret = -EPROBE_DEFER;
 			else
 				ret = PTR_ERR(opp);
-			goto exit_rcu_unlock;
+			goto exit;
 		}
-		rcu_read_unlock();
 
 		/* Convert HZ to KHZ */
 		max_frequencies[cpu] /= 1000;
@@ -217,7 +224,7 @@ static int sched_energy_probe(struct platform_device *pdev)
 	for_each_possible_cpu(cpu) {
 		unsigned long cpu_max_cap;
 		struct sched_group_energy *sge_l0, *sge;
-		int efficiency = arch_get_cpu_efficiency(cpu);
+		int efficiency = topology_get_cpu_efficiency(cpu);
 
 		cpu_max_cap = DIV_ROUND_UP(SCHED_CAPACITY_SCALE *
 					   max_frequencies[cpu], max_freq);
@@ -261,7 +268,6 @@ static int sched_energy_probe(struct platform_device *pdev)
 					sge_l0->cap_states[i].power);
 			}
 
-			is_sge_valid = true;
 			dev_info(&pdev->dev,
 				"cpu=%d eff=%d [freq=%ld cap=%ld power_d0=%ld] -> [freq=%ld cap=%ld power_d0=%ld]\n",
 				cpu, efficiency,
@@ -280,34 +286,14 @@ static int sched_energy_probe(struct platform_device *pdev)
 			cpu, efficiency, max_frequencies[cpu], max_efficiency,
 			cpu_max_cap);
 
-		arch_update_cpu_capacity(cpu);
 	}
 
 	kfree(max_frequencies);
-
-	if (is_sge_valid) {
-		/*
-		 * Sched_domains might have built with default cpu capacity
-		 * values on bootup.
-		 *
-		 * Let's rebuild them again with actual cpu capacities.
-		 * And partition_sched_domain() expects update in cpu topology
-		 * to rebuild the domains, so make it satisfied..
-		 */
-		update_topology = 1;
-		rebuild_sched_domains();
-		update_topology = 0;
-
-		walt_sched_energy_populated_callback();
-	}
 
 	walt_map_freq_to_load();
 
 	dev_info(&pdev->dev, "Sched-energy-costs capacity updated\n");
 	return 0;
-
-exit_rcu_unlock:
-	rcu_read_unlock();
 
 exit:
 	if (ret != -EPROBE_DEFER)

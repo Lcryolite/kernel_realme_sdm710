@@ -9,6 +9,7 @@
 
 #include <linux/types.h>
 #include <linux/ctype.h>
+#include <linux/errno.h>
 #include <linux/kernel.h>
 #include <linux/export.h>
 #include <asm/unaligned.h>
@@ -60,7 +61,7 @@ EXPORT_SYMBOL(hex_to_bin);
  * @src: ascii hexadecimal string
  * @count: result length
  *
- * Return 0 on success, -1 in case of bad input.
+ * Return 0 on success, -EINVAL in case of bad input.
  */
 int hex2bin(u8 *dst, const char *src, size_t count)
 {
@@ -69,10 +70,10 @@ int hex2bin(u8 *dst, const char *src, size_t count)
 
 		hi = hex_to_bin(*src++);
 		if (unlikely(hi < 0))
-			return -1;
+			return -EINVAL;
 		lo = hex_to_bin(*src++);
 		if (unlikely(lo < 0))
-			return -1;
+			return -EINVAL;
 
 		*dst++ = (hi << 4) | lo;
 	}

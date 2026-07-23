@@ -209,7 +209,7 @@ mem_acc_vreg_corner: regulator@fd4aa044 {
 	qcom,override-corner-acc-map =	<0 0 1>,
 					<0 1 2>,
 					<0 1 1>;
-	qcom,overide-l2-acc-custom-data = <0x0	0x0	0x3000>,
+	qcom,override-l2-acc-custom-data = <0x0	0x0	0x3000>,
 					  <0x0	0x3000	0x3000>,
 					  <0x0	0x0	0x0>;
 	qcom,mem-acc-type1 = <0x02 0x02 0x00>;

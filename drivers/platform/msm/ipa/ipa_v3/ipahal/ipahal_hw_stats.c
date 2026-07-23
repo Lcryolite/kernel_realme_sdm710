@@ -1,4 +1,4 @@
-/* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -9,7 +9,7 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
-
+#include "ipahal.h"
 #include "ipahal_hw_stats.h"
 #include "ipahal_hw_stats_i.h"
 #include "ipahal_i.h"
@@ -128,10 +128,8 @@ static struct ipahal_stats_init_pyld *ipahal_generate_init_pyld_tethering(
 		hdr_entries * sizeof(struct ipahal_stats_tethering_hdr_hw) +
 		entries * sizeof(struct ipahal_stats_tethering_hw),
 		is_atomic_ctx);
-	if (!pyld) {
-		IPAHAL_ERR("no mem\n");
+	if (!pyld)
 		return NULL;
-	}
 
 	pyld->len = hdr_entries * sizeof(struct ipahal_stats_tethering_hdr_hw) +
 		entries * sizeof(struct ipahal_stats_tethering_hw);
@@ -228,6 +226,72 @@ static int ipahal_parse_stats_tethering(void *init_params, void *raw_stats,
 
 	return 0;
 }
+
+static struct ipahal_stats_init_pyld *ipahal_generate_init_pyld_flt_rt_v4_5(
+	void *params, bool is_atomic_ctx)
+{
+	struct ipahal_stats_init_pyld *pyld;
+	long int num = (long int)(params);
+
+	if (num > IPA_MAX_FLT_RT_CNT_INDEX ||
+		num <= 0) {
+		IPAHAL_ERR("num %ld not valid\n", num);
+		return NULL;
+	}
+	pyld = IPAHAL_MEM_ALLOC(sizeof(*pyld) +
+		num *
+		sizeof(struct ipahal_stats_flt_rt_v4_5_hw),
+		is_atomic_ctx);
+	if (!pyld) {
+		IPAHAL_ERR("no mem\n");
+		return NULL;
+	}
+	pyld->len = num *
+		sizeof(struct ipahal_stats_flt_rt_v4_5_hw);
+	return pyld;
+}
+
+static int ipahal_get_offset_flt_rt_v4_5(void *params,
+	struct ipahal_stats_offset *out)
+{
+	struct ipahal_stats_get_offset_flt_rt_v4_5 *in =
+		(struct ipahal_stats_get_offset_flt_rt_v4_5 *)params;
+	int num;
+
+	out->offset = (in->start_id - 1) *
+		sizeof(struct ipahal_stats_flt_rt_v4_5);
+	num = in->end_id - in->start_id + 1;
+	out->size = num * sizeof(struct ipahal_stats_flt_rt_v4_5);
+
+	return 0;
+}
+
+static int ipahal_parse_stats_flt_rt_v4_5(void *init_params,
+	void *raw_stats, void *parsed_stats)
+{
+	struct ipahal_stats_flt_rt_v4_5_hw *raw_hw =
+		(struct ipahal_stats_flt_rt_v4_5_hw *)raw_stats;
+	struct ipa_ioc_flt_rt_query *query =
+		(struct ipa_ioc_flt_rt_query *)parsed_stats;
+	int num, i;
+
+	num = query->end_id - query->start_id + 1;
+	IPAHAL_DBG_LOW("\n");
+	for (i = 0; i < num; i++) {
+		((struct ipa_flt_rt_stats *)
+		query->stats)[i].num_bytes =
+			raw_hw[i].num_bytes;
+		((struct ipa_flt_rt_stats *)
+		query->stats)[i].num_pkts_hash =
+			raw_hw[i].num_packets_hash;
+		((struct ipa_flt_rt_stats *)
+		query->stats)[i].num_pkts =
+			raw_hw[i].num_packets;
+	}
+
+	return 0;
+}
+
 
 static struct ipahal_stats_init_pyld *ipahal_generate_init_pyld_flt_rt(
 	void *params, bool is_atomic_ctx)
@@ -376,10 +440,8 @@ static struct ipahal_stats_init_pyld *ipahal_generate_init_pyld_drop(
 	IPAHAL_DBG_LOW("entries = %d\n", entries);
 	pyld = IPAHAL_MEM_ALLOC(sizeof(*pyld) +
 		entries * sizeof(struct ipahal_stats_drop_hw), is_atomic_ctx);
-	if (!pyld) {
-		IPAHAL_ERR("no mem\n");
+	if (!pyld)
 		return NULL;
-	}
 
 	pyld->len = entries * sizeof(struct ipahal_stats_drop_hw);
 
@@ -450,6 +512,26 @@ static struct ipahal_hw_stats_obj
 		ipahal_get_offset_drop,
 		ipahal_parse_stats_drop
 	},
+	[IPA_HW_v4_5][IPAHAL_HW_STATS_QUOTA] = {
+		ipahal_generate_init_pyld_quota,
+		ipahal_get_offset_quota,
+		ipahal_parse_stats_quota
+	},
+	[IPA_HW_v4_5][IPAHAL_HW_STATS_FNR] = {
+		ipahal_generate_init_pyld_flt_rt_v4_5,
+		ipahal_get_offset_flt_rt_v4_5,
+		ipahal_parse_stats_flt_rt_v4_5
+	},
+	[IPA_HW_v4_5][IPAHAL_HW_STATS_TETHERING] = {
+		ipahal_generate_init_pyld_tethering,
+		ipahal_get_offset_tethering,
+		ipahal_parse_stats_tethering
+	},
+	[IPA_HW_v4_5][IPAHAL_HW_STATS_DROP] = {
+		ipahal_generate_init_pyld_drop,
+		ipahal_get_offset_drop,
+		ipahal_parse_stats_drop
+	},
 };
 
 int ipahal_hw_stats_init(enum ipa_hw_type ipa_hw_type)
@@ -457,6 +539,7 @@ int ipahal_hw_stats_init(enum ipa_hw_type ipa_hw_type)
 	int i;
 	int j;
 	struct ipahal_hw_stats_obj zero_obj;
+	struct ipahal_hw_stats_obj *hw_stat_ptr;
 
 	IPAHAL_DBG_LOW("Entry - HW_TYPE=%d\n", ipa_hw_type);
 
@@ -478,15 +561,14 @@ int ipahal_hw_stats_init(enum ipa_hw_type ipa_hw_type)
 				 * explicitly overridden stat.
 				 * Check validity
 				 */
-				if (!ipahal_hw_stats_objs[i + 1][j].
-					get_offset) {
+				hw_stat_ptr = &ipahal_hw_stats_objs[i + 1][j];
+				if (!hw_stat_ptr->get_offset) {
 					IPAHAL_ERR(
 					  "stat=%d get_offset null ver=%d\n",
 					  j, i+1);
 					WARN_ON(1);
 				}
-				if (!ipahal_hw_stats_objs[i + 1][j].
-				    parse_stats) {
+				if (!hw_stat_ptr->parse_stats) {
 					IPAHAL_ERR(
 					  "stat=%d parse_stats null ver=%d\n",
 						j, i + 1);
@@ -521,36 +603,27 @@ int ipahal_stats_get_offset(enum ipahal_hw_stats_type type, void *params,
 struct ipahal_stats_init_pyld *ipahal_stats_generate_init_pyld(
 	enum ipahal_hw_stats_type type, void *params, bool is_atomic_ctx)
 {
+	struct ipahal_hw_stats_obj *hw_obj_ptr;
+
 	if (type < 0 || type >= IPAHAL_HW_STATS_MAX) {
 		IPAHAL_ERR("Invalid type stat=%d\n", type);
 		WARN_ON(1);
 		return NULL;
 	}
 
-	if (!params) {
-		IPAHAL_ERR("Null arg\n");
-		WARN_ON(1);
-		return NULL;
-	}
-
-	return ipahal_hw_stats_objs[ipahal_ctx->hw_type][type].
-		generate_init_pyld(params, is_atomic_ctx);
+	hw_obj_ptr = &ipahal_hw_stats_objs[ipahal_ctx->hw_type][type];
+	return hw_obj_ptr->generate_init_pyld(params, is_atomic_ctx);
 }
 
 int ipahal_parse_stats(enum ipahal_hw_stats_type type, void *init_params,
 	void *raw_stats, void *parsed_stats)
 {
-	if (type < 0 || type >= IPAHAL_HW_STATS_MAX) {
-		IPAHAL_ERR("Invalid type stat=%d\n", type);
-		WARN_ON(1);
+	if (WARN((type < 0 || type >= IPAHAL_HW_STATS_MAX),
+		"Invalid type stat = %d\n", type))
 		return -EFAULT;
-	}
 
-	if (!raw_stats || !parsed_stats) {
-		IPAHAL_ERR("Null arg\n");
-		WARN_ON(1);
+	if (WARN((!raw_stats || !parsed_stats), "Null arg\n"))
 		return -EFAULT;
-	}
 
 	return ipahal_hw_stats_objs[ipahal_ctx->hw_type][type].parse_stats(
 		init_params, raw_stats, parsed_stats);

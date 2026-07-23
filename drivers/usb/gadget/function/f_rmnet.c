@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -55,8 +55,8 @@ static struct usb_interface_descriptor rmnet_interface_desc = {
 	.bDescriptorType =	USB_DT_INTERFACE,
 	.bNumEndpoints =	3,
 	.bInterfaceClass =	USB_CLASS_VENDOR_SPEC,
-	.bInterfaceSubClass =	USB_CLASS_VENDOR_SPEC,
-	.bInterfaceProtocol =	USB_CLASS_VENDOR_SPEC,
+	.bInterfaceSubClass =	USB_SUBCLASS_VENDOR_SPEC,
+	.bInterfaceProtocol =	0x50,
 	/* .iInterface = DYNAMIC */
 };
 
@@ -215,9 +215,9 @@ static struct usb_interface_descriptor dpl_data_intf_desc = {
 	.bDescriptorType    =	USB_DT_INTERFACE,
 	.bAlternateSetting  =   0,
 	.bNumEndpoints      =	1,
-	.bInterfaceClass    =	0xff,
-	.bInterfaceSubClass =	0xff,
-	.bInterfaceProtocol =	0xff,
+	.bInterfaceClass    =	USB_CLASS_VENDOR_SPEC,
+	.bInterfaceSubClass =	USB_SUBCLASS_VENDOR_SPEC,
+	.bInterfaceProtocol =	0x80,
 };
 
 static struct usb_endpoint_descriptor dpl_fs_data_desc = {
@@ -391,7 +391,6 @@ static int gport_rmnet_connect(struct f_rmnet *dev)
 	int			src_connection_idx = 0, dst_connection_idx = 0;
 	struct usb_gadget	*gadget = dev->cdev->gadget;
 	enum usb_ctrl		usb_bam_type;
-	int bam_pipe_num = (dev->qti_port_type == QTI_PORT_DPL) ? 1 : 0;
 
 	ret = gqti_ctrl_connect(&dev->port, dev->qti_port_type, dev->ifc_id,
 							dev->xport_type);
@@ -416,13 +415,13 @@ static int gport_rmnet_connect(struct f_rmnet *dev)
 			dst_connection_idx = usb_bam_get_connection_idx(
 						usb_bam_type, IPA_P_BAM,
 						PEER_PERIPHERAL_TO_USB,
-						USB_BAM_DEVICE, bam_pipe_num);
+						USB_BAM_DEVICE);
 		}
 		if (dev->bam_port.out) {
 			src_connection_idx = usb_bam_get_connection_idx(
 						usb_bam_type, IPA_P_BAM,
 						USB_TO_PEER_PERIPHERAL,
-						USB_BAM_DEVICE, bam_pipe_num);
+						USB_BAM_DEVICE);
 		}
 		if (dst_connection_idx < 0 || src_connection_idx < 0) {
 			pr_err("%s: usb_bam_get_connection_idx failed\n",
@@ -482,6 +481,13 @@ static void frmnet_unbind(struct usb_configuration *c, struct usb_function *f)
 		frmnet_free_req(dev->notify, dev->notify_req);
 
 	c->cdev->gadget->bam2bam_func_enabled = false;
+
+	if (dev->xport_type == BAM_DMUX)
+		gbam_cleanup(dev->bam_dmux_func_type);
+	else {
+		ipa_data_flush_workqueue();
+		ipa_data_free(dev->ipa_func_type);
+	}
 }
 
 static void frmnet_purge_responses(struct f_rmnet *dev)
@@ -1158,6 +1164,7 @@ static struct usb_function *frmnet_bind_config(struct usb_function_instance *fi)
 	struct f_rmnet_opts	*opts;
 	struct f_rmnet		*dev;
 	struct usb_function	*f;
+	int ret;
 
 	opts = container_of(fi, struct f_rmnet_opts, func_inst);
 	opts->refcnt++;
@@ -1183,6 +1190,14 @@ static struct usb_function *frmnet_bind_config(struct usb_function_instance *fi)
 	dev->port.disconnect = frmnet_disconnect;
 	dev->port.connect = frmnet_connect;
 
+	if (dev->xport_type == BAM_DMUX)
+		ret = gbam_setup(dev->bam_dmux_func_type);
+	else
+		ret = ipa_data_setup(dev->ipa_func_type);
+
+	if (ret)
+		pr_err("%s: bam setup failed with %d\n", __func__, ret);
+
 	pr_debug("%s: complete\n", __func__);
 
 	return f;
@@ -1202,10 +1217,6 @@ static void rmnet_free_inst(struct usb_function_instance *f)
 {
 	struct f_rmnet_opts *opts = container_of(f, struct f_rmnet_opts,
 						func_inst);
-	if (opts->dev->xport_type == BAM_DMUX)
-		gbam_cleanup(opts->dev->bam_dmux_func_type);
-	else
-		ipa_data_free(opts->dev->ipa_func_type);
 
 	kfree(opts->dev);
 	kfree(opts);
@@ -1246,13 +1257,6 @@ static int rmnet_set_inst_name(struct usb_function_instance *fi,
 	}
 
 	INIT_LIST_HEAD(&dev->cpkt_resp_q);
-	if (dev->xport_type == BAM_DMUX)
-		ret = gbam_setup(dev->bam_dmux_func_type);
-	else
-		ret = ipa_data_setup(dev->ipa_func_type);
-
-	if (ret)
-		goto fail;
 
 	opts->dev = dev;
 	return 0;

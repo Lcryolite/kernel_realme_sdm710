@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, 2017 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015, 2017-2018 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -23,6 +23,10 @@ enum {
 	SWR_DEVICE_UP,
 	SWR_SUBSYS_RESTART,
 	SWR_SET_NUM_RX_CH,
+	SWR_CLK_FREQ,
+	SWR_DEVICE_SSR_DOWN,
+	SWR_DEVICE_SSR_UP,
+	SWR_REGISTER_WAKE_IRQ,
 };
 
 struct swr_mstr_port {
@@ -30,7 +34,11 @@ struct swr_mstr_port {
 	u8 *port;
 };
 
-#if IS_ENABLED(CONFIG_SOUNDWIRE_WCD_CTRL)
+#define MCLK_FREQ		9600000
+#define MCLK_FREQ_NATIVE	11289600
+
+#if (IS_ENABLED(CONFIG_SOUNDWIRE_WCD_CTRL) || \
+	IS_ENABLED(CONFIG_SOUNDWIRE_MSTR_CTRL))
 extern int swrm_wcd_notify(struct platform_device *pdev, u32 id, void *data);
 #else /* CONFIG_SOUNDWIRE_WCD_CTRL */
 static inline int swrm_wcd_notify(struct platform_device *pdev, u32 id,

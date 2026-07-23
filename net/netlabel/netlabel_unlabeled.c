@@ -123,13 +123,7 @@ static struct netlbl_unlhsh_iface __rcu *netlbl_unlhsh_def;
 static u8 netlabel_unlabel_acceptflg;
 
 /* NetLabel Generic NETLINK unlabeled family */
-static struct genl_family netlbl_unlabel_gnl_family = {
-	.id = GENL_ID_GENERATE,
-	.hdrsize = 0,
-	.name = NETLBL_NLTYPE_UNLABELED_NAME,
-	.version = NETLBL_PROTO_VERSION,
-	.maxattr = NLBL_UNLABEL_A_MAX,
-};
+static struct genl_family netlbl_unlabel_gnl_family;
 
 /* NetLabel Netlink attribute policy */
 static const struct nla_policy netlbl_unlabel_genl_policy[NLBL_UNLABEL_A_MAX + 1] = {
@@ -833,7 +827,7 @@ static int netlbl_unlabel_accept(struct sk_buff *skb, struct genl_info *info)
 	if (info->attrs[NLBL_UNLABEL_A_ACPTFLG]) {
 		value = nla_get_u8(info->attrs[NLBL_UNLABEL_A_ACPTFLG]);
 		if (value == 1 || value == 0) {
-			netlbl_netlink_auditinfo(skb, &audit_info);
+			netlbl_netlink_auditinfo(&audit_info);
 			netlbl_unlabel_acceptflg_set(value, &audit_info);
 			return 0;
 		}
@@ -916,7 +910,7 @@ static int netlbl_unlabel_staticadd(struct sk_buff *skb,
 	       !info->attrs[NLBL_UNLABEL_A_IPV6MASK])))
 		return -EINVAL;
 
-	netlbl_netlink_auditinfo(skb, &audit_info);
+	netlbl_netlink_auditinfo(&audit_info);
 
 	ret_val = netlbl_unlabel_addrinfo_get(info, &addr, &mask, &addr_len);
 	if (ret_val != 0)
@@ -966,7 +960,7 @@ static int netlbl_unlabel_staticadddef(struct sk_buff *skb,
 	       !info->attrs[NLBL_UNLABEL_A_IPV6MASK])))
 		return -EINVAL;
 
-	netlbl_netlink_auditinfo(skb, &audit_info);
+	netlbl_netlink_auditinfo(&audit_info);
 
 	ret_val = netlbl_unlabel_addrinfo_get(info, &addr, &mask, &addr_len);
 	if (ret_val != 0)
@@ -1013,7 +1007,7 @@ static int netlbl_unlabel_staticremove(struct sk_buff *skb,
 	       !info->attrs[NLBL_UNLABEL_A_IPV6MASK])))
 		return -EINVAL;
 
-	netlbl_netlink_auditinfo(skb, &audit_info);
+	netlbl_netlink_auditinfo(&audit_info);
 
 	ret_val = netlbl_unlabel_addrinfo_get(info, &addr, &mask, &addr_len);
 	if (ret_val != 0)
@@ -1053,7 +1047,7 @@ static int netlbl_unlabel_staticremovedef(struct sk_buff *skb,
 	       !info->attrs[NLBL_UNLABEL_A_IPV6MASK])))
 		return -EINVAL;
 
-	netlbl_netlink_auditinfo(skb, &audit_info);
+	netlbl_netlink_auditinfo(&audit_info);
 
 	ret_val = netlbl_unlabel_addrinfo_get(info, &addr, &mask, &addr_len);
 	if (ret_val != 0)
@@ -1386,6 +1380,16 @@ static const struct genl_ops netlbl_unlabel_genl_ops[] = {
 	},
 };
 
+static struct genl_family netlbl_unlabel_gnl_family __ro_after_init = {
+	.hdrsize = 0,
+	.name = NETLBL_NLTYPE_UNLABELED_NAME,
+	.version = NETLBL_PROTO_VERSION,
+	.maxattr = NLBL_UNLABEL_A_MAX,
+	.module = THIS_MODULE,
+	.ops = netlbl_unlabel_genl_ops,
+	.n_ops = ARRAY_SIZE(netlbl_unlabel_genl_ops),
+};
+
 /*
  * NetLabel Generic NETLINK Protocol Functions
  */
@@ -1400,8 +1404,7 @@ static const struct genl_ops netlbl_unlabel_genl_ops[] = {
  */
 int __init netlbl_unlabel_genl_init(void)
 {
-	return genl_register_family_with_ops(&netlbl_unlabel_gnl_family,
-					     netlbl_unlabel_genl_ops);
+	return genl_register_family(&netlbl_unlabel_gnl_family);
 }
 
 /*

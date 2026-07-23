@@ -171,7 +171,7 @@ static inline size_t generic_threshold_store(struct kobject *kobj,
 	ret = kstrtouint(buf, 0, &threshold_val);
 	if (ret < 0)
 		return ret;
-	if (threshold_val <= 0 || threshold_val > MAX_THRES)
+	if (threshold_val <= 0)
 		return -EINVAL;
 	if (scm_io_write(hang_dev->threshold[offset],
 				threshold_val)){
@@ -263,7 +263,7 @@ static size_t store_ace_threshold(struct kobject *kobj, struct attribute *attr,
 	return generic_threshold_store(kobj, attr, buf, count,
 					hang_dev->ACE_offset);
 }
-GLADIATOR_HANG_ATTR(ace_threshold, S_IRUGO|S_IWUSR, show_ace_threshold,
+GLADIATOR_HANG_ATTR(ace_threshold, 0644, show_ace_threshold,
 					store_ace_threshold);
 
 static ssize_t show_io_threshold(struct kobject *kobj, struct attribute *attr,
@@ -282,7 +282,7 @@ static size_t store_io_threshold(struct kobject *kobj, struct attribute *attr,
 	return generic_threshold_store(kobj, attr, buf, count,
 					hang_dev->IO_offset);
 }
-GLADIATOR_HANG_ATTR(io_threshold, S_IRUGO|S_IWUSR, show_io_threshold,
+GLADIATOR_HANG_ATTR(io_threshold, 0644, show_io_threshold,
 					store_io_threshold);
 
 static ssize_t show_m1_threshold(struct kobject *kobj, struct attribute *attr,
@@ -301,7 +301,7 @@ static size_t store_m1_threshold(struct kobject *kobj, struct attribute *attr,
 	return generic_threshold_store(kobj, attr, buf, count,
 					hang_dev->M1_offset);
 }
-GLADIATOR_HANG_ATTR(m1_threshold, S_IRUGO|S_IWUSR, show_m1_threshold,
+GLADIATOR_HANG_ATTR(m1_threshold, 0644, show_m1_threshold,
 					store_m1_threshold);
 
 static ssize_t show_m2_threshold(struct kobject *kobj, struct attribute *attr,
@@ -320,7 +320,7 @@ static size_t store_m2_threshold(struct kobject *kobj, struct attribute *attr,
 	return generic_threshold_store(kobj, attr, buf, count,
 					hang_dev->M2_offset);
 }
-GLADIATOR_HANG_ATTR(m2_threshold, S_IRUGO|S_IWUSR, show_m2_threshold,
+GLADIATOR_HANG_ATTR(m2_threshold, 0644, show_m2_threshold,
 					store_m2_threshold);
 
 static ssize_t show_pcio_threshold(struct kobject *kobj, struct attribute *attr,
@@ -339,7 +339,7 @@ static size_t store_pcio_threshold(struct kobject *kobj, struct attribute *attr,
 	return generic_threshold_store(kobj, attr, buf, count,
 					hang_dev->PCIO_offset);
 }
-GLADIATOR_HANG_ATTR(pcio_threshold, S_IRUGO|S_IWUSR, show_pcio_threshold,
+GLADIATOR_HANG_ATTR(pcio_threshold, 0644, show_pcio_threshold,
 					store_pcio_threshold);
 
 static ssize_t show_ace_enable(struct kobject *kobj,
@@ -358,7 +358,7 @@ static size_t store_ace_enable(struct kobject *kobj,
 	return generic_enable_store(kobj, attr, buf, count,
 					hang_dev->ACE_offset);
 }
-GLADIATOR_HANG_ATTR(ace_enable, S_IRUGO|S_IWUSR, show_ace_enable,
+GLADIATOR_HANG_ATTR(ace_enable, 0644, show_ace_enable,
 		store_ace_enable);
 
 static ssize_t show_io_enable(struct kobject *kobj,
@@ -377,7 +377,7 @@ static size_t store_io_enable(struct kobject *kobj,
 	return generic_enable_store(kobj, attr, buf, count,
 					hang_dev->IO_offset);
 }
-GLADIATOR_HANG_ATTR(io_enable, S_IRUGO|S_IWUSR,
+GLADIATOR_HANG_ATTR(io_enable, 0644,
 		show_io_enable, store_io_enable);
 
 
@@ -397,7 +397,7 @@ static size_t store_m1_enable(struct kobject *kobj,
 	return generic_enable_store(kobj, attr, buf, count,
 					hang_dev->M1_offset);
 }
-GLADIATOR_HANG_ATTR(m1_enable, S_IRUGO|S_IWUSR,
+GLADIATOR_HANG_ATTR(m1_enable, 0644,
 		show_m1_enable, store_m1_enable);
 
 static ssize_t show_m2_enable(struct kobject *kobj,
@@ -416,7 +416,7 @@ static size_t store_m2_enable(struct kobject *kobj,
 	return generic_enable_store(kobj, attr, buf, count,
 					hang_dev->M2_offset);
 }
-GLADIATOR_HANG_ATTR(m2_enable, S_IRUGO|S_IWUSR,
+GLADIATOR_HANG_ATTR(m2_enable, 0644,
 		show_m2_enable, store_m2_enable);
 
 static ssize_t show_pcio_enable(struct kobject *kobj,
@@ -435,7 +435,7 @@ static size_t store_pcio_enable(struct kobject *kobj,
 	return generic_enable_store(kobj, attr, buf, count,
 					hang_dev->PCIO_offset);
 }
-GLADIATOR_HANG_ATTR(pcio_enable, S_IRUGO|S_IWUSR,
+GLADIATOR_HANG_ATTR(pcio_enable, 0644,
 		show_pcio_enable, store_pcio_enable);
 
 static struct attribute *hang_attrs[] = {
@@ -460,6 +460,12 @@ static struct attribute *hang_attrs_v2[] = {
 	NULL
 };
 
+static struct attribute *hang_attrs_v3[] = {
+	&hang_attr_ace_threshold.attr,
+	&hang_attr_ace_enable.attr,
+	NULL
+};
+
 static struct attribute_group hang_attr_group = {
 	.attrs = hang_attrs,
 };
@@ -467,6 +473,7 @@ static struct attribute_group hang_attr_group = {
 static const struct of_device_id msm_gladiator_hang_detect_table[] = {
 	{ .compatible = "qcom,gladiator-hang-detect" },
 	{ .compatible = "qcom,gladiator-hang-detect-v2" },
+	{ .compatible = "qcom,gladiator-hang-detect-v3" },
 	{}
 };
 
@@ -503,6 +510,11 @@ static int msm_gladiator_hang_detect_probe(struct platform_device *pdev)
 		hang_det->IO_offset = 1;
 		NR_GLA_REG = 2;
 		hang_attr_group.attrs = hang_attrs_v2;
+	} else if (of_device_is_compatible(node,
+			"qcom,gladiator-hang-detect-v3")) {
+		hang_det->ACE_offset = 0;
+		NR_GLA_REG = 1;
+		hang_attr_group.attrs = hang_attrs_v3;
 	}
 
 	hang_det->threshold = devm_kzalloc(&pdev->dev,
@@ -515,10 +527,8 @@ static int msm_gladiator_hang_detect_probe(struct platform_device *pdev)
 
 	treg = devm_kzalloc(&pdev->dev, sizeof(u32)*NR_GLA_REG, GFP_KERNEL);
 
-	if (!treg) {
-		pr_err("Can't allocate threshold register memory\n");
+	if (!treg)
 		return -ENOMEM;
-	}
 
 	ret = of_property_read_u32_array(node, "qcom,threshold-arr",
 			treg, NR_GLA_REG);

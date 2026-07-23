@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -25,15 +25,20 @@
 struct dp_ctrl {
 	int (*init)(struct dp_ctrl *dp_ctrl, bool flip, bool reset);
 	void (*deinit)(struct dp_ctrl *dp_ctrl);
-	int (*on)(struct dp_ctrl *dp_ctrl);
+	int (*on)(struct dp_ctrl *dp_ctrl, bool mst_mode, bool fec_en,
+			bool shallow);
 	void (*off)(struct dp_ctrl *dp_ctrl);
-	void (*reset)(struct dp_ctrl *dp_ctrl);
-	void (*push_idle)(struct dp_ctrl *dp_ctrl);
-	void (*abort)(struct dp_ctrl *dp_ctrl);
+	void (*abort)(struct dp_ctrl *dp_ctrl, bool reset);
 	void (*isr)(struct dp_ctrl *dp_ctrl);
 	bool (*handle_sink_request)(struct dp_ctrl *dp_ctrl);
 	void (*process_phy_test_request)(struct dp_ctrl *dp_ctrl);
 	int (*link_maintenance)(struct dp_ctrl *dp_ctrl);
+	int (*stream_on)(struct dp_ctrl *dp_ctrl, struct dp_panel *panel);
+	void (*stream_off)(struct dp_ctrl *dp_ctrl, struct dp_panel *panel);
+	void (*stream_pre_off)(struct dp_ctrl *dp_ctrl, struct dp_panel *panel);
+	void (*set_mst_channel_info)(struct dp_ctrl *dp_ctrl,
+			enum dp_stream_id strm,
+			u32 ch_start_slot, u32 ch_tot_slots);
 };
 
 struct dp_ctrl_in {

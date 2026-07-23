@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -16,9 +16,6 @@
 #include "sde_hw_mdss.h"
 #include "sde_hw_util.h"
 #include "sde_hw_blk.h"
-
-#define SDE_MIXER_LAYOUT_LEFT 0x1
-#define SDE_MIXER_LAYOUT_RIGHT 0x2
 
 struct sde_hw_mixer;
 
@@ -107,11 +104,6 @@ struct sde_hw_mixer {
 
 	/* store mixer info specific to display */
 	struct sde_hw_mixer_cfg cfg;
-
-	struct {
-		bool enabled;
-		bool stage[SDE_STAGE_MAX];
-	} dim;
 };
 
 /**

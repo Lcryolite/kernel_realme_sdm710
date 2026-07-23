@@ -1,4 +1,4 @@
-/* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -135,7 +135,7 @@ int cam_eeprom_parse_dt_memory_map(struct device_node *node,
 		return rc;
 	}
 
-	map = kzalloc((sizeof(*map) * data->num_map), GFP_KERNEL);
+	map = vzalloc((sizeof(*map) * data->num_map));
 	if (!map) {
 		rc = -ENOMEM;
 		return rc;
@@ -184,7 +184,7 @@ int cam_eeprom_parse_dt_memory_map(struct device_node *node,
 		data->num_data += map[i].mem.valid_size;
 	}
 
-	data->mapdata = kzalloc(data->num_data, GFP_KERNEL);
+	data->mapdata = vzalloc(data->num_data);
 	if (!data->mapdata) {
 		rc = -ENOMEM;
 		goto ERROR;
@@ -192,7 +192,7 @@ int cam_eeprom_parse_dt_memory_map(struct device_node *node,
 	return rc;
 
 ERROR:
-	kfree(data->map);
+	vfree(data->map);
 	memset(data, 0, sizeof(*data));
 	return rc;
 }
@@ -323,6 +323,17 @@ int cam_eeprom_parse_dt(struct cam_eeprom_ctrl_t *e_ctrl)
 			rc = -EFAULT;
 			return rc;
 		}
+
+		rc = of_property_read_u32(of_node, "cci-device",
+			&e_ctrl->cci_num);
+		CAM_DBG(CAM_ACTUATOR, "cci-device %d, rc %d",
+			e_ctrl->cci_num, rc);
+		if (rc < 0) {
+			/* Set default master 0 */
+			e_ctrl->cci_num = CCI_DEVICE_0;
+			rc = 0;
+		}
+		e_ctrl->io_master_info.cci_client->cci_device = e_ctrl->cci_num;
 	}
 
 	if (e_ctrl->io_master_info.master_type == SPI_MASTER) {

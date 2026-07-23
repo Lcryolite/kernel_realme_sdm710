@@ -1,0 +1,115 @@
+{
+  "schema": 1,
+  "milestone": "M2-sdm670-static-port",
+  "status": "PASS_STATIC_BUILD",
+  "sources": {
+    "framework": {
+      "repository": "LineageOS/android_kernel_qcom_sm8150",
+      "commit": "dbc6d0dab1093092d15c64ffd79a713ba214c107"
+    },
+    "clean_sdm670_data": {
+      "repository": "LineageOS/android_kernel_samsung_sdm670",
+      "commit": "a30605a54f3b92627d868f169c72ef9c6ef82123"
+    },
+    "rmx1901_hardware_truth": {
+      "repository": "Lcryolite/kernel_realme_sdm710",
+      "commit": "e7a1612ee260c815354c80c13440eaf49e8b30f4"
+    }
+  },
+  "imported_data_files": {
+    "drivers/clk/qcom/gcc-sdm845.c": "1d9e3df351456a11a359957dbaf6209d293c5cd0811f5dc4c02e605df2ff22ad",
+    "drivers/clk/qcom/vdd-level-sdm845.h": "8f190612c6539f7eabd9532b53364eda6a817a97dff1a5d93fb84f3313fe06d8",
+    "include/dt-bindings/clock/qcom,gcc-sdm845.h": "fb05eebc131f51f10836fe0f476aaedb160334aede1fa693bcba48019c012295",
+    "include/dt-bindings/clock/qcom,camcc-sdm845.h": "16113e943a0dfa3f2e2e087ed4d363b39eb28f213dfc2ca72ff9ab8f252b3cff",
+    "include/dt-bindings/clock/qcom,dispcc-sdm845.h": "795cb4cd6aff33a3d634b370d15127c54e24ecc534000dac229d02d87df1cbf7",
+    "include/dt-bindings/clock/qcom,gpucc-sdm845.h": "ebbc893765d2b69afb908f3f3882ea7e4dd7d71201f708bd2bd51f442a899339",
+    "include/dt-bindings/clock/qcom,videocc-sdm845.h": "4eef37b9d37f6b5354401ad4e9b985ddf21ca5568b9404c7daf712636faa0cd0",
+    "drivers/pinctrl/qcom/pinctrl-sdm670.c": "783c75e72cc06f7cf23544aa6a39f6ed9ddb31aa2f7ae4eb240c8f416ca7ca67",
+    "drivers/irqchip/qcom/pdc-sdm670.c": "c8d29537648d49cd3ba827dcf63127e0e58899824bbf34f49bd89f84c2e03a2c",
+    "drivers/soc/qcom/llcc-sdm670.c": "df91045860a9d738ec04efa710d3777f462a4d7000fd011e2a6a587e46a2ec01"
+  },
+  "device_tree_import": {
+    "source_directory": "arch/arm64/boot/dts/18041",
+    "destination_directory": "arch/arm64/boot/dts/rmx1901",
+    "exact_source_files": 26,
+    "adapted_source_files": 1,
+    "adaptation": "sdm670.dtsi uses the donor cpucc-sm8150 clock ID ABI",
+    "selection": "recursive preprocessor dependency graph of sdm710.dts",
+    "hardware_policy": "project 18041 RMX1901 data; no SM6150 hardware values"
+  },
+  "ported_data_files": {
+    "arch/arm64/boot/dts/rmx1901/sdm670.dtsi": {
+      "reference_sha256": "ed60af0aa9fff5c6cd42876cc9fcde9df12e59c8bff2a6ef0d4641097c143f07",
+      "current_sha256": "f9df85c8e20bd8b5f1517278fa8f322e600bfcf470eaa638617d726866494133",
+      "change": "use donor cpucc-sm8150 clock ID ABI"
+    },
+    "drivers/clk/qcom/camcc-sdm845.c": {
+      "reference_sha256": "3c54ae603630f51ac69f1151992a952e45b0fdd429ea778d08f5adb4e2d59e63",
+      "current_sha256": "c631bfa61681c6304017fafe65f8eae1d03e5a74657ef0ee307f666187de1634",
+      "change": "use 4.14 alpha_pll_config type; preserve PLL values"
+    },
+    "drivers/clk/qcom/dispcc-sdm845.c": {
+      "reference_sha256": "989fc0914b1026ea0378807a6536ce550f7a9f0df68913f9b4b26a536427cc6c",
+      "current_sha256": "ba5ca2f995cd2234bc2b1497b50fcd0ad31a72da2b6dc4a715368f61594b3a71",
+      "change": "use 4.14 alpha_pll_config type; preserve PLL values"
+    },
+    "drivers/clk/qcom/gpucc-sdm845.c": {
+      "reference_sha256": "086972a8476e6cd481c4756e41fef1f02ff8fc71a690c4a68c452053ed827cb5",
+      "current_sha256": "058a9c864c50ce3c02ae86c0ff4f084b1395cb9a6677c899736f8727e83c0359",
+      "change": "use 4.14 alpha_pll_config type; preserve PLL values"
+    },
+    "drivers/clk/qcom/videocc-sdm845.c": {
+      "reference_sha256": "46a5f599dade59f09551113d43450a9e51d82c7cb3469dd3554209cde40de317",
+      "current_sha256": "57953229b7f56b4c3e8d1d668d588479400d3eaf43468123b8be7df18c0aa1ba",
+      "change": "use 4.14 alpha_pll_config type; preserve PLL values"
+    }
+  },
+  "integrated_files": {
+    "drivers/clk/qcom/clk-rpmh.c": {
+      "sha256": "116d00635c371af4db4a23fb91b017e2d03e9e4aa5f2db2a2b7779f771b963d7",
+      "change": "add qcom,rpmh-clk-sdm670 descriptor without RF_CLK3"
+    },
+    "drivers/clk/qcom/clk-cpu-osm.c": {
+      "sha256": "733cf45041f6a16bdaafc8e1952856e597bd36f719c851e0fa170da6f8982a35",
+      "change": "match qcom,clk-cpu-osm-sdm670 and use donor two-cluster fixup"
+    },
+    "techpack/audio/config/sdm670auto_static.conf": {
+      "sha256": "6c6eb5d19719debedcf727881ceab72f59e9c1959dd09f498eda660f2dc0c517",
+      "change": "select the donor APRv2 RPMSG transport instead of removed GLINK transport"
+    },
+    "techpack/audio/config/sdm670autoconf.h": {
+      "sha256": "46727ea55cbc1484c849b6afc55bbf3851d906882c12cb41a399290b0198e600",
+      "change": "select the donor APRv2 RPMSG transport instead of removed GLINK transport"
+    }
+  },
+  "object_compile": {
+    "toolchain": "Android (6443078 based on r383902) clang version 11.0.1",
+    "result": "PASS",
+    "new_warnings": 0,
+    "objects": [
+      "drivers/clk/qcom/gcc-sdm845.o",
+      "drivers/clk/qcom/clk-rpmh.o",
+      "drivers/clk/qcom/camcc-sdm845.o",
+      "drivers/clk/qcom/dispcc-sdm845.o",
+      "drivers/clk/qcom/gpucc-sdm845.o",
+      "drivers/clk/qcom/videocc-sdm845.o",
+      "drivers/clk/qcom/clk-cpu-osm.o"
+    ]
+  },
+  "m2_defconfig": {
+    "path": "arch/arm64/configs/vendor/rmx1901_m2_defconfig",
+    "sha256": "707c0160f92b00e0e59d887c49e324bc2abc60e6b73787553d2d0b069e57aa20",
+    "arch_sdm670": true,
+    "arch_sm8150": false,
+    "ipa3_regdump": false,
+    "pstore_ram": true,
+    "geni_console": true,
+    "localversion": "-RMX1901-A17-M2"
+  },
+  "policy": {
+    "whole_driver_tree_copies": false,
+    "resukisu_enabled": false,
+    "bore_enabled": false,
+    "device_flash_allowed": false
+  }
+}

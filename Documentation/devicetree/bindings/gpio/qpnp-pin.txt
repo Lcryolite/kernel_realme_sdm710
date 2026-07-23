@@ -10,7 +10,7 @@ with each gpio chip. The driver will map these to Linux GPIO numbers.
 -Root Node-
 
 Required properties :
- - gpio-controller : Specify as gpio-contoller. All child nodes will belong to
+ - gpio-controller : Specify as gpio-controller. All child nodes will belong to
    this gpio_chip.
  - #gpio-cells: We encode a PMIC pin number and a 32-bit flag field to
    specify the gpio configuration. This must be set to '2'.

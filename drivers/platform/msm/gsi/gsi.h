@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2018, 2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -24,15 +24,15 @@
 /*
  * The following for adding code (ie. for EMULATION) not found on x86.
  */
-#if IPA_EMULATION_COMPILE == 1
+#if defined(CONFIG_IPA_EMULATION)
 # include "gsi_emulation_stubs.h"
 #endif
 
 #define GSI_CHAN_MAX      31
-#define GSI_EVT_RING_MAX  23
+#define GSI_EVT_RING_MAX  24
 #define GSI_NO_EVT_ERINDEX 31
 
-#define gsi_readl(c)	({ u32 __v = readl_relaxed(c); __iormb(); __v; })
+#define gsi_readl(c)	(readl(c))
 #define gsi_writel(v, c)	({ __iowmb(); writel_relaxed((v), (c)); })
 
 #define GSI_IPC_LOGGING(buf, fmt, args...) \
@@ -90,6 +90,7 @@ enum gsi_chan_state {
 	GSI_CHAN_STATE_STARTED = 0x2,
 	GSI_CHAN_STATE_STOPPED = 0x3,
 	GSI_CHAN_STATE_STOP_IN_PROC = 0x4,
+	GSI_CHAN_STATE_FLOW_CONTROL = 0x5,
 	GSI_CHAN_STATE_ERROR = 0xf
 };
 
@@ -120,24 +121,36 @@ struct gsi_chan_stats {
 	unsigned long completed;
 	unsigned long callback_to_poll;
 	unsigned long poll_to_callback;
+	unsigned long poll_pending_irq;
 	unsigned long invalid_tre_error;
 	unsigned long poll_ok;
 	unsigned long poll_empty;
+	unsigned long userdata_in_use;
 	struct gsi_chan_dp_stats dp;
+};
+
+/**
+ * struct gsi_user_data - user_data element pointed by the TRE
+ * @valid: valid to be cleaned. if its true that means it is being used.
+ *	false means its free to overwrite
+ * @p: pointer to the user data array element
+ */
+struct gsi_user_data {
+	bool valid;
+	void *p;
 };
 
 struct gsi_chan_ctx {
 	struct gsi_chan_props props;
 	enum gsi_chan_state state;
 	struct gsi_ring_ctx ring;
-	void **user_data;
+	struct gsi_user_data *user_data;
 	struct gsi_evt_ctx *evtr;
 	struct mutex mlock;
 	struct completion compl;
 	bool allocated;
 	atomic_t poll_mode;
-	union __packed gsi_channel_scratch scratch;
-	union __packed gsi_channel_scratch restore_scratch;
+	union gsi_channel_scratch scratch;
 	struct gsi_chan_stats stats;
 	bool enable_dp_stats;
 	bool print_dp_stats;
@@ -156,7 +169,7 @@ struct gsi_evt_ctx {
 	struct completion compl;
 	struct gsi_chan_ctx *chan;
 	atomic_t chan_ref_cnt;
-	union __packed gsi_evt_scratch scratch;
+	union gsi_evt_scratch scratch;
 	struct gsi_evt_stats stats;
 };
 
@@ -188,11 +201,7 @@ struct ch_debug_stats {
 
 struct gsi_generic_ee_cmd_debug_stats {
 	unsigned long halt_channel;
-};
-
-struct gsi_shared_chan_info {
-	uint8_t ch_id;
-	uint8_t evchid;
+	unsigned long flow_ctrl_channel;
 };
 
 struct gsi_ctx {
@@ -218,8 +227,6 @@ struct gsi_ctx {
 	struct completion gen_ee_cmd_compl;
 	void *ipc_logbuf;
 	void *ipc_logbuf_low;
-	struct gsi_shared_chan_info shared_ch_info;
-
 	/*
 	 * The following used only on emulation systems.
 	 */
@@ -227,12 +234,15 @@ struct gsi_ctx {
 	u32 intcntrlr_mem_size;
 	irq_handler_t intcntrlr_gsi_isr;
 	irq_handler_t intcntrlr_client_isr;
+
+	atomic_t num_unclock_irq;
 };
 
 enum gsi_re_type {
 	GSI_RE_XFER = 0x2,
 	GSI_RE_IMMD_CMD = 0x3,
 	GSI_RE_NOP = 0x4,
+	GSI_RE_COAL = 0x8,
 };
 
 struct __packed gsi_tre {
@@ -249,10 +259,28 @@ struct __packed gsi_tre {
 	uint8_t resvd2;
 };
 
+struct __packed gsi_gci_tre {
+	uint64_t buffer_ptr:41;
+	uint64_t resvd1:7;
+	uint64_t buf_len:16;
+	uint64_t cookie:40;
+	uint64_t resvd2:8;
+	uint64_t re_type:8;
+	uint64_t resvd3:8;
+};
+
+#define GSI_XFER_COMPL_TYPE_GCI 0x28
+
 struct __packed gsi_xfer_compl_evt {
-	uint64_t xfer_ptr;
+	union {
+		uint64_t xfer_ptr;
+		struct {
+			uint64_t cookie:40;
+			uint64_t resvd1:24;
+		};
+	};
 	uint16_t len;
-	uint8_t resvd1;
+	uint8_t veid;
 	uint8_t code;  /* see gsi_chan_evt */
 	uint16_t resvd;
 	uint8_t type;
@@ -297,12 +325,15 @@ enum gsi_ch_cmd_opcode {
 
 enum gsi_evt_ch_cmd_opcode {
 	GSI_EVT_ALLOCATE = 0x0,
-	GSI_EVT_RESET = 0x9,  /* TODO: is this valid? */
+	GSI_EVT_RESET = 0x9,
 	GSI_EVT_DE_ALLOC = 0xa,
 };
 
 enum gsi_generic_ee_cmd_opcode {
 	GSI_GEN_EE_CMD_HALT_CHANNEL = 0x1,
+	GSI_GEN_EE_CMD_ALLOC_CHANNEL = 0x2,
+	GSI_GEN_EE_CMD_ENABLE_FLOW_CHANNEL = 0x3,
+	GSI_GEN_EE_CMD_DISABLE_FLOW_CHANNEL = 0x4,
 };
 
 enum gsi_generic_ee_cmd_return_code {
@@ -312,6 +343,7 @@ enum gsi_generic_ee_cmd_return_code {
 	GSI_GEN_EE_CMD_RETURN_CODE_INCORRECT_CHANNEL_TYPE = 0x4,
 	GSI_GEN_EE_CMD_RETURN_CODE_INCORRECT_CHANNEL_INDEX = 0x5,
 	GSI_GEN_EE_CMD_RETURN_CODE_RETRY = 0x6,
+	GSI_GEN_EE_CMD_RETURN_CODE_OUT_OF_RESOURCES = 0x7,
 };
 
 extern struct gsi_ctx *gsi_ctx;

@@ -1,5 +1,5 @@
 /* Copyright (c) 2002,2007-2020, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022,2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -13,6 +13,7 @@
  */
 #include <linux/slab.h>
 #include <linux/sched.h>
+#include <linux/sched/clock.h>
 #include <linux/log2.h>
 #include <linux/time.h>
 #include <linux/delay.h>
@@ -29,6 +30,7 @@
 #include "adreno_trace.h"
 
 #include "a3xx_reg.h"
+#include "a6xx_reg.h"
 #include "adreno_a5xx.h"
 
 #define RB_HOSTPTR(_rb, _pos) \
@@ -89,9 +91,8 @@ static void adreno_get_submit_time(struct adreno_device *adreno_dev,
 static void adreno_ringbuffer_wptr(struct adreno_device *adreno_dev,
 		struct adreno_ringbuffer *rb)
 {
+	struct adreno_gpudev *gpudev = ADRENO_GPU_DEVICE(adreno_dev);
 	unsigned long flags;
-	bool write = false;
-	unsigned int val;
 	int ret = 0;
 
 	spin_lock_irqsave(&rb->preempt_lock, flags);
@@ -104,28 +105,47 @@ static void adreno_ringbuffer_wptr(struct adreno_device *adreno_dev,
 			 */
 			kgsl_pwrscale_busy(KGSL_DEVICE(adreno_dev));
 
-			write = true;
-			val = rb->_wptr;
+			/*
+			 * There could be a situation where GPU comes out of
+			 * ifpc after a fenced write transaction but before
+			 * reading AHB_FENCE_STATUS from KMD, it goes back to
+			 * ifpc due to inactivity (kernel scheduler plays a
+			 * role here). Put a keep alive vote to avoid such
+			 * unlikely scenario.
+			 */
+			if (gpudev->gpu_keepalive)
+				gpudev->gpu_keepalive(adreno_dev, true);
+
+			/*
+			 * Ensure the write posted after a possible
+			 * GMU wakeup (write could have dropped during wakeup)
+			 */
+			ret = adreno_gmu_fenced_write(adreno_dev,
+				ADRENO_REG_CP_RB_WPTR, rb->_wptr,
+				FENCE_STATUS_WRITEDROPPED0_MASK);
+			rb->skip_inline_wptr = false;
+			if (gpudev->gpu_keepalive)
+				gpudev->gpu_keepalive(adreno_dev, false);
+
 		}
+	} else {
+		/*
+		 * We skipped inline submission because of preemption state
+		 * machine. Set things up so that we write the wptr to the
+		 * hardware eventually.
+		 */
+		if (adreno_dev->cur_rb == rb)
+			rb->skip_inline_wptr = true;
 	}
 
 	rb->wptr = rb->_wptr;
 	spin_unlock_irqrestore(&rb->preempt_lock, flags);
-
-	/*
-	 * Ensure the write posted after a possible
-	 * GMU wakeup (write could have dropped during wakeup)
-	 */
-	if (write)
-		ret = adreno_gmu_fenced_write(adreno_dev, ADRENO_REG_CP_RB_WPTR,
-			rb->_wptr, FENCE_STATUS_WRITEDROPPED0_MASK);
 
 	if (ret) {
 		/* If WPTR update fails, set the fault and trigger recovery */
 		adreno_set_gpu_fault(adreno_dev, ADRENO_GMU_FAULT);
 		adreno_dispatcher_schedule(KGSL_DEVICE(adreno_dev));
 	}
-
 }
 
 static void adreno_profile_submit_time(struct adreno_submit_time *time)
@@ -289,8 +309,6 @@ int adreno_ringbuffer_start(struct adreno_device *adreno_dev,
 		rb->wptr = 0;
 		rb->_wptr = 0;
 		rb->wptr_preempt_end = 0xFFFFFFFF;
-		rb->starve_timer_state =
-			ADRENO_DISPATCHER_RB_STARVE_TIMER_UNINIT;
 	}
 
 	/* start is specific GPU rb */
@@ -353,12 +371,13 @@ int adreno_ringbuffer_probe(struct adreno_device *adreno_dev, bool nopreempt)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct adreno_gpudev *gpudev = ADRENO_GPU_DEVICE(adreno_dev);
-	int i;
+	unsigned int priv = KGSL_MEMDESC_RANDOM | KGSL_MEMDESC_PRIVILEGED;
+	int i, r = 0;
 	int status = -ENOMEM;
 
 	if (!adreno_is_a3xx(adreno_dev)) {
 		status = kgsl_allocate_global(device, &device->scratch,
-				PAGE_SIZE, 0, KGSL_MEMDESC_RANDOM, "scratch");
+				PAGE_SIZE, 0, priv, "scratch");
 		if (status != 0)
 			return status;
 	}
@@ -372,6 +391,19 @@ int adreno_ringbuffer_probe(struct adreno_device *adreno_dev, bool nopreempt)
 		status = _adreno_ringbuffer_probe(adreno_dev, i);
 		if (status != 0)
 			break;
+	}
+
+	if (!status && (nopreempt == false) &&
+			ADRENO_FEATURE(adreno_dev, ADRENO_PREEMPTION)) {
+
+		if (gpudev->preemption_init)
+			r = gpudev->preemption_init(adreno_dev);
+
+		if (r == 0)
+			set_bit(ADRENO_DEVICE_PREEMPTION, &adreno_dev->priv);
+		else
+			WARN(1, "adreno: GPU preemption is disabled\n");
+
 	}
 
 	if (status)
@@ -388,7 +420,6 @@ static void _adreno_ringbuffer_close(struct adreno_device *adreno_dev,
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 
 	kgsl_free_global(device, &rb->pagetable_desc);
-	kgsl_free_global(device, &rb->preemption_desc);
 	kgsl_free_global(device, &rb->profile_desc);
 	kgsl_free_global(device, &rb->buffer_desc);
 	kgsl_del_event_group(&rb->events);
@@ -398,6 +429,7 @@ static void _adreno_ringbuffer_close(struct adreno_device *adreno_dev,
 void adreno_ringbuffer_close(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	struct adreno_gpudev *gpudev = ADRENO_GPU_DEVICE(adreno_dev);
 	struct adreno_ringbuffer *rb;
 	int i;
 
@@ -406,6 +438,9 @@ void adreno_ringbuffer_close(struct adreno_device *adreno_dev)
 
 	FOR_EACH_RINGBUFFER(adreno_dev, rb, i)
 		_adreno_ringbuffer_close(adreno_dev, rb);
+
+	if (gpudev->preemption_close)
+		gpudev->preemption_close(adreno_dev);
 }
 
 /*
@@ -814,8 +849,6 @@ adreno_ringbuffer_issue_internal_cmds(struct adreno_ringbuffer *rb,
 		sizedwords, 0, NULL);
 }
 
-
-
 static void adreno_ringbuffer_set_constraint(struct kgsl_device *device,
 			struct kgsl_drawobj *drawobj)
 {
@@ -833,33 +866,43 @@ static void adreno_ringbuffer_set_constraint(struct kgsl_device *device,
 						context->id);
 
 	if (context->l3_pwr_constraint.type &&
-			((context->flags & KGSL_CONTEXT_PWR_CONSTRAINT) ||
-				(flags & KGSL_CONTEXT_PWR_CONSTRAINT))) {
+		((context->flags & KGSL_CONTEXT_PWR_CONSTRAINT) ||
+			(flags & KGSL_CONTEXT_PWR_CONSTRAINT))) {
 
-		if (IS_ERR_OR_NULL(device->l3_clk)) {
-			KGSL_DEV_ERR_ONCE(device, "Cannot set L3 constraint\n");
+		if (!device->l3_clk) {
+			KGSL_DEV_ERR_ONCE(device,
+				"l3_vote clk not available\n");
 			return;
 		}
 
 		switch (context->l3_pwr_constraint.type) {
-
 		case KGSL_CONSTRAINT_L3_PWRLEVEL: {
 			unsigned int sub_type;
+			unsigned int new_l3;
+			int ret = 0;
 
 			sub_type = context->l3_pwr_constraint.sub_type;
 
-			if (sub_type == KGSL_CONSTRAINT_L3_PWR_MED)
-				clk_set_rate(device->l3_clk,
-						device->l3_freq[1]);
+			/*
+			 * If an L3 constraint is already set, set the new
+			 * one only if it is higher.
+			 */
+			new_l3 = max_t(unsigned int, sub_type + 1,
+					device->cur_l3_pwrlevel);
+			new_l3 = min_t(unsigned int, new_l3,
+					device->num_l3_pwrlevels - 1);
 
-			if (sub_type == KGSL_CONSTRAINT_L3_PWR_MAX)
-				clk_set_rate(device->l3_clk,
-						device->l3_freq[2]);
+			ret = clk_set_rate(device->l3_clk,
+					device->l3_freq[new_l3]);
+
+			if (!ret)
+				device->cur_l3_pwrlevel = new_l3;
+			else
+				KGSL_DRV_ERR_RATELIMIT(device,
+					"Could not set l3_vote: %d\n",
+					ret);
+			break;
 			}
-			break;
-		case KGSL_CONSTRAINT_L3_NONE:
-			clk_set_rate(device->l3_clk, device->l3_freq[0]);
-			break;
 		}
 	}
 }
@@ -880,6 +923,8 @@ static inline int _get_alwayson_counter(struct adreno_device *adreno_dev,
 		ADRENO_GPUREV(adreno_dev) <= ADRENO_REV_A530)
 		*p++ = adreno_getreg(adreno_dev,
 			ADRENO_REG_RBBM_ALWAYSON_COUNTER_LO);
+	else if (adreno_is_a6xx(adreno_dev))
+		*p++ = A6XX_CP_ALWAYS_ON_COUNTER_LO | (1 << 30) | (2 << 18);
 	else
 		*p++ = adreno_getreg(adreno_dev,
 			ADRENO_REG_RBBM_ALWAYSON_COUNTER_LO) |
@@ -931,7 +976,6 @@ int adreno_ringbuffer_submitcmd(struct adreno_device *adreno_dev,
 	struct kgsl_memobj_node *ib;
 	unsigned int numibs = 0;
 	unsigned int *link;
-	unsigned int link_onstack[SZ_256] __aligned(8);
 	unsigned int *cmds;
 	struct kgsl_context *context;
 	struct adreno_context *drawctxt;
@@ -1066,15 +1110,10 @@ int adreno_ringbuffer_submitcmd(struct adreno_device *adreno_dev,
 	if (gpudev->ccu_invalidate)
 		dwords += 4;
 
-	if (likely(dwords <= ARRAY_SIZE(link_onstack))) {
-		memset(link_onstack, 0, dwords * sizeof(unsigned int));
-		link = link_onstack;
-	} else {
-		link = kcalloc(dwords, sizeof(unsigned int), GFP_KERNEL);
-		if (!link) {
-			ret = -ENOMEM;
-			goto done;
-		}
+	link = kcalloc(dwords, sizeof(unsigned int), GFP_KERNEL);
+	if (!link) {
+		ret = -ENOMEM;
+		goto done;
 	}
 
 	cmds = link;
@@ -1202,8 +1241,7 @@ done:
 	trace_kgsl_issueibcmds(device, context->id, numibs, drawobj->timestamp,
 			drawobj->flags, ret, drawctxt->type);
 
-	if (unlikely(link != link_onstack))
-		kfree(link);
+	kfree(link);
 	return ret;
 }
 

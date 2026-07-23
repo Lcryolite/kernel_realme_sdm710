@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -750,7 +750,7 @@ static int cnss_wlan_get_resources(struct platform_device *pdev)
 
 	if (of_get_property(node, WLAN_VREG_CORE_NAME "-supply", NULL)) {
 		vreg_info->wlan_reg_core = regulator_get(&pdev->dev,
-			WLAN_VREG_CORE_NAME);
+							 WLAN_VREG_CORE_NAME);
 		if (IS_ERR(vreg_info->wlan_reg_core)) {
 			ret = PTR_ERR(vreg_info->wlan_reg_core);
 
@@ -781,7 +781,7 @@ static int cnss_wlan_get_resources(struct platform_device *pdev)
 
 	if (of_get_property(node, WLAN_VREG_IO_NAME "-supply", NULL)) {
 		vreg_info->wlan_reg_io = regulator_get(&pdev->dev,
-			WLAN_VREG_IO_NAME);
+						       WLAN_VREG_IO_NAME);
 		if (!IS_ERR(vreg_info->wlan_reg_io)) {
 			ret = regulator_set_voltage(vreg_info->wlan_reg_io,
 						    WLAN_VREG_IO_MIN,
@@ -882,7 +882,7 @@ static int cnss_wlan_get_resources(struct platform_device *pdev)
 
 	if (of_get_property(node, WLAN_SWREG_NAME "-supply", NULL)) {
 		vreg_info->soc_swreg = regulator_get(&pdev->dev,
-			WLAN_SWREG_NAME);
+						     WLAN_SWREG_NAME);
 		if (IS_ERR(vreg_info->soc_swreg)) {
 			pr_err("%s: soc-swreg node not found\n",
 			       __func__);
@@ -3041,7 +3041,9 @@ static int cnss_probe(struct platform_device *pdev)
 	if (of_property_read_u32(dev->of_node, "qcom,wlan-ramdump-dynamic",
 				 &ramdump_size) == 0) {
 		penv->ramdump_addr = dma_alloc_coherent(&pdev->dev,
-				ramdump_size, &penv->ramdump_phys, GFP_KERNEL);
+							ramdump_size,
+							&penv->ramdump_phys,
+							GFP_KERNEL);
 
 		if (penv->ramdump_addr)
 			penv->ramdump_size = ramdump_size;
@@ -3053,7 +3055,7 @@ static int cnss_probe(struct platform_device *pdev)
 			penv->ramdump_phys = res->start;
 			ramdump_size = resource_size(res);
 			penv->ramdump_addr = ioremap(penv->ramdump_phys,
-					ramdump_size);
+						     ramdump_size);
 
 			if (penv->ramdump_addr)
 				penv->ramdump_size = ramdump_size;
@@ -3077,7 +3079,7 @@ static int cnss_probe(struct platform_device *pdev)
 	}
 
 	penv->ramdump_dev = create_ramdump_device(penv->subsysdesc.name,
-				penv->subsysdesc.dev);
+						  penv->subsysdesc.dev);
 	if (!penv->ramdump_dev) {
 		ret = -ENOMEM;
 		goto err_ramdump_create;

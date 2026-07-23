@@ -34,7 +34,7 @@
 #include <linux/jiffies.h>
 #include <linux/slab.h>
 #include <asm/unaligned.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/string.h>
 
 #define PPP_VERSION	"2.4.2"
@@ -898,8 +898,7 @@ ppp_async_input(struct asyncppp *ap, const unsigned char *buf,
 				/* packet overflowed MRU */
 				ap->state |= SC_TOSS;
 			} else {
-				sp = skb_put(skb, n);
-				memcpy(sp, buf, n);
+				sp = skb_put_data(skb, buf, n);
 				if (ap->state & SC_ESCAPE) {
 					sp[0] ^= PPP_TRANS;
 					ap->state &= ~SC_ESCAPE;

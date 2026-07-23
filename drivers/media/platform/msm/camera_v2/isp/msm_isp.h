@@ -131,6 +131,8 @@ struct msm_isp_timestamp {
 	struct timeval vt_time;
 	/*Wall clock for userspace event*/
 	struct timeval event_time;
+	/* event time in nanosec*/
+	uint64_t buf_time_ns;
 };
 
 struct msm_vfe_irq_ops {
@@ -153,10 +155,12 @@ struct msm_vfe_irq_ops {
 		struct msm_isp_timestamp *ts);
 	void (*process_axi_irq)(struct vfe_device *vfe_dev,
 		uint32_t irq_status0, uint32_t irq_status1,
+		uint32_t dual_irq_status,
 		uint32_t pingpong_status,
 		struct msm_isp_timestamp *ts);
 	void (*process_stats_irq)(struct vfe_device *vfe_dev,
 		uint32_t irq_status0, uint32_t irq_status1,
+		uint32_t dual_irq_status,
 		uint32_t pingpong_status,
 		struct msm_isp_timestamp *ts);
 	void (*config_irq)(struct vfe_device *vfe_dev,
@@ -164,6 +168,11 @@ struct msm_vfe_irq_ops {
 		enum msm_isp_irq_operation);
 	void (*preprocess_camif_irq)(struct vfe_device *vfe_dev,
 		uint32_t irq_status0);
+	void (*dual_config_irq)(struct vfe_device *vfe_dev,
+		uint32_t irq_status0, uint32_t irq_status1,
+		enum msm_isp_irq_operation);
+	void (*clear_dual_irq_status)(struct vfe_device *vfe_dev,
+		uint32_t *dual_irq_status0);
 };
 
 struct msm_vfe_axi_ops {
@@ -335,6 +344,9 @@ struct msm_vfe_platform_ops {
 		struct msm_isp_bandwidth_mgr *isp_bandwidth_mgr);
 	int (*update_bw)(struct msm_isp_bandwidth_mgr *isp_bandwidth_mgr);
 	void (*deinit_bw_mgr)(struct msm_isp_bandwidth_mgr *isp_bandwidth_mgr);
+	void (*set_dual_vfe_mode)(struct vfe_device *vfe_dev);
+	void (*clear_dual_vfe_mode)(struct vfe_device *vfe_dev);
+	int (*get_dual_sync_platform_data)(struct vfe_device *vfe_dev);
 };
 
 struct msm_vfe_ops {
@@ -604,6 +616,7 @@ struct msm_vfe_tasklet_queue_cmd {
 	uint32_t vfeInterruptStatus0;
 	uint32_t vfeInterruptStatus1;
 	uint32_t vfe_pingpong_status;
+	uint32_t dualvfeInterruptstatus;
 	struct msm_isp_timestamp ts;
 	uint8_t cmd_used;
 	struct vfe_device *vfe_dev;
@@ -767,11 +780,6 @@ struct msm_vfe_common_subdev {
 	struct msm_vfe_common_dev_data *common_data;
 };
 
-struct isp_proc {
-	uint32_t  kernel_sofid;
-	uint32_t  vfeid;
-};
-
 struct vfe_device {
 	/* Driver private data */
 	struct platform_device *pdev;
@@ -801,6 +809,7 @@ struct vfe_device {
 	enum cam_ahb_clk_vote ahb_vote;
 	enum cam_ahb_clk_vote user_requested_ahb_vote;
 	struct cx_ipeak_client *vfe_cx_ipeak;
+	int cx_ipeak_bit;
 
 	/* Sync variables*/
 	struct completion reset_complete;
@@ -836,6 +845,8 @@ struct vfe_device {
 	uint32_t dual_vfe_enable;
 	unsigned long page_fault_addr;
 	uint32_t vfe_hw_limit;
+	uint32_t dual_vfe_sync_mode;
+	uint32_t dual_vfe_sync_enable;
 
 	/* Debug variables */
 	int dump_reg;
@@ -858,8 +869,16 @@ struct vfe_device {
 	uint64_t total_bandwidth;
 	struct isp_kstate *isp_page;
 
+	/* Dual VFE IRQ CAMSS Info*/
+	void __iomem *camss_base;
+	struct resource *dual_vfe_irq;
+	bool dual_isp_sync_irq_enabled;
 	/* irq info */
+	uint32_t dual_irq_mask;
 	uint32_t irq_sof_id;
+
+	/* nano sec timestamp */
+	uint32_t nanosec_ts_enable;
 };
 
 struct vfe_parent_device {

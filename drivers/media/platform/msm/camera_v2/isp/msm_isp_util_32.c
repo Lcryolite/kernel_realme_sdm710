@@ -779,16 +779,16 @@ static long msm_isp_ioctl_unlocked(struct v4l2_subdev *sd,
 		break;
 	case VIDIOC_MSM_ISP_FETCH_ENG_START:
 		mutex_lock(&vfe_dev->core_mutex);
-		rc = vfe_dev->hw_info->vfe_ops.core_ops.
-			start_fetch_eng(vfe_dev, arg);
+		rc = vfe_dev->hw_info->vfe_ops.core_ops.start_fetch_eng(
+			vfe_dev, arg);
 		mutex_unlock(&vfe_dev->core_mutex);
 		break;
 	case VIDIOC_MSM_ISP_REG_UPDATE_CMD:
 		if (arg) {
 			enum msm_vfe_input_src frame_src =
 				*((enum msm_vfe_input_src *)arg);
-			vfe_dev->hw_info->vfe_ops.core_ops.
-				reg_update(vfe_dev, (1 << frame_src));
+			vfe_dev->hw_info->vfe_ops.core_ops.reg_update(vfe_dev,
+				(1 << frame_src));
 			vfe_dev->axi_data.src_info[frame_src].last_updt_frm_id =
 			  vfe_dev->axi_data.src_info[frame_src].frame_id;
 		}
@@ -1241,7 +1241,6 @@ int msm_isp_proc_cmd(struct vfe_device *vfe_dev, void *arg)
 		proc_cmd->cmd_len < UINT16_MAX) {
 		cfg_data = kzalloc(proc_cmd->cmd_len, GFP_KERNEL);
 		if (!cfg_data) {
-			pr_err("%s: cfg_data alloc failed\n", __func__);
 			rc = -ENOMEM;
 			goto cfg_data_failed;
 		}
@@ -1530,8 +1529,8 @@ void msm_isp_process_error_info(struct vfe_device *vfe_dev)
 
 	if (error_info->error_count == 1 ||
 		!(error_info->info_dump_frame_count % 100)) {
-		vfe_dev->hw_info->vfe_ops.core_ops.
-			process_error_status(vfe_dev);
+		vfe_dev->hw_info->vfe_ops.core_ops.process_error_status(
+				vfe_dev);
 		error_info->error_mask0 = 0;
 		error_info->error_mask1 = 0;
 		error_info->camif_status = 0;
@@ -1579,9 +1578,8 @@ static void msm_isp_process_overflow_irq(
 	if (atomic_read(&vfe_dev->error_info.overflow_state) != NO_OVERFLOW) {
 		uint32_t halt_restart_mask0, halt_restart_mask1;
 
-		vfe_dev->hw_info->vfe_ops.core_ops.
-		get_halt_restart_mask(&halt_restart_mask0,
-			&halt_restart_mask1);
+		vfe_dev->hw_info->vfe_ops.core_ops.get_halt_restart_mask(
+			&halt_restart_mask0, &halt_restart_mask1);
 		*irq_status0 &= halt_restart_mask0;
 		*irq_status1 &= halt_restart_mask1;
 
@@ -1589,8 +1587,7 @@ static void msm_isp_process_overflow_irq(
 	}
 
 	/*Check if any overflow bit is set*/
-	vfe_dev->hw_info->vfe_ops.core_ops.
-		get_overflow_mask(&overflow_mask);
+	vfe_dev->hw_info->vfe_ops.core_ops.get_overflow_mask(&overflow_mask);
 	overflow_mask &= *irq_status1;
 
 	if (overflow_mask) {
@@ -1617,8 +1614,8 @@ static void msm_isp_process_overflow_irq(
 		vfe_dev->hw_info->vfe_ops.axi_ops.halt(vfe_dev, 0);
 
 		/*Stop CAMIF Immediately*/
-		vfe_dev->hw_info->vfe_ops.core_ops.
-			update_camif_state(vfe_dev, DISABLE_CAMIF_IMMEDIATELY);
+		vfe_dev->hw_info->vfe_ops.core_ops.update_camif_state(vfe_dev,
+				DISABLE_CAMIF_IMMEDIATELY);
 
 		/*Update overflow state*/
 		*irq_status0 = 0;
@@ -1661,8 +1658,8 @@ irqreturn_t msm_isp_process_irq(int irq_num, void *data)
 	uint32_t irq_status0, irq_status1;
 	uint32_t error_mask0, error_mask1;
 
-	vfe_dev->hw_info->vfe_ops.irq_ops.
-		read_irq_status(vfe_dev, &irq_status0, &irq_status1);
+	vfe_dev->hw_info->vfe_ops.irq_ops.read_irq_status(vfe_dev,
+				&irq_status0, &irq_status1);
 
 	if ((irq_status0 == 0) && (irq_status1 == 0)) {
 		pr_err_ratelimited("%s:VFE%d irq_status0 & 1 are both 0\n",
@@ -1673,8 +1670,8 @@ irqreturn_t msm_isp_process_irq(int irq_num, void *data)
 	msm_isp_process_overflow_irq(vfe_dev,
 		&irq_status0, &irq_status1);
 
-	vfe_dev->hw_info->vfe_ops.core_ops.
-		get_error_mask(&error_mask0, &error_mask1);
+	vfe_dev->hw_info->vfe_ops.core_ops.get_error_mask(&error_mask0,
+		&error_mask1);
 	error_mask0 &= irq_status0;
 	error_mask1 &= irq_status1;
 	irq_status0 &= ~error_mask0;

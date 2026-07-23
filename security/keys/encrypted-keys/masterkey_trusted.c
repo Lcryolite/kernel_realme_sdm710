@@ -11,11 +11,10 @@
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, version 2 of the License.
  *
- * See Documentation/security/keys-trusted-encrypted.txt
+ * See Documentation/security/keys/trusted-encrypted.rst
  */
 
 #include <linux/uaccess.h>
-#include <linux/module.h>
 #include <linux/err.h>
 #include <keys/trusted-type.h>
 #include <keys/encrypted-type.h>

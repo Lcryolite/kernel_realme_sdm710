@@ -297,7 +297,6 @@ static inline int pm_qos_set_value_for_cpus(struct pm_qos_constraints *c,
 					qos_val[cpu] += req->node.prio;
 				break;
 			default:
-				BUG();
 				break;
 			}
 		}
@@ -316,20 +315,18 @@ static inline int pm_qos_set_value_for_cpus(struct pm_qos_constraints *c,
  * pm_qos_update_target - manages the constraints list and calls the notifiers
  *  if needed
  * @c: constraints data struct
- * @req: request to add to the list, to update or to remove
+ * @node: request to add to the list, to update or to remove
  * @action: action to take on the constraints list
  * @value: value of the request to add or update
  *
  * This function returns 1 if the aggregated constraint value has changed, 0
  *  otherwise.
  */
-int pm_qos_update_target(struct pm_qos_constraints *c,
-				struct pm_qos_request *req,
-				enum pm_qos_req_action action, int value)
+int pm_qos_update_target(struct pm_qos_constraints *c, struct plist_node *node,
+			 enum pm_qos_req_action action, int value)
 {
 	unsigned long flags;
 	int prev_value, curr_value, new_value;
-	struct plist_node *node = &req->node;
 	struct cpumask cpus;
 	int ret;
 
@@ -500,7 +497,6 @@ int pm_qos_request_for_cpumask(int pm_qos_class, struct cpumask *mask)
 				val = c->target_per_cpu[cpu];
 			break;
 		default:
-			BUG();
 			break;
 		}
 	}
@@ -518,7 +514,7 @@ static void __pm_qos_update_request(struct pm_qos_request *req,
 	if (new_value != req->node.prio)
 		pm_qos_update_target(
 			pm_qos_array[req->pm_qos_class]->constraints,
-			req, PM_QOS_UPDATE_REQ, new_value);
+			&req->node, PM_QOS_UPDATE_REQ, new_value);
 }
 
 /**
@@ -551,23 +547,34 @@ static void pm_qos_irq_release(struct kref *ref)
 	cpumask_setall(&req->cpus_affine);
 	spin_unlock_irqrestore(&pm_qos_lock, flags);
 
-	pm_qos_update_target(c, req, PM_QOS_UPDATE_REQ, c->default_value);
+	pm_qos_update_target(c, &req->node, PM_QOS_UPDATE_REQ,
+			c->default_value);
 }
 
 static void pm_qos_irq_notify(struct irq_affinity_notify *notify,
-		const cpumask_t *mask)
+		const cpumask_t *unused_mask)
 {
 	unsigned long flags;
 	struct pm_qos_request *req = container_of(notify,
 					struct pm_qos_request, irq_notify);
 	struct pm_qos_constraints *c =
 				pm_qos_array[req->pm_qos_class]->constraints;
+	struct irq_desc *desc = irq_to_desc(req->irq);
+	struct cpumask *new_affinity =
+			irq_data_get_effective_affinity_mask(&desc->irq_data);
+	bool affinity_changed = false;
 
 	spin_lock_irqsave(&pm_qos_lock, flags);
-	cpumask_copy(&req->cpus_affine, mask);
+	if (!cpumask_equal(&req->cpus_affine, new_affinity)) {
+		cpumask_copy(&req->cpus_affine, new_affinity);
+		affinity_changed = true;
+	}
+
 	spin_unlock_irqrestore(&pm_qos_lock, flags);
 
-	pm_qos_update_target(c, req, PM_QOS_UPDATE_REQ, req->node.prio);
+	if (affinity_changed)
+		pm_qos_update_target(c, &req->node, PM_QOS_UPDATE_REQ,
+				     req->node.prio);
 }
 #endif
 
@@ -600,7 +607,7 @@ void pm_qos_add_request(struct pm_qos_request *req,
 		if (cpumask_empty(&req->cpus_affine)) {
 			req->type = PM_QOS_REQ_ALL_CORES;
 			cpumask_setall(&req->cpus_affine);
-			WARN(1, KERN_ERR "Affine cores not set for request with affinity flag\n");
+			WARN(1, "Affine cores not set for request with affinity flag\n");
 		}
 		break;
 #ifdef CONFIG_SMP
@@ -612,9 +619,16 @@ void pm_qos_add_request(struct pm_qos_request *req,
 			if (!desc)
 				return;
 
-			mask = desc->irq_data.common->affinity;
+			/*
+			 * If the IRQ is not started, the effective affinity
+			 * won't be set. So fallback to the default affinity.
+			 */
+			mask = irq_data_get_effective_affinity_mask(
+						&desc->irq_data);
+			if (cpumask_empty(mask))
+				mask = irq_data_get_affinity_mask(
+						&desc->irq_data);
 
-			/* Get the current affinity */
 			cpumask_copy(&req->cpus_affine, mask);
 			req->irq_notify.irq = req->irq;
 			req->irq_notify.notify = pm_qos_irq_notify;
@@ -623,13 +637,13 @@ void pm_qos_add_request(struct pm_qos_request *req,
 		} else {
 			req->type = PM_QOS_REQ_ALL_CORES;
 			cpumask_setall(&req->cpus_affine);
-			WARN(1, KERN_ERR "IRQ-%d not set for request with affinity flag\n",
+			WARN(1, "IRQ-%d not set for request with affinity flag\n",
 					req->irq);
 		}
 		break;
 #endif
 	default:
-		WARN(1, KERN_ERR "Unknown request type %d\n", req->type);
+		WARN(1, "Unknown request type %d\n", req->type);
 		/* fall through */
 	case PM_QOS_REQ_ALL_CORES:
 		cpumask_setall(&req->cpus_affine);
@@ -640,7 +654,7 @@ void pm_qos_add_request(struct pm_qos_request *req,
 	INIT_DELAYED_WORK(&req->work, pm_qos_work_fn);
 	trace_pm_qos_add_request(pm_qos_class, value);
 	pm_qos_update_target(pm_qos_array[pm_qos_class]->constraints,
-			     req, PM_QOS_ADD_REQ, value);
+			     &req->node, PM_QOS_ADD_REQ, value);
 
 #ifdef CONFIG_SMP
 	if (req->type == PM_QOS_REQ_AFFINE_IRQ &&
@@ -655,7 +669,7 @@ void pm_qos_add_request(struct pm_qos_request *req,
 			cpumask_setall(&req->cpus_affine);
 			pm_qos_update_target(
 				pm_qos_array[pm_qos_class]->constraints,
-				req, PM_QOS_UPDATE_REQ, value);
+				&req->node, PM_QOS_UPDATE_REQ, value);
 		}
 	}
 #endif
@@ -683,16 +697,7 @@ void pm_qos_update_request(struct pm_qos_request *req,
 		return;
 	}
 
-	/*
-	 * This function may be called very early during boot, for example,
-	 * from of_clk_init(), where irq needs to stay disabled.
-	 * cancel_delayed_work_sync() assumes that irq is enabled on
-	 * invocation and re-enables it on return.  Avoid calling it until
-	 * workqueue is initialized.
-	 */
-	if (keventd_up())
-		cancel_delayed_work_sync(&req->work);
-
+	cancel_delayed_work_sync(&req->work);
 	__pm_qos_update_request(req, new_value);
 }
 EXPORT_SYMBOL_GPL(pm_qos_update_request);
@@ -721,7 +726,7 @@ void pm_qos_update_request_timeout(struct pm_qos_request *req, s32 new_value,
 	if (new_value != req->node.prio)
 		pm_qos_update_target(
 			pm_qos_array[req->pm_qos_class]->constraints,
-			req, PM_QOS_UPDATE_REQ, new_value);
+			&req->node, PM_QOS_UPDATE_REQ, new_value);
 
 	schedule_delayed_work(&req->work, usecs_to_jiffies(timeout_us));
 }
@@ -741,7 +746,7 @@ void pm_qos_remove_request(struct pm_qos_request *req)
 		/* silent return to keep pcm code cleaner */
 
 	if (!pm_qos_request_active(req)) {
-		WARN(1, "pm_qos_remove_request() called for unknown object\n");
+		WARN(1, "%s called for unknown object\n", __func__);
 		return;
 	}
 
@@ -759,7 +764,7 @@ void pm_qos_remove_request(struct pm_qos_request *req)
 
 	trace_pm_qos_remove_request(req->pm_qos_class, PM_QOS_DEFAULT_VALUE);
 	pm_qos_update_target(pm_qos_array[req->pm_qos_class]->constraints,
-			     req, PM_QOS_REMOVE_REQ,
+			     &req->node, PM_QOS_REMOVE_REQ,
 			     PM_QOS_DEFAULT_VALUE);
 	memset(req, 0, sizeof(*req));
 }
@@ -897,15 +902,6 @@ static ssize_t pm_qos_power_write(struct file *filp, const char __user *buf,
 		ret = kstrtos32_from_user(buf, count, 16, &value);
 		if (ret)
 			return ret;
-	}
-
-	switch (value) {
-		case 0x44:
-			value = 44;
-			break;
-		case 0x100:
-			return count;
-			break;
 	}
 
 	req = filp->private_data;

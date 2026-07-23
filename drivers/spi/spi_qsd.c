@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2018, 2020 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -277,7 +277,7 @@ static void msm_spi_clock_set(struct msm_spi *dd, int speed)
 	rate = msm_spi_clk_max_rate(dd->clk, speed);
 	if (rate < 0) {
 		dev_err(dd->dev,
-		"%s: no match found for requested clock frequency:%d",
+		"%s: no match found for requested clock frequency:%d\n",
 			__func__, speed);
 		return;
 	}
@@ -329,7 +329,7 @@ static int msm_spi_clk_path_postponed_register(struct msm_spi *dd)
 
 	if (IS_ERR_OR_NULL(dd->bus_cl_hdl)) {
 		ret = (dd->bus_cl_hdl ? PTR_ERR(dd->bus_cl_hdl) : -EAGAIN);
-		dev_err(dd->dev, "Failed bus registration Err %d", ret);
+		dev_err(dd->dev, "Failed bus registration Err %d\n", ret);
 	}
 
 	return ret;
@@ -702,14 +702,14 @@ static int msm_spi_bam_pipe_connect(struct msm_spi *dd,
 
 	ret = sps_connect(pipe->handle, config);
 	if (ret) {
-		dev_err(dd->dev, "%s: sps_connect(%s:0x%pK):%d",
+		dev_err(dd->dev, "%s: sps_connect(%s:0x%pK):%d\n",
 				__func__, pipe->name, pipe->handle, ret);
 		return ret;
 	}
 
 	ret = sps_register_event(pipe->handle, &event);
 	if (ret) {
-		dev_err(dd->dev, "%s sps_register_event(hndl:0x%pK %s):%d",
+		dev_err(dd->dev, "%s sps_register_event(hndl:0x%pK %s):%d\n",
 				__func__, pipe->handle, pipe->name, ret);
 		msm_spi_bam_pipe_disconnect(dd, pipe);
 		return ret;
@@ -772,7 +772,7 @@ msm_spi_bam_process_rx(struct msm_spi *dd, u32 *bytes_to_send, u32 desc_cnt)
 			data_xfr_size, dd, prod_flags);
 	if (ret < 0) {
 		dev_err(dd->dev,
-		"%s: Failed to queue producer BAM transfer",
+		"%s: Failed to queue producer BAM transfer\n",
 		__func__);
 		return ret;
 	}
@@ -809,7 +809,7 @@ msm_spi_bam_process_tx(struct msm_spi *dd, u32 *bytes_to_send, u32 desc_cnt)
 			data_xfr_size, dd, cons_flags);
 	if (ret < 0) {
 		dev_err(dd->dev,
-		"%s: Failed to queue consumer BAM transfer",
+		"%s: Failed to queue consumer BAM transfer\n",
 		__func__);
 		return ret;
 	}
@@ -850,7 +850,7 @@ msm_spi_bam_begin_transfer(struct msm_spi *dd)
 	ret = msm_spi_set_state(dd, SPI_OP_STATE_RUN);
 	if (ret < 0) {
 		dev_err(dd->dev,
-			"%s: Failed to set QUP state to run",
+			"%s: Failed to set QUP state to run\n",
 			__func__);
 		goto xfr_err;
 	}
@@ -1398,7 +1398,7 @@ static int msm_spi_process_transfer(struct msm_spi *dd)
 	ret = msm_spi_set_state(dd, SPI_OP_STATE_RESET);
 	if (ret < 0) {
 		dev_err(dd->dev,
-			"%s: Error setting QUP to reset-state",
+			"%s: Error setting QUP to reset-state\n",
 			__func__);
 		return ret;
 	}
@@ -1408,7 +1408,7 @@ static int msm_spi_process_transfer(struct msm_spi *dd)
 	if (dd->tx_mode == SPI_BAM_MODE) {
 		ret = msm_spi_dma_map_buffers(dd);
 		if (ret < 0) {
-			pr_err("Mapping DMA buffers\n");
+			pr_err("%s(): Error Mapping DMA buffers\n", __func__);
 			dd->tx_mode = SPI_MODE_NONE;
 			dd->rx_mode = SPI_MODE_NONE;
 			return ret;
@@ -1447,7 +1447,7 @@ static int msm_spi_process_transfer(struct msm_spi *dd)
 	if (dd->tx_mode != SPI_BAM_MODE)
 		if (msm_spi_set_state(dd, SPI_OP_STATE_RUN)) {
 			dev_warn(dd->dev,
-				"%s: Failed to set QUP to run-state. Mode:%d",
+				"%s: Failed to set QUP to run-state. Mode:%d\n",
 				__func__, dd->tx_mode);
 			goto transfer_end;
 		}
@@ -1499,7 +1499,7 @@ static inline void msm_spi_set_cs(struct spi_device *spi, bool set_flag)
 
 	rc = pm_runtime_get_sync(dd->dev);
 	if (rc < 0) {
-		dev_err(dd->dev, "Failure during runtime get,rc=%d", rc);
+		dev_err(dd->dev, "Failure during runtime get,rc=%d\n", rc);
 		return;
 	}
 
@@ -1565,13 +1565,6 @@ static void reset_core(struct msm_spi *dd)
 
 static void put_local_resources(struct msm_spi *dd)
 {
-
-	if (IS_ERR_OR_NULL(dd->clk) || IS_ERR_OR_NULL(dd->pclk)) {
-		dev_err(dd->dev,
-			"%s: error clk put\n",
-				__func__);
-		return;
-	}
 	msm_spi_disable_irqs(dd);
 	clk_disable_unprepare(dd->clk);
 	dd->clock_speed = 0;
@@ -1587,13 +1580,6 @@ static void put_local_resources(struct msm_spi *dd)
 static int get_local_resources(struct msm_spi *dd)
 {
 	int ret = -EINVAL;
-
-	if (IS_ERR_OR_NULL(dd->clk) || IS_ERR_OR_NULL(dd->pclk)) {
-		dev_err(dd->dev,
-			"%s: error clk put\n",
-				__func__);
-		return ret;
-	}
 
 	/* Configure the spi clk, miso, mosi and cs gpio */
 	if (dd->pdata->gpio_config) {
@@ -1717,28 +1703,82 @@ static int msm_spi_transfer_one(struct spi_master *master,
 	return status_error;
 }
 
-static int msm_spi_prepare_transfer_hardware(struct spi_master *master)
+static int msm_spi_pm_get_sync(struct device *dev)
 {
-	struct msm_spi	*dd = spi_master_get_devdata(master);
-	int resume_state = 0;
-
-	resume_state = pm_runtime_get_sync(dd->dev);
-	if (resume_state < 0)
-		goto spi_finalize;
+	int ret;
 
 	/*
 	 * Counter-part of system-suspend when runtime-pm is not enabled.
 	 * This way, resume can be left empty and device will be put in
 	 * active mode only if client requests anything on the bus
 	 */
-	if (!pm_runtime_enabled(dd->dev))
-		resume_state = msm_spi_pm_resume_runtime(dd->dev);
-	if (resume_state < 0)
-		goto spi_finalize;
-	if (dd->suspended) {
-		resume_state = -EBUSY;
-		goto spi_finalize;
+	if (!pm_runtime_enabled(dev)) {
+		dev_info(dev, "%s: pm_runtime not enabled\n", __func__);
+		ret = msm_spi_pm_resume_runtime(dev);
+	} else {
+		ret = pm_runtime_get_sync(dev);
 	}
+
+	return ret;
+}
+
+static int msm_spi_pm_put_sync(struct device *dev)
+{
+	int ret = 0;
+
+	if (!pm_runtime_enabled(dev)) {
+		dev_info(dev, "%s: pm_runtime not enabled\n", __func__);
+		ret = msm_spi_pm_suspend_runtime(dev);
+	} else {
+		pm_runtime_mark_last_busy(dev);
+		pm_runtime_put_autosuspend(dev);
+	}
+
+	return ret;
+}
+
+static int msm_spi_prepare_message(struct spi_master *master,
+					struct spi_message *spi_msg)
+{
+	struct msm_spi *dd = spi_master_get_devdata(master);
+	int resume_state;
+
+	resume_state = msm_spi_pm_get_sync(dd->dev);
+	if (resume_state < 0)
+		return resume_state;
+
+	return 0;
+}
+
+static int msm_spi_unprepare_message(struct spi_master *master,
+					struct spi_message *spi_msg)
+{
+	struct msm_spi *dd = spi_master_get_devdata(master);
+	int ret;
+
+	ret = msm_spi_pm_put_sync(dd->dev);
+	if (ret < 0)
+		return ret;
+
+	return 0;
+}
+
+static int msm_spi_prepare_transfer_hardware(struct spi_master *master)
+{
+	struct msm_spi *dd = spi_master_get_devdata(master);
+	int resume_state;
+
+	if (!dd->pdata->shared_ee) {
+		resume_state = msm_spi_pm_get_sync(dd->dev);
+		if (resume_state < 0)
+			goto spi_finalize;
+
+		if (dd->suspended) {
+			resume_state = -EBUSY;
+			goto spi_finalize;
+		}
+	}
+
 	return 0;
 
 spi_finalize:
@@ -1749,9 +1789,14 @@ spi_finalize:
 static int msm_spi_unprepare_transfer_hardware(struct spi_master *master)
 {
 	struct msm_spi	*dd = spi_master_get_devdata(master);
+	int ret;
 
-	pm_runtime_mark_last_busy(dd->dev);
-	pm_runtime_put_autosuspend(dd->dev);
+	if (!dd->pdata->shared_ee) {
+		ret = msm_spi_pm_put_sync(dd->dev);
+		if (ret < 0)
+			return ret;
+	}
+
 	return 0;
 }
 
@@ -1843,8 +1888,6 @@ err_setup_exit:
 }
 
 #ifdef CONFIG_DEBUG_FS
-
-
 static int debugfs_iomem_x32_set(void *data, u64 val)
 {
 	struct msm_spi_debugfs_data *reg = (struct msm_spi_debugfs_data *)data;
@@ -2050,7 +2093,7 @@ static int msm_spi_bam_pipe_init(struct msm_spi *dd,
 				&pipe_conf->desc.phys_base,
 				GFP_KERNEL);
 	if (!pipe_conf->desc.base) {
-		dev_err(dd->dev, "%s: Failed allocate BAM pipe memory"
+		dev_err(dd->dev, "%s: Failed allocate BAM pipe memory\n"
 			, __func__);
 		rc = -ENOMEM;
 		goto config_err;
@@ -2096,7 +2139,7 @@ static int msm_spi_bam_init(struct msm_spi *dd)
 		rc = sps_register_bam_device(&bam_props, &bam_handle);
 		if (rc) {
 			dev_err(dd->dev,
-				"%s: Failed to register BAM device",
+				"%s: Failed to register BAM device\n",
 				__func__);
 			return rc;
 		}
@@ -2108,7 +2151,7 @@ static int msm_spi_bam_init(struct msm_spi *dd)
 	rc = msm_spi_bam_pipe_init(dd, SPI_BAM_PRODUCER_PIPE);
 	if (rc) {
 		dev_err(dd->dev,
-			"%s: Failed to init producer BAM-pipe",
+			"%s: Failed to init producer BAM-pipe\n",
 			__func__);
 		goto bam_init_error;
 	}
@@ -2116,7 +2159,7 @@ static int msm_spi_bam_init(struct msm_spi *dd)
 	rc = msm_spi_bam_pipe_init(dd, SPI_BAM_CONSUMER_PIPE);
 	if (rc) {
 		dev_err(dd->dev,
-			"%s: Failed to init consumer BAM-pipe",
+			"%s: Failed to init consumer BAM-pipe\n",
 			__func__);
 		goto bam_init_error;
 	}
@@ -2249,6 +2292,8 @@ static struct msm_spi_platform_data *msm_spi_dt_to_pdata(
 			&pdata->rt_priority,		 DT_OPT,  DT_BOOL,  0},
 		{"qcom,shared",
 			&pdata->is_shared,		 DT_OPT,  DT_BOOL,  0},
+		{"qcom,shared_ee",
+			&pdata->shared_ee,		 DT_OPT,  DT_BOOL,  0},
 		{NULL,  NULL,                            0,       0,        0},
 		};
 
@@ -2292,7 +2337,7 @@ static int msm_spi_bam_get_resources(struct msm_spi *dd,
 						"spi_bam_physical");
 	if (!resource) {
 		dev_warn(&pdev->dev,
-			"%s: Missing spi_bam_physical entry in DT",
+			"%s: Missing spi_bam_physical entry in DT\n",
 			__func__);
 		return -ENXIO;
 	}
@@ -2303,14 +2348,14 @@ static int msm_spi_bam_get_resources(struct msm_spi *dd,
 					bam_mem_size);
 	if (!dd->bam.base) {
 		dev_warn(&pdev->dev,
-			"%s: Failed to ioremap(spi_bam_physical)",
+			"%s: Failed to ioremap(spi_bam_physical)\n",
 			__func__);
 		return -ENXIO;
 	}
 
 	dd->bam.irq = platform_get_irq_byname(pdev, "spi_bam_irq");
 	if (dd->bam.irq < 0) {
-		dev_warn(&pdev->dev, "%s: Missing spi_bam_irq entry in DT",
+		dev_warn(&pdev->dev, "%s: Missing spi_bam_irq entry in DT\n",
 			__func__);
 		return -EINVAL;
 	}
@@ -2380,7 +2425,7 @@ static int init_resources(struct platform_device *pdev)
 					msm_spi_get_qup_hw_ver(&pdev->dev, dd);
 		if (dd->qup_ver != ver)
 			dev_warn(&pdev->dev,
-			"%s: HW version different then initially assumed by probe",
+			"%s: HW version different then assumed by probe\n",
 			__func__);
 	}
 
@@ -2548,7 +2593,7 @@ static int msm_spi_probe(struct platform_device *pdev)
 		rc = msm_spi_bam_get_resources(dd, pdev, master);
 		if (rc) {
 			dev_warn(dd->dev,
-					"%s: Failed to get BAM resources",
+					"%s: Failed to get BAM resources\n",
 					__func__);
 			goto skip_dma_resources;
 		}
@@ -2572,6 +2617,12 @@ skip_dma_resources:
 	if (!dd->base) {
 		rc = -ENOMEM;
 		goto err_probe_reqmem;
+	}
+
+	/* This property is required for Dual EE use case of spi */
+	if (dd->pdata->shared_ee) {
+		master->prepare_message = msm_spi_prepare_message;
+		master->unprepare_message = msm_spi_unprepare_message;
 	}
 
 	pm_runtime_set_autosuspend_delay(&pdev->dev, MSEC_PER_SEC);
@@ -2699,7 +2750,7 @@ static int msm_spi_suspend(struct device *device)
 		struct spi_master *master = platform_get_drvdata(pdev);
 		struct msm_spi   *dd;
 
-		dev_dbg(device, "system suspend");
+		dev_dbg(device, "system suspend\n");
 		if (!master)
 			goto suspend_exit;
 		dd = spi_master_get_devdata(master);
@@ -2725,7 +2776,7 @@ static int msm_spi_resume(struct device *device)
 	 * Even if it's not enabled, rely on 1st client transaction to do
 	 * clock ON and gpio configuration
 	 */
-	dev_dbg(device, "system resume");
+	dev_dbg(device, "system resume\n");
 	return 0;
 }
 #else

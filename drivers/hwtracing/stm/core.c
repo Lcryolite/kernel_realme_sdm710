@@ -432,7 +432,7 @@ static int stm_file_assign(struct stm_file *stmf, char *id, unsigned int width)
 	return ret;
 }
 
-static ssize_t stm_write(struct stm_data *data, unsigned int master,
+static ssize_t notrace stm_write(struct stm_data *data, unsigned int master,
 			  unsigned int channel, const char *buf, size_t count)
 {
 	unsigned int flags = STP_PACKET_TIMESTAMPED;
@@ -446,18 +446,15 @@ static ssize_t stm_write(struct stm_data *data, unsigned int master,
 		for (pos = 0, p = buf; count > pos; pos += sz, p += sz) {
 			sz = min_t(unsigned int, count - pos, 8);
 			sz = data->packet(data, master, channel,
-					  STP_PACKET_DATA, flags,
-					  sz, p);
+						STP_PACKET_DATA, flags, sz, p);
 			flags = 0;
-
 			if (sz < 0)
 				break;
 		}
+		data->packet(data, master, channel, STP_PACKET_FLAG, 0, 0,
+		&nil);
 
-		data->packet(data, master, channel, STP_PACKET_FLAG, 0,
-			     0, &nil);
 	}
-
 	return pos;
 }
 
@@ -577,7 +574,7 @@ static int stm_char_policy_set_ioctl(struct stm_file *stmf, void __user *arg)
 	if (copy_from_user(&size, arg, sizeof(size)))
 		return -EFAULT;
 
-	if (size >= PATH_MAX + sizeof(*id))
+	if (size < sizeof(*id) || size >= PATH_MAX + sizeof(*id))
 		return -EINVAL;
 
 	/*
@@ -717,8 +714,11 @@ int stm_register_device(struct device *parent, struct stm_data *stm_data,
 		return -ENOMEM;
 
 	stm->major = register_chrdev(0, stm_data->name, &stm_fops);
-	if (stm->major < 0)
-		goto err_free;
+	if (stm->major < 0) {
+		err = stm->major;
+		vfree(stm);
+		return err;
+	}
 
 	device_initialize(&stm->dev);
 	stm->dev.devt = MKDEV(stm->major, 0);
@@ -762,10 +762,8 @@ int stm_register_device(struct device *parent, struct stm_data *stm_data,
 err_device:
 	unregister_chrdev(stm->major, stm_data->name);
 
-	/* matches device_initialize() above */
+	/* calls stm_device_release() */
 	put_device(&stm->dev);
-err_free:
-	vfree(stm);
 
 	return err;
 }
@@ -1135,8 +1133,9 @@ void stm_source_unregister_device(struct stm_source_data *data)
 }
 EXPORT_SYMBOL_GPL(stm_source_unregister_device);
 
-int stm_source_write(struct stm_source_data *data, unsigned int chan,
-		     const char *buf, size_t count)
+int notrace stm_source_write(struct stm_source_data *data,
+			     unsigned int chan,
+			     const char *buf, size_t count)
 {
 	struct stm_source_device *src = data->src;
 	struct stm_device *stm;

@@ -45,9 +45,9 @@
 #include <net/sctp/sm.h>
 
 /* Forward declarations for internal helpers. */
-static int sctp_copy_one_addr(struct net *, struct sctp_bind_addr *,
-			      union sctp_addr *, sctp_scope_t scope, gfp_t gfp,
-			      int flags);
+static int sctp_copy_one_addr(struct net *net, struct sctp_bind_addr *dest,
+			      union sctp_addr *addr, enum sctp_scope scope,
+			      gfp_t gfp, int flags);
 static void sctp_bind_addr_clean(struct sctp_bind_addr *);
 
 /* First Level Abstractions. */
@@ -57,7 +57,7 @@ static void sctp_bind_addr_clean(struct sctp_bind_addr *);
  */
 int sctp_bind_addr_copy(struct net *net, struct sctp_bind_addr *dest,
 			const struct sctp_bind_addr *src,
-			sctp_scope_t scope, gfp_t gfp,
+			enum sctp_scope scope, gfp_t gfp,
 			int flags)
 {
 	struct sctp_sockaddr_entry *addr;
@@ -87,6 +87,12 @@ int sctp_bind_addr_copy(struct net *net, struct sctp_bind_addr *dest,
 				goto out;
 		}
 	}
+
+	/* If somehow no addresses were found that can be used with this
+	 * scope, it's an error.
+	 */
+	if (list_empty(&dest->address_list))
+		error = -ENETUNREACH;
 
 out:
 	if (error)
@@ -291,11 +297,15 @@ int sctp_raw_to_bind_addrs(struct sctp_bind_addr *bp, __u8 *raw_addr_list,
 			goto out_err;
 		}
 
+		if (sctp_bind_addr_state(bp, &addr) != -1)
+			goto next;
 		retval = sctp_add_bind_addr(bp, &addr, sizeof(addr),
 					    SCTP_ADDR_SRC, gfp);
 		if (retval)
+			/* Can't finish building the list, clean up. */
 			goto out_err;
 
+next:
 		len = ntohs(param->length);
 		addrs_len -= len;
 		raw_addr_list += len;
@@ -439,9 +449,8 @@ union sctp_addr *sctp_find_unmatch_addr(struct sctp_bind_addr	*bp,
 
 /* Copy out addresses from the global local address list. */
 static int sctp_copy_one_addr(struct net *net, struct sctp_bind_addr *dest,
-			      union sctp_addr *addr,
-			      sctp_scope_t scope, gfp_t gfp,
-			      int flags)
+			      union sctp_addr *addr, enum sctp_scope scope,
+			      gfp_t gfp, int flags)
 {
 	int error = 0;
 
@@ -485,9 +494,10 @@ int sctp_is_any(struct sock *sk, const union sctp_addr *addr)
 }
 
 /* Is 'addr' valid for 'scope'?  */
-int sctp_in_scope(struct net *net, const union sctp_addr *addr, sctp_scope_t scope)
+int sctp_in_scope(struct net *net, const union sctp_addr *addr,
+		  enum sctp_scope scope)
 {
-	sctp_scope_t addr_scope = sctp_scope(addr);
+	enum sctp_scope addr_scope = sctp_scope(addr);
 
 	/* The unusable SCTP addresses will not be considered with
 	 * any defined scopes.
@@ -545,7 +555,7 @@ int sctp_is_ep_boundall(struct sock *sk)
  ********************************************************************/
 
 /* What is the scope of 'addr'?  */
-sctp_scope_t sctp_scope(const union sctp_addr *addr)
+enum sctp_scope sctp_scope(const union sctp_addr *addr)
 {
 	struct sctp_af *af;
 

@@ -711,11 +711,7 @@ static int uas_queuecommand_lck(struct scsi_cmnd *cmnd,
 	 * of queueing, no matter how fatal the error
 	 */
 	if (err == -ENODEV) {
-		if (cmdinfo->state & (COMMAND_INFLIGHT | DATA_IN_URB_INFLIGHT |
-				DATA_OUT_URB_INFLIGHT))
-			goto out;
-
-		cmnd->result = DID_NO_CONNECT << 16;
+		cmnd->result = DID_ERROR << 16;
 		cmnd->scsi_done(cmnd);
 		goto zombie;
 	}
@@ -728,7 +724,6 @@ static int uas_queuecommand_lck(struct scsi_cmnd *cmnd,
 		uas_add_work(cmdinfo);
 	}
 
-out:
 	devinfo->cmnd[idx] = cmnd;
 zombie:
 	spin_unlock_irqrestore(&devinfo->lock, flags);
@@ -780,7 +775,7 @@ static int uas_eh_abort_handler(struct scsi_cmnd *cmnd)
 	return FAILED;
 }
 
-static int uas_eh_bus_reset_handler(struct scsi_cmnd *cmnd)
+static int uas_eh_device_reset_handler(struct scsi_cmnd *cmnd)
 {
 	struct scsi_device *sdev = cmnd->device;
 	struct uas_dev_info *devinfo = sdev->hostdata;
@@ -839,9 +834,7 @@ static int uas_slave_alloc(struct scsi_device *sdev)
 {
 	struct uas_dev_info *devinfo =
 		(struct uas_dev_info *)sdev->host->hostdata;
-	#ifndef OPLUS_FEATURE_CHG_BASIC
-		int maxp;
-	#endif
+
 	sdev->hostdata = devinfo;
 
 	/*
@@ -849,10 +842,6 @@ static int uas_slave_alloc(struct scsi_device *sdev)
 	 * Controllers may or may not have alignment restrictions.
 	 * As this is not exported, we use an extremely conservative guess.
 	 */
-	#ifndef OPLUS_FEATURE_CHG_BASIC
-		maxp = usb_maxpacket(devinfo->udev, devinfo->data_in_pipe, 0);
-		blk_queue_virt_boundary(sdev->request_queue, maxp - 1);
-	#endif
 	blk_queue_update_dma_alignment(sdev->request_queue, (512 - 1));
 
 	if (devinfo->flags & US_FL_MAX_SECTORS_64)
@@ -885,6 +874,9 @@ static int uas_slave_configure(struct scsi_device *sdev)
 	if (devinfo->flags & US_FL_NO_READ_CAPACITY_16)
 		sdev->no_read_capacity_16 = 1;
 
+	/* Some disks cannot handle WRITE_SAME */
+	if (devinfo->flags & US_FL_NO_SAME)
+		sdev->no_write_same = 1;
 	/*
 	 * Some disks return the total number of blocks in response
 	 * to READ CAPACITY rather than the highest block number.
@@ -923,7 +915,7 @@ static struct scsi_host_template uas_host_template = {
 	.slave_alloc = uas_slave_alloc,
 	.slave_configure = uas_slave_configure,
 	.eh_abort_handler = uas_eh_abort_handler,
-	.eh_bus_reset_handler = uas_eh_bus_reset_handler,
+	.eh_device_reset_handler = uas_eh_device_reset_handler,
 	.this_id = -1,
 	.sg_tablesize = SG_NONE,
 	.skip_settle_delay = 1,

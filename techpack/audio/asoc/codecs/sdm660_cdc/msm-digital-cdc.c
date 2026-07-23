@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -23,17 +23,13 @@
 #include <sound/soc.h>
 #include <sound/soc-dapm.h>
 #include <sound/tlv.h>
-#include <linux/regulator/consumer.h>
 #include <dsp/q6afe-v2.h>
-#include <dsp/q6core.h>
 #include <ipc/apr.h>
 #include <soc/internal.h>
 #include "sdm660-cdc-registers.h"
 #include "msm-digital-cdc.h"
 #include "msm-cdc-common.h"
 #include "../../sdm660-common.h"
-
-#define CONFIG_SOUND_CONTROL
 
 #define DRV_NAME "msm_digital_codec"
 #define MCLK_RATE_9P6MHZ        9600000
@@ -45,8 +41,6 @@
 
 #define DEC_SVA 5
 #define MSM_DIG_CDC_VERSION_ENTRY_SIZE 32
-#define MAX_ON_DEMAND_DIG_SUPPLY_NAME_LENGTH 64
-#define CODEC_DT_MAX_PROP_SIZE 40
 
 static unsigned long rx_digital_gain_reg[] = {
 	MSM89XX_CDC_CORE_RX1_VOL_CTL_B2_CTL,
@@ -62,15 +56,7 @@ static unsigned long tx_digital_gain_reg[] = {
 	MSM89XX_CDC_CORE_TX5_VOL_CTL_GAIN,
 };
 
-//#ifndef VENDOR_EDIT
-/*Jianfeng.Qiu@PSW.MM.AudioDriver.Codec.1447862, 2018/06/26,
- *Modify for pop noise when start dmic
- */
-//#define SDM660_TX_UNMUTE_DELAY_MS 40
-//#else /* OPLUS_ARCH_EXTENDS */
-#define SDM660_TX_UNMUTE_DELAY_MS 50
-//#endif /* OPLUS_ARCH_EXTENDS */
-
+#define SDM660_TX_UNMUTE_DELAY_MS 40
 static int tx_unmute_delay = SDM660_TX_UNMUTE_DELAY_MS;
 module_param(tx_unmute_delay, int, 0664);
 MODULE_PARM_DESC(tx_unmute_delay, "delay to unmute the tx path");
@@ -80,46 +66,12 @@ static const DECLARE_TLV_DB_SCALE(digital_gain, 0, 1, 0);
 struct snd_soc_codec *registered_digcodec;
 struct hpf_work tx_hpf_work[NUM_DECIMATORS];
 
-static int msm_dig_cdc_enable_on_demand_supply(
-			struct snd_soc_dapm_widget *w,
-			struct snd_kcontrol *kcontrol, int event);
-static char on_demand_supply_name[][MAX_ON_DEMAND_DIG_SUPPLY_NAME_LENGTH] = {
-	"cdc-vdd-digital",
-};
-
 /* Codec supports 2 IIR filters */
 enum {
 	IIR1 = 0,
 	IIR2,
 	IIR_MAX,
 };
-
-/*
- * msm_digcdc_mclk_enable - add mclk support in digital codec
- * @codec: codec instance
- * @mclk_enable: mclk enable/disable
- * @dapm: check for dapm widget
- */
-int msm_digcdc_mclk_enable(struct snd_soc_codec *codec,
-			int mclk_enable, bool dapm)
-{
-	dev_dbg(codec->dev, "%s: mclk_enable = %u, dapm = %d\n",
-			__func__, mclk_enable, dapm);
-	if (mclk_enable) {
-		snd_soc_update_bits(codec,
-			MSM89XX_CDC_CORE_CLK_MCLK_CTL, 0x01, 0x01);
-		snd_soc_update_bits(codec,
-			MSM89XX_CDC_CORE_TOP_CTL, 0x01, 0x01);
-	} else {
-		snd_soc_update_bits(codec,
-			MSM89XX_CDC_CORE_TOP_CTL, 0x01, 0x00);
-		snd_soc_update_bits(codec,
-			MSM89XX_CDC_CORE_CLK_MCLK_CTL, 0x01, 0x00);
-	}
-
-	return 0;
-}
-EXPORT_SYMBOL(msm_digcdc_mclk_enable);
 
 static int msm_digcdc_clock_control(bool flag)
 {
@@ -133,8 +85,6 @@ static int msm_digcdc_clock_control(bool flag)
 	if (flag) {
 		mutex_lock(&pdata->cdc_int_mclk0_mutex);
 		if (atomic_read(&pdata->int_mclk0_enabled) == false) {
-			if (msm_dig_cdc->regmap->cache_only == true)
-				return ret;
 			if (pdata->native_clk_set)
 				pdata->digital_cdc_core_clk.clk_freq_in_hz =
 							NATIVE_MCLK_RATE;
@@ -150,9 +100,10 @@ static int msm_digcdc_clock_control(bool flag)
 				       __func__);
 				/*
 				 * Avoid access to lpass register
-				 * as clock enable failed during SSR/PDR.
+				 * as clock enable failed during SSR.
 				 */
-				msm_dig_cdc->regmap->cache_only = true;
+				if (ret == -ENODEV)
+					msm_dig_cdc->regmap->cache_only = true;
 				return ret;
 			}
 			pr_debug("enabled digital codec core clk\n");
@@ -292,8 +243,7 @@ static int msm_dig_cdc_codec_config_compander(struct snd_soc_codec *codec,
 
 	if (SND_SOC_DAPM_EVENT_ON(event)) {
 		/* compander is not enabled */
-		if (!dig_cdc->comp_enabled[interp_n] &&
-			dig_cdc->set_compander_mode) {
+		if (!dig_cdc->comp_enabled[interp_n]) {
 			dig_cdc->set_compander_mode(dig_cdc->handle, 0x00);
 			return 0;
 		};
@@ -315,8 +265,7 @@ static int msm_dig_cdc_codec_config_compander(struct snd_soc_codec *codec,
 				return 0;
 			}
 		}
-		if (dig_cdc->set_compander_mode)
-			dig_cdc->set_compander_mode(dig_cdc->handle, 0x08);
+		dig_cdc->set_compander_mode(dig_cdc->handle, 0x08);
 		/* Enable Compander Clock */
 		snd_soc_update_bits(codec,
 			MSM89XX_CDC_CORE_COMP0_B2_CTL, 0x0F, 0x09);
@@ -664,8 +613,7 @@ static void tx_hpf_corner_freq_callback(struct work_struct *work)
 
 	dev_dbg(codec->dev, "%s(): decimator %u hpf_cut_of_freq 0x%x\n",
 		 __func__, hpf_work->decimator, (unsigned int)hpf_cut_of_freq);
-	if (msm_dig_cdc->update_clkdiv)
-		msm_dig_cdc->update_clkdiv(msm_dig_cdc->handle, 0x51);
+	msm_dig_cdc->update_clkdiv(msm_dig_cdc->handle, 0x51);
 
 	snd_soc_update_bits(codec, tx_mux_ctl_reg, 0x30, hpf_cut_of_freq << 4);
 }
@@ -1020,8 +968,7 @@ static int msm_dig_cdc_codec_enable_dec(struct snd_soc_dapm_widget *w,
 			snd_soc_update_bits(codec, tx_mux_ctl_reg, 0x30,
 					    CF_MIN_3DB_150HZ << 4);
 		}
-		if (msm_dig_cdc->update_clkdiv)
-			msm_dig_cdc->update_clkdiv(msm_dig_cdc->handle, 0x42);
+		msm_dig_cdc->update_clkdiv(msm_dig_cdc->handle, 0x42);
 		break;
 	case SND_SOC_DAPM_POST_PMU:
 		/* enable HPF */
@@ -1079,7 +1026,6 @@ static int msm_dig_cdc_event_notify(struct notifier_block *block,
 	struct snd_soc_codec *codec = registered_digcodec;
 	struct msm_dig_priv *msm_dig_cdc = snd_soc_codec_get_drvdata(codec);
 	struct msm_asoc_mach_data *pdata = NULL;
-	struct msm_cap_mode *capmode;
 	int ret = -EINVAL;
 
 	pdata = snd_soc_card_get_drvdata(codec->component.card);
@@ -1168,9 +1114,6 @@ static int msm_dig_cdc_event_notify(struct notifier_block *block,
 		break;
 	case DIG_CDC_EVENT_SSR_DOWN:
 		regcache_cache_only(msm_dig_cdc->regmap, true);
-		mutex_lock(&pdata->cdc_int_mclk0_mutex);
-		atomic_set(&pdata->int_mclk0_enabled, false);
-		mutex_unlock(&pdata->cdc_int_mclk0_mutex);
 		break;
 	case DIG_CDC_EVENT_SSR_UP:
 		regcache_cache_only(msm_dig_cdc->regmap, false);
@@ -1197,11 +1140,6 @@ static int msm_dig_cdc_event_notify(struct notifier_block *block,
 				AFE_PORT_ID_INT0_MI2S_RX,
 				&pdata->digital_cdc_core_clk);
 		mutex_unlock(&pdata->cdc_int_mclk0_mutex);
-		break;
-	case DIG_CDC_EVENT_CAP_CONFIGURE:
-		capmode = (struct msm_cap_mode *)data;
-		capmode->micbias1_cap_mode = pdata->micbias1_cap_mode;
-		capmode->micbias2_cap_mode = pdata->micbias2_cap_mode;
 		break;
 	case DIG_CDC_EVENT_INVALID:
 	default:
@@ -1300,29 +1238,6 @@ int msm_dig_codec_info_create_codec_entry(struct snd_info_entry *codec_root,
 }
 EXPORT_SYMBOL(msm_dig_codec_info_create_codec_entry);
 
-static void msm_dig_cdc_update_micbias_regulator(
-				const struct msm_dig_priv *dig_cdc,
-				const char *name,
-				struct on_demand_dig_supply *micbias_supply)
-{
-	int i;
-
-	for (i = 0; i < dig_cdc->num_of_supplies; i++) {
-		if (dig_cdc->supplies[i].supply &&
-				!strcmp(dig_cdc->supplies[i].supply, name)) {
-			micbias_supply->supply =
-				dig_cdc->supplies[i].consumer;
-			micbias_supply->min_uv = dig_cdc->regulator[i].min_uv;
-			micbias_supply->max_uv = dig_cdc->regulator[i].max_uv;
-			micbias_supply->optimum_ua =
-				dig_cdc->regulator[i].optimum_ua;
-			return;
-		}
-	}
-
-	dev_dbg(dig_cdc->dev, "Error: regulator not found:%s\n", name);
-}
-
 static void sdm660_tx_mute_update_callback(struct work_struct *work)
 {
 	struct tx_mute_work *tx_mute_dwork;
@@ -1356,96 +1271,11 @@ static void sdm660_tx_mute_update_callback(struct work_struct *work)
 	}
 }
 
-
-#ifdef CONFIG_SOUND_CONTROL
-static struct snd_soc_codec *sound_control_codec_ptr;
-
-static ssize_t headphone_gain_show(struct kobject *kobj,
-		struct kobj_attribute *attr, char *buf)
-{
-	return snprintf(buf, PAGE_SIZE, "%d %d\n",
-		snd_soc_read(sound_control_codec_ptr, MSM89XX_CDC_CORE_RX1_VOL_CTL_B2_CTL),
-		snd_soc_read(sound_control_codec_ptr, MSM89XX_CDC_CORE_RX2_VOL_CTL_B2_CTL)
-	);
-}
-
-static ssize_t headphone_gain_store(struct kobject *kobj,
-		struct kobj_attribute *attr, const char *buf, size_t count)
-{
-
-	int input_l, input_r;
-
-	sscanf(buf, "%d %d", &input_l, &input_r);
-
-	if (input_l < -84 || input_l > 20)
-		input_l = 0;
-
-	if (input_r < -84 || input_r > 20)
-		input_r = 0;
-
-
-	snd_soc_write(sound_control_codec_ptr, MSM89XX_CDC_CORE_RX1_VOL_CTL_B2_CTL, input_l);
-	snd_soc_write(sound_control_codec_ptr, MSM89XX_CDC_CORE_RX2_VOL_CTL_B2_CTL, input_r);
-
-	return count;
-}
-
-static struct kobj_attribute headphone_gain_attribute =
-	__ATTR(headphone_gain, 0664,
-		headphone_gain_show,
-		headphone_gain_store);
-
-static ssize_t mic_gain_show(struct kobject *kobj,
-		struct kobj_attribute *attr, char *buf)
-{
-	return snprintf(buf, PAGE_SIZE, "%d\n",
-		snd_soc_read(sound_control_codec_ptr, MSM89XX_CDC_CORE_TX1_VOL_CTL_GAIN));
-
-}
-
-static ssize_t mic_gain_store(struct kobject *kobj,
-		struct kobj_attribute *attr, const char *buf, size_t count)
-{
-	int input;
-
-	sscanf(buf, "%d", &input);
-
-	if (input < -10 || input > 20)
-		input = 0;
-
- 	snd_soc_write(sound_control_codec_ptr, MSM89XX_CDC_CORE_TX1_VOL_CTL_GAIN, input);
-
-	return count;
-}
-
-static struct kobj_attribute mic_gain_attribute =
-	__ATTR(mic_gain, 0664,
-		mic_gain_show,
-		mic_gain_store);
-
-static struct attribute *sound_control_attrs[] = {
-		&headphone_gain_attribute.attr,
-		&mic_gain_attribute.attr,
-		NULL,
-};
-
-static struct attribute_group sound_control_attr_group = {
-		.attrs = sound_control_attrs,
-};
-
-static struct kobject *sound_control_kobj;
-#endif
-
-
 static int msm_dig_cdc_soc_probe(struct snd_soc_codec *codec)
 {
 	struct msm_dig_priv *msm_dig_cdc = dev_get_drvdata(codec->dev);
 	struct snd_soc_dapm_context *dapm = snd_soc_codec_get_dapm(codec);
 	int i, ret;
-
-#ifdef CONFIG_SOUND_CONTROL
-	sound_control_codec_ptr = codec;
-#endif
 
 	msm_dig_cdc->codec = codec;
 
@@ -1478,29 +1308,8 @@ static int msm_dig_cdc_soc_probe(struct snd_soc_codec *codec)
 			return ret;
 		}
 	}
-
-	msm_dig_cdc_update_micbias_regulator(
-			msm_dig_cdc,
-			on_demand_supply_name[ON_DEMAND_DIGITAL],
-			&msm_dig_cdc->on_demand_list[ON_DEMAND_DIGITAL]);
-	atomic_set(&msm_dig_cdc->on_demand_list[ON_DEMAND_DIGITAL].ref, 0);
-
 	registered_digcodec = codec;
-	if (msm_dig_cdc->no_analog_codec) {
-		msm_dig_cdc->fw_data = devm_kzalloc(codec->dev,
-					    sizeof(*(msm_dig_cdc->fw_data)),
-					    GFP_KERNEL);
-		if (!msm_dig_cdc->fw_data)
-			return -ENOMEM;
 
-		ret = wcd_cal_create_hwdep(msm_dig_cdc->fw_data,
-			WCD9XXX_CODEC_HWDEP_NODE, codec);
-		if (ret < 0) {
-			dev_err(codec->dev, "%s hwdep failed %d\n", __func__,
-				ret);
-			return ret;
-		}
-	}
 	snd_soc_dapm_ignore_suspend(dapm, "AIF1 Playback");
 	snd_soc_dapm_ignore_suspend(dapm, "AIF1 Capture");
 	snd_soc_dapm_ignore_suspend(dapm, "ADC1_IN");
@@ -1989,11 +1798,6 @@ static const struct snd_soc_dapm_widget msm_dig_dapm_widgets[] = {
 	SND_SOC_DAPM_SUPPLY("TX_I2S_CLK",
 		MSM89XX_CDC_CORE_CLK_TX_I2S_CTL, 4, 0, NULL, 0),
 
-	SND_SOC_DAPM_MICBIAS_E("DIGITAL_REGULATOR", SND_SOC_NOPM,
-		ON_DEMAND_DIGITAL, 0,
-		msm_dig_cdc_enable_on_demand_supply,
-		SND_SOC_DAPM_PRE_PMU |
-		SND_SOC_DAPM_POST_PMD),
 
 	SND_SOC_DAPM_MUX("I2S TX2 INP1", SND_SOC_NOPM, 0, 0,
 			&i2s_tx2_inp1_mux),
@@ -2048,41 +1852,39 @@ static const struct snd_kcontrol_new msm_dig_snd_controls[] = {
 		-84, 40, digital_gain),
 	SOC_SINGLE_S8_TLV("DEC2 Volume",
 		  MSM89XX_CDC_CORE_TX2_VOL_CTL_GAIN,
-		-84, 40, digital_gain),
+		  -84, 40, digital_gain),
 	SOC_SINGLE_S8_TLV("DEC3 Volume",
 		  MSM89XX_CDC_CORE_TX3_VOL_CTL_GAIN,
-		-84, 40, digital_gain),
+		  -84, 40, digital_gain),
 	SOC_SINGLE_S8_TLV("DEC4 Volume",
 		  MSM89XX_CDC_CORE_TX4_VOL_CTL_GAIN,
-		-84, 40, digital_gain),
+		  -84, 40, digital_gain),
 	SOC_SINGLE_S8_TLV("DEC5 Volume",
 		  MSM89XX_CDC_CORE_TX5_VOL_CTL_GAIN,
-		-84, 40, digital_gain),
+		  -84, 40, digital_gain),
 
 	SOC_SINGLE_S8_TLV("IIR1 INP1 Volume",
 			  MSM89XX_CDC_CORE_IIR1_GAIN_B1_CTL,
-			 -84, 40, digital_gain),
+			  -84, 40, digital_gain),
 	SOC_SINGLE_S8_TLV("IIR1 INP2 Volume",
 			  MSM89XX_CDC_CORE_IIR1_GAIN_B2_CTL,
-			 -84, 40, digital_gain),
+			  -84, 40, digital_gain),
 	SOC_SINGLE_S8_TLV("IIR1 INP3 Volume",
 			  MSM89XX_CDC_CORE_IIR1_GAIN_B3_CTL,
-			 -84, 40, digital_gain),
+			  -84, 40, digital_gain),
 	SOC_SINGLE_S8_TLV("IIR1 INP4 Volume",
 			  MSM89XX_CDC_CORE_IIR1_GAIN_B4_CTL,
 			  -84, 40, digital_gain),
 	SOC_SINGLE_S8_TLV("IIR2 INP1 Volume",
 			  MSM89XX_CDC_CORE_IIR2_GAIN_B1_CTL,
-			 -84, 40, digital_gain),
+			  -84, 40, digital_gain),
 
-#ifndef CONFIG_SOUND_CONTROL
 	SOC_SINGLE_S8_TLV("RX1 Digital Volume",
 		MSM89XX_CDC_CORE_RX1_VOL_CTL_B2_CTL,
 		-84, 40, digital_gain),
 	SOC_SINGLE_S8_TLV("RX2 Digital Volume",
 		MSM89XX_CDC_CORE_RX2_VOL_CTL_B2_CTL,
 		-84, 40, digital_gain),
-#endif
 	SOC_SINGLE_S8_TLV("RX3 Digital Volume",
 		MSM89XX_CDC_CORE_RX3_VOL_CTL_B2_CTL,
 		-84, 40, digital_gain),
@@ -2178,218 +1980,6 @@ static const struct snd_kcontrol_new msm_dig_snd_controls[] = {
 	SOC_SINGLE("TX5 HPF Switch",
 		MSM89XX_CDC_CORE_TX5_MUX_CTL, 3, 1, 0),
 };
-
-static int msm_dig_cdc_enable_on_demand_supply(
-		struct snd_soc_dapm_widget *w,
-		struct snd_kcontrol *kcontrol, int event)
-{
-	int ret = 0;
-	struct snd_soc_codec *codec = snd_soc_dapm_to_codec(w->dapm);
-	struct msm_dig_priv *msm_dig_cdc = snd_soc_codec_get_drvdata(codec);
-	struct on_demand_dig_supply *supply;
-
-	if (w->shift >= ON_DEMAND_DIG_SUPPLIES_MAX) {
-		dev_err(codec->dev, "%s: error index >= MAX on demand supplies",
-			__func__);
-		ret = -EINVAL;
-		goto out;
-	}
-	dev_dbg(codec->dev, "%s: supply: %s event: %d ref: %d\n",
-		__func__, on_demand_supply_name[w->shift], event,
-		atomic_read(&msm_dig_cdc->on_demand_list[w->shift].ref));
-
-	supply = &msm_dig_cdc->on_demand_list[w->shift];
-	if (!supply->supply) {
-		dev_err(codec->dev, "%s: err supply not present ond for %d",
-			__func__, w->shift);
-		goto out;
-	}
-	switch (event) {
-	case SND_SOC_DAPM_PRE_PMU:
-		if (atomic_inc_return(&supply->ref) == 1) {
-			ret = regulator_set_voltage(supply->supply,
-						supply->min_uv,
-						supply->max_uv);
-			if (ret) {
-				dev_err(codec->dev,
-					"Setting regulator voltage(en) for micbias with err = %d\n",
-					ret);
-				goto out;
-			}
-			ret = regulator_set_load(supply->supply,
-						supply->optimum_ua);
-			if (ret < 0) {
-				dev_err(codec->dev,
-					"Setting regulator optimum mode(en) failed for micbias with err = %d\n",
-					ret);
-				goto out;
-			}
-			ret = regulator_enable(supply->supply);
-			if (ret)
-				dev_err(codec->dev, "%s: Failed to enable %s\n",
-					__func__,
-					on_demand_supply_name[w->shift]);
-		}
-		break;
-	case SND_SOC_DAPM_POST_PMD:
-		if (atomic_read(&supply->ref) == 0) {
-			dev_dbg(codec->dev, "%s: %s supply has been disabled.\n",
-				__func__, on_demand_supply_name[w->shift]);
-			goto out;
-		}
-		if (atomic_dec_return(&supply->ref) == 0) {
-			ret = regulator_disable(supply->supply);
-			if (ret)
-				dev_err(codec->dev, "%s: Failed to disable %s\n",
-					__func__,
-					on_demand_supply_name[w->shift]);
-			ret = regulator_set_voltage(supply->supply,
-					0,
-					supply->max_uv);
-			if (ret) {
-				dev_err(codec->dev,
-					"Setting regulator voltage(dis) failed for micbias with err = %d\n",
-					ret);
-				goto out;
-			}
-			ret = regulator_set_load(supply->supply, 0);
-			if (ret < 0)
-				dev_err(codec->dev,
-					"Setting regulator optimum mode(dis) failed for micbias with err = %d\n",
-					ret);
-		}
-		break;
-	default:
-		break;
-	}
-out:
-	return ret;
-}
-
-static int msm_digital_cdc_init_supplies(struct msm_dig_priv *msm_cdc)
-{
-	int ret;
-	int i;
-
-	msm_cdc->supplies = devm_kzalloc(msm_cdc->dev,
-					sizeof(struct regulator_bulk_data) *
-					ARRAY_SIZE(msm_cdc->regulator),
-					GFP_KERNEL);
-	if (!msm_cdc->supplies) {
-		ret = -ENOMEM;
-		goto err;
-	}
-
-	msm_cdc->num_of_supplies = 0;
-
-	if (ARRAY_SIZE(msm_cdc->regulator) > MAX_REGULATOR) {
-		dev_err(msm_cdc->dev, "%s: Array Size out of bound\n",
-			__func__);
-		ret = -EINVAL;
-		goto err;
-	}
-
-	for (i = 0; i < ARRAY_SIZE(msm_cdc->regulator); i++) {
-		if (msm_cdc->regulator[i].name) {
-			msm_cdc->supplies[i].supply =
-						msm_cdc->regulator[i].name;
-			msm_cdc->num_of_supplies++;
-		}
-	}
-
-	ret = devm_regulator_bulk_get(msm_cdc->dev,
-				      msm_cdc->num_of_supplies,
-				      msm_cdc->supplies);
-	if (ret != 0) {
-		dev_err(msm_cdc->dev,
-			"Failed to get supplies: err = %d\n",
-			ret);
-		goto err_supplies;
-	}
-
-	for (i = 0; i < msm_cdc->num_of_supplies; i++) {
-		if (regulator_count_voltages(
-			msm_cdc->supplies[i].consumer) <= 0)
-			continue;
-		ret = regulator_set_voltage(
-					msm_cdc->supplies[i].consumer,
-					msm_cdc->regulator[i].min_uv,
-					msm_cdc->regulator[i].max_uv);
-		if (ret) {
-			dev_err(msm_cdc->dev,
-				"Setting regulator voltage failed for regulator %s err = %d\n",
-				msm_cdc->supplies[i].supply, ret);
-			goto err_supplies;
-		}
-		ret = regulator_set_load(msm_cdc->supplies[i].consumer,
-				msm_cdc->regulator[i].optimum_ua);
-		if (ret < 0) {
-			dev_err(msm_cdc->dev,
-				"Setting regulator optimum mode failed for regulator %s err = %d\n",
-				msm_cdc->supplies[i].supply, ret);
-			goto err_supplies;
-		} else {
-			ret = 0;
-		}
-	}
-
-	return ret;
-
-err_supplies:
-err:
-	return ret;
-}
-
-static int msm_digital_cdc_dt_parse_vreg_info(struct device *dev,
-	struct dig_cdc_regulator *vreg, const char *vreg_name)
-{
-	int len, ret = 0;
-	const __be32 *prop;
-	char prop_name[CODEC_DT_MAX_PROP_SIZE];
-	struct device_node *regnode = NULL;
-	u32 prop_val;
-
-	snprintf(prop_name, CODEC_DT_MAX_PROP_SIZE, "%s-supply",
-			vreg_name);
-	regnode = of_parse_phandle(dev->of_node, prop_name, 0);
-
-	if (!regnode) {
-		dev_err(dev, "Looking up %s property in node %s failed\n",
-			prop_name, dev->of_node->full_name);
-		return -ENODEV;
-	}
-
-	dev_dbg(dev, "Looking up %s property in node %s\n",
-		prop_name, dev->of_node->full_name);
-
-	vreg->name = vreg_name;
-
-	snprintf(prop_name, CODEC_DT_MAX_PROP_SIZE,
-		"qcom,%s-voltage", vreg_name);
-	prop = of_get_property(dev->of_node, prop_name, &len);
-
-	if (!prop || (len != (2 * sizeof(__be32)))) {
-		dev_err(dev, "%s %s property\n",
-			prop ? "invalid format" : "no", prop_name);
-		return -EINVAL;
-	}
-	vreg->min_uv = be32_to_cpup(&prop[0]);
-	vreg->max_uv = be32_to_cpup(&prop[1]);
-
-	snprintf(prop_name, CODEC_DT_MAX_PROP_SIZE,
-		"qcom,%s-current", vreg_name);
-
-	ret = of_property_read_u32(dev->of_node, prop_name, &prop_val);
-	if (ret) {
-		dev_err(dev, "Looking up %s property in node %s failed",
-			prop_name, dev->of_node->full_name);
-		return -EFAULT;
-	}
-	vreg->optimum_ua = prop_val;
-	dev_dbg(dev, "%s: vol=[%d %d]uV, curr=[%d]uA\n", vreg->name,
-		vreg->min_uv, vreg->max_uv, vreg->optimum_ua);
-	return 0;
-}
 
 static struct snd_soc_dai_ops msm_dig_dai_ops = {
 	.hw_params = msm_dig_cdc_hw_params,
@@ -2507,131 +2097,23 @@ const struct regmap_config msm_digital_regmap_config = {
 	.max_register = MSM89XX_CDC_CORE_MAX_REGISTER,
 };
 
-static bool msm_digital_cdc_populate_dt_pdata(
-					struct device *dev,
-					struct msm_dig_priv *dig_priv)
-{
-	int ret, ond_cnt, i, idx = 0;
-	const char *name = NULL;
-	const char *ond_prop_name = "qcom,cdc-on-demand-supplies";
-
-	ond_cnt = of_property_count_strings(dev->of_node, ond_prop_name);
-	if (ond_cnt < 0)
-		ond_cnt = 0;
-
-	if (ond_cnt > ARRAY_SIZE(dig_priv->regulator)) {
-		ret = -EINVAL;
-		goto err;
-	}
-
-	for (i = 0; i < ond_cnt; i++, idx++) {
-		ret = of_property_read_string_index(dev->of_node, ond_prop_name,
-							i, &name);
-		if (ret) {
-			dev_err(dev, "%s: err parsing on_demand for %s idx %d\n",
-				__func__, ond_prop_name, i);
-			goto err;
-		}
-
-		dev_dbg(dev, "%s: Found on-demand cdc supply %s\n", __func__,
-			name);
-		ret = msm_digital_cdc_dt_parse_vreg_info(dev,
-						&dig_priv->regulator[idx],
-						name);
-		if (ret) {
-			dev_err(dev, "%s: err parsing vreg on_demand for %s idx %d\n",
-				__func__, name, idx);
-			goto err;
-		}
-	}
-
-	return true;
-err:
-	dev_err(dev, "%s: Failed to populate DT data ret = %d\n",
-		__func__, ret);
-	return false;
-}
-
-static void msm_digital_cdc_disable_supplies(struct msm_dig_priv *msm_cdc)
-{
-	int i;
-
-	if (!msm_cdc->supplies)
-		return;
-
-	regulator_bulk_disable(msm_cdc->num_of_supplies,
-			       msm_cdc->supplies);
-	for (i = 0; i < msm_cdc->num_of_supplies; i++) {
-		if (regulator_count_voltages(
-				msm_cdc->supplies[i].consumer) <= 0)
-			continue;
-		regulator_set_voltage(msm_cdc->supplies[i].consumer, 0,
-				msm_cdc->regulator[i].max_uv);
-		regulator_set_load(msm_cdc->supplies[i].consumer, 0);
-	}
-	regulator_bulk_free(msm_cdc->num_of_supplies,
-			    msm_cdc->supplies);
-	devm_kfree(msm_cdc->dev, msm_cdc->supplies);
-}
-
 static int msm_dig_cdc_probe(struct platform_device *pdev)
 {
-	int ret = -EINVAL;
+	int ret;
 	u32 dig_cdc_addr;
 	struct msm_dig_priv *msm_dig_cdc;
-	struct dig_ctrl_platform_data *pdata = NULL;
-	int adsp_state;
-
-	adsp_state = apr_get_subsys_state();
-	if ((adsp_state != APR_SUBSYS_LOADED) || (!q6core_is_adsp_ready())) {
-		dev_err(&pdev->dev, "Adsp is not loaded yet %d\n",
-			adsp_state);
-		return -EPROBE_DEFER;
-	}
-
-	device_init_wakeup(&pdev->dev, true);
+	struct dig_ctrl_platform_data *pdata;
 
 	msm_dig_cdc = devm_kzalloc(&pdev->dev, sizeof(struct msm_dig_priv),
 			      GFP_KERNEL);
 	if (!msm_dig_cdc)
 		return -ENOMEM;
-
-	msm_dig_cdc->dev = &pdev->dev;
-	if (pdev->dev.of_node == NULL)
-		return -EINVAL;
-
-	if (pdev->dev.of_node)
-		msm_dig_cdc->no_analog_codec = of_property_read_bool(
-					pdev->dev.of_node,
-					"qcom,no-analog-codec");
-
-	if (msm_dig_cdc->no_analog_codec) {
-		dev_dbg(&pdev->dev, "%s:Platform data from device tree\n",
-				__func__);
-		if (msm_digital_cdc_populate_dt_pdata(&pdev->dev,
-							msm_dig_cdc)) {
-			ret = msm_digital_cdc_init_supplies(
-							msm_dig_cdc);
-			if (ret) {
-				dev_err(&pdev->dev,
-				"%s: Fail to enable Codec supplies\n",
-				__func__);
-				goto rtn;
-			}
-		}
-	} else {
-		pdata = dev_get_platdata(&pdev->dev);
-		if (!pdata) {
-			dev_err(&pdev->dev, "%s: pdata from parent is NULL\n",
-				__func__);
-			ret = -EINVAL;
-			goto err_supplies;
-		}
-		msm_dig_cdc->update_clkdiv = pdata->update_clkdiv;
-		msm_dig_cdc->set_compander_mode = pdata->set_compander_mode;
-		msm_dig_cdc->get_cdc_version = pdata->get_cdc_version;
-		msm_dig_cdc->handle = pdata->handle;
-		msm_dig_cdc->register_notifier = pdata->register_notifier;
+	pdata = dev_get_platdata(&pdev->dev);
+	if (!pdata) {
+		dev_err(&pdev->dev, "%s: pdata from parent is NULL\n",
+			__func__);
+		ret = -EINVAL;
+		goto rtn;
 	}
 
 	ret = of_property_read_u32(pdev->dev.of_node, "reg",
@@ -2639,51 +2121,37 @@ static int msm_dig_cdc_probe(struct platform_device *pdev)
 	if (ret) {
 		dev_err(&pdev->dev, "%s: could not find %s entry in dt\n",
 			__func__, "reg");
-		goto err_supplies;
+		return ret;
 	}
-
-#ifdef CONFIG_SOUND_CONTROL
-	sound_control_kobj = kobject_create_and_add("sound_control", kernel_kobj);
-	if (sound_control_kobj == NULL) {
-		pr_warn("%s kobject create failed!\n", __func__);
-        }
-
-	ret = sysfs_create_group(sound_control_kobj, &sound_control_attr_group);
-        if (ret) {
-		pr_warn("%s sysfs file create failed!\n", __func__);
-	}
-#endif
 
 	msm_dig_cdc->dig_base = ioremap(dig_cdc_addr,
 					MSM89XX_CDC_CORE_MAX_REGISTER);
 	if (msm_dig_cdc->dig_base == NULL) {
 		dev_err(&pdev->dev, "%s ioremap failed\n", __func__);
-		ret = -ENOMEM;
-		goto err_supplies;
+		return -ENOMEM;
 	}
 	msm_dig_cdc->regmap =
 		devm_regmap_init_mmio_clk(&pdev->dev, NULL,
 			msm_dig_cdc->dig_base, &msm_digital_regmap_config);
+
+	msm_dig_cdc->update_clkdiv = pdata->update_clkdiv;
+	msm_dig_cdc->set_compander_mode = pdata->set_compander_mode;
+	msm_dig_cdc->get_cdc_version = pdata->get_cdc_version;
+	msm_dig_cdc->handle = pdata->handle;
+	msm_dig_cdc->register_notifier = pdata->register_notifier;
 
 	dev_set_drvdata(&pdev->dev, msm_dig_cdc);
 	snd_soc_register_codec(&pdev->dev, &soc_msm_dig_codec,
 				msm_codec_dais, ARRAY_SIZE(msm_codec_dais));
 	dev_dbg(&pdev->dev, "%s: registered DIG CODEC 0x%x\n",
 			__func__, dig_cdc_addr);
-	return ret;
-err_supplies:
-	if (msm_dig_cdc->no_analog_codec)
-		msm_digital_cdc_disable_supplies(msm_dig_cdc);
 rtn:
 	return ret;
 }
 
 static int msm_dig_cdc_remove(struct platform_device *pdev)
 {
-	struct msm_dig_priv *msm_cdc = dev_get_drvdata(&pdev->dev);
-
 	snd_soc_unregister_codec(&pdev->dev);
-	msm_digital_cdc_disable_supplies(msm_cdc);
 	return 0;
 }
 
@@ -2695,10 +2163,6 @@ static int msm_dig_suspend(struct device *dev)
 
 	if (!registered_digcodec || !msm_dig_cdc) {
 		pr_debug("%s:digcodec not initialized, return\n", __func__);
-		return 0;
-	}
-	if (!registered_digcodec->component.card) {
-		pr_debug("%s:component not initialized, return\n", __func__);
 		return 0;
 	}
 	pdata = snd_soc_card_get_drvdata(registered_digcodec->component.card);

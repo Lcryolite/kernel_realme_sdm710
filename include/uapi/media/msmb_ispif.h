@@ -176,4 +176,3 @@ struct ispif_cfg_data_ext {
 	_IOWR('V', BASE_VIDIOC_PRIVATE+1, struct ispif_cfg_data_ext)
 
 #endif
-

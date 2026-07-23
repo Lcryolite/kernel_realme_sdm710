@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -20,33 +20,7 @@
 #include <uapi/drm/msm_drm_pp.h>
 
 struct sde_hw_pingpong;
-
-struct sde_hw_tear_check {
-	/*
-	 * This is ratio of MDP VSYNC clk freq(Hz) to
-	 * refresh rate divided by no of lines
-	 */
-	u32 vsync_count;
-	u32 sync_cfg_height;
-	u32 vsync_init_val;
-	u32 sync_threshold_start;
-	u32 sync_threshold_continue;
-	u32 start_pos;
-	u32 rd_ptr_irq;
-	u8 hw_vsync_mode;
-};
-
-struct sde_hw_autorefresh {
-	bool  enable;
-	u32 frame_count;
-};
-
-struct sde_hw_pp_vsync_info {
-	u32 rd_ptr_init_val;	/* value of rd pointer at vsync edge */
-	u32 rd_ptr_frame_count;	/* num frames sent since enabling interface */
-	u32 rd_ptr_line_count;	/* current line on panel (rd ptr) */
-	u32 wr_ptr_line_count;	/* current line within pp fifo (wr ptr) */
-};
+struct sde_hw_merge_3d;
 
 struct sde_hw_dsc_cfg {
 	u8 enable;
@@ -79,6 +53,12 @@ struct sde_hw_pingpong_ops {
 	 */
 	int (*enable_tearcheck)(struct sde_hw_pingpong *pp,
 			bool enable);
+
+	/**
+	 * updates tearcheck configuration
+	 */
+	void (*update_tearcheck)(struct sde_hw_pingpong *pp,
+			struct sde_hw_tear_check *cfg);
 
 	/**
 	 * read, modify, write to either set or clear listening to external TE
@@ -142,6 +122,42 @@ struct sde_hw_pingpong_ops {
 	 * Obtain current vertical line counter
 	 */
 	u32 (*get_line_count)(struct sde_hw_pingpong *pp);
+
+	/**
+	 * Programs the 3d blend configuration
+	 */
+	void (*setup_3d_mode)(struct sde_hw_pingpong *pp,
+			enum sde_3d_blend_mode cfg);
+
+	/**
+	 * reset 3d blend configuration
+	 */
+	void (*reset_3d_mode)(struct sde_hw_pingpong *pp);
+};
+
+struct sde_hw_merge_3d_ops {
+	/**
+	 * setup the 3d blend mode configuration
+	 */
+	void (*setup_blend_mode)(struct sde_hw_merge_3d *id,
+			enum sde_3d_blend_mode cfg);
+
+	/**
+	 * reset 3d blend mode configuration
+	 */
+	void (*reset_blend_mode)(struct sde_hw_merge_3d *id);
+};
+
+struct sde_hw_merge_3d {
+	struct sde_hw_blk base;
+	struct sde_hw_blk_reg_map hw;
+
+	/* merge_3d */
+	enum sde_merge_3d idx;
+	const struct sde_merge_3d_cfg *caps;
+
+	/* ops */
+	struct sde_hw_merge_3d_ops ops;
 };
 
 struct sde_hw_pingpong {
@@ -151,6 +167,9 @@ struct sde_hw_pingpong {
 	/* pingpong */
 	enum sde_pingpong idx;
 	const struct sde_pingpong_cfg *caps;
+
+	/* associated 3d_merge */
+	struct sde_hw_merge_3d *merge_3d;
 
 	/* ops */
 	struct sde_hw_pingpong_ops ops;

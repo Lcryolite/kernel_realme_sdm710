@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -11,8 +11,8 @@
  * GNU General Public License for more details.
  */
 
-#ifndef _DT_BINDINGS_CLK_MSM_RPMH_H
-#define _DT_BINDINGS_CLK_MSM_RPMH_H
+#ifndef _DT_BINDINGS_CLK_QCOM_RPMH_H
+#define _DT_BINDINGS_CLK_QCOM_RPMH_H
 
 /* RPMh controlled clocks */
 #define RPMH_CXO_CLK						0
@@ -29,5 +29,6 @@
 #define RPMH_RF_CLK3_A						11
 #define RPMH_RF_CLK4						12
 #define RPMH_RF_CLK4_A						13
+#define RPMH_QPIC_CLK						14
 
 #endif

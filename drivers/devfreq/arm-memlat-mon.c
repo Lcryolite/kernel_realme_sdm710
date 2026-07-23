@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014-2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -28,11 +28,11 @@
 #include <linux/irq.h>
 #include <linux/cpu_pm.h>
 #include <linux/cpu.h>
+#include <linux/of_fdt.h>
 #include "governor.h"
 #include "governor_memlat.h"
 #include <linux/perf_event.h>
 #include <linux/of_device.h>
-#include <soc/qcom/scm.h>
 
 enum ev_index {
 	INST_IDX,
@@ -57,12 +57,9 @@ struct cpu_pmu_stats {
 
 struct cpu_grp_info {
 	cpumask_t cpus;
-	cpumask_t inited_cpus;
 	unsigned int event_ids[NUM_EVENTS];
 	struct cpu_pmu_stats *cpustats;
 	struct memlat_hwmon hw;
-	struct notifier_block arm_memlat_cpu_notif;
-	struct list_head mon_list;
 };
 
 struct memlat_mon_spec {
@@ -75,8 +72,6 @@ struct memlat_mon_spec {
 	(&cpu_grp->hw.core_stats[cpu - cpumask_first(&cpu_grp->cpus)])
 #define to_cpu_grp(hwmon) container_of(hwmon, struct cpu_grp_info, hw)
 
-static LIST_HEAD(memlat_mon_list);
-static DEFINE_MUTEX(list_lock);
 
 static unsigned long compute_freq(struct cpu_pmu_stats *cpustats,
 						unsigned long cyc_cnt)
@@ -135,15 +130,7 @@ static unsigned long get_cnt(struct memlat_hwmon *hw)
 	int cpu;
 	struct cpu_grp_info *cpu_grp = to_cpu_grp(hw);
 
-	/*
-	 * Some of SCM call is very heavy(+20ms) so perf IPI could
-	 * be stuck on the CPU which contributes long latency.
-	 */
-	if (under_scm_call()) {
-		return 0;
-	}
-
-	for_each_cpu(cpu, &cpu_grp->inited_cpus)
+	for_each_cpu(cpu, &cpu_grp->cpus)
 		read_perf_counters(cpu, cpu_grp);
 
 	return 0;
@@ -168,8 +155,7 @@ static void stop_hwmon(struct memlat_hwmon *hw)
 	struct cpu_grp_info *cpu_grp = to_cpu_grp(hw);
 	struct dev_stats *devstats;
 
-	get_online_cpus();
-	for_each_cpu(cpu, &cpu_grp->inited_cpus) {
+	for_each_cpu(cpu, &cpu_grp->cpus) {
 		delete_events(to_cpustats(cpu_grp, cpu));
 
 		/* Clear governor data */
@@ -179,15 +165,6 @@ static void stop_hwmon(struct memlat_hwmon *hw)
 		devstats->freq = 0;
 		devstats->stall_pct = 0;
 	}
-	mutex_lock(&list_lock);
-	if (!cpumask_equal(&cpu_grp->cpus, &cpu_grp->inited_cpus))
-		list_del(&cpu_grp->mon_list);
-	mutex_unlock(&list_lock);
-	cpumask_clear(&cpu_grp->inited_cpus);
-
-	put_online_cpus();
-
-	unregister_cpu_notifier(&cpu_grp->arm_memlat_cpu_notif);
 }
 
 static struct perf_event_attr *alloc_attr(void)
@@ -242,60 +219,18 @@ err_out:
 	return err;
 }
 
-static int arm_memlat_cpu_callback(struct notifier_block *nb,
-		unsigned long action, void *hcpu)
-{
-	unsigned long cpu = (unsigned long)hcpu;
-	struct cpu_grp_info *cpu_grp, *tmp;
-
-	if (action != CPU_ONLINE)
-		return NOTIFY_OK;
-
-	mutex_lock(&list_lock);
-	list_for_each_entry_safe(cpu_grp, tmp, &memlat_mon_list, mon_list) {
-		if (!cpumask_test_cpu(cpu, &cpu_grp->cpus) ||
-		    cpumask_test_cpu(cpu, &cpu_grp->inited_cpus))
-			continue;
-		if (set_events(cpu_grp, cpu))
-			pr_warn("Failed to create perf ev for CPU%lu\n", cpu);
-		else
-			cpumask_set_cpu(cpu, &cpu_grp->inited_cpus);
-		if (cpumask_equal(&cpu_grp->cpus, &cpu_grp->inited_cpus))
-			list_del(&cpu_grp->mon_list);
-	}
-	mutex_unlock(&list_lock);
-
-	return NOTIFY_OK;
-}
-
 static int start_hwmon(struct memlat_hwmon *hw)
 {
 	int cpu, ret = 0;
 	struct cpu_grp_info *cpu_grp = to_cpu_grp(hw);
 
-	register_cpu_notifier(&cpu_grp->arm_memlat_cpu_notif);
-
-	get_online_cpus();
 	for_each_cpu(cpu, &cpu_grp->cpus) {
 		ret = set_events(cpu_grp, cpu);
 		if (ret) {
-			if (!cpu_online(cpu)) {
-				ret = 0;
-			} else {
-				pr_warn("Perf event init failed on CPU%d\n",
-					cpu);
-				break;
-			}
-		} else {
-			cpumask_set_cpu(cpu, &cpu_grp->inited_cpus);
+			pr_warn("Perf event init failed on CPU%d\n", cpu);
+			break;
 		}
 	}
-	mutex_lock(&list_lock);
-	if (!cpumask_equal(&cpu_grp->cpus, &cpu_grp->inited_cpus))
-		list_add_tail(&cpu_grp->mon_list, &memlat_mon_list);
-	mutex_unlock(&list_lock);
-
-	put_online_cpus();
 
 	return ret;
 }
@@ -326,6 +261,26 @@ static int get_mask_from_dev_handle(struct platform_device *pdev,
 	return ret;
 }
 
+static struct device_node *parse_child_nodes(struct device *dev)
+{
+	struct device_node *of_child;
+	int ddr_type_of = -1;
+	int ddr_type = of_fdt_get_ddrtype();
+	int ret;
+
+	for_each_child_of_node(dev->of_node, of_child) {
+		ret = of_property_read_u32(of_child, "qcom,ddr-type",
+							&ddr_type_of);
+		if (!ret && (ddr_type == ddr_type_of)) {
+			dev_dbg(dev,
+				"ddr-type = %d, is matching DT entry\n",
+				ddr_type_of);
+			return of_child;
+		}
+	}
+	return NULL;
+}
+
 static int arm_memlat_mon_driver_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -338,7 +293,6 @@ static int arm_memlat_mon_driver_probe(struct platform_device *pdev)
 	cpu_grp = devm_kzalloc(dev, sizeof(*cpu_grp), GFP_KERNEL);
 	if (!cpu_grp)
 		return -ENOMEM;
-	cpu_grp->arm_memlat_cpu_notif.notifier_call = arm_memlat_cpu_callback;
 	hw = &cpu_grp->hw;
 
 	hw->dev = dev;
@@ -372,6 +326,8 @@ static int arm_memlat_mon_driver_probe(struct platform_device *pdev)
 	hw->start_hwmon = &start_hwmon;
 	hw->stop_hwmon = &stop_hwmon;
 	hw->get_cnt = &get_cnt;
+	if (of_get_child_count(dev->of_node))
+		hw->get_child_of_node = &parse_child_nodes;
 
 	spec = of_device_get_match_data(dev);
 	if (spec && spec->is_compute) {

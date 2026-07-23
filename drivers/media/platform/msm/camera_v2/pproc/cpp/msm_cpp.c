@@ -24,7 +24,7 @@
 #include <linux/timer.h>
 #include <linux/kernel.h>
 #include <linux/workqueue.h>
-#include <linux/clk/msm-clk.h>
+#include <linux/clk/qcom.h>
 #include <media/v4l2-event.h>
 #include <media/v4l2-ioctl.h>
 #include <media/msmb_camera.h>
@@ -35,6 +35,7 @@
 #include "msm_camera_io_util.h"
 #include <linux/debugfs.h>
 #include "cam_smmu_api.h"
+#include "msm_cam_cx_ipeak.h"
 
 #define MSM_CPP_DRV_NAME "msm_cpp"
 
@@ -239,7 +240,8 @@ static void msm_cpp_deinit_bandwidth_mgr(struct cpp_device *cpp_dev)
 }
 
 static int  msm_cpp_update_bandwidth_setting(struct cpp_device *cpp_dev,
-	uint64_t ab, uint64_t ib) {
+	uint64_t ab, uint64_t ib)
+{
 	int rc;
 
 	if (cpp_dev->bus_master_flag)
@@ -454,7 +456,7 @@ static unsigned long msm_cpp_queue_buffer_info(struct cpp_device *cpp_dev,
 	if (buff_queue->security_mode == SECURE_MODE)
 		rc = cam_smmu_get_stage2_phy_addr(cpp_dev->iommu_hdl,
 			buffer_info->fd, CAM_SMMU_MAP_RW,
-			cpp_dev->ion_client, &buff->map_info.phy_addr,
+			&buff->map_info.phy_addr,
 			(size_t *)&buff->map_info.len);
 	else
 		rc = cam_smmu_get_phy_addr(cpp_dev->iommu_hdl,
@@ -463,7 +465,7 @@ static unsigned long msm_cpp_queue_buffer_info(struct cpp_device *cpp_dev,
 			(size_t *)&buff->map_info.len);
 	if (rc < 0) {
 		pr_err("ION mmap for CPP buffer failed\n");
-		kzfree(buff);
+		kfree(buff);
 		goto error;
 	}
 
@@ -619,8 +621,8 @@ static int32_t msm_cpp_create_buff_queue(struct cpp_device *cpp_dev,
 {
 	struct msm_cpp_buff_queue_info_t *buff_queue;
 
-	buff_queue = kzalloc(
-		sizeof(struct msm_cpp_buff_queue_info_t) * num_buffq,
+	buff_queue = kcalloc(
+		sizeof(struct msm_cpp_buff_queue_info_t), num_buffq,
 		GFP_KERNEL);
 	if (!buff_queue) {
 		pr_err("Buff queue allocation failure\n");
@@ -629,7 +631,7 @@ static int32_t msm_cpp_create_buff_queue(struct cpp_device *cpp_dev,
 
 	if (cpp_dev->buff_queue) {
 		pr_err("Buff queue not empty\n");
-		kzfree(buff_queue);
+		kfree(buff_queue);
 		return -EINVAL;
 	}
 	cpp_dev->buff_queue = buff_queue;
@@ -885,14 +887,14 @@ static void msm_cpp_iommu_fault_handler(struct iommu_domain *domain,
 				processed_frame[i] =
 					cpp_timer.data.processed_frame[i];
 				ifd = processed_frame[i]->input_buffer_info.fd;
-				ofd = processed_frame[i]->
-					output_buffer_info[0].fd;
-				dfd = processed_frame[i]->
-					duplicate_buffer_info.fd;
-				t0fd = processed_frame[i]->
-					tnr_scratch_buffer_info[0].fd;
-				t1fd = processed_frame[i]->
-					tnr_scratch_buffer_info[1].fd;
+				ofd = processed_frame[
+					i]->output_buffer_info[0].fd;
+				dfd = processed_frame[
+					i]->duplicate_buffer_info.fd;
+				t0fd = processed_frame[
+					i]->tnr_scratch_buffer_info[0].fd;
+				t1fd = processed_frame[
+					i]->tnr_scratch_buffer_info[1].fd;
 				pr_err("Fault on identity=0x%x, frame_id=%03d\n",
 					processed_frame[i]->identity,
 					processed_frame[i]->frame_id);
@@ -1092,7 +1094,7 @@ static int cpp_init_hardware(struct cpp_device *cpp_dev)
 			goto clk_failed;
 		}
 	}
-
+	msm_cpp_update_bandwidth(cpp_dev, 0x1000, 0x1000);
 	rc = msm_camera_clk_enable(&cpp_dev->pdev->dev, cpp_dev->clk_info,
 			cpp_dev->cpp_clk, cpp_dev->num_clks, true);
 	if (rc < 0) {
@@ -1183,8 +1185,7 @@ ahb_vote_fail:
 	msm_camera_clk_enable(&cpp_dev->pdev->dev, cpp_dev->clk_info,
 		cpp_dev->cpp_clk, cpp_dev->num_clks, false);
 clk_failed:
-	msm_camera_regulator_enable(cpp_dev->cpp_vdd,
-		cpp_dev->num_reg, false);
+	msm_camera_regulator_disable(cpp_dev->cpp_vdd, cpp_dev->num_reg, true);
 reg_enable_failed:
 	return rc;
 }
@@ -1205,9 +1206,10 @@ static void cpp_release_hardware(struct cpp_device *cpp_dev)
 		pr_err("%s: failed to remove vote for AHB\n", __func__);
 	msm_camera_clk_enable(&cpp_dev->pdev->dev, cpp_dev->clk_info,
 		cpp_dev->cpp_clk, cpp_dev->num_clks, false);
-	msm_camera_regulator_enable(cpp_dev->cpp_vdd, cpp_dev->num_reg, false);
-	if (cpp_dev->stream_cnt > 0) {
-		pr_warn("stream count active\n");
+	msm_camera_regulator_disable(cpp_dev->cpp_vdd, cpp_dev->num_reg, true);
+	if ((cpp_dev->stream_cnt > 0) || (cpp_dev->cpp_open_cnt == 0)) {
+		pr_debug("stream count active %d and close cpp node %d\n",
+			cpp_dev->stream_cnt, cpp_dev->cpp_open_cnt);
 		rc = msm_cpp_update_bandwidth_setting(cpp_dev, 0, 0);
 	}
 	cpp_dev->stream_cnt = 0;
@@ -1473,13 +1475,6 @@ static int cpp_open_node(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
 		}
 		cpp_dev->state = CPP_STATE_IDLE;
 
-		CPP_DBG("Invoking msm_ion_client_create()\n");
-		cpp_dev->ion_client = msm_ion_client_create("cpp");
-		if (cpp_dev->ion_client == NULL) {
-			pr_err("msm_ion_client_create() failed\n");
-			mutex_unlock(&cpp_dev->mutex);
-			rc = -ENOMEM;
-		}
 	}
 
 	mutex_unlock(&cpp_dev->mutex);
@@ -1531,7 +1526,9 @@ static int cpp_close_node(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
 	}
 
 	if (cpp_dev->turbo_vote == 1) {
-		rc = cx_ipeak_update(cpp_dev->cpp_cx_ipeak, false);
+		pr_debug("%s:cx_ipeak_update unvote. ipeak bit %d\n",
+			__func__, cpp_dev->cx_ipeak_bit);
+		rc = cam_cx_ipeak_unvote_cx_ipeak(cpp_dev->cx_ipeak_bit);
 			if (rc)
 				pr_err("cx_ipeak_update failed");
 			else
@@ -1639,11 +1636,6 @@ static int cpp_close_node(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
 		msm_cpp_empty_list(eventData_q, list_eventdata);
 		cpp_dev->state = CPP_STATE_OFF;
 
-		if (cpp_dev->ion_client) {
-			CPP_DBG("Invoking ion_client_destroy()\n");
-			ion_client_destroy(cpp_dev->ion_client);
-			cpp_dev->ion_client = NULL;
-		}
 	}
 
 	/* unregister vbif error handler */
@@ -1740,8 +1732,9 @@ static int msm_cpp_notify_frame_done(struct cpp_device *cpp_dev,
 				buff_mgr_info.index =
 					processed_frame->batch_info.cont_idx;
 			} else {
-				buff_mgr_info.index = processed_frame->
-					output_buffer_info[0].index;
+				buff_mgr_info.index =
+					processed_frame->output_buffer_info[
+						0].index;
 			}
 			if (put_buf) {
 				rc = msm_cpp_buffer_ops(cpp_dev,
@@ -1763,9 +1756,8 @@ static int msm_cpp_notify_frame_done(struct cpp_device *cpp_dev,
 		}
 
 		if (processed_frame->duplicate_output  &&
-			!processed_frame->
-				duplicate_buffer_info.processed_divert &&
-			!processed_frame->we_disable) {
+		!processed_frame->duplicate_buffer_info.processed_divert
+		&& !processed_frame->we_disable) {
 			int32_t iden = processed_frame->duplicate_identity;
 
 			SWAP_IDENTITY_FOR_BATCH_ON_PREVIEW(processed_frame,
@@ -1844,7 +1836,8 @@ static int msm_cpp_dump_frame_cmd(struct msm_cpp_frame_info_t *frame_info)
 #endif
 
 static void msm_cpp_flush_queue_and_release_buffer(struct cpp_device *cpp_dev,
-	int queue_len) {
+	int queue_len)
+{
 	uint32_t i;
 
 	while (queue_len) {
@@ -2971,6 +2964,14 @@ static int msm_cpp_cfg(struct cpp_device *cpp_dev,
 		pr_err("%s: Error allocating frame\n", __func__);
 		rc = -EINVAL;
 	} else {
+		if ((frame->msg_len == 0) ||
+			(frame->msg_len > MSM_CPP_MAX_FRAME_LENGTH)) {
+			pr_err("%s:%d: Invalid frame len:%d\n", __func__,
+				__LINE__, frame->msg_len);
+			kfree(frame);
+			return -EINVAL;
+		}
+
 		rc = msm_cpp_cfg_frame(cpp_dev, frame);
 		if (rc >= 0) {
 			for (i = 0; i < num_buff; i++) {
@@ -3148,7 +3149,9 @@ static unsigned long cpp_cx_ipeak_update(struct cpp_device *cpp_dev,
 	if ((clock >= cpp_dev->hw_info.freq_tbl
 		[(cpp_dev->hw_info.freq_tbl_count) - 1]) &&
 		(cpp_dev->turbo_vote == 0)) {
-		ret = cx_ipeak_update(cpp_dev->cpp_cx_ipeak, true);
+		pr_debug("%s: clk is more than Nominal cpp, ipeak bit %d\n",
+			__func__, cpp_dev->cx_ipeak_bit);
+		ret = cam_cx_ipeak_update_vote_cx_ipeak(cpp_dev->cx_ipeak_bit);
 		if (ret) {
 			pr_err("cx_ipeak voting failed setting clock below turbo");
 			clock = cpp_dev->hw_info.freq_tbl
@@ -3161,7 +3164,10 @@ static unsigned long cpp_cx_ipeak_update(struct cpp_device *cpp_dev,
 		[(cpp_dev->hw_info.freq_tbl_count) - 1]) {
 		clock_rate = msm_cpp_set_core_clk(cpp_dev, clock, idx);
 		if (cpp_dev->turbo_vote == 1) {
-			ret = cx_ipeak_update(cpp_dev->cpp_cx_ipeak, false);
+			pr_debug("%s:clk is less than Nominal, ipeak bit %d\n",
+				__func__, cpp_dev->cx_ipeak_bit);
+			ret = cam_cx_ipeak_unvote_cx_ipeak(
+				cpp_dev->cx_ipeak_bit);
 			if (ret)
 				pr_err("cx_ipeak unvoting failed");
 			else
@@ -3344,7 +3350,7 @@ static long msm_cpp_subdev_ioctl(struct v4l2_subdev *sd,
 
 		if (u_stream_buff_info->num_buffs != 0) {
 			k_stream_buff_info.buffer_info =
-				kzalloc(k_stream_buff_info.num_buffs *
+				kcalloc(k_stream_buff_info.num_buffs,
 				sizeof(struct msm_cpp_buffer_info_t),
 				GFP_KERNEL);
 			if (ZERO_OR_NULL_PTR(k_stream_buff_info.buffer_info)) {
@@ -4148,7 +4154,7 @@ static long msm_cpp_subdev_fops_compat_ioctl(struct file *file,
 		status = compat_ptr(k32_frame_info.status);
 
 		if (copy_to_user(status, &rc,
-			sizeof(void *)))
+			sizeof(int32_t)))
 			pr_err("error cannot copy error\n");
 
 		if (copy_to_user((void __user *)kp_ioctl.ioctl_ptr,
@@ -4523,8 +4529,8 @@ static void msm_cpp_set_vbif_reg_values(struct cpp_device *cpp_dev)
 }
 
 static int msm_cpp_buffer_private_ops(struct cpp_device *cpp_dev,
-	uint32_t buff_mgr_ops, uint32_t id, void *arg) {
-
+	uint32_t buff_mgr_ops, uint32_t id, void *arg)
+{
 	int32_t rc = 0;
 
 	switch (id) {
@@ -4638,6 +4644,18 @@ static int cpp_probe(struct platform_device *pdev)
 			msm_camera_set_clk_flags(cpp_dev->cpp_clk[i],
 				CLKFLAG_NORETAIN_PERIPH);
 		}
+	}
+
+	if (of_find_property(pdev->dev.of_node, "qcom,cpp-cx-ipeak", NULL)) {
+		cpp_dev->cpp_cx_ipeak = cx_ipeak_register(
+			pdev->dev.of_node, "qcom,cpp-cx-ipeak");
+		if (cpp_dev->cpp_cx_ipeak) {
+			cam_cx_ipeak_register_cx_ipeak(cpp_dev->cpp_cx_ipeak,
+				&cpp_dev->cx_ipeak_bit);
+			pr_debug("%s register cx_ipeak received bit %d\n",
+				__func__, cpp_dev->cx_ipeak_bit);
+		} else
+			pr_err("Cx ipeak Registration Unsuccessful");
 	}
 
 	rc = msm_camera_get_reset_info(pdev,

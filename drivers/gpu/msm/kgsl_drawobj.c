@@ -101,7 +101,7 @@ void kgsl_dump_syncpoints(struct kgsl_device *device,
 				&retired);
 
 			dev_err(device->dev,
-				"  [timestamp] context %d timestamp %d (retired %d)\n",
+				"  [timestamp] context %u timestamp %u (retired %u)\n",
 				event->context->id, event->timestamp,
 				retired);
 			break;
@@ -143,7 +143,7 @@ static void syncobj_timer(unsigned long data)
 	device = drawobj->context->device;
 
 	dev_err(device->dev,
-		"kgsl: possible gpu syncpoint deadlock for context %d timestamp %d\n",
+		"kgsl: possible gpu syncpoint deadlock for context %u timestamp %u\n",
 		drawobj->context->id, drawobj->timestamp);
 
 	set_bit(ADRENO_CONTEXT_FENCE_LOG, &drawobj->context->priv);
@@ -160,7 +160,7 @@ static void syncobj_timer(unsigned long data)
 
 		switch (event->type) {
 		case KGSL_CMD_SYNCPOINT_TYPE_TIMESTAMP:
-			dev_err(device->dev, "       [%d] TIMESTAMP %d:%d\n",
+			dev_err(device->dev, "       [%u] TIMESTAMP %u:%u\n",
 				i, event->context->id, event->timestamp);
 			break;
 		case KGSL_CMD_SYNCPOINT_TYPE_FENCE: {
@@ -168,7 +168,7 @@ static void syncobj_timer(unsigned long data)
 			struct event_fence_info *info = &event->info;
 
 			for (j = 0; j < info->num_fences; j++)
-				dev_err(device->dev, "       [%d] FENCE %s\n",
+				dev_err(device->dev, "       [%u] FENCE %s\n",
 					i, info->fences[j].name);
 			break;
 		}
@@ -202,7 +202,7 @@ static bool drawobj_sync_expire(struct kgsl_device *device,
 	 * for dispatch
 	 */
 	if (!kgsl_drawobj_events_pending(event->syncobj)) {
-		del_timer_sync(&syncobj->timer);
+		del_timer(&syncobj->timer);
 
 		if (device->ftbl->drawctxt_sched)
 			device->ftbl->drawctxt_sched(device,
@@ -992,7 +992,7 @@ int kgsl_drawobj_sparse_add_sparselist(struct kgsl_device *device,
 	for (i = 0; i < count; i++) {
 		memset(&obj, 0, sizeof(obj));
 
-		ret = _copy_from_user(&obj, ptr, sizeof(obj), size);
+		ret = kgsl_copy_from_user(&obj, ptr, sizeof(obj), size);
 		if (ret)
 			return ret;
 
@@ -1039,7 +1039,7 @@ int kgsl_drawobj_cmd_add_cmdlist(struct kgsl_device *device,
 	for (i = 0; i < count; i++) {
 		memset(&obj, 0, sizeof(obj));
 
-		ret = _copy_from_user(&obj, ptr, sizeof(obj), size);
+		ret = kgsl_copy_from_user(&obj, ptr, sizeof(obj), size);
 		if (ret)
 			return ret;
 
@@ -1081,7 +1081,7 @@ int kgsl_drawobj_cmd_add_memlist(struct kgsl_device *device,
 	for (i = 0; i < count; i++) {
 		memset(&obj, 0, sizeof(obj));
 
-		ret = _copy_from_user(&obj, ptr, sizeof(obj), size);
+		ret = kgsl_copy_from_user(&obj, ptr, sizeof(obj), size);
 		if (ret)
 			return ret;
 
@@ -1131,7 +1131,8 @@ int kgsl_drawobj_sync_add_synclist(struct kgsl_device *device,
 	for (i = 0; i < count; i++) {
 		memset(&syncpoint, 0, sizeof(syncpoint));
 
-		ret = _copy_from_user(&syncpoint, ptr, sizeof(syncpoint), size);
+		ret = kgsl_copy_from_user(&syncpoint, ptr,
+					sizeof(syncpoint), size);
 		if (ret)
 			return ret;
 

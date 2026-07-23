@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -40,8 +40,8 @@
 
 #define UFS_QCOM_LIMIT_NUM_LANES_RX	2
 #define UFS_QCOM_LIMIT_NUM_LANES_TX	2
-#define UFS_QCOM_LIMIT_HSGEAR_RX	UFS_HS_G3
-#define UFS_QCOM_LIMIT_HSGEAR_TX	UFS_HS_G3
+#define UFS_QCOM_LIMIT_HSGEAR_RX	UFS_HS_G4
+#define UFS_QCOM_LIMIT_HSGEAR_TX	UFS_HS_G4
 #define UFS_QCOM_LIMIT_PWMGEAR_RX	UFS_PWM_G4
 #define UFS_QCOM_LIMIT_PWMGEAR_TX	UFS_PWM_G4
 #define UFS_QCOM_LIMIT_RX_PWR_PWM	SLOW_MODE
@@ -75,7 +75,6 @@ enum {
 	 */
 	UFS_AH8_CFG				= 0xFC,
 };
-
 
 /* QCOM UFS host controller vendor specific debug registers */
 enum {
@@ -166,11 +165,16 @@ enum ufs_qcom_phy_init_type {
 #define PA_VS_CLK_CFG_REG	0x9004
 #define PA_VS_CLK_CFG_REG_MASK	0x1FF
 
+#define PA_VS_CORE_CLK_40NS_CYCLES	0x9007
+#define PA_VS_CORE_CLK_40NS_CYCLES_MASK	0xF
+
 #define DL_VS_CLK_CFG		0xA00B
 #define DL_VS_CLK_CFG_MASK	0x3FF
 
 #define DME_VS_CORE_CLK_CTRL	0xD002
 /* bit and mask definitions for DME_VS_CORE_CLK_CTRL attribute */
+#define DME_VS_CORE_CLK_CTRL_MAX_CORE_CLK_1US_CYCLES_MASK_V4	0xFFF
+#define DME_VS_CORE_CLK_CTRL_MAX_CORE_CLK_1US_CYCLES_OFFSET_V4	0x10
 #define DME_VS_CORE_CLK_CTRL_MAX_CORE_CLK_1US_CYCLES_MASK	0xFF
 #define DME_VS_CORE_CLK_CTRL_CORE_CLK_DIV_EN_BIT		BIT(8)
 #define DME_VS_CORE_CLK_CTRL_DME_HW_CGC_EN			BIT(9)
@@ -220,31 +224,16 @@ struct ufs_qcom_bus_vote {
 	struct device_attribute max_bus_bw;
 };
 
-/**
- * struct ufs_qcom_ice_data - ICE related information
- * @vops:	pointer to variant operations of ICE
- * @async_done:	completion for supporting ICE's driver asynchronous nature
- * @pdev:	pointer to the proper ICE platform device
- * @state:      UFS-ICE interface's internal state (see
- *       ufs-qcom-ice.h for possible internal states)
- * @quirks:     UFS-ICE interface related quirks
- * @crypto_engine_err: crypto engine errors
- */
-struct ufs_qcom_ice_data {
-	struct qcom_ice_variant_ops *vops;
-	struct platform_device *pdev;
-	int state;
-
-	u16 quirks;
-
-	bool crypto_engine_err;
-};
-
 /* Host controller hardware version: major.minor.step */
 struct ufs_hw_version {
 	u16 step;
 	u16 minor;
 	u8 major;
+};
+
+struct ufs_qcom_testbus {
+	u8 select_major;
+	u8 select_minor;
 };
 
 #ifdef CONFIG_DEBUG_FS
@@ -259,11 +248,6 @@ struct qcom_debugfs_files {
 	struct dentry *pm_qos;
 };
 #endif
-
-struct ufs_qcom_testbus {
-	u8 select_major;
-	u8 select_minor;
-};
 
 /* PM QoS voting state  */
 enum ufs_qcom_pm_qos_state {
@@ -359,23 +343,25 @@ struct ufs_qcom_host {
 	bool disable_lpm;
 	bool is_lane_clks_enabled;
 	bool sec_cfg_updated;
-	struct ufs_qcom_ice_data ice;
+
 	void __iomem *dev_ref_clk_ctrl_mmio;
 	bool is_dev_ref_clk_enabled;
 	struct ufs_hw_version hw_ver;
-	u32 dev_ref_clk_en_mask;
 #ifdef CONFIG_DEBUG_FS
 	struct qcom_debugfs_files debugfs_files;
 #endif
+
+	u32 dev_ref_clk_en_mask;
+
 	/* Bitmask for enabling debug prints */
 	u32 dbg_print_en;
 	struct ufs_qcom_testbus testbus;
 
-	spinlock_t ice_work_lock;
-	struct work_struct ice_cfg_work;
 	struct request *req_pending;
 	struct ufs_vreg *vddp_ref_clk;
+	struct ufs_vreg *vccq_parent;
 	bool work_pending;
+	bool is_phy_pwr_on;
 };
 
 static inline u32

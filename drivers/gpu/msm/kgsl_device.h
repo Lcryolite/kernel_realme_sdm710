@@ -1,4 +1,5 @@
 /* Copyright (c) 2002,2007-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -15,8 +16,11 @@
 
 #include <linux/slab.h>
 #include <linux/idr.h>
+#include <linux/pm.h>
 #include <linux/pm_qos.h>
 #include <linux/sched.h>
+#include <linux/sched/task.h>
+#include <linux/sched/mm.h>
 
 #include "kgsl.h"
 #include "kgsl_mmu.h"
@@ -26,7 +30,7 @@
 #include "kgsl_snapshot.h"
 #include "kgsl_sharedmem.h"
 #include "kgsl_drawobj.h"
-#include "kgsl_gmu.h"
+#include "kgsl_gmu_core.h"
 
 #define KGSL_IOCTL_FUNC(_cmd, _func) \
 	[_IOC_NR((_cmd))] = \
@@ -65,6 +69,7 @@ enum kgsl_event_results {
 	KGSL_EVENT_CANCELLED = 2,
 };
 
+#define KGSL_FLAG_WAKE_ON_TOUCH BIT(0)
 #define KGSL_FLAG_SPARSE        BIT(1)
 
 /*
@@ -130,10 +135,6 @@ struct kgsl_functable {
 	int (*init)(struct kgsl_device *device);
 	int (*start)(struct kgsl_device *device, int priority);
 	int (*stop)(struct kgsl_device *device);
-	void (*gmu_regread)(struct kgsl_device *device,
-		unsigned int offsetwords, unsigned int *value);
-	void (*gmu_regwrite)(struct kgsl_device *device,
-		unsigned int offsetwords, unsigned int value);
 	int (*getproperty)(struct kgsl_device *device,
 		unsigned int type, void __user *value,
 		size_t sizebytes);
@@ -192,8 +193,10 @@ struct kgsl_functable {
 	void (*gpu_model)(struct kgsl_device *device, char *str,
 		size_t bufsz);
 	void (*stop_fault_timer)(struct kgsl_device *device);
-	void (*dispatcher_halt)(struct kgsl_device *device);
-	void (*dispatcher_unhalt)(struct kgsl_device *device);
+	int (*suspend_device)(struct kgsl_device *device,
+		pm_message_t pm_state);
+	int (*resume_device)(struct kgsl_device *device,
+		pm_message_t pm_state);
 };
 
 struct kgsl_ioctl {
@@ -271,7 +274,7 @@ struct kgsl_device {
 	const char *shadermemname;
 
 	struct kgsl_mmu mmu;
-	struct gmu_device gmu;
+	struct gmu_core_device gmu_core;
 	struct completion hwaccess_gate;
 	struct completion halt_gate;
 	const struct kgsl_functable *ftbl;
@@ -327,7 +330,7 @@ struct kgsl_device {
 	struct kgsl_pwrscale pwrscale;
 
 	int reset_counter; /* Track how many GPU core resets have occurred */
-	struct workqueue_struct *events_wq;
+	struct kthread_worker *events_worker;
 
 	struct device *busmondev; /* pseudo dev for GPU BW voting governor */
 
@@ -337,10 +340,8 @@ struct kgsl_device {
 	struct clk *l3_clk;
 	unsigned int l3_freq[MAX_L3_LEVELS];
 	unsigned int num_l3_pwrlevels;
-	#if defined(OPLUS_FEATURE_GPU_MINIDUMP)
-	bool snapshot_control;
-	int snapshotfault;
-	#endif /* OPLUS_FEATURE_GPU_MINIDUMP */
+	/* store current L3 vote to determine if we should change our vote */
+	unsigned int cur_l3_pwrlevel;
 };
 
 #define KGSL_MMU_DEVICE(_mmu) \
@@ -351,7 +352,7 @@ struct kgsl_device {
 	.halt_gate = COMPLETION_INITIALIZER((_dev).halt_gate),\
 	.idle_check_ws = __WORK_INITIALIZER((_dev).idle_check_ws,\
 			kgsl_idle_check),\
-	.context_idr = IDR_INIT((_dev).context_idr),\
+	.context_idr = IDR_INIT(_dev),\
 	.wait_queue = __WAIT_QUEUE_HEAD_INITIALIZER((_dev).wait_queue),\
 	.active_cnt_wq = __WAIT_QUEUE_HEAD_INITIALIZER((_dev).active_cnt_wq),\
 	.mutex = __MUTEX_INITIALIZER((_dev).mutex),\
@@ -404,6 +405,8 @@ struct kgsl_process_private;
  * @fault_time: time of the first gpu hang in last _context_throttle_time ms
  * @user_ctxt_record: memory descriptor used by CP to save/restore VPC data
  * across preemption
+ * @total_fault_count: number of times gpu faulted in this context
+ * @last_faulted_cmd_ts: last faulted command batch timestamp
  */
 struct kgsl_context {
 	struct kref refcount;
@@ -423,6 +426,8 @@ struct kgsl_context {
 	unsigned int fault_count;
 	unsigned long fault_time;
 	struct kgsl_mem_entry *user_ctxt_record;
+	unsigned int total_fault_count;
+	unsigned int last_faulted_cmd_ts;
 };
 
 #define _context_comm(_c) \
@@ -470,10 +475,10 @@ struct kgsl_process_private {
 	struct kobject kobj;
 	struct dentry *debug_root;
 	struct {
-		uint64_t cur;
-		uint64_t max;
+		atomic64_t cur;
+		atomic64_t max;
 	} stats[KGSL_MEM_ENTRY_MAX];
-	uint64_t gpumem_mapped;
+	atomic64_t gpumem_mapped;
 	struct idr syncsource_idr;
 	spinlock_t syncsource_lock;
 	int fd_count;
@@ -542,9 +547,6 @@ struct kgsl_snapshot {
 	bool first_read;
 	bool gmu_fault;
 	bool recovered;
-	#if defined(OPLUS_FEATURE_GPU_MINIDUMP)
-	char snapshot_hashid[96];
-	#endif /* OPLUS_FEATURE_GPU_MINIDUMP */
 };
 
 /**
@@ -570,9 +572,35 @@ struct kgsl_device *kgsl_get_device(int dev_idx);
 static inline void kgsl_process_add_stats(struct kgsl_process_private *priv,
 	unsigned int type, uint64_t size)
 {
-	priv->stats[type].cur += size;
-	if (priv->stats[type].max < priv->stats[type].cur)
-		priv->stats[type].max = priv->stats[type].cur;
+	u64 ret = atomic64_add_return(size, &priv->stats[type].cur);
+
+	if (ret > atomic64_read(&priv->stats[type].max))
+		atomic64_set(&priv->stats[type].max, ret);
+	add_mm_counter(current->mm, MM_UNRECLAIMABLE, (size >> PAGE_SHIFT));
+}
+
+static inline void kgsl_process_sub_stats(struct kgsl_process_private *priv,
+	unsigned int type, uint64_t size)
+{
+	struct pid *pid_struct;
+	struct task_struct *task;
+	struct mm_struct *mm;
+
+	atomic64_sub(size, &priv->stats[type].cur);
+	pid_struct = find_get_pid(pid_nr(priv->pid));
+	if (pid_struct) {
+		task = get_pid_task(pid_struct, PIDTYPE_PID);
+		if (task) {
+			mm = get_task_mm(task);
+			if (mm) {
+				add_mm_counter(mm, MM_UNRECLAIMABLE,
+					-(size >> PAGE_SHIFT));
+				mmput(mm);
+			}
+			put_task_struct(task);
+		}
+		put_pid(pid_struct);
+	}
 }
 
 static inline bool kgsl_is_register_offset(struct kgsl_device *device,
@@ -581,26 +609,14 @@ static inline bool kgsl_is_register_offset(struct kgsl_device *device,
 	return ((offsetwords * sizeof(uint32_t)) < device->reg_len);
 }
 
-static inline bool kgsl_is_gmu_offset(struct kgsl_device *device,
-				unsigned int offsetwords)
-{
-	struct gmu_device *gmu = &device->gmu;
-
-	return (gmu->pdev &&
-		(offsetwords >= gmu->gmu2gpu_offset) &&
-		((offsetwords - gmu->gmu2gpu_offset) * sizeof(uint32_t) <
-			gmu->reg_len));
-}
-
 static inline void kgsl_regread(struct kgsl_device *device,
 				unsigned int offsetwords,
 				unsigned int *value)
 {
 	if (kgsl_is_register_offset(device, offsetwords))
 		device->ftbl->regread(device, offsetwords, value);
-	else if (device->ftbl->gmu_regread &&
-			kgsl_is_gmu_offset(device, offsetwords))
-		device->ftbl->gmu_regread(device, offsetwords, value);
+	else if (gmu_core_is_register_offset(device, offsetwords))
+		gmu_core_regread(device, offsetwords, value);
 	else {
 		WARN(1, "Out of bounds register read: 0x%x\n", offsetwords);
 		*value = 0;
@@ -613,29 +629,10 @@ static inline void kgsl_regwrite(struct kgsl_device *device,
 {
 	if (kgsl_is_register_offset(device, offsetwords))
 		device->ftbl->regwrite(device, offsetwords, value);
-	else if (device->ftbl->gmu_regwrite &&
-			kgsl_is_gmu_offset(device, offsetwords))
-		device->ftbl->gmu_regwrite(device, offsetwords, value);
+	else if (gmu_core_is_register_offset(device, offsetwords))
+		gmu_core_regwrite(device, offsetwords, value);
 	else
 		WARN(1, "Out of bounds register write: 0x%x\n", offsetwords);
-}
-
-static inline void kgsl_gmu_regread(struct kgsl_device *device,
-				unsigned int offsetwords,
-				unsigned int *value)
-{
-	if (device->ftbl->gmu_regread)
-		device->ftbl->gmu_regread(device, offsetwords, value);
-	else
-		*value = 0;
-}
-
-static inline void kgsl_gmu_regwrite(struct kgsl_device *device,
-				 unsigned int offsetwords,
-				 unsigned int value)
-{
-	if (device->ftbl->gmu_regwrite)
-		device->ftbl->gmu_regwrite(device, offsetwords, value);
 }
 
 static inline void kgsl_regrmw(struct kgsl_device *device,
@@ -649,17 +646,6 @@ static inline void kgsl_regrmw(struct kgsl_device *device,
 	kgsl_regwrite(device, offsetwords, val | bits);
 }
 
-static inline void kgsl_gmu_regrmw(struct kgsl_device *device,
-		unsigned int offsetwords,
-		unsigned int mask, unsigned int bits)
-{
-	unsigned int val = 0;
-
-	kgsl_gmu_regread(device, offsetwords, &val);
-	val &= ~mask;
-	kgsl_gmu_regwrite(device, offsetwords, val | bits);
-}
-
 static inline int kgsl_idle(struct kgsl_device *device)
 {
 	return device->ftbl->idle(device);
@@ -669,25 +655,6 @@ static inline unsigned int kgsl_gpuid(struct kgsl_device *device,
 	unsigned int *chipid)
 {
 	return device->ftbl->gpuid(device, chipid);
-}
-
-static inline int kgsl_create_device_sysfs_files(struct device *root,
-	const struct device_attribute **list)
-{
-	int ret = 0, i;
-
-	for (i = 0; list[i] != NULL; i++)
-		ret |= device_create_file(root, list[i]);
-	return ret;
-}
-
-static inline void kgsl_remove_device_sysfs_files(struct device *root,
-	const struct device_attribute **list)
-{
-	int i;
-
-	for (i = 0; list[i] != NULL; i++)
-		device_remove_file(root, list[i]);
 }
 
 static inline struct kgsl_device *kgsl_device_from_dev(struct device *dev)
@@ -704,16 +671,34 @@ static inline struct kgsl_device *kgsl_device_from_dev(struct device *dev)
 
 static inline int kgsl_state_is_awake(struct kgsl_device *device)
 {
-	struct gmu_device *gmu = &device->gmu;
-
 	if (device->state == KGSL_STATE_ACTIVE ||
 		device->state == KGSL_STATE_AWARE)
 		return true;
-	else if (kgsl_gmu_isenabled(device) &&
-			test_bit(GMU_CLK_ON, &gmu->flags))
+	else if (gmu_core_gpmu_isenabled(device) &&
+			test_bit(GMU_CLK_ON, &device->gmu_core.flags))
 		return true;
 	else
 		return false;
+}
+
+static inline int kgsl_change_flag(struct kgsl_device *device,
+		unsigned long flag, unsigned long *val)
+{
+	int ret;
+
+	mutex_lock(&device->mutex);
+	/*
+	 * Bring down the GPU, so that we can bring it back up with the correct
+	 * power and clock settings
+	 */
+	ret = kgsl_pwrctrl_change_state(device, KGSL_STATE_SUSPEND);
+	if (!ret) {
+		change_bit(flag, val);
+		kgsl_pwrctrl_change_state(device, KGSL_STATE_SLUMBER);
+	}
+
+	mutex_unlock(&device->mutex);
+	return ret;
 }
 
 int kgsl_readtimestamp(struct kgsl_device *device, void *priv,

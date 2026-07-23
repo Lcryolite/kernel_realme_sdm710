@@ -91,6 +91,7 @@ exit:
 static void msg_submit(struct mbox_chan *chan)
 {
 	int err = 0;
+	unsigned long flags;
 
 	/*
 	 * If the controller returns -EAGAIN, then it means, our spinlock
@@ -103,10 +104,12 @@ static void msg_submit(struct mbox_chan *chan)
 		err = __msg_submit(chan);
 	} while (err == -EAGAIN);
 
-	if (!err && (chan->txdone_method & TXDONE_BY_POLL))
+	if (!err && (chan->txdone_method & TXDONE_BY_POLL)) {
 		/* kick start the timer immediately to avoid delays */
-		hrtimer_start(&chan->mbox->poll_hrt, ktime_set(0, 0),
-			      HRTIMER_MODE_REL);
+		spin_lock_irqsave(&chan->mbox->poll_hrt_lock, flags);
+		hrtimer_start(&chan->mbox->poll_hrt, 0, HRTIMER_MODE_REL);
+		spin_unlock_irqrestore(&chan->mbox->poll_hrt_lock, flags);
+	}
 }
 
 static void tx_tick(struct mbox_chan *chan, int r)
@@ -139,6 +142,7 @@ static enum hrtimer_restart txdone_hrtimer(struct hrtimer *hrtimer)
 		container_of(hrtimer, struct mbox_controller, poll_hrt);
 	bool txdone, resched = false;
 	int i;
+	unsigned long flags;
 
 	for (i = 0; i < mbox->num_chans; i++) {
 		struct mbox_chan *chan = &mbox->chans[i];
@@ -153,7 +157,11 @@ static enum hrtimer_restart txdone_hrtimer(struct hrtimer *hrtimer)
 	}
 
 	if (resched) {
-		hrtimer_forward_now(hrtimer, ms_to_ktime(mbox->txpoll_period));
+		spin_lock_irqsave(&mbox->poll_hrt_lock, flags);
+		if (!hrtimer_is_queued(hrtimer))
+			hrtimer_forward_now(hrtimer, ms_to_ktime(mbox->txpoll_period));
+		spin_unlock_irqrestore(&mbox->poll_hrt_lock, flags);
+
 		return HRTIMER_RESTART;
 	}
 	return HRTIMER_NORESTART;
@@ -303,9 +311,8 @@ int mbox_send_message(struct mbox_chan *chan, void *mssg)
 EXPORT_SYMBOL_GPL(mbox_send_message);
 
 /**
- * mbox_write_controller_data -	For client to submit a message to be
- *				written to the controller but not sent to
- *				the remote processor.
+ * mbox_send_controller_data-	For client to submit a message to be
+ *				sent only to the controller.
  * @chan: Mailbox channel assigned to this client.
  * @mssg: Client specific message typecasted.
  *
@@ -316,7 +323,7 @@ EXPORT_SYMBOL_GPL(mbox_send_message);
  *	or transmission over chan (blocking mode).
  *	Negative value denotes failure.
  */
-int mbox_write_controller_data(struct mbox_chan *chan, void *mssg)
+int mbox_send_controller_data(struct mbox_chan *chan, void *mssg)
 {
 	unsigned long flags;
 	int err;
@@ -325,12 +332,12 @@ int mbox_write_controller_data(struct mbox_chan *chan, void *mssg)
 		return -EINVAL;
 
 	spin_lock_irqsave(&chan->lock, flags);
-	err = chan->mbox->ops->write_controller_data(chan, mssg);
+	err = chan->mbox->ops->send_controller_data(chan, mssg);
 	spin_unlock_irqrestore(&chan->lock, flags);
 
 	return err;
 }
-EXPORT_SYMBOL(mbox_write_controller_data);
+EXPORT_SYMBOL(mbox_send_controller_data);
 
 bool mbox_controller_is_idle(struct mbox_chan *chan)
 {
@@ -419,15 +426,18 @@ struct mbox_chan *mbox_request_channel(struct mbox_client *cl, int index)
 	init_completion(&chan->tx_complete);
 
 	if (chan->txdone_method	== TXDONE_BY_POLL && cl->knows_txdone)
-		chan->txdone_method |= TXDONE_BY_ACK;
+		chan->txdone_method = TXDONE_BY_ACK;
 
 	spin_unlock_irqrestore(&chan->lock, flags);
 
-	ret = chan->mbox->ops->startup(chan);
-	if (ret) {
-		dev_err(dev, "Unable to startup the chan (%d)\n", ret);
-		mbox_free_channel(chan);
-		chan = ERR_PTR(ret);
+	if (chan->mbox->ops->startup) {
+		ret = chan->mbox->ops->startup(chan);
+
+		if (ret) {
+			dev_err(dev, "Unable to startup the chan (%d)\n", ret);
+			mbox_free_channel(chan);
+			chan = ERR_PTR(ret);
+		}
 	}
 
 	mutex_unlock(&con_mutex);
@@ -478,13 +488,14 @@ void mbox_free_channel(struct mbox_chan *chan)
 	if (!chan || !chan->cl)
 		return;
 
-	chan->mbox->ops->shutdown(chan);
+	if (chan->mbox->ops->shutdown)
+		chan->mbox->ops->shutdown(chan);
 
 	/* The queued TX requests are simply aborted, no callbacks are made */
 	spin_lock_irqsave(&chan->lock, flags);
 	chan->cl = NULL;
 	chan->active_req = NULL;
-	if (chan->txdone_method == (TXDONE_BY_POLL | TXDONE_BY_ACK))
+	if (chan->txdone_method == TXDONE_BY_ACK)
 		chan->txdone_method = TXDONE_BY_POLL;
 
 	module_put(chan->mbox->dev->driver->owner);
@@ -526,9 +537,16 @@ int mbox_controller_register(struct mbox_controller *mbox)
 		txdone = TXDONE_BY_ACK;
 
 	if (txdone == TXDONE_BY_POLL) {
+
+		if (!mbox->ops->last_tx_done) {
+			dev_err(mbox->dev, "last_tx_done method is absent\n");
+			return -EINVAL;
+		}
+
 		hrtimer_init(&mbox->poll_hrt, CLOCK_MONOTONIC,
 			     HRTIMER_MODE_REL);
 		mbox->poll_hrt.function = txdone_hrtimer;
+		spin_lock_init(&mbox->poll_hrt_lock);
 	}
 
 	for (i = 0; i < mbox->num_chans; i++) {

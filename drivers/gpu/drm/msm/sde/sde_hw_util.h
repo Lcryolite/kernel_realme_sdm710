@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -16,6 +16,7 @@
 #include <linux/io.h>
 #include <linux/slab.h>
 #include "sde_hw_mdss.h"
+#include "sde_hw_catalog.h"
 
 #define REG_MASK(n)                     ((BIT(n)) - 1)
 struct sde_format_extended;
@@ -54,6 +55,7 @@ struct sde_hw_blk_reg_map {
  * @ adjust_a:      A-coefficients for mapping curve
  * @ adjust_b:      B-coefficients for mapping curve
  * @ adjust_c:      C-coefficients for mapping curve
+ * @ blend:      Unsharp Blend Filter Ratio
  */
 struct sde_hw_scaler3_de_cfg {
 	u32 enable;
@@ -69,6 +71,7 @@ struct sde_hw_scaler3_de_cfg {
 	int16_t adjust_a[SDE_MAX_DE_CURVES];
 	int16_t adjust_b[SDE_MAX_DE_CURVES];
 	int16_t adjust_c[SDE_MAX_DE_CURVES];
+	uint32_t blend;
 };
 
 
@@ -106,6 +109,8 @@ struct sde_hw_scaler3_de_cfg {
  * @ cir_lut:      pointer to circular filter LUT
  * @ sep_lut:      pointer to separable filter LUT
  * @ de: detail enhancer configuration
+ * @ dir_weight:   Directional Weight
+ * @dyn_exp_disabled:     Dynamic expansion disabled
  */
 struct sde_hw_scaler3_cfg {
 	u32 enable;
@@ -146,6 +151,8 @@ struct sde_hw_scaler3_cfg {
 	 * Detail enhancer settings
 	 */
 	struct sde_hw_scaler3_de_cfg de;
+	uint32_t dir_weight;
+	uint32_t dyn_exp_disabled;
 };
 
 struct sde_hw_scaler3_lut_cfg {
@@ -177,16 +184,21 @@ int sde_reg_read(struct sde_hw_blk_reg_map *c, u32 reg_off);
 
 void *sde_hw_util_get_dir(void);
 
+void sde_init_scaler_blk(struct sde_scaler_blk *blk, u32 version);
+
 void sde_set_scaler_v2(struct sde_hw_scaler3_cfg *cfg,
 		const struct sde_drm_scaler_v2 *scale_v2);
 
 void sde_hw_setup_scaler3(struct sde_hw_blk_reg_map *c,
-		struct sde_hw_scaler3_cfg *scaler3_cfg,
-		u32 scaler_offset, u32 scaler_version,
-		const struct sde_format *format);
+		struct sde_hw_scaler3_cfg *scaler3_cfg, u32 scaler_version,
+		u32 scaler_offset, const struct sde_format *format);
 
 u32 sde_hw_get_scaler3_ver(struct sde_hw_blk_reg_map *c,
 		u32 scaler_offset);
+
+void sde_hw_csc_matrix_coeff_setup(struct sde_hw_blk_reg_map *c,
+		u32 csc_reg_off, struct sde_csc_cfg *data,
+		u32 shift_bit);
 
 void sde_hw_csc_setup(struct sde_hw_blk_reg_map  *c,
 		u32 csc_reg_off,
@@ -199,4 +211,9 @@ uint32_t sde_copy_formats(
 		const struct sde_format_extended *src_list,
 		uint32_t src_list_size);
 
+static inline bool is_qseed3_rev_qseed3lite(struct sde_mdss_cfg *sde_cfg)
+{
+	return ((sde_cfg->qseed_type == SDE_SSPP_SCALER_QSEED3LITE) ?
+			true : false);
+}
 #endif /* _SDE_HW_UTIL_H */

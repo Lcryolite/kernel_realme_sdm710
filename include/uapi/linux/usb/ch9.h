@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  * This file holds USB constants and structures that are needed for
  * USB device APIs.  These are used by the USB device model, which is
@@ -224,7 +225,8 @@ struct usb_ctrlrequest {
  * through the Linux-USB APIs, they are not converted to cpu byte
  * order; it is the responsibility of the client code to do this.
  * The single exception is when device and configuration descriptors (but
- * not other descriptors) are read from usbfs (i.e. /proc/bus/usb/BBB/DDD);
+ * not other descriptors) are read from character devices
+ * (i.e. /dev/bus/usb/BBB/DDD);
  * in this case the fields are converted to host endianness by the kernel.
  */
 
@@ -426,6 +428,7 @@ struct usb_endpoint_descriptor {
 #define USB_ENDPOINT_XFER_INT		3
 #define USB_ENDPOINT_MAX_ADJUSTABLE	0x80
 
+#define USB_ENDPOINT_MAXP_MASK	0x07ff
 #define USB_EP_MAXP_MULT_SHIFT	11
 #define USB_EP_MAXP_MULT_MASK	(3 << USB_EP_MAXP_MULT_SHIFT)
 #define USB_EP_MAXP_MULT(m) \
@@ -631,11 +634,11 @@ static inline int usb_endpoint_is_isoc_out(
  * usb_endpoint_maxp - get endpoint's max packet size
  * @epd: endpoint to be checked
  *
- * Returns @epd's max packet
+ * Returns @epd's max packet bits [10:0]
  */
 static inline int usb_endpoint_maxp(const struct usb_endpoint_descriptor *epd)
 {
-	return __le16_to_cpu(epd->wMaxPacketSize);
+	return __le16_to_cpu(epd->wMaxPacketSize) & USB_ENDPOINT_MAXP_MASK;
 }
 
 /**
@@ -1082,23 +1085,19 @@ struct usb_ptm_cap_descriptor {
  * configuration. This descriptor may be used by Host software to decide
  * which Configuration to use to obtain the desired functionality.
  */
-#define	USB_CAP_TYPE_CONFIG_SUMMARY	0x10
-
-struct function_class_info {
-	__u8 bClass;
-	__u8 bSubClass;
-	__u8 bProtocol;
-};
+#define USB_CAP_TYPE_CONFIG_SUMMARY	0x10
+#define USB_CONFIG_SUMMARY_DESC_REV	0x100
 
 struct usb_config_summary_descriptor {
 	__u8 bLength;
 	__u8 bDescriptorType;
 	__u8 bDevCapabilityType;
 	__u16 bcdVersion;
-	__u8 bConfigurationValue;
-	__u8 bMaxPower;
-	__u8 bNumFunctions;
-	struct function_class_info cs_info[];
+	__u8 bClass;
+	__u8 bSubClass;
+	__u8 bProtocol;
+	__u8 bConfigurationCount;
+	__u8 bConfigurationIndex[];
 } __attribute__((packed));
 
 /*-------------------------------------------------------------------------*/

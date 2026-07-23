@@ -22,11 +22,6 @@
 #include "codecs/msm_sdw/msm_sdw.h"
 #include <linux/pm_qos.h>
 
-#ifdef OPLUS_ARCH_EXTENDS
-/* Chunyu.xie@MULTIMEDIA.AudioDriver.Codec, 2021/05/07, Add for stable dmic */
-#include <soc/oppo/oppo_project.h>
-#endif /* OPLUS_ARCH_EXTENDS */
-
 #define __CHIPSET__ "SDM660 "
 #define MSM_DAILINK_NAME(name) (__CHIPSET__#name)
 
@@ -34,12 +29,6 @@
 
 #define WCN_CDC_SLIM_RX_CH_MAX 2
 #define WCN_CDC_SLIM_TX_CH_MAX 3
-#ifdef OPLUS_ARCH_EXTENDS
-/*Jianfeng.Qiu@MULTIMEDIA.AudioDriver.Codec.1911528, 2019/03/22, Add for make sure dmic clock stable>50ms*/
-static unsigned long clk_on_jiffies = 0;
-static unsigned long clk_off_jiffies = 0;
-static unsigned int clk_switch_us = 52*1000; //52ms
-#endif /* OPLUS_ARCH_EXTENDS */
 
 #define WSA8810_NAME_1 "wsa881x.20170211"
 #define WSA8810_NAME_2 "wsa881x.20170212"
@@ -56,8 +45,7 @@ enum {
 };
 
 enum {
-	BT_SLIM7_RX,
-	BT_SLIM7_TX,
+	BT_SLIM7,
 	FM_SLIM8,
 	SLIM_MAX,
 };
@@ -133,8 +121,7 @@ static struct dev_config int_mi2s_cfg[] = {
 };
 
 static struct dev_config bt_fm_cfg[] = {
-	[BT_SLIM7_RX] = {SAMPLING_RATE_8KHZ, SNDRV_PCM_FORMAT_S16_LE, 1},
-	[BT_SLIM7_TX] = {SAMPLING_RATE_8KHZ, SNDRV_PCM_FORMAT_S16_LE, 1},
+	[BT_SLIM7] = {SAMPLING_RATE_8KHZ, SNDRV_PCM_FORMAT_S16_LE, 1},
 	[FM_SLIM8] = {SAMPLING_RATE_48KHZ, SNDRV_PCM_FORMAT_S16_LE, 2},
 };
 
@@ -147,12 +134,6 @@ static const char *const int_mi2s_tx_ch_text[] = {"One", "Two",
 static char const *bit_format_text[] = {"S16_LE", "S24_LE", "S24_3LE"};
 static const char *const loopback_mclk_text[] = {"DISABLE", "ENABLE"};
 static char const *bt_sample_rate_text[] = {"KHZ_8", "KHZ_16",
-					"KHZ_44P1", "KHZ_48",
-					"KHZ_88P2", "KHZ_96"};
-static char const *bt_sample_rate_rx_text[] = {"KHZ_8", "KHZ_16",
-					"KHZ_44P1", "KHZ_48",
-					"KHZ_88P2", "KHZ_96"};
-static char const *bt_sample_rate_tx_text[] = {"KHZ_8", "KHZ_16",
 					"KHZ_44P1", "KHZ_48",
 					"KHZ_88P2", "KHZ_96"};
 
@@ -171,8 +152,6 @@ static SOC_ENUM_SINGLE_EXT_DECL(int4_mi2s_rx_format, bit_format_text);
 static SOC_ENUM_SINGLE_EXT_DECL(int5_mi2s_tx_chs, int_mi2s_ch_text);
 static SOC_ENUM_SINGLE_EXT_DECL(loopback_mclk_en, loopback_mclk_text);
 static SOC_ENUM_SINGLE_EXT_DECL(bt_sample_rate, bt_sample_rate_text);
-static SOC_ENUM_SINGLE_EXT_DECL(bt_sample_rate_rx, bt_sample_rate_rx_text);
-static SOC_ENUM_SINGLE_EXT_DECL(bt_sample_rate_tx, bt_sample_rate_tx_text);
 
 static int msm_dmic_event(struct snd_soc_dapm_widget *w,
 			  struct snd_kcontrol *kcontrol, int event);
@@ -180,10 +159,7 @@ static int msm_int_enable_dig_cdc_clk(struct snd_soc_codec *codec, int enable,
 				      bool dapm);
 static int msm_int_mclk0_event(struct snd_soc_dapm_widget *w,
 			      struct snd_kcontrol *kcontrol, int event);
-static int msm_int_dig_mclk0_event(struct snd_soc_dapm_widget *w,
-			      struct snd_kcontrol *kcontrol, int event);
 static int msm_int_mi2s_snd_startup(struct snd_pcm_substream *substream);
-static int msm_int_dig_mi2s_snd_startup(struct snd_pcm_substream *substream);
 static void msm_int_mi2s_snd_shutdown(struct snd_pcm_substream *substream);
 
 static struct wcd_mbhc_config *mbhc_cfg_ptr;
@@ -455,15 +431,6 @@ static const struct snd_soc_dapm_widget msm_int_dapm_widgets[] = {
 	SND_SOC_DAPM_MIC("Digital Mic4", msm_dmic_event),
 };
 
-static const struct snd_soc_dapm_widget msm_int_dig_dapm_widgets[] = {
-	SND_SOC_DAPM_SUPPLY_S("INT_MCLK0", -1, SND_SOC_NOPM, 0, 0,
-	msm_int_dig_mclk0_event, SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
-	SND_SOC_DAPM_MIC("Digital Mic1", msm_dmic_event),
-	SND_SOC_DAPM_MIC("Digital Mic2", msm_dmic_event),
-	SND_SOC_DAPM_MIC("Digital Mic3", msm_dmic_event),
-	SND_SOC_DAPM_MIC("Digital Mic4", msm_dmic_event),
-};
-
 static int msm_config_hph_compander_gpio(bool enable,
 					 struct snd_soc_codec *codec)
 {
@@ -642,18 +609,12 @@ static int msm_btfm_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
 
 	switch (dai_link->id) {
 	case MSM_BACKEND_DAI_SLIMBUS_7_RX:
-		param_set_mask(params, SNDRV_PCM_HW_PARAM_FORMAT,
-				bt_fm_cfg[BT_SLIM7_RX].bit_format);
-		rate->min = rate->max = bt_fm_cfg[BT_SLIM7_RX].sample_rate;
-		channels->min = channels->max =
-			bt_fm_cfg[BT_SLIM7_RX].channels;
-		break;
 	case MSM_BACKEND_DAI_SLIMBUS_7_TX:
 		param_set_mask(params, SNDRV_PCM_HW_PARAM_FORMAT,
-				bt_fm_cfg[BT_SLIM7_TX].bit_format);
-		rate->min = rate->max = bt_fm_cfg[BT_SLIM7_TX].sample_rate;
+				bt_fm_cfg[BT_SLIM7].bit_format);
+		rate->min = rate->max = bt_fm_cfg[BT_SLIM7].sample_rate;
 		channels->min = channels->max =
-			bt_fm_cfg[BT_SLIM7_TX].channels;
+			bt_fm_cfg[BT_SLIM7].channels;
 		break;
 
 	case MSM_BACKEND_DAI_SLIMBUS_8_TX:
@@ -858,7 +819,7 @@ static int msm_bt_sample_rate_get(struct snd_kcontrol *kcontrol,
 	 * when used for BT_SCO use case. Return either Rx or Tx sample rate
 	 * value.
 	 */
-	switch (bt_fm_cfg[BT_SLIM7_RX].sample_rate) {
+	switch (bt_fm_cfg[BT_SLIM7].sample_rate) {
 	case SAMPLING_RATE_96KHZ:
 		ucontrol->value.integer.value[0] = 5;
 		break;
@@ -880,7 +841,7 @@ static int msm_bt_sample_rate_get(struct snd_kcontrol *kcontrol,
 		break;
 	}
 	pr_debug("%s: sample rate = %d", __func__,
-		 bt_fm_cfg[BT_SLIM7_RX].sample_rate);
+		 bt_fm_cfg[BT_SLIM7].sample_rate);
 
 	return 0;
 }
@@ -890,159 +851,29 @@ static int msm_bt_sample_rate_put(struct snd_kcontrol *kcontrol,
 {
 	switch (ucontrol->value.integer.value[0]) {
 	case 1:
-		bt_fm_cfg[BT_SLIM7_RX].sample_rate = SAMPLING_RATE_16KHZ;
-		bt_fm_cfg[BT_SLIM7_TX].sample_rate = SAMPLING_RATE_16KHZ;
+		bt_fm_cfg[BT_SLIM7].sample_rate = SAMPLING_RATE_16KHZ;
 		break;
 	case 2:
-		bt_fm_cfg[BT_SLIM7_RX].sample_rate = SAMPLING_RATE_44P1KHZ;
-		bt_fm_cfg[BT_SLIM7_TX].sample_rate = SAMPLING_RATE_44P1KHZ;
+		bt_fm_cfg[BT_SLIM7].sample_rate = SAMPLING_RATE_44P1KHZ;
 		break;
 	case 3:
-		bt_fm_cfg[BT_SLIM7_RX].sample_rate = SAMPLING_RATE_48KHZ;
-		bt_fm_cfg[BT_SLIM7_TX].sample_rate = SAMPLING_RATE_48KHZ;
+		bt_fm_cfg[BT_SLIM7].sample_rate = SAMPLING_RATE_48KHZ;
 		break;
 	case 4:
-		bt_fm_cfg[BT_SLIM7_RX].sample_rate = SAMPLING_RATE_88P2KHZ;
-		bt_fm_cfg[BT_SLIM7_TX].sample_rate = SAMPLING_RATE_88P2KHZ;
+		bt_fm_cfg[BT_SLIM7].sample_rate = SAMPLING_RATE_88P2KHZ;
 		break;
 	case 5:
-		bt_fm_cfg[BT_SLIM7_RX].sample_rate = SAMPLING_RATE_96KHZ;
-		bt_fm_cfg[BT_SLIM7_TX].sample_rate = SAMPLING_RATE_96KHZ;
+		bt_fm_cfg[BT_SLIM7].sample_rate = SAMPLING_RATE_96KHZ;
 		break;
 	case 0:
 	default:
-		bt_fm_cfg[BT_SLIM7_RX].sample_rate = SAMPLING_RATE_8KHZ;
-		bt_fm_cfg[BT_SLIM7_TX].sample_rate = SAMPLING_RATE_8KHZ;
+		bt_fm_cfg[BT_SLIM7].sample_rate = SAMPLING_RATE_8KHZ;
 		break;
 	}
 	pr_debug("%s: sample rates: slim7_rx = %d, value = %d\n",
 		 __func__,
-		 bt_fm_cfg[BT_SLIM7_RX].sample_rate,
+		 bt_fm_cfg[BT_SLIM7].sample_rate,
 		 ucontrol->value.enumerated.item[0]);
-
-	return 0;
-}
-
-static int msm_bt_sample_rate_rx_get(struct snd_kcontrol *kcontrol,
-					struct snd_ctl_elem_value *ucontrol)
-{
-	switch (bt_fm_cfg[BT_SLIM7_RX].sample_rate) {
-	case SAMPLING_RATE_96KHZ:
-		ucontrol->value.integer.value[0] = 5;
-		break;
-	case SAMPLING_RATE_88P2KHZ:
-		ucontrol->value.integer.value[0] = 4;
-		break;
-	case SAMPLING_RATE_48KHZ:
-		ucontrol->value.integer.value[0] = 3;
-		break;
-	case SAMPLING_RATE_44P1KHZ:
-		ucontrol->value.integer.value[0] = 2;
-		break;
-	case SAMPLING_RATE_16KHZ:
-		ucontrol->value.integer.value[0] = 1;
-		break;
-	case SAMPLING_RATE_8KHZ:
-	default:
-		ucontrol->value.integer.value[0] = 0;
-		break;
-	}
-	pr_debug("%s: sample rate = %d", __func__,
-		bt_fm_cfg[BT_SLIM7_RX].sample_rate);
-
-	return 0;
-}
-
-static int msm_bt_sample_rate_rx_put(struct snd_kcontrol *kcontrol,
-					struct snd_ctl_elem_value *ucontrol)
-{
-	switch (ucontrol->value.integer.value[0]) {
-	case 1:
-		bt_fm_cfg[BT_SLIM7_RX].sample_rate = SAMPLING_RATE_16KHZ;
-		break;
-	case 2:
-		bt_fm_cfg[BT_SLIM7_RX].sample_rate = SAMPLING_RATE_44P1KHZ;
-		break;
-	case 3:
-		bt_fm_cfg[BT_SLIM7_RX].sample_rate = SAMPLING_RATE_48KHZ;
-		break;
-	case 4:
-		bt_fm_cfg[BT_SLIM7_RX].sample_rate = SAMPLING_RATE_88P2KHZ;
-		break;
-	case 5:
-		bt_fm_cfg[BT_SLIM7_RX].sample_rate = SAMPLING_RATE_96KHZ;
-		break;
-	case 0:
-	default:
-		bt_fm_cfg[BT_SLIM7_RX].sample_rate = SAMPLING_RATE_8KHZ;
-		break;
-	}
-	pr_debug("%s: sample rates: slim7_rx = %d, value = %d\n",
-		__func__,
-		bt_fm_cfg[BT_SLIM7_RX].sample_rate,
-		ucontrol->value.enumerated.item[0]);
-
-	return 0;
-}
-
-static int msm_bt_sample_rate_tx_get(struct snd_kcontrol *kcontrol,
-					struct snd_ctl_elem_value *ucontrol)
-{
-	switch (bt_fm_cfg[BT_SLIM7_TX].sample_rate) {
-	case SAMPLING_RATE_96KHZ:
-		ucontrol->value.integer.value[0] = 5;
-		break;
-	case SAMPLING_RATE_88P2KHZ:
-		ucontrol->value.integer.value[0] = 4;
-		break;
-	case SAMPLING_RATE_48KHZ:
-		ucontrol->value.integer.value[0] = 3;
-		break;
-	case SAMPLING_RATE_44P1KHZ:
-		ucontrol->value.integer.value[0] = 2;
-		break;
-	case SAMPLING_RATE_16KHZ:
-		ucontrol->value.integer.value[0] = 1;
-		break;
-	case SAMPLING_RATE_8KHZ:
-	default:
-		ucontrol->value.integer.value[0] = 0;
-		break;
-	}
-	pr_debug("%s: sample rate = %d", __func__,
-		bt_fm_cfg[BT_SLIM7_TX].sample_rate);
-
-	return 0;
-}
-
-static int msm_bt_sample_rate_tx_put(struct snd_kcontrol *kcontrol,
-					struct snd_ctl_elem_value *ucontrol)
-{
-	switch (ucontrol->value.integer.value[0]) {
-	case 1:
-		bt_fm_cfg[BT_SLIM7_TX].sample_rate = SAMPLING_RATE_16KHZ;
-		break;
-	case 2:
-		bt_fm_cfg[BT_SLIM7_TX].sample_rate = SAMPLING_RATE_44P1KHZ;
-		break;
-	case 3:
-		bt_fm_cfg[BT_SLIM7_TX].sample_rate = SAMPLING_RATE_48KHZ;
-		break;
-	case 4:
-		bt_fm_cfg[BT_SLIM7_TX].sample_rate = SAMPLING_RATE_88P2KHZ;
-		break;
-	case 5:
-		bt_fm_cfg[BT_SLIM7_TX].sample_rate = SAMPLING_RATE_96KHZ;
-		break;
-	case 0:
-	default:
-		bt_fm_cfg[BT_SLIM7_TX].sample_rate = SAMPLING_RATE_8KHZ;
-		break;
-	}
-	pr_debug("%s: sample rates: slim7_tx = %d, value = %d\n",
-		__func__,
-		bt_fm_cfg[BT_SLIM7_TX].sample_rate,
-		ucontrol->value.enumerated.item[0]);
 
 	return 0;
 }
@@ -1069,20 +900,11 @@ static const struct snd_kcontrol_new msm_snd_controls[] = {
 			int_mi2s_ch_get, int_mi2s_ch_put),
 	SOC_ENUM_EXT("INT3_MI2S_TX Channels", int3_mi2s_tx_chs,
 			int_mi2s_ch_get, int_mi2s_ch_put),
+	SOC_ENUM_EXT("Loopback MCLK", loopback_mclk_en,
+		     loopback_mclk_get, loopback_mclk_put),
 	SOC_ENUM_EXT("BT SampleRate", bt_sample_rate,
 			msm_bt_sample_rate_get,
 			msm_bt_sample_rate_put),
-	SOC_ENUM_EXT("BT SampleRate RX", bt_sample_rate_rx,
-			msm_bt_sample_rate_rx_get,
-			msm_bt_sample_rate_rx_put),
-	SOC_ENUM_EXT("BT SampleRate TX", bt_sample_rate_tx,
-			msm_bt_sample_rate_tx_get,
-			msm_bt_sample_rate_tx_put),
-};
-
-static const struct snd_kcontrol_new msm_loopback_snd_controls[] = {
-	SOC_ENUM_EXT("Loopback MCLK", loopback_mclk_en,
-		     loopback_mclk_get, loopback_mclk_put),
 };
 
 static const struct snd_kcontrol_new msm_sdw_controls[] = {
@@ -1103,53 +925,17 @@ static int msm_dmic_event(struct snd_soc_dapm_widget *w,
 	struct msm_asoc_mach_data *pdata = NULL;
 	struct snd_soc_codec *codec = snd_soc_dapm_to_codec(w->dapm);
 	int ret = 0;
-	#ifdef OPLUS_ARCH_EXTENDS
-	/*Jianfeng.Qiu@MULTIMEDIA.AudioDriver.Codec.1911528, 2019/03/22, Add for make sure dmic clock stable>50ms*/
-	static bool dmic_active = false;
-	unsigned int interval_us = 0;
-	#endif /* OPLUS_ARCH_EXTENDS */
 
 	pdata = snd_soc_card_get_drvdata(codec->component.card);
-	#ifndef OPLUS_ARCH_EXTENDS
-	/*Jianfeng.Qiu@MULTIMEDIA.AudioDriver.Codec, 2019/03/22, Modify for print log*/
 	pr_debug("%s: event = %d\n", __func__, event);
-	#else /* OPLUS_ARCH_EXTENDS */
-	pr_info("%s: event = %d\n", __func__, event);
-	#endif /* OPLUS_ARCH_EXTENDS */
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
-		#ifdef OPLUS_ARCH_EXTENDS
-		/*Jianfeng.Qiu@MULTIMEDIA.AudioDriver.Codec.1911528, 2019/03/22, Add for make sure dmic clock stable>50ms*/
-		if (is_project(OPPO_18097)) {
-			if (!dmic_active) {
-				if ((jiffies > clk_off_jiffies)
-					&& ((jiffies - clk_off_jiffies) < usecs_to_jiffies(clk_switch_us))) {
-					interval_us = jiffies_to_usecs(jiffies - clk_off_jiffies);
-					pr_warn("%s: clk off %d us, too short!\n", __func__, interval_us);
-					if (interval_us < clk_switch_us) {
-						usleep_range(clk_switch_us-interval_us, clk_switch_us-interval_us+50);
-						pr_warn("%s: before turn on clk, sleep %d us!\n",
-							__func__, clk_switch_us - interval_us);
-					}
-				}
-			}
-		}
-		#endif /* OPLUS_ARCH_EXTENDS */
 		ret = msm_cdc_pinctrl_select_active_state(pdata->dmic_gpio_p);
 		if (ret < 0) {
 			pr_err("%s: gpio set cannot be activated %sd",
 					__func__, "dmic_gpio");
 			return ret;
 		}
-		#ifdef OPLUS_ARCH_EXTENDS
-		/*Jianfeng.Qiu@MULTIMEDIA.AudioDriver.Codec.1911528, 2019/03/22, Add for make sure dmic clock stable>50ms*/
-		if (is_project(OPPO_18097)) {
-			if (!dmic_active) {
-				dmic_active = true;
-				clk_on_jiffies = jiffies;
-			}
-		}
-		#endif /* OPLUS_ARCH_EXTENDS */
 		break;
 	case SND_SOC_DAPM_POST_PMD:
 		ret = msm_cdc_pinctrl_select_sleep_state(pdata->dmic_gpio_p);
@@ -1158,14 +944,6 @@ static int msm_dmic_event(struct snd_soc_dapm_widget *w,
 					__func__, "dmic_gpio");
 			return ret;
 		}
-		#ifdef OPLUS_ARCH_EXTENDS
-		/*Jianfeng.Qiu@MULTIMEDIA.AudioDriver.Codec.1911528, 2019/03/22, Add for make sure dmic clock stable>50ms*/
-		if (is_project(OPPO_18097)) {
-			if (dmic_active) {
-				dmic_active = false;
-			}
-		}
-		#endif /* OPLUS_ARCH_EXTENDS */
 		break;
 	default:
 		pr_err("%s: invalid DAPM event %d\n", __func__, event);
@@ -1182,12 +960,7 @@ static int msm_int_mclk0_event(struct snd_soc_dapm_widget *w,
 	int ret = 0;
 
 	pdata = snd_soc_card_get_drvdata(codec->component.card);
-	#ifndef OPLUS_ARCH_EXTENDS
-	/*Jianfeng.Qiu@MULTIMEDIA.AudioDriver.Codec, 2019/03/22, Modify for print log*/
 	pr_debug("%s: event = %d\n", __func__, event);
-	#else /* OPLUS_ARCH_EXTENDS */
-	pr_info("%s: event = %d\n", __func__, event);
-	#endif /* OPLUS_ARCH_EXTENDS */
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
 		ret = msm_cdc_pinctrl_select_active_state(pdata->pdm_gpio_p);
@@ -1211,35 +984,6 @@ static int msm_int_mclk0_event(struct snd_soc_dapm_widget *w,
 		pr_debug("%s: disabling MCLK\n", __func__);
 		/* disable the codec mclk config*/
 		msm_anlg_cdc_mclk_enable(codec, 0, true);
-		msm_int_enable_dig_cdc_clk(codec, 0, true);
-		break;
-	default:
-		pr_err("%s: invalid DAPM event %d\n", __func__, event);
-		return -EINVAL;
-	}
-	return 0;
-}
-
-static int msm_int_dig_mclk0_event(struct snd_soc_dapm_widget *w,
-			       struct snd_kcontrol *kcontrol, int event)
-{
-	struct msm_asoc_mach_data *pdata = NULL;
-	struct snd_soc_codec *codec = snd_soc_dapm_to_codec(w->dapm);
-
-	pdata = snd_soc_card_get_drvdata(codec->component.card);
-	#ifndef OPLUS_ARCH_EXTENDS
-	/*Jianfeng.Qiu@MULTIMEDIA.AudioDriver.Codec, 2019/03/22, Add for print log*/
-	pr_debug("%s: event = %d\n", __func__, event);
-	#else /* OPLUS_ARCH_EXTENDS */
-	pr_info("%s: event = %d\n", __func__, event);
-	#endif /* OPLUS_ARCH_EXTENDS */
-	switch (event) {
-	case SND_SOC_DAPM_PRE_PMU:
-		msm_digcdc_mclk_enable(codec, 1, true);
-		msm_int_enable_dig_cdc_clk(codec, 1, true);
-		break;
-	case SND_SOC_DAPM_POST_PMD:
-		msm_digcdc_mclk_enable(codec, 0, true);
 		msm_int_enable_dig_cdc_clk(codec, 0, true);
 		break;
 	default:
@@ -1416,37 +1160,6 @@ static int msm_int_mi2s_snd_startup(struct snd_pcm_substream *substream)
 	struct msm_asoc_mach_data *pdata = NULL;
 
 	pdata = snd_soc_card_get_drvdata(codec->component.card);
-	#ifndef OPLUS_ARCH_EXTENDS
-	/*Jianfeng.Qiu@MULTIMEDIA.AudioDriver.Codec, 2019/03/22, Add for print log*/
-	pr_debug("%s(): substream = %s  stream = %d\n", __func__,
-		 substream->name, substream->stream);
-	#else /* OPLUS_ARCH_EXTENDS */
-	pr_info("%s(): substream = %s  stream = %d\n", __func__,
-		 substream->name, substream->stream);
-	#endif /* OPLUS_ARCH_EXTENDS */
-
-	ret = int_mi2s_set_sclk(substream, true);
-	if (ret < 0) {
-		pr_err("%s: failed to enable sclk %d\n",
-				__func__, ret);
-		return ret;
-	}
-	ret = snd_soc_dai_set_fmt(cpu_dai, SND_SOC_DAIFMT_CBS_CFS);
-	if (ret < 0)
-		pr_err("%s: set fmt cpu dai failed; ret=%d\n", __func__, ret);
-
-	return ret;
-}
-
-static int msm_int_dig_mi2s_snd_startup(struct snd_pcm_substream *substream)
-{
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
-	struct snd_soc_codec *codec = rtd->codec;
-	int ret = 0;
-	struct msm_asoc_mach_data *pdata = NULL;
-
-	pdata = snd_soc_card_get_drvdata(codec->component.card);
 	pr_debug("%s(): substream = %s  stream = %d\n", __func__,
 		 substream->name, substream->stream);
 
@@ -1466,51 +1179,14 @@ static int msm_int_dig_mi2s_snd_startup(struct snd_pcm_substream *substream)
 static void msm_int_mi2s_snd_shutdown(struct snd_pcm_substream *substream)
 {
 	int ret;
-	#ifdef OPLUS_ARCH_EXTENDS
-	/*Jianfeng.Qiu@MULTIMEDIA.AudioDriver.Codec.1911528, 2019/03/22, Add for make sure dmic clock stable>50ms*/
-	unsigned int interval_us = 0;
-	#endif /* OPLUS_ARCH_EXTENDS */
 
-	#ifndef OPLUS_ARCH_EXTENDS
-	/*Jianfeng.Qiu@MULTIMEDIA.AudioDriver.Codec, 2019/03/22, Add for print log*/
 	pr_debug("%s(): substream = %s  stream = %d\n", __func__,
 			substream->name, substream->stream);
-	#else /* OPLUS_ARCH_EXTENDS */
-	pr_info("%s(): substream = %s  stream = %d\n", __func__,
-			substream->name, substream->stream);
-	#endif /* OPLUS_ARCH_EXTENDS */
-
-	#ifdef OPLUS_ARCH_EXTENDS
-	/*Jianfeng.Qiu@MULTIMEDIA.AudioDriver.Codec.1911528, 2019/03/22, Add for make sure dmic clock stable>50ms*/
-	if (is_project(OPPO_18097)) {
-		if (substream->stream == 1) {
-			if ((jiffies > clk_on_jiffies)
-				&&((jiffies - clk_on_jiffies) < usecs_to_jiffies(clk_switch_us))) {
-				interval_us = jiffies_to_usecs(jiffies - clk_on_jiffies);
-				pr_warn("%s: clk on %d us, too short!\n", __func__, interval_us);
-				if (interval_us < clk_switch_us) {
-					usleep_range(clk_switch_us - interval_us, clk_switch_us - interval_us + 50);
-					pr_warn("%s: before turn off clk, sleep %d us!\n",
-						__func__, clk_switch_us - interval_us);
-				}
-			}
-		}
-	}
-	#endif /* OPLUS_ARCH_EXTENDS */
 
 	ret = int_mi2s_set_sclk(substream, false);
 	if (ret < 0)
 		pr_err("%s:clock disable failed; ret=%d\n", __func__,
 				ret);
-
-	#ifdef OPLUS_ARCH_EXTENDS
-	/*Jianfeng.Qiu@MULTIMEDIA.AudioDriver.Codec.1911528, 2019/03/22, Add for make sure dmic clock stable>50ms*/
-	if (is_project(OPPO_18097)) {
-		if ((substream->stream == 1) && (ret >= 0)) {
-			clk_off_jiffies = jiffies;
-		}
-	}
-	#endif /* OPLUS_ARCH_EXTENDS */
 }
 
 static void *def_msm_int_wcd_mbhc_cal(void)
@@ -1525,14 +1201,7 @@ static void *def_msm_int_wcd_mbhc_cal(void)
 		return NULL;
 
 #define S(X, Y) ((WCD_MBHC_CAL_PLUG_TYPE_PTR(msm_int_wcd_cal)->X) = (Y))
-	//#ifndef OPLUS_ARCH_EXTENDS
-	/*Jianfeng.Qiu@MULTIMEDIA.AudioDriver.HeadsetDet, 2017/03/06,
-	 *Modify for headset detect.
-	 */
-	//S(v_hs_max, 1500);
-	//#else /* OPLUS_ARCH_EXTENDS */
-	S(v_hs_max, 1700);
-	//#endif
+	S(v_hs_max, 1500);
 #undef S
 #define S(X, Y) ((WCD_MBHC_CAL_BTN_DET_PTR(msm_int_wcd_cal)->X) = (Y))
 	S(num_btn, WCD_MBHC_DEF_BUTTONS);
@@ -1555,11 +1224,7 @@ static void *def_msm_int_wcd_mbhc_cal(void)
 	 * 210-290 == Button 2
 	 * 360-680 == Button 3
 	 */
-	//#ifndef OPLUS_ARCH_EXTENDS
-	/*Jianfeng.Qiu@PSW.MM.AudioDriver.HeadsetDet, 2017/03/03,
-	 *Modify for headset button threshold.
-	 */
-	/*btn_low[0] = 75;
+	btn_low[0] = 75;
 	btn_high[0] = 75;
 	btn_low[1] = 150;
 	btn_high[1] = 150;
@@ -1568,19 +1233,7 @@ static void *def_msm_int_wcd_mbhc_cal(void)
 	btn_low[3] = 450;
 	btn_high[3] = 450;
 	btn_low[4] = 500;
-	btn_high[4] = 500;*/
-	//#else /* OPLUS_ARCH_EXTENDS */
-	btn_low[0] = 60;		/* Hook ,0 ~ 160 Ohm*/
-	btn_high[0] = 130;
-	btn_low[1] = 131;
-	btn_high[1] = 131;
-	btn_low[2] = 253;		/* Volume + ,160 ~ 360 Ohm*/
-	btn_high[2] = 253;
-	btn_low[3] = 425;		/* Volume - ,360 ~ 680 Ohm*/
-	btn_high[3] = 425;
-	btn_low[4] = 426;
-	btn_high[4] = 426;
-	//#endif /* OPLUS_ARCH_EXTENDS */
+	btn_high[4] = 500;
 
 	return msm_int_wcd_cal;
 }
@@ -1604,15 +1257,6 @@ static int msm_audrx_init(struct snd_soc_pcm_runtime *rtd)
 			__func__, ret);
 		return ret;
 	}
-
-	ret = snd_soc_add_codec_controls(ana_cdc, msm_loopback_snd_controls,
-				   ARRAY_SIZE(msm_loopback_snd_controls));
-	if (ret < 0) {
-		pr_err("%s: add_codec_controls failed: %d\n",
-			__func__, ret);
-		return ret;
-	}
-
 	ret = snd_soc_add_codec_controls(ana_cdc, msm_common_snd_controls,
 				   msm_common_snd_controls_size());
 	if (ret < 0) {
@@ -1629,8 +1273,6 @@ static int msm_audrx_init(struct snd_soc_pcm_runtime *rtd)
 	snd_soc_dapm_ignore_suspend(dapm, "Secondary Mic");
 	snd_soc_dapm_ignore_suspend(dapm, "Digital Mic1");
 	snd_soc_dapm_ignore_suspend(dapm, "Digital Mic2");
-	snd_soc_dapm_ignore_suspend(dapm, "Digital Mic3");
-	snd_soc_dapm_ignore_suspend(dapm, "Digital Mic4");
 
 	snd_soc_dapm_ignore_suspend(dapm, "EAR");
 	snd_soc_dapm_ignore_suspend(dapm, "HEADPHONE");
@@ -1668,59 +1310,6 @@ done:
 	return 0;
 }
 
-static int msm_dig_audrx_init(struct snd_soc_pcm_runtime *rtd)
-{
-	struct snd_soc_codec *dig_cdc = rtd->codec;
-	struct snd_soc_dapm_context *dapm = snd_soc_codec_get_dapm(dig_cdc);
-	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
-	struct msm_asoc_mach_data *pdata = snd_soc_card_get_drvdata(rtd->card);
-	struct snd_card *card;
-	int ret = -ENOMEM;
-
-	pr_debug("%s(),dev_name%s\n", __func__, dev_name(cpu_dai->dev));
-
-	ret = snd_soc_add_codec_controls(dig_cdc, msm_snd_controls,
-				   ARRAY_SIZE(msm_snd_controls));
-	if (ret < 0) {
-		pr_err("%s: add_codec_controls failed: %d\n",
-			__func__, ret);
-		return ret;
-	}
-	ret = snd_soc_add_codec_controls(dig_cdc, msm_common_snd_controls,
-				   msm_common_snd_controls_size());
-	if (ret < 0) {
-		pr_err("%s: add common snd controls failed: %d\n",
-			__func__, ret);
-		return ret;
-	}
-
-	snd_soc_dapm_new_controls(dapm, msm_int_dig_dapm_widgets,
-				  ARRAY_SIZE(msm_int_dig_dapm_widgets));
-
-	snd_soc_dapm_ignore_suspend(dapm, "Digital Mic1");
-	snd_soc_dapm_ignore_suspend(dapm, "Digital Mic2");
-
-	snd_soc_dapm_ignore_suspend(dapm, "DMIC1");
-	snd_soc_dapm_ignore_suspend(dapm, "DMIC2");
-	snd_soc_dapm_ignore_suspend(dapm, "DMIC3");
-	snd_soc_dapm_ignore_suspend(dapm, "DMIC4");
-
-	card = rtd->card->snd_card;
-	if (!codec_root)
-		codec_root = snd_info_create_subdir(card->module, "codecs",
-						      card->proc_root);
-	if (!codec_root) {
-		pr_debug("%s: Cannot create codecs module entry\n",
-			 __func__);
-		goto done;
-	}
-	pdata->codec_root = codec_root;
-	msm_dig_codec_info_create_codec_entry(codec_root, dig_cdc);
-done:
-	msm_set_codec_reg_done(true);
-	return 0;
-}
-
 static int msm_sdw_audrx_init(struct snd_soc_pcm_runtime *rtd)
 {
 	struct snd_soc_codec *codec = rtd->codec;
@@ -1751,7 +1340,7 @@ static int msm_sdw_audrx_init(struct snd_soc_pcm_runtime *rtd)
 	if (rtd->card->num_aux_devs &&
 		!list_empty(&rtd->card->aux_comp_list)) {
 		aux_comp = list_first_entry(&rtd->card->aux_comp_list,
-					struct snd_soc_component, list_aux);
+			struct snd_soc_component, card_aux_list);
 		if (!strcmp(aux_comp->name, WSA8810_NAME_1) ||
 			!strcmp(aux_comp->name, WSA8810_NAME_2)) {
 			msm_sdw_set_spkr_mode(rtd->codec, SPKR_MODE_1);
@@ -1849,29 +1438,6 @@ static int msm_snd_card_late_probe(struct snd_soc_card *card)
 	return ret;
 }
 
-//#ifdef OPLUS_ARCH_EXTENDS
-/* Jianfeng.Qiu@MULTIMEDIA.AudioDriver.HeadsetDAC 2015/06/03,
- * Add for no sound when ap suspend in call.
- */
-static int ak4376_audrx_init(struct snd_soc_pcm_runtime *rtd)
-{
-	struct snd_soc_codec *codec = rtd->codec;
-	struct snd_soc_dapm_context *dapm = snd_soc_codec_get_dapm(codec);//&codec->dapm;
-	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
-
-	pr_err("%s(),dev_name%s\n", __func__, dev_name(cpu_dai->dev));
-
-	snd_soc_dapm_ignore_suspend(dapm, "AK4376 HPL");
-	snd_soc_dapm_ignore_suspend(dapm, "AK4376 HPR");
-	/*xiang.fei@MULTIMEDIA.AudioDriver.HeadsetDAC, 2017/03/19, Add for kernel 4.4*/
-	snd_soc_dapm_ignore_suspend(dapm, "Playback");
-
-	snd_soc_dapm_sync(dapm);
-
-	return 0;
-}
-//#endif /* OPLUS_ARCH_EXTENDS */
-
 static struct snd_soc_ops msm_tdm_be_ops = {
 	.startup = msm_tdm_snd_startup,
 	.shutdown = msm_tdm_snd_shutdown,
@@ -1894,11 +1460,6 @@ static struct snd_soc_ops msm_aux_pcm_be_ops = {
 
 static struct snd_soc_ops msm_int_mi2s_be_ops = {
 	.startup = msm_int_mi2s_snd_startup,
-	.shutdown = msm_int_mi2s_snd_shutdown,
-};
-
-static struct snd_soc_ops msm_int_dig_mi2s_be_ops = {
-	.startup = msm_int_dig_mi2s_snd_startup,
 	.shutdown = msm_int_mi2s_snd_shutdown,
 };
 
@@ -2147,10 +1708,6 @@ static struct snd_soc_dai_link msm_int_dai[] = {
 		.platform_name = "msm-pcm-hostless",
 		.dynamic = 1,
 		.dpcm_capture = 1,
-		#ifdef OPLUS_ARCH_EXTENDS
-		/*Jianfeng.Qiu@PSW.MM.AudioDriver.Machine, 2017/02/20, Add for loopback test*/
-		.dpcm_playback = 1,
-		#endif /* OPLUS_ARCH_EXTENDS */
 		.trigger = {SND_SOC_DPCM_TRIGGER_POST,
 			    SND_SOC_DPCM_TRIGGER_POST},
 		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
@@ -2758,60 +2315,6 @@ static struct snd_soc_dai_link msm_int_be_dai[] = {
 		.ops = &msm_int_mi2s_be_ops,
 		.ignore_suspend = 1,
 	},
-};
-
-static struct snd_soc_dai_link msm_int_dig_be_dai[] = {
-    /* DIG Codec Backend DAI Links */
-	{
-		.name = LPASS_BE_INT0_MI2S_RX,
-		.stream_name = "INT0 MI2S Playback",
-		.cpu_dai_name = "msm-dai-q6-mi2s.7",
-		.platform_name = "msm-pcm-routing",
-		.codec_dai_name = "msm_dig_cdc_dai_rx1",
-		.no_pcm = 1,
-		.dpcm_playback = 1,
-		.async_ops = ASYNC_DPCM_SND_SOC_PREPARE |
-			ASYNC_DPCM_SND_SOC_HW_PARAMS,
-		.id = MSM_BACKEND_DAI_INT0_MI2S_RX,
-		.init = &msm_dig_audrx_init,
-		.be_hw_params_fixup = int_mi2s_be_hw_params_fixup,
-		.ops = &msm_int_dig_mi2s_be_ops,
-		.ignore_suspend = 1,
-	},
-	{
-		.name = LPASS_BE_INT3_MI2S_TX,
-		.stream_name = "INT3 MI2S Capture",
-		.cpu_dai_name = "msm-dai-q6-mi2s.10",
-		.platform_name = "msm-pcm-routing",
-		.codec_dai_name = "msm_dig_cdc_dai_tx1",
-		.no_pcm = 1,
-		.dpcm_capture = 1,
-		.async_ops = ASYNC_DPCM_SND_SOC_PREPARE |
-			ASYNC_DPCM_SND_SOC_HW_PARAMS,
-		.id = MSM_BACKEND_DAI_INT3_MI2S_TX,
-		.be_hw_params_fixup = int_mi2s_be_hw_params_fixup,
-		.ops = &msm_int_dig_mi2s_be_ops,
-		.ignore_suspend = 1,
-	},
-	{
-		.name = LPASS_BE_INT2_MI2S_TX,
-		.stream_name = "INT2 MI2S Capture",
-		.cpu_dai_name = "msm-dai-q6-mi2s.9",
-		.platform_name = "msm-pcm-routing",
-		.codec_dai_name = "msm_dig_cdc_dai_tx2",
-		.no_pcm = 1,
-		.dpcm_capture = 1,
-		.async_ops = ASYNC_DPCM_SND_SOC_PREPARE |
-			ASYNC_DPCM_SND_SOC_HW_PARAMS,
-		.id = MSM_BACKEND_DAI_INT2_MI2S_TX,
-		.be_hw_params_fixup = int_mi2s_be_hw_params_fixup,
-		.ops = &msm_int_dig_mi2s_be_ops,
-		.ignore_suspend = 1,
-	},
-};
-
-static struct snd_soc_dai_link msm_int_common_be_dai[] = {
-	/* Backend I2S DAI Links */
 	{
 		.name = LPASS_BE_AFE_PCM_RX,
 		.stream_name = "AFE Playback",
@@ -2897,33 +2400,6 @@ static struct snd_soc_dai_link msm_int_common_be_dai[] = {
 		.be_hw_params_fixup = msm_be_hw_params_fixup,
 		.ignore_suspend = 1,
 		.ignore_pmdown_time = 1,
-	},
-	/* Proxy Tx BACK END DAI Link */
-	{
-		.name = LPASS_BE_PROXY_TX,
-		.stream_name = "Proxy Capture",
-		.cpu_dai_name = "msm-dai-q6-dev.8195",
-		.platform_name = "msm-pcm-routing",
-		.codec_name = "msm-stub-codec.1",
-		.codec_dai_name = "msm-stub-tx",
-		.no_pcm = 1,
-		.dpcm_capture = 1,
-		.id = MSM_BACKEND_DAI_PROXY_TX,
-		.ignore_suspend = 1,
-	},
-	/* Proxy Rx BACK END DAI Link */
-	{
-		.name = LPASS_BE_PROXY_RX,
-		.stream_name = "Proxy Playback",
-		.cpu_dai_name = "msm-dai-q6-dev.8194",
-		.platform_name = "msm-pcm-routing",
-		.codec_name = "msm-stub-codec.1",
-		.codec_dai_name = "msm-stub-rx",
-		.no_pcm = 1,
-		.dpcm_playback = 1,
-		.id = MSM_BACKEND_DAI_PROXY_RX,
-		.ignore_pmdown_time = 1,
-		.ignore_suspend = 1,
 	},
 	{
 		.name = LPASS_BE_USB_AUDIO_RX,
@@ -3098,49 +2574,6 @@ static struct snd_soc_dai_link msm_int_common_be_dai[] = {
 		.ignore_suspend = 1,
 	},
 };
-
-//#ifdef OPLUS_ARCH_EXTENDS
-/* Jianfeng.Qiu@PSW.MM.AudioDriver.HeadsetDAC, 2017/09/21, Add for ak43xx */
-static struct snd_soc_dai_link ak43xx_be_dai_links[] = {
-	{
-		.name = LPASS_BE_SEC_MI2S_RX,
-		.stream_name = "Secondary MI2S Playback",
-		.cpu_dai_name = "msm-dai-q6-mi2s.1",
-		.platform_name = "msm-pcm-routing",
-		.codec_name = "ak4376.2-0010",
-		.codec_dai_name = "ak4376-AIF1",
-		.init = ak4376_audrx_init,
-		.no_pcm = 1,
-		.dpcm_playback = 1,
-		.id = MSM_BACKEND_DAI_SECONDARY_MI2S_RX,
-		.be_hw_params_fixup = msm_common_be_hw_params_fixup,
-		.ops = &msm_mi2s_be_ops,
-		.ignore_suspend = 1,
-		.ignore_pmdown_time = 1,
-	},
-};
-//#endif /* OPLUS_ARCH_EXTENDS */
-
-//ifdef OPLUS_ARCH_EXTENDS
-/* Jianfeng.Qiu@MULTIMEDIA.AudioDriver.SmartPA, 2017/09/21, Add for tfa98xx */
-static struct snd_soc_dai_link tfa98xx_be_dai_links[] = {
-	{
-		.name = LPASS_BE_TERT_MI2S_RX,
-		.stream_name = "Tertiary MI2S Playback",
-		.cpu_dai_name = "msm-dai-q6-mi2s.2",
-		.platform_name = "msm-pcm-routing",
-		.codec_name = "tfa98xx.2-0035",
-		.codec_dai_name = "tfa98xx-aif-2-35",
-		.no_pcm = 1,
-		.dpcm_playback = 1,
-		.id = MSM_BACKEND_DAI_TERTIARY_MI2S_RX,
-		.be_hw_params_fixup = msm_common_be_hw_params_fixup,
-		.ops = &msm_mi2s_be_ops,
-		.ignore_suspend = 1,
-		.ignore_pmdown_time = 1,
-	},
-};
-//endif /* OPLUS_ARCH_EXTENDS */
 
 static struct snd_soc_dai_link msm_mi2s_be_dai_links[] = {
 	{
@@ -3537,8 +2970,6 @@ ARRAY_SIZE(msm_int_dai) +
 ARRAY_SIZE(msm_int_wsa_dai) +
 ARRAY_SIZE(msm_int_compress_capture_dai) +
 ARRAY_SIZE(msm_int_be_dai) +
-ARRAY_SIZE(msm_int_dig_be_dai) +
-ARRAY_SIZE(msm_int_common_be_dai) +
 ARRAY_SIZE(msm_mi2s_be_dai_links) +
 ARRAY_SIZE(msm_auxpcm_be_dai_links)+
 ARRAY_SIZE(msm_wcn_be_dai_links) +
@@ -3551,13 +2982,6 @@ static struct snd_soc_card sdm660_card = {
 	.dai_link	= msm_int_dai,
 	.num_links	= ARRAY_SIZE(msm_int_dai),
 	.late_probe	= msm_snd_card_late_probe,
-};
-
-static struct snd_soc_card qcs605_dig_card = {
-	/* snd_soc_card_qcs605 */
-	.name		= "qcs605-dig-snd-card",
-	.dai_link	= msm_int_dai,
-	.num_links	= ARRAY_SIZE(msm_int_dai),
 };
 
 static void msm_disable_int_mclk0(struct work_struct *work)
@@ -3606,27 +3030,11 @@ static void msm_int_dt_parse_cap_info(struct platform_device *pdev,
 }
 
 static struct snd_soc_card *msm_int_populate_sndcard_dailinks(
-					struct device *dev, int snd_card_val)
+						struct device *dev)
 {
-	struct snd_soc_card *card;
+	struct snd_soc_card *card = &sdm660_card;
 	struct snd_soc_dai_link *dailink;
 	int len1;
-
-	//#ifdef OPLUS_ARCH_EXTENDS
-	/* Jianfeng.Qiu@MULTIMEDIA.AudioDriver.Machine, 2017/01/23,
-	 * Add for custom audio.
-	 */
-	int i;
-	const char *product_name = NULL;
-	const char *oppo_speaker_type = "oppo,speaker-pa";
-	const char *oppo_headphone_type = "oppo,headphone-pa";
-	struct snd_soc_dai_link *temp_link;
-	//#endif /* OPLUS_ARCH_EXTENDS */
-
-	if (snd_card_val == INT_SND_CARD)
-		card = &sdm660_card;
-	else
-		card = &qcs605_dig_card;
 
 	card->name = dev_name(dev);
 	len1 = ARRAY_SIZE(msm_int_dai);
@@ -3643,59 +3051,11 @@ static struct snd_soc_card *msm_int_populate_sndcard_dailinks(
 		sizeof(msm_int_compress_capture_dai));
 	len1 += ARRAY_SIZE(msm_int_compress_capture_dai);
 
-	if (snd_card_val == INT_SND_CARD) {
-		memcpy(dailink + len1, msm_int_be_dai, sizeof(msm_int_be_dai));
-		len1 += ARRAY_SIZE(msm_int_be_dai);
-	} else {
-		memcpy(dailink + len1, msm_int_dig_be_dai,
-			sizeof(msm_int_dig_be_dai));
-		len1 += ARRAY_SIZE(msm_int_dig_be_dai);
-	}
-
-	memcpy(dailink + len1, msm_int_common_be_dai,
-		sizeof(msm_int_common_be_dai));
-	len1 += ARRAY_SIZE(msm_int_common_be_dai);
+	memcpy(dailink + len1, msm_int_be_dai, sizeof(msm_int_be_dai));
+	len1 += ARRAY_SIZE(msm_int_be_dai);
 
 	if (of_property_read_bool(dev->of_node,
 				  "qcom,mi2s-audio-intf")) {
-	    //#ifdef OPLUS_ARCH_EXTENDS
-		/* Jianfeng.Qiu@PSW.MM.AudioDriver.Machine, 2017/01/23,
-		 * Add for custom audio.
-		 */
-		if (!of_property_read_string(dev->of_node, oppo_headphone_type,
-				&product_name)) {
-			pr_info("%s: custom headphone product %s\n", __func__, product_name);
-			for (i = 0; i < ARRAY_SIZE(msm_mi2s_be_dai_links); i++) {
-				temp_link = &msm_mi2s_be_dai_links[i];
-				if (temp_link->id == MSM_BACKEND_DAI_SECONDARY_MI2S_RX) {
-					if (!strcmp(product_name, "akm")
-						&& soc_find_component(NULL, ak43xx_be_dai_links[0].codec_name)) {
-						pr_info("%s: use akm dailink replace\n", __func__);
-						memcpy(temp_link, &ak43xx_be_dai_links[0],
-							sizeof(ak43xx_be_dai_links[0]));
-						break;
-					}
-				}
-			}
-		}
-
-		if (!of_property_read_string(dev->of_node, oppo_speaker_type,
-				&product_name)) {
-			pr_info("%s: custom speaker product %s\n", __func__, product_name);
-			for (i = 0; i < ARRAY_SIZE(msm_mi2s_be_dai_links); i++) {
-				temp_link = &msm_mi2s_be_dai_links[i];
-				if (temp_link->id == MSM_BACKEND_DAI_TERTIARY_MI2S_RX) {
-					if (!strcmp(product_name, "nxp")
-						&& soc_find_component(NULL, tfa98xx_be_dai_links[0].codec_name)) {
-						pr_info("%s: use nxp dailink replace\n", __func__);
-						memcpy(temp_link, &tfa98xx_be_dai_links[0],
-							sizeof(tfa98xx_be_dai_links[0]));
-						break;
-					}
-				}
-			}
-		}
-		//#endif /* OPLUS_ARCH_EXTENDS */
 		memcpy(dailink + len1,
 		       msm_mi2s_be_dai_links,
 		       sizeof(msm_mi2s_be_dai_links));
@@ -3749,22 +3109,19 @@ static int msm_internal_init(struct platform_device *pdev,
 			"%s: doesn't support external speaker pa\n",
 			__func__);
 
-	if (pdata->snd_card_val != INT_DIG_SND_CARD) {
-		ret = of_property_read_string(pdev->dev.of_node,
+	ret = of_property_read_string(pdev->dev.of_node,
 				      hs_micbias_type, &type);
-		if (ret) {
-			dev_err(&pdev->dev, "%s: missing %s in dt node\n",
-				__func__, hs_micbias_type);
-			goto err;
-		}
-
-		if (!strcmp(type, "external")) {
-			dev_dbg(&pdev->dev, "Headset is using external micbias\n");
-			mbhc_cfg_ptr->hs_ext_micbias = true;
-		} else {
-			dev_dbg(&pdev->dev, "Headset is using internal micbias\n");
-			mbhc_cfg_ptr->hs_ext_micbias = false;
-		}
+	if (ret) {
+		dev_err(&pdev->dev, "%s: missing %s in dt node\n",
+			__func__, hs_micbias_type);
+		goto err;
+	}
+	if (!strcmp(type, "external")) {
+		dev_dbg(&pdev->dev, "Headset is using external micbias\n");
+		mbhc_cfg_ptr->hs_ext_micbias = true;
+	} else {
+		dev_dbg(&pdev->dev, "Headset is using internal micbias\n");
+		mbhc_cfg_ptr->hs_ext_micbias = false;
 	}
 
 	/* initialize the int_mclk0 */
@@ -3782,8 +3139,7 @@ static int msm_internal_init(struct platform_device *pdev,
 	/* Initialize loopback mode to false */
 	pdata->lb_mode = false;
 
-	if (pdata->snd_card_val != INT_DIG_SND_CARD)
-		msm_int_dt_parse_cap_info(pdev, pdata);
+	msm_int_dt_parse_cap_info(pdev, pdata);
 
 	card->dev = &pdev->dev;
 	platform_set_drvdata(pdev, card);
@@ -3822,8 +3178,7 @@ int msm_int_cdc_init(struct platform_device *pdev,
 {
 	mbhc_cfg_ptr = mbhc_cfg;
 
-	*card = msm_int_populate_sndcard_dailinks(&pdev->dev,
-						  pdata->snd_card_val);
+	*card = msm_int_populate_sndcard_dailinks(&pdev->dev);
 	msm_internal_init(pdev, pdata, *card);
 	return 0;
 }

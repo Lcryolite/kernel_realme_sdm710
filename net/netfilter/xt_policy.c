@@ -93,7 +93,8 @@ match_policy_out(const struct sk_buff *skb, const struct xt_policy_info *info,
 	if (dst->xfrm == NULL)
 		return -1;
 
-	for (i = 0; dst && dst->xfrm; dst = dst->child, i++) {
+	for (i = 0; dst && dst->xfrm;
+	     dst = ((struct xfrm_dst *)dst)->child, i++) {
 		pos = strict ? i : 0;
 		if (pos >= info->len)
 			return 0;
@@ -116,9 +117,9 @@ policy_mt(const struct sk_buff *skb, struct xt_action_param *par)
 	int ret;
 
 	if (info->flags & XT_POLICY_MATCH_IN)
-		ret = match_policy_in(skb, info, par->family);
+		ret = match_policy_in(skb, info, xt_family(par));
 	else
-		ret = match_policy_out(skb, info, par->family);
+		ret = match_policy_out(skb, info, xt_family(par));
 
 	if (ret < 0)
 		ret = info->flags & XT_POLICY_MATCH_NONE ? true : false;

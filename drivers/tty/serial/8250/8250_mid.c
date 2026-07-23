@@ -75,6 +75,42 @@ static int pnw_setup(struct mid8250 *mid, struct uart_port *p)
 	return 0;
 }
 
+static void pnw_exit(struct mid8250 *mid)
+{
+	pci_dev_put(mid->dma_dev);
+}
+
+static int tng_handle_irq(struct uart_port *p)
+{
+	struct mid8250 *mid = p->private_data;
+	struct uart_8250_port *up = up_to_u8250p(p);
+	struct hsu_dma_chip *chip;
+	u32 status;
+	int ret = 0;
+	int err;
+
+	chip = pci_get_drvdata(mid->dma_dev);
+
+	/* Rx DMA */
+	err = hsu_dma_get_status(chip, mid->dma_index * 2 + 1, &status);
+	if (err > 0) {
+		serial8250_rx_dma_flush(up);
+		ret |= 1;
+	} else if (err == 0)
+		ret |= hsu_dma_do_irq(chip, mid->dma_index * 2 + 1, status);
+
+	/* Tx DMA */
+	err = hsu_dma_get_status(chip, mid->dma_index * 2, &status);
+	if (err > 0)
+		ret |= 1;
+	else if (err == 0)
+		ret |= hsu_dma_do_irq(chip, mid->dma_index * 2, status);
+
+	/* UART */
+	ret |= serial8250_handle_irq(p, serial_port_in(p, UART_IIR));
+	return IRQ_RETVAL(ret);
+}
+
 static int tng_setup(struct mid8250 *mid, struct uart_port *p)
 {
 	struct pci_dev *pdev = to_pci_dev(p->dev);
@@ -90,7 +126,14 @@ static int tng_setup(struct mid8250 *mid, struct uart_port *p)
 
 	mid->dma_index = index;
 	mid->dma_dev = pci_get_slot(pdev->bus, PCI_DEVFN(5, 0));
+
+	p->handle_irq = tng_handle_irq;
 	return 0;
+}
+
+static void tng_exit(struct mid8250 *mid)
+{
+	pci_dev_put(mid->dma_dev);
 }
 
 static int dnv_handle_irq(struct uart_port *p)
@@ -131,8 +174,16 @@ static int dnv_setup(struct mid8250 *mid, struct uart_port *p)
 	unsigned int bar = FL_GET_BASE(mid->board->flags);
 	int ret;
 
+	pci_set_master(pdev);
+
+	ret = pci_alloc_irq_vectors(pdev, 1, 1, PCI_IRQ_ALL_TYPES);
+	if (ret < 0)
+		return ret;
+
+	p->irq = pci_irq_vector(pdev, 0);
+
 	chip->dev = &pdev->dev;
-	chip->irq = pdev->irq;
+	chip->irq = pci_irq_vector(pdev, 0);
 	chip->regs = p->membase;
 	chip->length = pci_resource_len(pdev, bar);
 	chip->offset = DNV_DMA_CHAN_OFFSET;
@@ -250,8 +301,6 @@ static int mid8250_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (ret)
 		return ret;
 
-	pci_set_master(pdev);
-
 	mid = devm_kzalloc(&pdev->dev, sizeof(*mid), GFP_KERNEL);
 	if (!mid)
 		return -ENOMEM;
@@ -293,9 +342,9 @@ static int mid8250_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 
 	pci_set_drvdata(pdev, mid);
 	return 0;
+
 err:
-	if (mid->board->exit)
-		mid->board->exit(mid);
+	mid->board->exit(mid);
 	return ret;
 }
 
@@ -303,10 +352,9 @@ static void mid8250_remove(struct pci_dev *pdev)
 {
 	struct mid8250 *mid = pci_get_drvdata(pdev);
 
-	if (mid->board->exit)
-		mid->board->exit(mid);
-
 	serial8250_unregister_port(mid->line);
+
+	mid->board->exit(mid);
 }
 
 static const struct mid8250_board pnw_board = {
@@ -314,6 +362,7 @@ static const struct mid8250_board pnw_board = {
 	.freq = 50000000,
 	.base_baud = 115200,
 	.setup = pnw_setup,
+	.exit = pnw_exit,
 };
 
 static const struct mid8250_board tng_board = {
@@ -321,6 +370,7 @@ static const struct mid8250_board tng_board = {
 	.freq = 38400000,
 	.base_baud = 1843200,
 	.setup = tng_setup,
+	.exit = tng_exit,
 };
 
 static const struct mid8250_board dnv_board = {

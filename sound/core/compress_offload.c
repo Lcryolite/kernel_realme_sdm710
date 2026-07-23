@@ -732,8 +732,6 @@ static int snd_compr_stop(struct snd_compr_stream *stream)
 		/* clear flags and stop any drain wait */
 		stream->partial_drain = false;
 		stream->metadata_set = false;
-		snd_compr_drain_notify(stream);
-
 		stream->runtime->total_bytes_available = 0;
 		stream->runtime->total_bytes_transferred = 0;
 	}
@@ -802,7 +800,6 @@ static int snd_compr_drain(struct snd_compr_stream *stream)
 		break;
 	}
 	mutex_unlock(&stream->device->lock);
-
 	retval = stream->ops->trigger(stream, SND_COMPR_TRIGGER_DRAIN);
 	mutex_lock(&stream->device->lock);
 	if (!retval) {
@@ -852,11 +849,11 @@ static int snd_compr_partial_drain(struct snd_compr_stream *stream)
 	case SNDRV_PCM_STATE_SETUP:
 	case SNDRV_PCM_STATE_PREPARED:
 	case SNDRV_PCM_STATE_PAUSED:
-		mutex_unlock(&stream->device->lock);
-		return -EPERM;
+		retval = -EPERM;
+		goto ret;
 	case SNDRV_PCM_STATE_XRUN:
-		mutex_unlock(&stream->device->lock);
-		return -EPIPE;
+		retval = -EPIPE;
+		goto ret;
 	default:
 		break;
 	}
@@ -874,6 +871,10 @@ static int snd_compr_partial_drain(struct snd_compr_stream *stream)
 	retval = stream->ops->trigger(stream, SND_COMPR_TRIGGER_PARTIAL_DRAIN);
 
 	stream->next_track = false;
+	return retval;
+
+ret:
+	mutex_unlock(&stream->device->lock);
 	return retval;
 }
 

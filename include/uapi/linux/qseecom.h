@@ -12,6 +12,9 @@
 #define QSEECOM_TA_ION_ALLOCATE_DELAY           50
 #define QSEECOM_TA_ION_ALLOCATE_MAX_ATTEMP      20
 
+#define ICE_KEY_SIZE 32
+#define ICE_SALT_SIZE 32
+
 /*
  * struct qseecom_register_listener_req -
  *      for register listener ioctl request
@@ -268,6 +271,10 @@ struct qseecom_ce_pipe_entry {
 	unsigned int ce_pipe_pair;
 };
 
+struct qseecom_ice_data_t {
+	int flag;
+};
+
 #define MAX_CE_INFO_HANDLE_SIZE 32
 struct qseecom_ce_info_req {
 	unsigned char handle[MAX_CE_INFO_HANDLE_SIZE];
@@ -277,8 +284,11 @@ struct qseecom_ce_info_req {
 	struct qseecom_ce_pipe_entry ce_pipe_entry[MAX_CE_PIPE_PAIR_PER_UNIT];
 };
 
-struct qseecom_ice_data_t {
-	int flag;
+struct qseecom_ice_key_data_t {
+	uint8_t key[ICE_KEY_SIZE];
+	uint32_t key_len;
+	uint8_t salt[ICE_SALT_SIZE];
+	uint32_t salt_len;
 };
 
 #define SG_ENTRY_SZ		sizeof(struct qseecom_sg_entry)
@@ -391,5 +401,8 @@ struct file;
 
 #define QSEECOM_IOCTL_SET_ICE_INFO \
 	_IOWR(QSEECOM_IOC_MAGIC, 43, struct qseecom_ice_data_t)
+
+#define QSEECOM_IOCTL_FBE_CLEAR_KEY \
+	_IOWR(QSEECOM_IOC_MAGIC, 44, struct qseecom_ice_key_data_t)
 
 #endif /* _UAPI_QSEECOM_H_ */

@@ -257,11 +257,11 @@ static struct sip_list *sip_coalesce_segments(struct nf_conn *ct,
 							sip_entry->entry->skb,
 							*skb_ref, &fragstolen,
 							&delta_truesize)) {
-					pr_debug(" Combining segments\n");
-					*combined_skb_ref =
-							  sip_entry->entry->skb;
-					*success = true;
-					list_del(list_trav_node);
+						pr_debug(" Combining segments\n");
+						*combined_skb_ref =
+						sip_entry->entry->skb;
+						*success = true;
+						list_del(list_trav_node);
 					} else{
 						skb_push(*skb_ref, dataoff);
 					}
@@ -282,7 +282,7 @@ static void recalc_header(struct sk_buff *skb, unsigned int skblen,
 	const struct nf_nat_l3proto *l3proto;
 
 	/* here we recalculate ip and tcp headers */
-	if (nf_ct_l3num((struct nf_conn *)skb->nfct) == NFPROTO_IPV4) {
+	if (nf_ct_l3num((struct nf_conn *)skb->_nfct) == NFPROTO_IPV4) {
 		/* fix IP hdr checksum information */
 		ip_hdr(skb)->tot_len = htons(skblen);
 		ip_send_check(ip_hdr(skb));
@@ -293,7 +293,7 @@ static void recalc_header(struct sk_buff *skb, unsigned int skblen,
 	datalen = skb->len - protoff;
 	tcph = (struct tcphdr *)((void *)skb->data + protoff);
 	l3proto = __nf_nat_l3proto_find(nf_ct_l3num
-					((struct nf_conn *)skb->nfct));
+					((struct nf_conn *)skb->_nfct));
 	l3proto->csum_recalc(skb, IPPROTO_TCP, tcph, &tcph->check,
 			     datalen, oldlen);
 }
@@ -392,8 +392,9 @@ static int nf_sip_enqueue_packet(struct nf_queue_entry *entry,
 	return 0;
 }
 
-static void nf_hook_drop_sip(struct net *net, const struct nf_hook_entry *hook)
+static unsigned int nf_hook_drop_sip(struct net *net)
 {
+	return 0;
 }
 
 static const struct nf_queue_handler nf_sip_qh = {
@@ -409,6 +410,9 @@ int proc_sip_segment(struct ctl_table *ctl, int write,
 
 	ret = proc_dointvec(ctl, write, buffer, lenp, ppos);
 	if (nf_ct_enable_sip_segmentation) {
+		pr_debug("de-registering queue handler before register for sip\n");
+		nf_unregister_queue_handler(&init_net);
+
 		pr_debug("registering queue handler\n");
 		nf_register_queue_handler(&init_net, &nf_sip_qh);
 	} else {
@@ -954,7 +958,7 @@ int ct_sip_parse_numerical_param(const struct nf_conn *ct, const char *dptr,
 	start += strlen(name);
 	*val = simple_strtoul(start, &end, 0);
 	if (start == end)
-		return 0;
+		return -1;
 	if (matchoff && matchlen) {
 		*matchoff = start - dptr;
 		*matchlen = end - start;
@@ -1158,13 +1162,11 @@ static int refresh_signalling_expectation(struct nf_conn *ct,
 		    exp->tuple.dst.protonum != proto ||
 		    exp->tuple.dst.u.udp.port != port)
 			continue;
-		if (!del_timer(&exp->timeout))
-			continue;
-		exp->flags &= ~NF_CT_EXPECT_INACTIVE;
-		exp->timeout.expires = jiffies + expires * HZ;
-		add_timer(&exp->timeout);
-		found = 1;
-		break;
+		if (mod_timer_pending(&exp->timeout, jiffies + expires * HZ)) {
+			exp->flags &= ~NF_CT_EXPECT_INACTIVE;
+			found = 1;
+			break;
+		}
 	}
 	spin_unlock_bh(&nf_conntrack_expect_lock);
 	return found;
@@ -1180,10 +1182,8 @@ static void flush_expectations(struct nf_conn *ct, bool media)
 	hlist_for_each_entry_safe(exp, next, &help->expectations, lnode) {
 		if ((exp->class != SIP_EXPECT_SIGNALLING) ^ media)
 			continue;
-		if (!del_timer(&exp->timeout))
+		if (!nf_ct_remove_expect(exp))
 			continue;
-		nf_ct_unlink_expect(exp);
-		nf_ct_expect_put(exp);
 		if (!media)
 			break;
 	}
@@ -1237,7 +1237,6 @@ static int set_expected_rtp_rtcp(struct sk_buff *skb, unsigned int protoff,
 	tuple.dst.u3		= *daddr;
 	tuple.dst.u.udp.port	= port;
 
-	rcu_read_lock();
 	do {
 		exp = __nf_ct_expect_find(net, nf_ct_zone(ct), &tuple);
 
@@ -1271,10 +1270,8 @@ static int set_expected_rtp_rtcp(struct sk_buff *skb, unsigned int protoff,
 			goto err1;
 	}
 
-	if (skip_expect) {
-		rcu_read_unlock();
+	if (skip_expect)
 		return NF_ACCEPT;
-	}
 
 	rtp_exp = nf_ct_expect_alloc(ct);
 	if (rtp_exp == NULL)
@@ -1305,7 +1302,6 @@ static int set_expected_rtp_rtcp(struct sk_buff *skb, unsigned int protoff,
 err2:
 	nf_ct_expect_put(rtp_exp);
 err1:
-	rcu_read_unlock();
 	return ret;
 }
 
@@ -1906,7 +1902,7 @@ static int sip_help_tcp(struct sk_buff *skb, unsigned int protoff,
 				content_len_exists = 0;
 				goto destination;
 			} else {
-			break;
+				break;
 			}
 		}
 
@@ -1949,8 +1945,8 @@ destination:
 			}
 			/* Traverse list to find prev segment */
 			/*Traverse the list if list non empty */
-			if (((&ct->sip_segment_list)->next) !=
-				(&ct->sip_segment_list)) {
+			if (ct->sip_segment_list.next !=
+				&ct->sip_segment_list) {
 				/* Combine segments if they are fragments of
 				 *  the same message.
 				 */
@@ -2101,6 +2097,7 @@ static int __init nf_conntrack_sip_init(void)
 {
 	int i, ret;
 
+	NF_CT_HELPER_BUILD_BUG_ON(sizeof(struct nf_ct_sip_master));
 	sip_sysctl_header = register_net_sysctl(&init_net, "net/netfilter",
 						sip_sysctl_tbl);
 	if (!sip_sysctl_header)
@@ -2117,23 +2114,19 @@ static int __init nf_conntrack_sip_init(void)
 	for (i = 0; i < ports_c; i++) {
 		nf_ct_helper_init(&sip[4 * i], AF_INET, IPPROTO_UDP, "sip",
 				  SIP_PORT, ports[i], i, sip_exp_policy,
-				  SIP_EXPECT_MAX,
-				  sizeof(struct nf_ct_sip_master), sip_help_udp,
+				  SIP_EXPECT_MAX, sip_help_udp,
 				  NULL, THIS_MODULE);
 		nf_ct_helper_init(&sip[4 * i + 1], AF_INET, IPPROTO_TCP, "sip",
 				  SIP_PORT, ports[i], i, sip_exp_policy,
-				  SIP_EXPECT_MAX,
-				  sizeof(struct nf_ct_sip_master), sip_help_tcp,
+				  SIP_EXPECT_MAX, sip_help_tcp,
 				  NULL, THIS_MODULE);
 		nf_ct_helper_init(&sip[4 * i + 2], AF_INET6, IPPROTO_UDP, "sip",
 				  SIP_PORT, ports[i], i, sip_exp_policy,
-				  SIP_EXPECT_MAX,
-				  sizeof(struct nf_ct_sip_master), sip_help_udp,
+				  SIP_EXPECT_MAX, sip_help_udp,
 				  NULL, THIS_MODULE);
 		nf_ct_helper_init(&sip[4 * i + 3], AF_INET6, IPPROTO_TCP, "sip",
 				  SIP_PORT, ports[i], i, sip_exp_policy,
-				  SIP_EXPECT_MAX,
-				  sizeof(struct nf_ct_sip_master), sip_help_tcp,
+				  SIP_EXPECT_MAX, sip_help_tcp,
 				  NULL, THIS_MODULE);
 	}
 

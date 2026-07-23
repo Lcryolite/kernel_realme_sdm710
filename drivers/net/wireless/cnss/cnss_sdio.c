@@ -330,7 +330,6 @@ static int cnss_get_hw_resources(struct device *dev)
 		pr_debug("wlan_vreg regulator is invalid\n");
 	}
 
-
 	ret = mmc_power_restore_host(host);
 	if (ret) {
 		pr_err("Failed to restore host power ret:%d\n",
@@ -547,9 +546,10 @@ static int cnss_configure_ramdump(void)
 
 	if (of_property_read_u32(dev->of_node, "qcom,wlan-ramdump-dynamic",
 				 &ramdump_size) == 0) {
-		ssr_info->ramdump_addr = dma_alloc_coherent(dev, ramdump_size,
-							&ssr_info->ramdump_phys,
-							GFP_KERNEL);
+		ssr_info->ramdump_addr =
+			dma_alloc_coherent(dev, ramdump_size,
+					   &ssr_info->ramdump_phys,
+					   GFP_KERNEL);
 		if (ssr_info->ramdump_addr)
 			ssr_info->ramdump_size = ramdump_size;
 		ssr_info->ramdump_dynamic = true;
@@ -560,7 +560,7 @@ static int cnss_configure_ramdump(void)
 			ssr_info->ramdump_phys = res->start;
 			ramdump_size = resource_size(res);
 			ssr_info->ramdump_addr = ioremap(ssr_info->ramdump_phys,
-								ramdump_size);
+							 ramdump_size);
 			if (ssr_info->ramdump_addr)
 				ssr_info->ramdump_size = ramdump_size;
 			ssr_info->ramdump_dynamic = false;
@@ -583,7 +583,7 @@ static int cnss_configure_ramdump(void)
 	}
 
 	ssr_info->ramdump_dev = create_ramdump_device(ssr_info->subsys_name,
-									dev);
+						      dev);
 	if (!ssr_info->ramdump_dev) {
 		ret = -ENOMEM;
 		pr_err("ramdump dev create failed: error=%d\n",
@@ -1365,7 +1365,7 @@ static int cnss_sdio_pinctrl_init(struct cnss_sdio_data *pdata,
 	}
 
 	info->sleep = pinctrl_lookup_state(info->pinctrl,
-						   CNSS_PINCTRL_SLEEP_STATE);
+					   CNSS_PINCTRL_SLEEP_STATE);
 	if (IS_ERR_OR_NULL(info->sleep)) {
 		dev_err(dev, "%s: Fail to get sleep state for pin\n", __func__);
 		ret = PTR_ERR(info->sleep);

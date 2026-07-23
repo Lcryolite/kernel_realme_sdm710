@@ -5,7 +5,7 @@
  ******************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2017, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -599,6 +599,9 @@ acpi_status acpi_db_display_objects(char *obj_type_arg, char *display_count_arg)
 	if (!obj_type_arg) {
 		object_info =
 		    ACPI_ALLOCATE_ZEROED(sizeof(struct acpi_object_info));
+
+		if (!object_info)
+			return (AE_NO_MEMORY);
 
 		/* Walk the namespace from the root */
 

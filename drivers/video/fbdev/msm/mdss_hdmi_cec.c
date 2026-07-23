@@ -52,11 +52,11 @@ static int hdmi_cec_msg_send(void *data, struct cec_msg *msg)
 	u32 frame_retransmit = RETRANSMIT_MAX_NUM;
 	bool frame_type;
 	unsigned long flags;
-	struct mdss_io_data *io = NULL;
+	struct dss_io_data *io = NULL;
 	struct hdmi_cec_ctrl *cec_ctrl = (struct hdmi_cec_ctrl *)data;
 
 	if (!cec_ctrl || !cec_ctrl->init_data.io || !msg) {
-		DEV_ERR("%s: Invalid input\n", __func__);
+		DEV_ERR("%s: invalid cec ctrl\n", __func__);
 		return -EINVAL;
 	}
 
@@ -129,7 +129,7 @@ static void hdmi_cec_init_input_event(struct hdmi_cec_ctrl *cec_ctrl)
 	int rc = 0;
 
 	if (!cec_ctrl) {
-		DEV_ERR("%s: Invalid input\n", __func__);
+		DEV_ERR("%s: invalid cec ctrl\n", __func__);
 		return;
 	}
 
@@ -169,13 +169,13 @@ static void hdmi_cec_msg_recv(struct work_struct *work)
 	int i;
 	u32 data;
 	struct hdmi_cec_ctrl *cec_ctrl = NULL;
-	struct mdss_io_data *io = NULL;
+	struct dss_io_data *io = NULL;
 	struct cec_msg msg;
 	struct cec_cbs *cbs;
 
 	cec_ctrl = container_of(work, struct hdmi_cec_ctrl, cec_read_work);
 	if (!cec_ctrl || !cec_ctrl->init_data.io) {
-		DEV_ERR("%s: invalid input\n", __func__);
+		DEV_ERR("%s: invalid cec ctrl\n", __func__);
 		return;
 	}
 
@@ -262,11 +262,11 @@ int hdmi_cec_isr(void *input)
 	int rc = 0;
 	u32 cec_intr, cec_status;
 	unsigned long flags;
-	struct mdss_io_data *io = NULL;
+	struct dss_io_data *io = NULL;
 	struct hdmi_cec_ctrl *cec_ctrl = (struct hdmi_cec_ctrl *)input;
 
 	if (!cec_ctrl || !cec_ctrl->init_data.io) {
-		DEV_ERR("%s: Invalid input\n", __func__);
+		DEV_ERR("%s: invalid cec ctrl\n", __func__);
 		return -EPERM;
 	}
 
@@ -344,7 +344,7 @@ static void hdmi_cec_wakeup_en(void *input, bool enable)
 	struct hdmi_cec_ctrl *cec_ctrl = (struct hdmi_cec_ctrl *)input;
 
 	if (!cec_ctrl) {
-		DEV_ERR("%s: Invalid input\n", __func__);
+		DEV_ERR("%s: invalid cec ctrl\n", __func__);
 		return;
 	}
 
@@ -356,7 +356,7 @@ static void hdmi_cec_write_logical_addr(void *input, u8 addr)
 	struct hdmi_cec_ctrl *cec_ctrl = (struct hdmi_cec_ctrl *)input;
 
 	if (!cec_ctrl || !cec_ctrl->init_data.io) {
-		DEV_ERR("%s: Invalid input\n", __func__);
+		DEV_ERR("%s: invalid cec ctrl\n", __func__);
 		return;
 	}
 
@@ -368,12 +368,12 @@ static int hdmi_cec_enable(void *input, bool enable)
 {
 	int ret = 0;
 	u32 hdmi_hw_version, reg_val;
-	struct mdss_io_data *io = NULL;
+	struct dss_io_data *io = NULL;
 	struct hdmi_cec_ctrl *cec_ctrl = (struct hdmi_cec_ctrl *)input;
 	struct mdss_panel_info *pinfo;
 
 	if (!cec_ctrl || !cec_ctrl->init_data.io) {
-		DEV_ERR("%s: Invalid input\n", __func__);
+		DEV_ERR("%s: invalid cec ctrl\n", __func__);
 		ret = -EPERM;
 		goto end;
 	}
@@ -382,7 +382,7 @@ static int hdmi_cec_enable(void *input, bool enable)
 	pinfo = cec_ctrl->init_data.pinfo;
 
 	if (!pinfo) {
-		DEV_ERR("%s: invalid pinfo\n", __func__);
+		DEV_ERR("%s: invalid panel info\n", __func__);
 		goto end;
 	}
 
@@ -445,7 +445,7 @@ void *hdmi_cec_init(struct hdmi_cec_init_data *init_data)
 	int ret = 0;
 
 	if (!init_data) {
-		DEV_ERR("%s: Invalid input\n", __func__);
+		DEV_ERR("%s: invalid cec ctrl\n", __func__);
 		ret = -EINVAL;
 		goto error;
 	}

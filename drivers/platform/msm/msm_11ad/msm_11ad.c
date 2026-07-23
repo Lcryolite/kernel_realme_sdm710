@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -50,8 +50,6 @@
 #define VDDIO_MAX_UV	2040000
 #define VDDIO_MAX_UA	70300
 
-#define PCIE20_CAP_LINKCTRLSTATUS 0x80
-
 #define WIGIG_MIN_CPU_BOOST_KBPS	150000
 
 struct device;
@@ -98,7 +96,8 @@ struct msm11ad_ctx {
 	u32 rc_index; /* PCIE root complex index */
 	struct pci_dev *pcidev;
 	struct pci_saved_state *pristine_state;
-	bool l1_enabled_in_enum;
+	struct pci_saved_state *golden_state;
+	struct msm_pcie_register_event pci_event;
 
 	/* SMMU */
 	bool use_smmu; /* have SMMU enabled? */
@@ -136,7 +135,8 @@ struct msm11ad_ctx {
 	/* cpu boost support */
 	bool use_cpu_boost;
 	bool is_cpu_boosted;
-	struct cpumask boost_cpu;
+	struct cpumask boost_cpu_0;
+	struct cpumask boost_cpu_1;
 
 	bool keep_radio_on_during_sleep;
 	int features;
@@ -177,7 +177,7 @@ static int msm_11ad_init_vreg(struct device *dev,
 		goto out;
 	}
 
-	dev_info(dev, "%s: %s initialized successfully\n", __func__, name);
+	dev_dbg(dev, "%s: %s initialized successfully\n", __func__, name);
 
 out:
 	return rc;
@@ -188,7 +188,7 @@ static int msm_11ad_release_vreg(struct device *dev, struct msm11ad_vreg *vreg)
 	if (!vreg || !vreg->reg)
 		return 0;
 
-	dev_info(dev, "%s: %s released\n", __func__, vreg->name);
+	dev_dbg(dev, "%s: %s released\n", __func__, vreg->name);
 
 	devm_regulator_put(vreg->reg);
 	vreg->reg = NULL;
@@ -218,7 +218,7 @@ static int msm_11ad_init_clk(struct device *dev, struct msm11ad_clk *clk,
 		goto out;
 	}
 
-	dev_info(dev, "%s: %s initialized successfully\n", __func__, name);
+	dev_dbg(dev, "%s: %s initialized successfully\n", __func__, name);
 
 out:
 	return rc;
@@ -229,7 +229,7 @@ static int msm_11ad_release_clk(struct device *dev, struct msm11ad_clk *clk)
 	if (!clk || !clk->clk)
 		return 0;
 
-	dev_info(dev, "%s: %s released\n", __func__, clk->name);
+	dev_dbg(dev, "%s: %s released\n", __func__, clk->name);
 
 	devm_clk_put(dev, clk->clk);
 	clk->clk = NULL;
@@ -340,7 +340,7 @@ static int msm_11ad_enable_vreg(struct msm11ad_ctx *ctx,
 
 	vreg->enabled = true;
 
-	dev_info(dev, "%s: %s enabled\n", __func__, vreg->name);
+	dev_dbg(dev, "%s: %s enabled\n", __func__, vreg->name);
 
 	return rc;
 
@@ -370,7 +370,7 @@ static int msm_11ad_disable_vreg(struct msm11ad_ctx *ctx,
 	msm_11ad_cfg_vreg(dev, vreg, false);
 	vreg->enabled = false;
 
-	dev_info(dev, "%s: %s disabled\n", __func__, vreg->name);
+	dev_dbg(dev, "%s: %s disabled\n", __func__, vreg->name);
 
 out:
 	return rc;
@@ -468,6 +468,7 @@ static int msm_11ad_init_clocks(struct msm11ad_ctx *ctx)
 {
 	int rc;
 	struct device *dev = ctx->dev;
+	int rf_clk3_pin_idx;
 
 	if (!of_property_read_bool(dev->of_node, "qcom,use-ext-clocks"))
 		return 0;
@@ -476,9 +477,14 @@ static int msm_11ad_init_clocks(struct msm11ad_ctx *ctx)
 	if (rc)
 		return rc;
 
-	rc = msm_11ad_init_clk(dev, &ctx->rf_clk3_pin, "rf_clk3_pin_clk");
-	if (rc)
-		msm_11ad_release_clk(ctx->dev, &ctx->rf_clk3);
+	rf_clk3_pin_idx = of_property_match_string(dev->of_node, "clock-names",
+						   "rf_clk3_pin_clk");
+	if (rf_clk3_pin_idx >= 0) {
+		rc = msm_11ad_init_clk(dev, &ctx->rf_clk3_pin,
+				       "rf_clk3_pin_clk");
+		if (rc)
+			msm_11ad_release_clk(ctx->dev, &ctx->rf_clk3);
+	}
 
 	return rc;
 }
@@ -493,47 +499,6 @@ static void msm_11ad_disable_clocks(struct msm11ad_ctx *ctx)
 {
 	msm_11ad_disable_clk(ctx, &ctx->rf_clk3_pin);
 	msm_11ad_disable_clk(ctx, &ctx->rf_clk3);
-}
-
-int msm_11ad_ctrl_aspm_l1(struct msm11ad_ctx *ctx, bool enable)
-{
-	int rc;
-	u32 val;
-	struct pci_dev *pdev = ctx->pcidev;
-	bool l1_enabled;
-
-	/* Read current state */
-	rc = pci_read_config_dword(pdev,
-				   PCIE20_CAP_LINKCTRLSTATUS, &val);
-	if (rc) {
-		dev_err(ctx->dev,
-			"reading PCIE20_CAP_LINKCTRLSTATUS failed:%d\n", rc);
-		return rc;
-	}
-	dev_dbg(ctx->dev, "PCIE20_CAP_LINKCTRLSTATUS read returns 0x%x\n", val);
-
-	l1_enabled = val & PCI_EXP_LNKCTL_ASPM_L1;
-	if (l1_enabled == enable) {
-		dev_dbg(ctx->dev, "ASPM_L1 is already %s\n",
-			l1_enabled ? "enabled" : "disabled");
-		return 0;
-	}
-
-	if (enable)
-		val |= PCI_EXP_LNKCTL_ASPM_L1; /* enable bit 1 */
-	else
-		val &= ~PCI_EXP_LNKCTL_ASPM_L1; /* disable bit 1 */
-
-	dev_dbg(ctx->dev, "writing PCIE20_CAP_LINKCTRLSTATUS (val 0x%x)\n",
-		val);
-	rc = pci_write_config_dword(pdev,
-				    PCIE20_CAP_LINKCTRLSTATUS, val);
-	if (rc)
-		dev_err(ctx->dev,
-			"writing PCIE20_CAP_LINKCTRLSTATUS (val 0x%x) failed:%d\n",
-			val, rc);
-
-	return rc;
 }
 
 static int msm_11ad_turn_device_power_off(struct msm11ad_ctx *ctx)
@@ -606,13 +571,13 @@ static int msm_11ad_suspend_power_off(void *handle)
 
 	pcidev = ctx->pcidev;
 
-	msm_pcie_shadow_control(ctx->pcidev, 0);
-
+	/* free the old saved state and save the latest state */
 	rc = pci_save_state(pcidev);
 	if (rc) {
 		dev_err(ctx->dev, "pci_save_state failed :%d\n", rc);
 		goto out;
 	}
+	kfree(ctx->pristine_state);
 	ctx->pristine_state = pci_store_saved_state(pcidev);
 
 	rc = msm_pcie_pm_control(MSM_PCIE_SUSPEND, pcidev->bus->number,
@@ -626,6 +591,72 @@ static int msm_11ad_suspend_power_off(void *handle)
 	rc = msm_11ad_turn_device_power_off(ctx);
 
 out:
+	return rc;
+}
+
+static int ops_pci_linkdown_recovery(void *handle)
+{
+	struct msm11ad_ctx *ctx = handle;
+	struct pci_dev *pcidev;
+	int rc;
+
+	if (!ctx) {
+		pr_err("11ad pci_linkdown_recovery: No context\n");
+		return -ENODEV;
+	}
+
+	pcidev = ctx->pcidev;
+
+	/* suspend */
+	dev_dbg(ctx->dev, "11ad pci_linkdown_recovery, suspend the device\n");
+	pci_disable_device(pcidev);
+	rc = msm_pcie_pm_control(MSM_PCIE_SUSPEND, pcidev->bus->number,
+				 pcidev, NULL, 0);
+	if (rc) {
+		dev_err(ctx->dev, "msm_pcie_pm_control(SUSPEND) failed: %d\n",
+			rc);
+		goto out;
+	}
+
+	rc = msm_11ad_turn_device_power_off(ctx);
+	if (rc) {
+		dev_err(ctx->dev, "failed to turn off device: %d\n",
+			rc);
+		goto out;
+	}
+
+	/* resume */
+	rc = msm_11ad_turn_device_power_on(ctx);
+	if (rc)
+		goto out;
+
+	rc = msm_pcie_pm_control(MSM_PCIE_RESUME, pcidev->bus->number,
+				 pcidev, NULL, 0);
+	if (rc) {
+		dev_err(ctx->dev, "msm_pcie_pm_control(RESUME) failed: %d\n",
+			rc);
+		goto err_disable_power;
+	}
+
+	pci_set_power_state(pcidev, PCI_D0);
+
+	if (ctx->golden_state)
+		pci_load_saved_state(pcidev, ctx->golden_state);
+	pci_restore_state(pcidev);
+
+	rc = pci_enable_device(pcidev);
+	if (rc) {
+		dev_err(ctx->dev, "pci_enable_device failed (%d)\n", rc);
+		goto err_disable_power;
+	}
+
+	pci_set_master(pcidev);
+
+out:
+	return rc;
+
+err_disable_power:
+	msm_11ad_turn_device_power_off(ctx);
 	return rc;
 }
 
@@ -646,11 +677,10 @@ static int ops_suspend(void *handle, bool keep_device_power)
 
 	pcidev = ctx->pcidev;
 
-	msm_pcie_shadow_control(pcidev, 0);
-
 	dev_dbg(ctx->dev, "disable device and save config\n");
 	pci_disable_device(pcidev);
 	pci_save_state(pcidev);
+	kfree(ctx->pristine_state);
 	ctx->pristine_state = pci_store_saved_state(pcidev);
 	dev_dbg(ctx->dev, "moving to D3\n");
 	pci_set_power_state(pcidev, PCI_D3hot);
@@ -696,23 +726,8 @@ static int msm_11ad_resume_power_on(void *handle)
 		pci_load_saved_state(ctx->pcidev, ctx->pristine_state);
 	pci_restore_state(ctx->pcidev);
 
-	msm_pcie_shadow_control(ctx->pcidev, 1);
-
-	/* Disable L1, in case it is enabled */
-	if (ctx->l1_enabled_in_enum) {
-		rc = msm_11ad_ctrl_aspm_l1(ctx, false);
-		if (rc) {
-			dev_err(ctx->dev,
-				"failed to disable L1, rc %d\n", rc);
-			goto err_suspend_rc;
-		}
-	}
-
 	return 0;
 
-err_suspend_rc:
-	msm_pcie_pm_control(MSM_PCIE_SUSPEND, pcidev->bus->number,
-			    pcidev, NULL, 0);
 err_disable_power:
 	msm_11ad_turn_device_power_off(ctx);
 	return rc;
@@ -753,8 +768,6 @@ static int ops_resume(void *handle, bool device_powered_on)
 		dev_err(ctx->dev, "pci_enable_device failed (%d)\n", rc);
 		goto out;
 	}
-
-	msm_pcie_shadow_control(pcidev, 1);
 
 	dev_dbg(ctx->dev, "pci set master\n");
 	pci_set_master(pcidev);
@@ -834,7 +847,7 @@ static int msm_11ad_smmu_init(struct msm11ad_ctx *ctx)
 		dev_err(ctx->dev, "arm_iommu_attach_device failed (%d)\n", rc);
 		goto release_mapping;
 	}
-	dev_info(ctx->dev, "attached to IOMMU\n");
+	dev_dbg(ctx->dev, "attached to IOMMU\n");
 
 	return 0;
 release_mapping:
@@ -846,7 +859,7 @@ release_mapping:
 static int msm_11ad_ssr_shutdown(const struct subsys_desc *subsys,
 				 bool force_stop)
 {
-	pr_info("%s(%p,%d)\n", __func__, subsys, force_stop);
+	pr_info("%s(%pK,%d)\n", __func__, subsys, force_stop);
 	/* nothing is done in shutdown. We do full recovery in powerup */
 	return 0;
 }
@@ -857,7 +870,7 @@ static int msm_11ad_ssr_powerup(const struct subsys_desc *subsys)
 	struct platform_device *pdev;
 	struct msm11ad_ctx *ctx;
 
-	pr_info("%s(%p)\n", __func__, subsys);
+	pr_info("%s(%pK)\n", __func__, subsys);
 
 	pdev = to_platform_device(subsys->dev);
 	ctx = platform_get_drvdata(pdev);
@@ -867,7 +880,7 @@ static int msm_11ad_ssr_powerup(const struct subsys_desc *subsys)
 
 	if (ctx->recovery_in_progress) {
 		if (ctx->rops.fw_recovery && ctx->wil_handle) {
-			dev_info(ctx->dev, "requesting FW recovery\n");
+			dev_dbg(ctx->dev, "requesting FW recovery\n");
 			rc = ctx->rops.fw_recovery(ctx->wil_handle);
 		}
 		ctx->recovery_in_progress = false;
@@ -1016,32 +1029,66 @@ out_rc:
 
 static void msm_11ad_init_cpu_boost(struct msm11ad_ctx *ctx)
 {
-	unsigned int minfreq = 0, maxfreq = 0, freq;
+	unsigned int cpu0freq, freq;
 	int i, boost_cpu = 0;
 
+	cpu0freq = cpufreq_quick_get_max(0);
 	for_each_possible_cpu(i) {
 		freq = cpufreq_quick_get_max(i);
-		if (freq > maxfreq) {
-			maxfreq = freq;
+		if (freq > cpu0freq) {
 			boost_cpu = i;
+			break;
 		}
-		if (!minfreq || freq < minfreq)
-			minfreq = freq;
 	}
 
-	if (minfreq != maxfreq) {
+	if (boost_cpu) {
 		/*
-		 * use first big core for boost, to be compatible with WLAN
+		 * use first 2 big cores for boost, to be compatible with WLAN
 		 * which assigns big cores from the last index
 		 */
 		ctx->use_cpu_boost = true;
-		cpumask_clear(&ctx->boost_cpu);
-		cpumask_set_cpu(boost_cpu, &ctx->boost_cpu);
-		dev_info(ctx->dev, "CPU boost: will use core %d\n", boost_cpu);
+		cpumask_clear(&ctx->boost_cpu_0);
+		cpumask_clear(&ctx->boost_cpu_1);
+		cpumask_set_cpu(boost_cpu, &ctx->boost_cpu_0);
+		if (boost_cpu < (nr_cpu_ids - 1)) {
+			cpumask_set_cpu(boost_cpu + 1, &ctx->boost_cpu_1);
+			dev_info(ctx->dev, "CPU boost: will use cores %d - %d\n",
+				 boost_cpu, boost_cpu + 1);
+		} else {
+			cpumask_set_cpu(boost_cpu, &ctx->boost_cpu_1);
+			dev_info(ctx->dev, "CPU boost: will use core %d\n",
+				 boost_cpu);
+		}
 	} else {
 		ctx->use_cpu_boost = false;
 		dev_info(ctx->dev, "CPU boost disabled, uniform topology\n");
 	}
+}
+
+static void msm_11ad_pci_event_cb(struct msm_pcie_notify *notify)
+{
+	struct pci_dev *pcidev = notify->user;
+	struct msm11ad_ctx *ctx = pcidev2ctx(pcidev);
+
+	if (!ctx)
+		return;
+
+	if (!ctx->rops.notify || !ctx->wil_handle) {
+		dev_info(ctx->dev,
+			 "no registered notif CB, cannot hadle pci notifications\n");
+		return;
+	}
+
+	switch (notify->event) {
+	case MSM_PCIE_EVENT_LINKDOWN:
+		dev_err(ctx->dev, "PCIe linkdown\n");
+		ctx->rops.notify(ctx->wil_handle,
+				 WIL_PLATFORM_NOTIF_PCI_LINKDOWN);
+		break;
+	default:
+		break;
+	}
+
 }
 
 static int msm_11ad_probe(struct platform_device *pdev)
@@ -1053,8 +1100,8 @@ static int msm_11ad_probe(struct platform_device *pdev)
 	struct pci_dev *pcidev = NULL;
 	u32 smmu_mapping[2];
 	int rc, i;
-	u32 val;
 	bool pcidev_found = false;
+	struct msm_pcie_register_event *pci_event;
 
 	ctx = devm_kzalloc(dev, sizeof(*ctx), GFP_KERNEL);
 	if (!ctx)
@@ -1243,30 +1290,6 @@ static int msm_11ad_probe(struct platform_device *pdev)
 
 	pci_restore_state(ctx->pcidev);
 
-	/* Read current state */
-	rc = pci_read_config_dword(pcidev,
-				   PCIE20_CAP_LINKCTRLSTATUS, &val);
-	if (rc) {
-		dev_err(ctx->dev,
-			"reading PCIE20_CAP_LINKCTRLSTATUS failed:%d\n",
-			rc);
-		goto out_suspend;
-	}
-
-	ctx->l1_enabled_in_enum = val & PCI_EXP_LNKCTL_ASPM_L1;
-	dev_dbg(ctx->dev, "L1 is %s in enumeration\n",
-		ctx->l1_enabled_in_enum ? "enabled" : "disabled");
-
-	/* Disable L1, in case it is enabled */
-	if (ctx->l1_enabled_in_enum) {
-		rc = msm_11ad_ctrl_aspm_l1(ctx, false);
-		if (rc) {
-			dev_err(ctx->dev,
-				"failed to disable L1, rc %d\n", rc);
-			goto out_suspend;
-		}
-	}
-
 	if (ctx->sleep_clk_en >= 0) {
 		rc = gpio_request(ctx->sleep_clk_en, "msm_11ad");
 		if (rc < 0) {
@@ -1289,18 +1312,41 @@ static int msm_11ad_probe(struct platform_device *pdev)
 	msm_11ad_init_cpu_boost(ctx);
 
 	/* report */
-	dev_info(ctx->dev, "msm_11ad discovered. %p {\n"
+	dev_info(ctx->dev, "msm_11ad discovered. %pK {\n"
 		 "  gpio_en = %d\n"
 		 "  gpio_dc = %d\n"
 		 "  sleep_clk_en = %d\n"
 		 "  rc_index = %d\n"
 		 "  use_smmu = %d\n"
-		 "  pcidev = %p\n"
+		 "  pcidev = %pK\n"
 		 "}\n", ctx, ctx->gpio_en, ctx->gpio_dc, ctx->sleep_clk_en,
 		 ctx->rc_index, ctx->use_smmu, ctx->pcidev);
 
 	platform_set_drvdata(pdev, ctx);
 	device_disable_async_suspend(&pcidev->dev);
+
+	/* Save golden config space for pci linkdown recovery */
+	rc = pci_save_state(pcidev);
+	if (rc) {
+		dev_err(ctx->dev, "pci_save_state failed :%d\n", rc);
+		goto out_suspend;
+	}
+	ctx->golden_state = pci_store_saved_state(pcidev);
+
+	pci_event = &ctx->pci_event;
+	pci_event->events = MSM_PCIE_EVENT_LINKDOWN;
+	pci_event->user = ctx->pcidev;
+	pci_event->mode = MSM_PCIE_TRIGGER_CALLBACK;
+	pci_event->options = MSM_PCIE_CONFIG_NO_RECOVERY;
+	pci_event->callback = msm_11ad_pci_event_cb;
+
+	rc = msm_pcie_register_event(pci_event);
+	if (rc) {
+		dev_err(ctx->dev, "failed to register msm pcie event: %d\n",
+			rc);
+		kfree(ctx->golden_state);
+		goto out_suspend;
+	}
 
 	list_add_tail(&ctx->list, &dev_list);
 	msm_11ad_suspend_power_off(ctx);
@@ -1337,11 +1383,13 @@ static int msm_11ad_remove(struct platform_device *pdev)
 {
 	struct msm11ad_ctx *ctx = platform_get_drvdata(pdev);
 
+	msm_pcie_deregister_event(&ctx->pci_event);
 	msm_11ad_ssr_deinit(ctx);
 	list_del(&ctx->list);
-	dev_info(ctx->dev, "%s: pdev %p pcidev %p\n", __func__, pdev,
+	dev_info(ctx->dev, "%s: pdev %pK pcidev %pK\n", __func__, pdev,
 		 ctx->pcidev);
 	kfree(ctx->pristine_state);
+	kfree(ctx->golden_state);
 
 	pci_dev_put(ctx->pcidev);
 	if (ctx->gpio_en >= 0) {
@@ -1378,7 +1426,8 @@ static struct platform_driver msm_11ad_driver = {
 };
 module_platform_driver(msm_11ad_driver);
 
-static void msm_11ad_set_boost_affinity(struct msm11ad_ctx *ctx)
+static void msm_11ad_set_affinity_hint(struct msm11ad_ctx *ctx, uint irq,
+				       struct cpumask *boost_cpu)
 {
 	/*
 	 * There is a very small window where user space can change the
@@ -1389,15 +1438,14 @@ static void msm_11ad_set_boost_affinity(struct msm11ad_ctx *ctx)
 	struct irq_desc *desc;
 
 	while (retries > 0) {
-		irq_modify_status(ctx->pcidev->irq, IRQ_NO_BALANCING, 0);
-		rc = irq_set_affinity_hint(ctx->pcidev->irq, &ctx->boost_cpu);
+		irq_modify_status(irq, IRQ_NO_BALANCING, 0);
+		rc = irq_set_affinity_hint(irq, boost_cpu);
 		if (rc)
 			dev_warn(ctx->dev,
 				"Failed set affinity, rc=%d\n", rc);
-		irq_modify_status(ctx->pcidev->irq, 0, IRQ_NO_BALANCING);
-		desc = irq_to_desc(ctx->pcidev->irq);
-		if (cpumask_equal(desc->irq_common_data.affinity,
-				  &ctx->boost_cpu))
+		irq_modify_status(irq, 0, IRQ_NO_BALANCING);
+		desc = irq_to_desc(irq);
+		if (cpumask_equal(desc->irq_common_data.affinity, boost_cpu))
 			break;
 		retries--;
 	}
@@ -1406,15 +1454,30 @@ static void msm_11ad_set_boost_affinity(struct msm11ad_ctx *ctx)
 		dev_warn(ctx->dev, "failed to set CPU boost affinity\n");
 }
 
-static void msm_11ad_clear_boost_affinity(struct msm11ad_ctx *ctx)
+static void msm_11ad_set_boost_affinity(struct msm11ad_ctx *ctx)
+{
+	msm_11ad_set_affinity_hint(ctx, ctx->pcidev->irq, &ctx->boost_cpu_0);
+	/* boost rx and tx interrupts */
+	if (ctx->features & BIT(WIL_PLATFORM_FEATURE_TRIPLE_MSI))
+		msm_11ad_set_affinity_hint(ctx, ctx->pcidev->irq + 1,
+					  &ctx->boost_cpu_1);
+}
+
+static void msm_11ad_clear_affinity_hint(struct msm11ad_ctx *ctx, uint irq)
 {
 	int rc;
 
-	irq_modify_status(ctx->pcidev->irq, IRQ_NO_BALANCING, 0);
-	rc = irq_set_affinity_hint(ctx->pcidev->irq, NULL);
+	irq_modify_status(irq, IRQ_NO_BALANCING, 0);
+	rc = irq_set_affinity_hint(irq, NULL);
 	if (rc)
-		dev_warn(ctx->dev,
-			 "Failed clear affinity, rc=%d\n", rc);
+		dev_warn(ctx->dev, "Failed clear affinity, rc=%d\n", rc);
+}
+
+static void msm_11ad_clear_boost_affinity(struct msm11ad_ctx *ctx)
+{
+	msm_11ad_clear_affinity_hint(ctx, ctx->pcidev->irq);
+	if (ctx->features & BIT(WIL_PLATFORM_FEATURE_TRIPLE_MSI))
+		msm_11ad_clear_affinity_hint(ctx, ctx->pcidev->irq + 1);
 }
 
 /* hooks for the wil6210 driver */
@@ -1523,6 +1586,7 @@ static int ops_notify(void *handle, enum wil_platform_event evt)
 {
 	struct msm11ad_ctx *ctx = (struct msm11ad_ctx *)handle;
 	int rc = 0;
+	struct pci_dev *pcidev = ctx->pcidev;
 
 	switch (evt) {
 	case WIL_PLATFORM_EVT_FW_CRASH:
@@ -1542,14 +1606,6 @@ static int ops_notify(void *handle, enum wil_platform_event evt)
 				break;
 			}
 		}
-
-		/* Re-enable L1 in case it was enabled in enumeration */
-		if (ctx->l1_enabled_in_enum) {
-			rc = msm_11ad_ctrl_aspm_l1(ctx, true);
-			if (rc)
-				dev_err(ctx->dev,
-					"failed to enable L1, rc %d\n", rc);
-		}
 		break;
 	case WIL_PLATFORM_EVT_FW_RDY:
 		/*
@@ -1559,6 +1615,19 @@ static int ops_notify(void *handle, enum wil_platform_event evt)
 		if (ctx->features &
 		    BIT(WIL_PLATFORM_FEATURE_FW_EXT_CLK_CONTROL))
 			msm_11ad_disable_clk(ctx, &ctx->rf_clk3);
+
+		/*
+		 * Save golden config space for pci linkdown recovery.
+		 * golden_state is also saved after enumeration, free the old
+		 * saved state before reallocating
+		 */
+		rc = pci_save_state(pcidev);
+		if (rc) {
+			dev_err(ctx->dev, "pci_save_state failed :%d\n", rc);
+			return rc;
+		}
+		kfree(ctx->golden_state);
+		ctx->golden_state = pci_store_saved_state(pcidev);
 		break;
 	default:
 		pr_debug("%s: Unhandled event %d\n", __func__, evt);
@@ -1599,7 +1668,7 @@ void *msm_11ad_dev_init(struct device *dev, struct wil_platform_ops *ops,
 	struct msm11ad_ctx *ctx = pcidev2ctx(pcidev);
 
 	if (!ctx) {
-		pr_err("Context not found for pcidev %p\n", pcidev);
+		pr_err("Context not found for pcidev %pK\n", pcidev);
 		return NULL;
 	}
 
@@ -1633,6 +1702,7 @@ void *msm_11ad_dev_init(struct device *dev, struct wil_platform_ops *ops,
 	ops->notify = ops_notify;
 	ops->get_capa = ops_get_capa;
 	ops->set_features = ops_set_features;
+	ops->pci_linkdown_recovery = ops_pci_linkdown_recovery;
 
 	return ctx;
 }

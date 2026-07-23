@@ -197,13 +197,13 @@ struct msm_port {
 static
 void msm_write(struct uart_port *port, unsigned int val, unsigned int off)
 {
-	writel_relaxed_no_log(val, port->membase + off);
+	writel_relaxed(val, port->membase + off);
 }
 
 static
 unsigned int msm_read(struct uart_port *port, unsigned int off)
 {
-	return readl_relaxed_no_log(port->membase + off);
+	return readl_relaxed(port->membase + off);
 }
 
 /*
@@ -303,17 +303,15 @@ static void msm_request_tx_dma(struct msm_port *msm_port, resource_size_t base)
 	struct device *dev = msm_port->uart.dev;
 	struct dma_slave_config conf;
 	struct msm_dma *dma;
-	struct dma_chan *dma_chan;
 	u32 crci = 0;
 	int ret;
 
 	dma = &msm_port->tx_dma;
 
 	/* allocate DMA resources, if available */
-	dma_chan = dma_request_slave_channel_reason(dev, "tx");
-	if (IS_ERR(dma_chan))
+	dma->chan = dma_request_slave_channel_reason(dev, "tx");
+	if (IS_ERR(dma->chan))
 		goto no_tx;
-	dma->chan = dma_chan;
 
 	of_property_read_u32(dev->of_node, "qcom,tx-crci", &crci);
 
@@ -348,17 +346,15 @@ static void msm_request_rx_dma(struct msm_port *msm_port, resource_size_t base)
 	struct device *dev = msm_port->uart.dev;
 	struct dma_slave_config conf;
 	struct msm_dma *dma;
-	struct dma_chan *dma_chan;
 	u32 crci = 0;
 	int ret;
 
 	dma = &msm_port->rx_dma;
 
 	/* allocate DMA resources, if available */
-	dma_chan = dma_request_slave_channel_reason(dev, "rx");
-	if (IS_ERR(dma_chan))
+	dma->chan = dma_request_slave_channel_reason(dev, "rx");
+	if (IS_ERR(dma->chan))
 		goto no_rx;
-	dma->chan = dma_chan;
 
 	of_property_read_u32(dev->of_node, "qcom,rx-crci", &crci);
 
@@ -395,22 +391,14 @@ no_rx:
 
 static inline void msm_wait_for_xmitr(struct uart_port *port)
 {
-	u32 count = 500000;
+	unsigned int timeout = 500000;
 
 	while (!(msm_read(port, UART_SR) & UART_SR_TX_EMPTY)) {
 		if (msm_read(port, UART_ISR) & UART_ISR_TX_READY)
 			break;
 		udelay(1);
-
-		/* At worst case, it is stuck in this loop for waiting
-		 * TX ready, have a 500ms timeout to avoid stuck here
-		 * and only miss some log to uart.
-		 */
-		if (count-- == 0) {
-			msm_write(port, UART_CR_CMD_RESET_TX, UART_CR);
-			printk_deferred("uart may lost data, resetting TX!\n");
+		if (!timeout--)
 			break;
-		}
 	}
 	msm_write(port, UART_CR_CMD_RESET_TX_READY, UART_CR);
 }
@@ -427,12 +415,6 @@ static void msm_start_tx(struct uart_port *port)
 {
 	struct msm_port *msm_port = UART_TO_MSM(port);
 	struct msm_dma *dma = &msm_port->tx_dma;
-
-	/* No need to start tx when system suspended. */
-	if (port->suspended) {
-		printk_deferred("port suspended!\n");
-		return;
-	}
 
 	/* Already started in DMA mode */
 	if (dma->count)
@@ -1248,7 +1230,7 @@ err_irq:
 		msm_release_dma(msm_port);
 
 	clk_disable_unprepare(msm_port->pclk);
-
+	clk_disable_unprepare(msm_port->clk);
 err_pclk:
 	clk_disable_unprepare(msm_port->clk);
 
@@ -1654,7 +1636,6 @@ static void __msm_console_write(struct uart_port *port, const char *s,
 		int j;
 		unsigned int num_chars;
 		char buf[4] = { 0 };
-		const u32 *buffer;
 
 		if (is_uartdm)
 			num_chars = min(count - i, (unsigned int)sizeof(buf));
@@ -1679,8 +1660,7 @@ static void __msm_console_write(struct uart_port *port, const char *s,
 		while (!(msm_read(port, UART_SR) & UART_SR_TX_READY))
 			cpu_relax();
 
-		buffer = (const u32 *)buf;
-		writel_relaxed_no_log(*buffer, tf);
+		iowrite32_rep(tf, buf, 1);
 		i += num_chars;
 	}
 
@@ -1690,6 +1670,12 @@ static void __msm_console_write(struct uart_port *port, const char *s,
 	local_irq_restore(flags);
 }
 
+#ifdef CONFIG_SERIAL_RX_CONSOLE_ONLY
+static void msm_console_write(struct console *co, const char *s,
+			      unsigned int count)
+{
+}
+#else
 static void msm_console_write(struct console *co, const char *s,
 			      unsigned int count)
 {
@@ -1703,6 +1689,7 @@ static void msm_console_write(struct console *co, const char *s,
 
 	__msm_console_write(port, s, count, msm_port->is_uartdm);
 }
+#endif
 
 static int __init msm_console_setup(struct console *co, char *options)
 {
@@ -1885,50 +1872,25 @@ MODULE_DEVICE_TABLE(of, msm_match_table);
 #ifdef CONFIG_PM_SLEEP
 static int msm_serial_suspend(struct device *dev)
 {
-	struct uart_port *port = dev_get_drvdata(dev);
+	struct msm_port *port = dev_get_drvdata(dev);
 
-	uart_suspend_port(&msm_uart_driver, port);
+	uart_suspend_port(&msm_uart_driver, &port->uart);
 
 	return 0;
 }
 
 static int msm_serial_resume(struct device *dev)
 {
-	struct uart_port *port = dev_get_drvdata(dev);
+	struct msm_port *port = dev_get_drvdata(dev);
 
-	uart_resume_port(&msm_uart_driver, port);
+	uart_resume_port(&msm_uart_driver, &port->uart);
 
 	return 0;
 }
+#endif /* CONFIG_PM_SLEEP */
 
-static int msm_serial_freeze(struct device *dev)
-{
-	struct uart_port *port = dev_get_drvdata(dev);
-	struct msm_port *msm_port = UART_TO_MSM(port);
-	int ret;
-
-	ret = msm_serial_suspend(dev);
-	if (ret)
-		return ret;
-
-	/*
-	 * Set the rate as recommended to avoid issues where the clock
-	 * driver skips reconfiguring the clock hardware during
-	 * hibernation resume.
-	 */
-	return clk_set_rate(msm_port->clk, 19200000);
-}
-#endif
-
-static const struct dev_pm_ops msm_serial_pm_ops = {
-#ifdef CONFIG_PM_SLEEP
-	.suspend = msm_serial_suspend,
-	.resume = msm_serial_resume,
-	.freeze = msm_serial_freeze,
-	.thaw = msm_serial_resume,
-	.poweroff = msm_serial_suspend,
-	.restore = msm_serial_resume,
-#endif
+static const struct dev_pm_ops msm_serial_dev_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(msm_serial_suspend, msm_serial_resume)
 };
 
 static struct platform_driver msm_platform_driver = {
@@ -1936,8 +1898,8 @@ static struct platform_driver msm_platform_driver = {
 	.probe = msm_serial_probe,
 	.driver = {
 		.name = "msm_serial",
+		.pm = &msm_serial_dev_pm_ops,
 		.of_match_table = msm_match_table,
-		.pm = &msm_serial_pm_ops,
 	},
 };
 

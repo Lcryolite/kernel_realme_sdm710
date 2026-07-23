@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -16,59 +16,7 @@
 
 #include <linux/clk.h>
 #include "dp_power.h"
-
-#ifdef VENDOR_EDIT
-#include <linux/module.h>
-int max20328_enable_displayport(bool enable, bool flip);
-int fsa4480_enable_sub_switch(bool enable, bool flip);
-bool max20328_chip_ready(void);
-static bool (*oppo_switch_chip_ready)(void);
-static int (*oppo_enable_sub_switch)(bool enable, bool flip);
-static int need_update_defer = false;
-static int oppo_sub_switch_enable_status = false;
-static int oppo_sub_switch_flip_status = false;
-
-
-bool oppo_dp_sub_switch_ready(void)
-{
-	if (!oppo_enable_sub_switch)
-		oppo_enable_sub_switch = symbol_request(fsa4480_enable_sub_switch);
-	if (!oppo_enable_sub_switch)
-		oppo_enable_sub_switch = symbol_request(max20328_enable_displayport);
-	if (!oppo_enable_sub_switch) {
-		pr_err("failed to found oppo_enable_sub_switch\n");
-		return false;
-	}
-
-	if (!oppo_switch_chip_ready)
-		oppo_switch_chip_ready = symbol_request(max20328_chip_ready);
-	if (!oppo_switch_chip_ready) {
-		pr_err("failed to found oppo_switch_chip_ready function\n");
-		return false;
-	}
-	if (oppo_switch_chip_ready && !oppo_switch_chip_ready()) {
-		pr_err("switch chips not ready\n");
-		return false;
-	}
-
-	return true;
-}
-
-int oppo_dp_sub_switch_status_update(void)
-{
-	if (!need_update_defer)
-		return 0;
-
-	if (!oppo_dp_sub_switch_ready() || !oppo_enable_sub_switch)
-		return -EINVAL;
-
-	need_update_defer = false;
-	oppo_enable_sub_switch(oppo_sub_switch_enable_status,
-			       oppo_sub_switch_flip_status);
-
-	return 0;
-}
-#endif /* VENDOR_EDIT */
+#include "dp_catalog.h"
 
 #define DP_CLIENT_NAME_SIZE	20
 
@@ -77,6 +25,8 @@ struct dp_power_private {
 	struct platform_device *pdev;
 	struct clk *pixel_clk_rcg;
 	struct clk *pixel_parent;
+	struct clk *pixel1_clk_rcg;
+	struct clk *pixel1_parent;
 
 	struct dp_power dp_power;
 	struct sde_power_client *dp_core_client;
@@ -84,6 +34,8 @@ struct dp_power_private {
 
 	bool core_clks_on;
 	bool link_clks_on;
+	bool strm0_clks_on;
+	bool strm1_clks_on;
 };
 
 static int dp_power_regulator_init(struct dp_power_private *power)
@@ -165,14 +117,28 @@ error:
 
 static int dp_power_pinctrl_set(struct dp_power_private *power, bool active)
 {
-	int rc = -EFAULT;
+	int rc = 0;
 	struct pinctrl_state *pin_state;
 	struct dp_parser *parser;
 
 	parser = power->parser;
 
-	if (IS_ERR_OR_NULL(parser->pinctrl.pin))
-		return PTR_ERR(parser->pinctrl.pin);
+	if (IS_ERR_OR_NULL(parser->pinctrl.pin) || power->dp_power.sim_mode)
+		return 0;
+
+	if (parser->no_aux_switch && parser->lphw_hpd) {
+		pin_state = active ? parser->pinctrl.state_hpd_ctrl
+				: parser->pinctrl.state_hpd_tlmm;
+		if (!IS_ERR_OR_NULL(pin_state)) {
+			rc = pinctrl_select_state(parser->pinctrl.pin,
+				pin_state);
+			if (rc) {
+				pr_err("cannot direct hpd line to %s\n",
+					active ? "ctrl" : "tlmm");
+				return rc;
+			}
+		}
+	}
 
 	pin_state = active ? parser->pinctrl.state_active
 				: parser->pinctrl.state_suspend;
@@ -183,10 +149,6 @@ static int dp_power_pinctrl_set(struct dp_power_private *power, bool active)
 			pr_err("can not set %s pins\n",
 			       active ? "dp_active"
 			       : "dp_sleep");
-	} else {
-		pr_err("invalid '%s' pinstate\n",
-		       active ? "dp_active"
-		       : "dp_sleep");
 	}
 
 	return rc;
@@ -195,33 +157,25 @@ static int dp_power_pinctrl_set(struct dp_power_private *power, bool active)
 static int dp_power_clk_init(struct dp_power_private *power, bool enable)
 {
 	int rc = 0;
-	struct dss_module_power *core, *ctrl;
 	struct device *dev;
-
-	core = &power->parser->mp[DP_CORE_PM];
-	ctrl = &power->parser->mp[DP_CTRL_PM];
+	enum dp_pm_type module;
 
 	dev = &power->pdev->dev;
 
-	if (!core || !ctrl) {
-		pr_err("invalid power_data\n");
-		rc = -EINVAL;
-		goto exit;
-	}
-
 	if (enable) {
-		rc = msm_dss_get_clk(dev, core->clk_config, core->num_clk);
-		if (rc) {
-			pr_err("failed to get %s clk. err=%d\n",
-				dp_parser_pm_name(DP_CORE_PM), rc);
-			goto exit;
-		}
+		for (module = DP_CORE_PM; module < DP_MAX_PM; module++) {
+			struct dss_module_power *pm =
+				&power->parser->mp[module];
 
-		rc = msm_dss_get_clk(dev, ctrl->clk_config, ctrl->num_clk);
-		if (rc) {
-			pr_err("failed to get %s clk. err=%d\n",
-				dp_parser_pm_name(DP_CTRL_PM), rc);
-			goto ctrl_get_error;
+			if (!pm->num_clk)
+				continue;
+
+			rc = msm_dss_get_clk(dev, pm->clk_config, pm->num_clk);
+			if (rc) {
+				pr_err("failed to get %s clk. err=%d\n",
+					dp_parser_pm_name(module), rc);
+				goto exit;
+			}
 		}
 
 		power->pixel_clk_rcg = devm_clk_get(dev, "pixel_clk_rcg");
@@ -235,6 +189,18 @@ static int dp_power_clk_init(struct dp_power_private *power, bool enable)
 			pr_debug("Unable to get DP pixel RCG parent\n");
 			power->pixel_parent = NULL;
 		}
+
+		power->pixel1_clk_rcg = devm_clk_get(dev, "pixel1_clk_rcg");
+		if (IS_ERR(power->pixel1_clk_rcg)) {
+			pr_debug("Unable to get DP pixel1 clk RCG\n");
+			power->pixel1_clk_rcg = NULL;
+		}
+
+		power->pixel1_parent = devm_clk_get(dev, "pixel1_parent");
+		if (IS_ERR(power->pixel1_parent)) {
+			pr_debug("Unable to get DP pixel1 RCG parent\n");
+			power->pixel1_parent = NULL;
+		}
 	} else {
 		if (power->pixel_parent)
 			devm_clk_put(dev, power->pixel_parent);
@@ -242,14 +208,22 @@ static int dp_power_clk_init(struct dp_power_private *power, bool enable)
 		if (power->pixel_clk_rcg)
 			devm_clk_put(dev, power->pixel_clk_rcg);
 
-		msm_dss_put_clk(ctrl->clk_config, ctrl->num_clk);
-		msm_dss_put_clk(core->clk_config, core->num_clk);
+		if (power->pixel1_parent)
+			devm_clk_put(dev, power->pixel1_parent);
+
+		if (power->pixel1_clk_rcg)
+			devm_clk_put(dev, power->pixel1_clk_rcg);
+
+		for (module = DP_CORE_PM; module < DP_MAX_PM; module++) {
+			struct dss_module_power *pm =
+				&power->parser->mp[module];
+
+			if (!pm->num_clk)
+				continue;
+
+			msm_dss_put_clk(pm->clk_config, pm->num_clk);
+		}
 	}
-
-	return rc;
-
-ctrl_get_error:
-	msm_dss_put_clk(core->clk_config, core->num_clk);
 exit:
 	return rc;
 }
@@ -308,22 +282,25 @@ static int dp_power_clk_enable(struct dp_power *dp_power,
 
 	mp = &power->parser->mp[pm_type];
 
-	if ((pm_type != DP_CORE_PM) && (pm_type != DP_CTRL_PM)) {
+	if (pm_type >= DP_MAX_PM) {
 		pr_err("unsupported power module: %s\n",
 				dp_parser_pm_name(pm_type));
 		return -EINVAL;
 	}
 
 	if (enable) {
-		if ((pm_type == DP_CORE_PM)
-			&& (power->core_clks_on)) {
+		if (pm_type == DP_CORE_PM && power->core_clks_on) {
 			pr_debug("core clks already enabled\n");
 			return 0;
 		}
 
-		if ((pm_type == DP_CTRL_PM)
-			&& (power->link_clks_on)) {
-			pr_debug("links clks already enabled\n");
+		if ((pm_type == DP_STREAM0_PM) && (power->strm0_clks_on)) {
+			pr_debug("strm0 clks already enabled\n");
+			return 0;
+		}
+
+		if ((pm_type == DP_STREAM1_PM) && (power->strm1_clks_on)) {
+			pr_debug("strm1 clks already enabled\n");
 			return 0;
 		}
 
@@ -339,6 +316,11 @@ static int dp_power_clk_enable(struct dp_power *dp_power,
 				power->core_clks_on = true;
 			}
 		}
+
+		if (pm_type == DP_LINK_PM && power->link_clks_on) {
+			pr_debug("links clks already enabled\n");
+			return 0;
+		}
 	}
 
 	rc = dp_power_clk_set_rate(power, pm_type, enable);
@@ -351,15 +333,24 @@ static int dp_power_clk_enable(struct dp_power *dp_power,
 
 	if (pm_type == DP_CORE_PM)
 		power->core_clks_on = enable;
-	else
+	else if (pm_type == DP_STREAM0_PM)
+		power->strm0_clks_on = enable;
+	else if (pm_type == DP_STREAM1_PM)
+		power->strm1_clks_on = enable;
+	else if (pm_type == DP_LINK_PM)
 		power->link_clks_on = enable;
 
-	pr_debug("%s clocks for %s\n",
-			enable ? "enable" : "disable",
-			dp_parser_pm_name(pm_type));
-	pr_debug("link_clks:%s core_clks:%s\n",
+	/*
+	 * This log is printed only when user connects or disconnects
+	 * a DP cable. As this is a user-action and not a frequent
+	 * usecase, it is not going to flood the kernel logs. Also,
+	 * helpful in debugging the NOC issues.
+	 */
+	pr_info("core:%s link:%s strm0:%s strm1:%s\n",
+		power->core_clks_on ? "on" : "off",
 		power->link_clks_on ? "on" : "off",
-		power->core_clks_on ? "on" : "off");
+		power->strm0_clks_on ? "on" : "off",
+		power->strm1_clks_on ? "on" : "off");
 error:
 	return rc;
 }
@@ -442,6 +433,9 @@ static int dp_power_config_gpios(struct dp_power_private *power, bool flip,
 	struct dss_module_power *mp;
 	struct dss_gpio *config;
 
+	if (power->parser->no_aux_switch)
+		return 0;
+
 	mp = &power->parser->mp[DP_CORE_PM];
 	config = mp->gpio_config;
 
@@ -455,25 +449,12 @@ static int dp_power_config_gpios(struct dp_power_private *power, bool flip,
 		dp_power_set_gpio(power, flip);
 	} else {
 		for (i = 0; i < mp->num_gpio; i++) {
-			#ifdef VENDOR_EDIT
-			if (!gpio_is_valid(config[i].gpio))
-				continue;
-			#endif /* VENDOR_EDIT */
-			gpio_set_value(config[i].gpio, 0);
-			gpio_free(config[i].gpio);
+			if (gpio_is_valid(config[i].gpio)) {
+				gpio_set_value(config[i].gpio, 0);
+				gpio_free(config[i].gpio);
+			}
 		}
 	}
-
-#ifdef VENDOR_EDIT
-	if (!oppo_enable_sub_switch)
-		oppo_enable_sub_switch = symbol_request(fsa4480_enable_sub_switch);
-	if (!oppo_enable_sub_switch)
-		oppo_enable_sub_switch = symbol_request(max20328_enable_displayport);
-	if (oppo_enable_sub_switch)
-		oppo_enable_sub_switch(enable, flip);
-	else
-		pr_err("failed to found oppo_enable_sub_switch\n");
-#endif
 
 	return 0;
 }
@@ -539,21 +520,28 @@ static void dp_power_client_deinit(struct dp_power *dp_power)
 	dp_power_regulator_deinit(power);
 }
 
-static int dp_power_set_pixel_clk_parent(struct dp_power *dp_power)
+static int dp_power_set_pixel_clk_parent(struct dp_power *dp_power, u32 strm_id)
 {
 	int rc = 0;
 	struct dp_power_private *power;
 
-	if (!dp_power) {
-		pr_err("invalid power data\n");
+	if (!dp_power || strm_id >= DP_STREAM_MAX) {
+		pr_err("invalid power data. stream %d\n", strm_id);
 		rc = -EINVAL;
 		goto exit;
 	}
 
 	power = container_of(dp_power, struct dp_power_private, dp_power);
 
-	if (power->pixel_clk_rcg && power->pixel_parent)
-		clk_set_parent(power->pixel_clk_rcg, power->pixel_parent);
+	if (strm_id == DP_STREAM_0) {
+		if (power->pixel_clk_rcg && power->pixel_parent)
+			clk_set_parent(power->pixel_clk_rcg,
+					power->pixel_parent);
+	} else if (strm_id == DP_STREAM_1) {
+		if (power->pixel1_clk_rcg && power->pixel1_parent)
+			clk_set_parent(power->pixel1_clk_rcg,
+					power->pixel1_parent);
+	}
 exit:
 	return rc;
 }
@@ -630,19 +618,14 @@ static int dp_power_deinit(struct dp_power *dp_power)
 	power = container_of(dp_power, struct dp_power_private, dp_power);
 
 	dp_power_clk_enable(dp_power, DP_CORE_PM, false);
-	/*
-	 * If the display power on event was not successful, for example if
-	 * there was a link training failure, then the link clocks could
-	 * possibly still be on. In this scenario, we need to turn off the
-	 * link clocks as soon as the cable is disconnected so that the clock
-	 * state is cleaned up before subsequent connection events.
-	 */
+
 	if (power->link_clks_on)
-		dp_power_clk_enable(dp_power, DP_CTRL_PM, false);
+		dp_power_clk_enable(dp_power, DP_LINK_PM, false);
+
 	rc = sde_power_resource_enable(power->phandle,
 			power->dp_core_client, false);
 	if (rc) {
-		pr_err("Power resource enable failed, rc=%d\n", rc);
+		pr_err("Power resource disable failed, rc=%d\n", rc);
 		goto exit;
 	}
 	dp_power_config_gpios(power, false, false);

@@ -1,16 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * NFIT - Machine Check Handler
  *
  * Copyright(c) 2013-2016 Intel Corporation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of version 2 of the GNU General Public License as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
  */
 #include <linux/notifier.h>
 #include <linux/acpi.h>
@@ -79,7 +71,7 @@ static int nfit_handle_mce(struct notifier_block *nb, unsigned long val,
 			 * already in progress, just let that be the last
 			 * authoritative one
 			 */
-			acpi_nfit_ars_rescan(acpi_desc);
+			acpi_nfit_ars_rescan(acpi_desc, 0);
 		}
 		break;
 	}
@@ -90,6 +82,7 @@ static int nfit_handle_mce(struct notifier_block *nb, unsigned long val,
 
 static struct notifier_block nfit_mce_dec = {
 	.notifier_call	= nfit_handle_mce,
+	.priority	= MCE_PRIO_NFIT,
 };
 
 void nfit_mce_register(void)

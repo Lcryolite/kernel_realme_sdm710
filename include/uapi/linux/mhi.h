@@ -36,4 +36,3 @@ struct ep_info {
 #define MHI_UCI_CV2X_EP_LOOKUP _IOR(MHI_UCI_IOCTL_MAGIC, 4, struct ep_info)
 
 #endif /* _UAPI_MHI_H */
-

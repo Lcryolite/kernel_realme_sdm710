@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -70,7 +70,7 @@ struct dp_usbpd_private {
 	struct device *dev;
 	struct usbpd *pd;
 	struct usbpd_svid_handler svid_handler;
-	struct dp_usbpd_cb *dp_cb;
+	struct dp_hpd_cb *dp_cb;
 	struct dp_usbpd_capabilities cap;
 	struct dp_usbpd dp_usbpd;
 	enum dp_usbpd_alt_mode alt_mode;
@@ -155,19 +155,19 @@ static void dp_usbpd_get_status(struct dp_usbpd_private *pd)
 
 	status->low_pow_st     = (buf & BIT(2)) ? true : false;
 	status->adaptor_dp_en  = (buf & BIT(3)) ? true : false;
-	status->multi_func     = (buf & BIT(4)) ? true : false;
+	status->base.multi_func = (buf & BIT(4)) ? true : false;
 	status->usb_config_req = (buf & BIT(5)) ? true : false;
 	status->exit_dp_mode   = (buf & BIT(6)) ? true : false;
-	status->hpd_high       = (buf & BIT(7)) ? true : false;
-	status->hpd_irq        = (buf & BIT(8)) ? true : false;
+	status->base.hpd_high  = (buf & BIT(7)) ? true : false;
+	status->base.hpd_irq   = (buf & BIT(8)) ? true : false;
 
 	pr_debug("low_pow_st = %d, adaptor_dp_en = %d, multi_func = %d\n",
 			status->low_pow_st, status->adaptor_dp_en,
-			status->multi_func);
+			status->base.multi_func);
 	pr_debug("usb_config_req = %d, exit_dp_mode = %d, hpd_high =%d\n",
 			status->usb_config_req,
-			status->exit_dp_mode, status->hpd_high);
-	pr_debug("hpd_irq = %d\n", status->hpd_irq);
+			status->exit_dp_mode, status->base.hpd_high);
+	pr_debug("hpd_irq = %d\n", status->base.hpd_irq);
 
 	dp_usbpd_init_port(&status->port, port);
 }
@@ -185,7 +185,7 @@ static u32 dp_usbpd_gen_config_pkt(struct dp_usbpd_private *pd)
 
 	for (pin = DP_USBPD_PIN_A; pin < DP_USBPD_PIN_MAX; pin++) {
 		if (pin_cfg & BIT(pin)) {
-			if (pd->dp_usbpd.multi_func) {
+			if (pd->dp_usbpd.base.multi_func) {
 				if (pin == DP_USBPD_PIN_D)
 					break;
 			} else {
@@ -244,7 +244,8 @@ static void dp_usbpd_send_event(struct dp_usbpd_private *pd,
 	}
 }
 
-static void dp_usbpd_connect_cb(struct usbpd_svid_handler *hdlr)
+static void dp_usbpd_connect_cb(struct usbpd_svid_handler *hdlr,
+		bool peer_usb_comm)
 {
 	struct dp_usbpd_private *pd;
 
@@ -254,7 +255,8 @@ static void dp_usbpd_connect_cb(struct usbpd_svid_handler *hdlr)
 		return;
 	}
 
-	pr_debug("\n");
+	pr_debug("peer_usb_comm: %d\n", peer_usb_comm);
+	pd->dp_usbpd.base.peer_usb_comm = peer_usb_comm;
 	dp_usbpd_send_event(pd, DP_USBPD_EVT_DISCOVER);
 }
 
@@ -269,7 +271,7 @@ static void dp_usbpd_disconnect_cb(struct usbpd_svid_handler *hdlr)
 	}
 
 	pd->alt_mode = DP_USBPD_ALT_MODE_NONE;
-	pd->dp_usbpd.alt_mode_cfg_done = false;
+	pd->dp_usbpd.base.alt_mode_cfg_done = false;
 	pr_debug("\n");
 
 	if (pd->dp_cb && pd->dp_cb->disconnect)
@@ -329,7 +331,7 @@ static int dp_usbpd_get_ss_lanes(struct dp_usbpd_private *pd)
 	 * all four lanes in case DPCD indicates support for
 	 * four lanes.
 	 */
-	if (!pd->dp_usbpd.multi_func) {
+	if (!pd->dp_usbpd.base.multi_func) {
 		while (timeout) {
 			rc = pd->svid_handler.request_usb_ss_lane(
 					pd->pd, &pd->svid_handler);
@@ -386,7 +388,7 @@ static void dp_usbpd_response_cb(struct usbpd_svid_handler *hdlr, u8 cmd,
 		pd->vdo = *vdos;
 		dp_usbpd_get_status(pd);
 
-		if (!pd->dp_usbpd.alt_mode_cfg_done) {
+		if (!pd->dp_usbpd.base.alt_mode_cfg_done) {
 			if (pd->dp_usbpd.port & BIT(1))
 				dp_usbpd_send_event(pd, DP_USBPD_EVT_CONFIGURE);
 			break;
@@ -409,10 +411,11 @@ static void dp_usbpd_response_cb(struct usbpd_svid_handler *hdlr, u8 cmd,
 		break;
 	case DP_USBPD_VDM_CONFIGURE:
 		pd->alt_mode |= DP_USBPD_ALT_MODE_CONFIGURE;
-		pd->dp_usbpd.alt_mode_cfg_done = true;
+		pd->dp_usbpd.base.alt_mode_cfg_done = true;
 		dp_usbpd_get_status(pd);
 
-		pd->dp_usbpd.orientation = usbpd_get_plug_orientation(pd->pd);
+		pd->dp_usbpd.base.orientation =
+			usbpd_get_plug_orientation(pd->pd);
 
 		rc = dp_usbpd_get_ss_lanes(pd);
 		if (rc) {
@@ -429,22 +432,28 @@ static void dp_usbpd_response_cb(struct usbpd_svid_handler *hdlr, u8 cmd,
 	}
 }
 
-static int dp_usbpd_simulate_connect(struct dp_usbpd *dp_usbpd, bool hpd)
+static int dp_usbpd_simulate_connect(struct dp_hpd *dp_hpd, bool hpd)
 {
 	int rc = 0;
+	struct dp_usbpd *dp_usbpd;
 	struct dp_usbpd_private *pd;
 
-	if (!dp_usbpd) {
+	if (!dp_hpd) {
 		pr_err("invalid input\n");
 		rc = -EINVAL;
 		goto error;
 	}
 
+	dp_usbpd = container_of(dp_hpd, struct dp_usbpd, base);
 	pd = container_of(dp_usbpd, struct dp_usbpd_private, dp_usbpd);
 
-	dp_usbpd->hpd_high = hpd;
+	dp_usbpd->base.hpd_high = hpd;
 	pd->forced_disconnect = !hpd;
+	pd->dp_usbpd.base.alt_mode_cfg_done = hpd;
 
+	pr_debug("hpd_high=%d, forced_disconnect=%d, orientation=%d\n",
+			dp_usbpd->base.hpd_high, pd->forced_disconnect,
+			pd->dp_usbpd.base.orientation);
 	if (hpd)
 		pd->dp_cb->configure(pd->dev);
 	else
@@ -454,11 +463,13 @@ error:
 	return rc;
 }
 
-static int dp_usbpd_simulate_attention(struct dp_usbpd *dp_usbpd, int vdo)
+static int dp_usbpd_simulate_attention(struct dp_hpd *dp_hpd, int vdo)
 {
 	int rc = 0;
+	struct dp_usbpd *dp_usbpd;
 	struct dp_usbpd_private *pd;
 
+	dp_usbpd = container_of(dp_hpd, struct dp_usbpd, base);
 	if (!dp_usbpd) {
 		pr_err("invalid input\n");
 		rc = -EINVAL;
@@ -476,11 +487,46 @@ error:
 	return rc;
 }
 
-struct dp_usbpd *dp_usbpd_get(struct device *dev, struct dp_usbpd_cb *cb)
+int dp_usbpd_register(struct dp_hpd *dp_hpd)
+{
+	struct dp_usbpd *dp_usbpd;
+	struct dp_usbpd_private *usbpd;
+	int rc = 0;
+
+	if (!dp_hpd)
+		return -EINVAL;
+
+	dp_usbpd = container_of(dp_hpd, struct dp_usbpd, base);
+
+	usbpd = container_of(dp_usbpd, struct dp_usbpd_private, dp_usbpd);
+
+	rc = usbpd_register_svid(usbpd->pd, &usbpd->svid_handler);
+	if (rc)
+		pr_err("pd registration failed\n");
+
+	return rc;
+}
+
+static void dp_usbpd_wakeup_phy(struct dp_hpd *dp_hpd, bool wakeup)
+{
+	struct dp_usbpd *dp_usbpd;
+	struct dp_usbpd_private *usbpd;
+
+	dp_usbpd = container_of(dp_hpd, struct dp_usbpd, base);
+	usbpd = container_of(dp_usbpd, struct dp_usbpd_private, dp_usbpd);
+
+	if (!usbpd->pd) {
+		pr_err("usbpd pointer invalid");
+		return;
+	}
+
+	usbpd_vdm_in_suspend(usbpd->pd, wakeup);
+}
+
+struct dp_hpd *dp_usbpd_init(struct device *dev, struct usbpd *pd,
+		struct dp_hpd_cb *cb)
 {
 	int rc = 0;
-	const char *pd_phandle = "qcom,dp-usbpd-detection";
-	struct usbpd *pd = NULL;
 	struct dp_usbpd_private *usbpd;
 	struct dp_usbpd *dp_usbpd;
 	struct usbpd_svid_handler svid_handler = {
@@ -491,16 +537,9 @@ struct dp_usbpd *dp_usbpd_get(struct device *dev, struct dp_usbpd_cb *cb)
 		.disconnect	= &dp_usbpd_disconnect_cb,
 	};
 
-	if (!cb) {
-		pr_err("invalid cb data\n");
+	if (IS_ERR(pd) || !cb) {
+		pr_err("invalid data\n");
 		rc = -EINVAL;
-		goto error;
-	}
-
-	pd = devm_usbpd_get_by_phandle(dev, pd_phandle);
-	if (IS_ERR(pd)) {
-		pr_err("usbpd phandle failed (%ld)\n", PTR_ERR(pd));
-		rc = PTR_ERR(pd);
 		goto error;
 	}
 
@@ -515,27 +554,23 @@ struct dp_usbpd *dp_usbpd_get(struct device *dev, struct dp_usbpd_cb *cb)
 	usbpd->svid_handler = svid_handler;
 	usbpd->dp_cb = cb;
 
-	rc = usbpd_register_svid(pd, &usbpd->svid_handler);
-	if (rc) {
-		pr_err("pd registration failed\n");
-		rc = -ENODEV;
-		devm_kfree(dev, usbpd);
-		goto error;
-	}
-
 	dp_usbpd = &usbpd->dp_usbpd;
-	dp_usbpd->simulate_connect = dp_usbpd_simulate_connect;
-	dp_usbpd->simulate_attention = dp_usbpd_simulate_attention;
+	dp_usbpd->base.simulate_connect = dp_usbpd_simulate_connect;
+	dp_usbpd->base.simulate_attention = dp_usbpd_simulate_attention;
+	dp_usbpd->base.register_hpd = dp_usbpd_register;
+	dp_usbpd->base.wakeup_phy = dp_usbpd_wakeup_phy;
 
-	return dp_usbpd;
+	return &dp_usbpd->base;
 error:
 	return ERR_PTR(rc);
 }
 
-void dp_usbpd_put(struct dp_usbpd *dp_usbpd)
+void dp_usbpd_deinit(struct dp_hpd *dp_hpd)
 {
+	struct dp_usbpd *dp_usbpd;
 	struct dp_usbpd_private *usbpd;
 
+	dp_usbpd = container_of(dp_hpd, struct dp_usbpd, base);
 	if (!dp_usbpd)
 		return;
 

@@ -73,7 +73,7 @@ the device register map, interrupt map, clocks and regulators.
   Usage: optional
   Value type: <u32>
   Definition: Offset of the register space compared to
-              to Camera base register space.
+		to Camera base register space.
 
 - interrupt-names
   Usage: optional
@@ -94,7 +94,7 @@ the device register map, interrupt map, clocks and regulators.
   Usage: required
   Value type: <phandle>
   Definition: Regulator reference corresponding to the names listed
-              in "regulator-names".
+		in "regulator-names".
 
 - clock-names
   Usage: required
@@ -184,4 +184,3 @@ Examples:
 		clock-cntl-level = "nominal";
 		status = "ok";
 	};
-

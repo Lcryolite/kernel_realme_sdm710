@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2016-2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013, 2017, The Linux Foundation. All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -46,13 +46,14 @@ struct clk_branch {
 #define BRANCH_HALT_ENABLE		1 /* pol: 0 = halt */
 #define BRANCH_HALT_ENABLE_VOTED	(BRANCH_HALT_ENABLE | BRANCH_VOTED)
 #define BRANCH_HALT_DELAY		2 /* No bit to check; just delay */
+#define BRANCH_HALT_SKIP		3 /* Don't check halt bit */
 
 	struct clk_regmap clkr;
 };
 
 /**
  * struct clk_gate2 - gating clock with status bit and dynamic hardware gating
- * @udelay: halt delay in microseconds on clock branch Enable/Disable
+ * @udelay: halt delay in microseconds on clock branch enable/disable
  * @clkr: handle between common and hardware-specific interfaces
  *
  * Clock which can gate its output.

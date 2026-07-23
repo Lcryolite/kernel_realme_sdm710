@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -34,9 +34,9 @@
 #include <linux/uaccess.h>
 #include <linux/pmic-voter.h>
 
-#define fg_dbg(chip, reason, fmt, ...)			\
+#define fg_dbg(fg, reason, fmt, ...)			\
 	do {							\
-		if (*chip->debug_mask & (reason))		\
+		if (*fg->debug_mask & (reason))		\
 			pr_info(fmt, ##__VA_ARGS__);	\
 		else						\
 			pr_debug(fmt, ##__VA_ARGS__);	\
@@ -48,47 +48,55 @@
 		|| ((left) <= (right) && (left) <= (value) \
 			&& (value) <= (right)))
 
+#define PARAM(_id, _addr_word, _addr_byte, _len, _num, _den, _offset,	\
+	      _enc, _dec)						\
+	[FG_SRAM_##_id] = {						\
+		.addr_word	= _addr_word,				\
+		.addr_byte	= _addr_byte,				\
+		.len		= _len,					\
+		.numrtr		= _num,					\
+		.denmtr		= _den,					\
+		.offset		= _offset,				\
+		.encode		= _enc,					\
+		.decode		= _dec,					\
+	}								\
+
 /* Awake votable reasons */
 #define SRAM_READ		"fg_sram_read"
 #define SRAM_WRITE		"fg_sram_write"
 #define PROFILE_LOAD		"fg_profile_load"
 #define TTF_PRIMING		"fg_ttf_priming"
+#define ESR_CALIB		"fg_esr_calib"
 #define FG_ESR_VOTER		"fg_esr_voter"
 
 /* Delta BSOC irq votable reasons */
 #define DELTA_BSOC_IRQ_VOTER	"fg_delta_bsoc_irq"
+
+/* Delta ESR irq votable reasons */
+#define DELTA_ESR_IRQ_VOTER	"fg_delta_esr_irq"
 
 /* Battery missing irq votable reasons */
 #define BATT_MISS_IRQ_VOTER	"fg_batt_miss_irq"
 
 #define ESR_FCC_VOTER		"fg_esr_fcc"
 
-#define DEBUG_PRINT_BUFFER_SIZE		64
-/* 3 byte address + 1 space character */
-#define ADDR_LEN			4
-/* Format is 'XX ' */
-#define CHARS_PER_ITEM			3
-/* 4 data items per line */
-#define ITEMS_PER_LINE			4
-#define MAX_LINE_LENGTH			(ADDR_LEN + (ITEMS_PER_LINE *	\
-					CHARS_PER_ITEM) + 1)		\
+#define FG_PARALLEL_EN_VOTER	"fg_parallel_en"
+#define MEM_ATTN_IRQ_VOTER	"fg_mem_attn_irq"
 
-#define NUM_PARTITIONS			3
-#define FG_SRAM_ADDRESS_MAX		255
-#define FG_SRAM_LEN			504
-#define PROFILE_LEN			224
-#define PROFILE_COMP_LEN		148
+#define DEBUG_BOARD_VOTER	"fg_debug_board"
+
 #define BUCKET_COUNT			8
 #define BUCKET_SOC_PCT			(256 / BUCKET_COUNT)
 
-#define KI_COEFF_MAX			62200
-#define KI_COEFF_SOC_LEVELS		3
-
-#define SLOPE_LIMIT_COEFF_MAX		31
-
-#define BATT_THERM_NUM_COEFFS		3
-
 #define MAX_CC_STEPS			20
+
+#define FULL_CAPACITY			100
+#define FULL_SOC_RAW			255
+
+#define DEBUG_BATT_SOC			67
+#define BATT_MISS_SOC			50
+#define ESR_SOH_SOC			50
+#define EMPTY_SOC			0
 
 enum prof_load_status {
 	PROFILE_MISSING,
@@ -108,6 +116,7 @@ enum fg_debug_flag {
 	FG_BUS_READ		= BIT(6), /* Show REGMAP reads */
 	FG_CAP_LEARN		= BIT(7), /* Show capacity learning */
 	FG_TTF			= BIT(8), /* Show time to full */
+	FG_FVSS			= BIT(9), /* Show FVSS */
 };
 
 enum awake_reasons {
@@ -133,6 +142,7 @@ enum jeita_levels {
 
 /* FG irqs */
 enum fg_irq_index {
+	/* FG_BATT_SOC */
 	MSOC_FULL_IRQ = 0,
 	MSOC_HIGH_IRQ,
 	MSOC_EMPTY_IRQ,
@@ -141,15 +151,25 @@ enum fg_irq_index {
 	BSOC_DELTA_IRQ,
 	SOC_READY_IRQ,
 	SOC_UPDATE_IRQ,
+	/* FG_BATT_INFO */
 	BATT_TEMP_DELTA_IRQ,
 	BATT_MISSING_IRQ,
 	ESR_DELTA_IRQ,
 	VBATT_LOW_IRQ,
 	VBATT_PRED_DELTA_IRQ,
+	/* FG_MEM_IF */
 	DMA_GRANT_IRQ,
 	MEM_XCP_IRQ,
 	IMA_RDY_IRQ,
-	FG_IRQ_MAX,
+	FG_GEN3_IRQ_MAX,
+	/* GEN4 FG_MEM_IF */
+	MEM_ATTN_IRQ,
+	DMA_XCP_IRQ,
+	/* GEN4 FG_ADC_RR */
+	BATT_TEMP_COLD_IRQ,
+	BATT_TEMP_HOT_IRQ,
+	BATT_ID_IRQ,
+	FG_GEN4_IRQ_MAX,
 };
 
 /*
@@ -163,9 +183,17 @@ enum fg_irq_index {
 enum fg_sram_param_id {
 	FG_SRAM_BATT_SOC = 0,
 	FG_SRAM_FULL_SOC,
+	FG_SRAM_MONOTONIC_SOC,
 	FG_SRAM_VOLTAGE_PRED,
 	FG_SRAM_OCV,
+	FG_SRAM_VBAT_FLT,
+	FG_SRAM_VBAT_TAU,
+	FG_SRAM_VBAT_FINAL,
+	FG_SRAM_IBAT_FINAL,
+	FG_SRAM_IBAT_FLT,
 	FG_SRAM_ESR,
+	FG_SRAM_ESR_MDL,
+	FG_SRAM_ESR_ACT,
 	FG_SRAM_RSLOW,
 	FG_SRAM_ALG_FLAGS,
 	FG_SRAM_CC_SOC,
@@ -195,11 +223,25 @@ enum fg_sram_param_id {
 	FG_SRAM_KI_COEFF_LOW_DISCHG,
 	FG_SRAM_KI_COEFF_MED_DISCHG,
 	FG_SRAM_KI_COEFF_HI_DISCHG,
+	FG_SRAM_KI_COEFF_LO_MED_DCHG_THR,
+	FG_SRAM_KI_COEFF_MED_HI_DCHG_THR,
+	FG_SRAM_KI_COEFF_LOW_CHG,
+	FG_SRAM_KI_COEFF_MED_CHG,
 	FG_SRAM_KI_COEFF_HI_CHG,
+	FG_SRAM_KI_COEFF_LO_MED_CHG_THR,
+	FG_SRAM_KI_COEFF_MED_HI_CHG_THR,
 	FG_SRAM_KI_COEFF_FULL_SOC,
+	FG_SRAM_KI_COEFF_CUTOFF,
 	FG_SRAM_ESR_TIGHT_FILTER,
 	FG_SRAM_ESR_BROAD_FILTER,
 	FG_SRAM_SLOPE_LIMIT,
+	FG_SRAM_BATT_TEMP_COLD,
+	FG_SRAM_BATT_TEMP_HOT,
+	FG_SRAM_ESR_CAL_SOC_MIN,
+	FG_SRAM_ESR_CAL_SOC_MAX,
+	FG_SRAM_ESR_CAL_TEMP_MIN,
+	FG_SRAM_ESR_CAL_TEMP_MAX,
+	FG_SRAM_DELTA_ESR_THR,
 	FG_SRAM_MAX,
 };
 
@@ -240,6 +282,11 @@ enum fg_alg_flag_id {
 	ALG_FLAG_MAX,
 };
 
+enum fg_version {
+	GEN3_FG = 1,
+	GEN4_FG,
+};
+
 struct fg_alg_flag {
 	char	*name;
 	u8	bit;
@@ -249,6 +296,9 @@ struct fg_alg_flag {
 enum wa_flags {
 	PMI8998_V1_REV_WA = BIT(0),
 	PM660_TSMC_OSC_WA = BIT(1),
+	PM8150B_V1_DMA_WA = BIT(2),
+	PM8150B_V1_RSLOW_COMP_WA = BIT(3),
+	PM8150B_V2_RSLOW_SCALE_FN_WA = BIT(4),
 };
 
 enum slope_limit_status {
@@ -271,68 +321,9 @@ enum esr_timer_config {
 	NUM_ESR_TIMERS,
 };
 
-enum ttf_mode {
-	TTF_MODE_NORMAL = 0,
-	TTF_MODE_QNOVO,
-};
-
-/* DT parameters for FG device */
-struct fg_dt_props {
-	bool	force_load_profile;
-	bool	hold_soc_while_full;
-	bool	linearize_soc;
-	bool	auto_recharge_soc;
-	bool	use_esr_sw;
-	bool	disable_esr_pull_dn;
-	bool	disable_fg_twm;
-	int	cutoff_volt_mv;
-	int	empty_volt_mv;
-	int	vbatt_low_thr_mv;
-	int	chg_term_curr_ma;
-	int	chg_term_base_curr_ma;
-	int	sys_term_curr_ma;
-	int	cutoff_curr_ma;
-	int	delta_soc_thr;
-	int	recharge_soc_thr;
-	int	recharge_volt_thr_mv;
-	int	rsense_sel;
-	int	esr_timer_charging[NUM_ESR_TIMERS];
-	int	esr_timer_awake[NUM_ESR_TIMERS];
-	int	esr_timer_asleep[NUM_ESR_TIMERS];
-	int	esr_timer_shutdown[NUM_ESR_TIMERS];
-	int	rconn_mohms;
-	int	esr_clamp_mohms;
-	int	cl_start_soc;
-	int	cl_max_temp;
-	int	cl_min_temp;
-	int	cl_max_cap_inc;
-	int	cl_max_cap_dec;
-	int	cl_max_cap_limit;
-	int	cl_min_cap_limit;
-	int	jeita_hyst_temp;
-	int	batt_temp_delta;
-	int	esr_flt_switch_temp;
-	int	esr_tight_flt_upct;
-	int	esr_broad_flt_upct;
-	int	esr_tight_lt_flt_upct;
-	int	esr_broad_lt_flt_upct;
-	int	esr_flt_rt_switch_temp;
-	int	esr_tight_rt_flt_upct;
-	int	esr_broad_rt_flt_upct;
-	int	slope_limit_temp;
-	int	esr_pulse_thresh_ma;
-	int	esr_meas_curr_ma;
-	int	sync_sleep_threshold_ma;
-	int	bmd_en_delay_ms;
-	int	ki_coeff_full_soc_dischg;
-	int	ki_coeff_hi_chg;
-	int	jeita_thresholds[NUM_JEITA_LEVELS];
-	int	ki_coeff_soc[KI_COEFF_SOC_LEVELS];
-	int	ki_coeff_low_dischg[KI_COEFF_SOC_LEVELS];
-	int	ki_coeff_med_dischg[KI_COEFF_SOC_LEVELS];
-	int	ki_coeff_hi_dischg[KI_COEFF_SOC_LEVELS];
-	int	slope_limit_coeffs[SLOPE_LIMIT_NUM_COEFFS];
-	u8	batt_therm_coeffs[BATT_THERM_NUM_COEFFS];
+enum fg_ttf_mode {
+	FG_TTF_MODE_NORMAL = 0,
+	FG_TTF_MODE_QNOVO,
 };
 
 /* parameters from battery profile */
@@ -342,6 +333,11 @@ struct fg_batt_props {
 	int		float_volt_uv;
 	int		vbatt_full_mv;
 	int		fastchg_curr_ma;
+	int		*therm_coeffs;
+	int		therm_ctr_offset;
+	int		therm_pull_up_kohms;
+	int		*rslow_normal_coeffs;
+	int		*rslow_low_coeffs;
 };
 
 struct fg_cyc_ctr_data {
@@ -386,7 +382,7 @@ struct fg_pt {
 	s32 y;
 };
 
-struct ttf {
+struct fg_ttf {
 	struct fg_circ_buf	ibatt;
 	struct fg_circ_buf	vbatt;
 	struct fg_cc_step_data	cc_step;
@@ -425,7 +421,14 @@ static const struct fg_pt fg_tsmc_osc_table[] = {
 	{  90,		444992 },
 };
 
-struct fg_chip {
+struct fg_memif {
+	struct fg_dma_address	*addr_map;
+	int			num_partitions;
+	u16			address_max;
+	u8			num_bytes_per_word;
+};
+
+struct fg_dev {
 	struct thermal_zone_device	*tz_dev;
 	struct device		*dev;
 	struct pmic_revid_data	*pmic_rev_id;
@@ -437,32 +440,24 @@ struct fg_chip {
 	struct power_supply	*dc_psy;
 	struct power_supply	*parallel_psy;
 	struct power_supply	*pc_port_psy;
-	struct iio_channel	*batt_id_chan;
-	struct iio_channel	*die_temp_chan;
 	struct fg_irq_info	*irqs;
 	struct votable		*awake_votable;
 	struct votable		*delta_bsoc_irq_en_votable;
 	struct votable		*batt_miss_irq_en_votable;
-	struct votable		*pl_disable_votable;
 	struct fg_sram_param	*sp;
-	struct fg_dma_address	*addr_map;
+	struct fg_memif		sram;
 	struct fg_alg_flag	*alg_flags;
 	int			*debug_mask;
-	char			batt_profile[PROFILE_LEN];
-	struct fg_dt_props	dt;
 	struct fg_batt_props	bp;
-	struct fg_cyc_ctr_data	cyc_ctr;
 	struct notifier_block	nb;
-	struct notifier_block	twm_nb;
-	struct fg_cap_learning  cl;
 	struct alarm            esr_sw_timer;
-	struct ttf		ttf;
+	struct notifier_block	twm_nb;
 	struct mutex		bus_lock;
 	struct mutex		sram_rw_lock;
 	struct mutex		charge_full_lock;
 	struct mutex		qnovo_esr_ctrl_lock;
-	spinlock_t		awake_lock;
 	spinlock_t		suspend_lock;
+	spinlock_t		awake_lock;
 	u32			batt_soc_base;
 	u32			batt_info_base;
 	u32			mem_if_base;
@@ -471,7 +466,6 @@ struct fg_chip {
 	u32			esr_wakeup_ms;
 	u32			awake_status;
 	int			batt_id_ohms;
-	int			ki_coeff_full_soc;
 	int			charge_status;
 	int			prev_charge_status;
 	int			charge_done;
@@ -485,35 +479,27 @@ struct fg_chip {
 	int			last_msoc;
 	int			last_recharge_volt_mv;
 	int			delta_temp_irq_count;
-	int			esr_timer_charging_default[NUM_ESR_TIMERS];
-	enum slope_limit_status	slope_limit_sts;
 	enum esr_filter_status	esr_flt_sts;
 	bool			profile_available;
-	bool			profile_loaded;
 	enum prof_load_status	profile_load_status;
 	bool			battery_missing;
 	bool			fg_restarting;
 	bool			charge_full;
 	bool			recharge_soc_adjusted;
-	bool			ki_coeff_dischg_en;
-	bool			esr_fcc_ctrl_en;
 	bool			soc_reporting_ready;
-	bool			esr_flt_cold_temp_en;
-	bool			slope_limit_en;
 	bool			use_ima_single_mode;
 	bool			usb_present;
 	bool			twm_state;
 	bool			use_dma;
 	bool			qnovo_enable;
+	enum fg_version		version;
 	bool			suspended;
 	struct completion	soc_update;
 	struct completion	soc_ready;
 	struct delayed_work	profile_load_work;
 	struct work_struct	status_change_work;
 	struct work_struct	esr_sw_work;
-	struct delayed_work	ttf_work;
 	struct delayed_work	sram_dump_work;
-	struct delayed_work	pl_enable_work;
 	struct work_struct	esr_filter_work;
 	struct alarm		esr_filter_alarm;
 	ktime_t			last_delta_temp_time;
@@ -531,7 +517,7 @@ struct fg_log_buffer {
 
 /* transaction parameters */
 struct fg_trans {
-	struct fg_chip		*chip;
+	struct fg_dev		*fg;
 	struct mutex		fg_dfs_lock; /* Prevent thread concurrency */
 	struct fg_log_buffer	*log;
 	u32			cnt;
@@ -542,47 +528,89 @@ struct fg_trans {
 
 struct fg_dbgfs {
 	struct debugfs_blob_wrapper	help_msg;
-	struct fg_chip			*chip;
+	struct fg_dev			*fg;
 	struct dentry			*root;
 	u32				cnt;
 	u32				addr;
 };
 
-extern int fg_sram_write(struct fg_chip *chip, u16 address, u8 offset,
+extern int fg_decode_voltage_24b(struct fg_sram_param *sp,
+	enum fg_sram_param_id id, int val);
+extern int fg_decode_voltage_15b(struct fg_sram_param *sp,
+	enum fg_sram_param_id id, int val);
+extern int fg_decode_current_16b(struct fg_sram_param *sp,
+	enum fg_sram_param_id id, int val);
+extern int fg_decode_current_24b(struct fg_sram_param *sp,
+	enum fg_sram_param_id id, int val);
+extern int fg_decode_cc_soc(struct fg_sram_param *sp,
+	enum fg_sram_param_id id, int value);
+extern int fg_decode_value_16b(struct fg_sram_param *sp,
+	enum fg_sram_param_id id, int val);
+extern int fg_decode_default(struct fg_sram_param *sp,
+	enum fg_sram_param_id id, int val);
+extern int fg_decode(struct fg_sram_param *sp,
+	enum fg_sram_param_id id, int val);
+extern void fg_encode_voltage(struct fg_sram_param *sp,
+	enum fg_sram_param_id id, int val_mv, u8 *buf);
+extern void fg_encode_current(struct fg_sram_param *sp,
+	enum fg_sram_param_id id, int val_ma, u8 *buf);
+extern void fg_encode_default(struct fg_sram_param *sp,
+	enum fg_sram_param_id id, int val, u8 *buf);
+extern void fg_encode(struct fg_sram_param *sp,
+	enum fg_sram_param_id id, int val, u8 *buf);
+extern int fg_get_sram_prop(struct fg_dev *fg, enum fg_sram_param_id id,
+	int *val);
+extern int fg_get_msoc_raw(struct fg_dev *fg, int *val);
+extern int fg_get_msoc(struct fg_dev *fg, int *val);
+extern const char *fg_get_battery_type(struct fg_dev *fg);
+extern int fg_get_battery_resistance(struct fg_dev *fg, int *val);
+extern int fg_get_battery_voltage(struct fg_dev *fg, int *val);
+extern int fg_get_battery_current(struct fg_dev *fg, int *val);
+extern int fg_set_esr_timer(struct fg_dev *fg, int cycles_init, int cycles_max,
+				bool charging, int flags);
+extern int fg_set_constant_chg_voltage(struct fg_dev *fg, int volt_uv);
+extern int fg_register_interrupts(struct fg_dev *fg, int size);
+extern void fg_unregister_interrupts(struct fg_dev *fg, void *data, int size);
+extern int fg_sram_write(struct fg_dev *fg, u16 address, u8 offset,
 			u8 *val, int len, int flags);
-extern int fg_sram_read(struct fg_chip *chip, u16 address, u8 offset,
+extern int fg_sram_read(struct fg_dev *fg, u16 address, u8 offset,
 			u8 *val, int len, int flags);
-extern int fg_sram_masked_write(struct fg_chip *chip, u16 address, u8 offset,
+extern int fg_sram_masked_write(struct fg_dev *fg, u16 address, u8 offset,
 			u8 mask, u8 val, int flags);
-extern int fg_interleaved_mem_read(struct fg_chip *chip, u16 address,
+extern int fg_interleaved_mem_read(struct fg_dev *fg, u16 address,
 			u8 offset, u8 *val, int len);
-extern int fg_interleaved_mem_write(struct fg_chip *chip, u16 address,
+extern int fg_interleaved_mem_write(struct fg_dev *fg, u16 address,
 			u8 offset, u8 *val, int len, bool atomic_access);
-extern int fg_direct_mem_read(struct fg_chip *chip, u16 address,
+extern int fg_direct_mem_read(struct fg_dev *fg, u16 address,
 			u8 offset, u8 *val, int len);
-extern int fg_direct_mem_write(struct fg_chip *chip, u16 address,
+extern int fg_direct_mem_write(struct fg_dev *fg, u16 address,
 			u8 offset, u8 *val, int len, bool atomic_access);
-extern int fg_read(struct fg_chip *chip, int addr, u8 *val, int len);
-extern int fg_write(struct fg_chip *chip, int addr, u8 *val, int len);
-extern int fg_masked_write(struct fg_chip *chip, int addr, u8 mask, u8 val);
-extern int fg_dump_regs(struct fg_chip *chip);
-extern int fg_ima_init(struct fg_chip *chip);
-extern int fg_dma_init(struct fg_chip *chip);
-extern int fg_clear_ima_errors_if_any(struct fg_chip *chip, bool check_hw_sts);
-extern int fg_clear_dma_errors_if_any(struct fg_chip *chip);
-extern int fg_debugfs_create(struct fg_chip *chip);
+extern int fg_read(struct fg_dev *fg, int addr, u8 *val, int len);
+extern int fg_write(struct fg_dev *fg, int addr, u8 *val, int len);
+extern int fg_masked_write(struct fg_dev *fg, int addr, u8 mask, u8 val);
+extern int fg_dump_regs(struct fg_dev *fg);
+extern int fg_restart(struct fg_dev *fg, int wait_time_ms);
+extern int fg_memif_init(struct fg_dev *fg);
+extern int fg_clear_ima_errors_if_any(struct fg_dev *fg, bool check_hw_sts);
+extern int fg_clear_dma_errors_if_any(struct fg_dev *fg);
+extern int fg_debugfs_create(struct fg_dev *fg);
 extern void fill_string(char *str, size_t str_len, u8 *buf, int buf_len);
-extern void dump_sram(u8 *buf, int addr, int len);
-extern int64_t twos_compliment_extend(int64_t val, int s_bit_pos);
+extern void dump_sram(struct fg_dev *fg, u8 *buf, int addr, int len);
 extern s64 fg_float_decode(u16 val);
-extern bool is_input_present(struct fg_chip *chip);
-extern bool is_qnovo_en(struct fg_chip *chip);
+extern bool usb_psy_initialized(struct fg_dev *fg);
+extern bool dc_psy_initialized(struct fg_dev *fg);
+extern bool batt_psy_initialized(struct fg_dev *fg);
+extern bool pc_port_psy_initialized(struct fg_dev *fg);
+extern void fg_notify_charger(struct fg_dev *fg);
+extern bool is_input_present(struct fg_dev *fg);
+extern bool is_qnovo_en(struct fg_dev *fg);
+extern bool is_parallel_charger_available(struct fg_dev *fg);
 extern void fg_circ_buf_add(struct fg_circ_buf *buf, int val);
 extern void fg_circ_buf_clr(struct fg_circ_buf *buf);
 extern int fg_circ_buf_avg(struct fg_circ_buf *buf, int *avg);
 extern int fg_circ_buf_median(struct fg_circ_buf *buf, int *median);
 extern int fg_lerp(const struct fg_pt *pts, size_t tablesize, s32 input,
 			s32 *output);
-void fg_stay_awake(struct fg_chip *chip, int awake_reason);
-void fg_relax(struct fg_chip *chip, int awake_reason);
+void fg_stay_awake(struct fg_dev *fg, int awake_reason);
+void fg_relax(struct fg_dev *fg, int awake_reason);
 #endif

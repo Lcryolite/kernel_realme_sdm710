@@ -25,10 +25,18 @@ Charger specific properties:
   Definition: Should specify the phandle of SMB's revid module. This is used
 	      to identify the SMB subtype.
 
-- qcom,channel-num
+- io-channels
+- io-channel-names
   Usage:      required
+  Value type: <phandle>
+  Definition: For details about IIO bindings see:
+	      Documentation/devicetree/bindings/iio/iio-bindings.txt
+
+- qcom,max-cutoff-soc
+  Usage:      optional
   Value type: <u32>
-  Definition: Specifies the ADC channel number for reading die temperature.
+  Definition: SOC beyond which SMB1390 is kept disabled.
+	      If this value is not specified then default value is 85%.
 
 ================================================
 Second Level Nodes - SMB1390 Charger Peripherals
@@ -53,10 +61,11 @@ Example
 smb1390_charger: qcom,charge_pump {
 	compatible = "qcom,smb1390-charger";
 	qcom,pmic-revid = <&smb1390_revid>;
-	qcom,channel-num = <15>
 	interrupt-parent = <&smb1390>;
-	qcom,smb-vadc = <&pm8998_vadc>;
 	status = "disabled";
+
+	io-channels = <&pm8150b_vadc ADC_AMUX_THM2>;
+	io-channel-names = "cp_die_temp";
 
 	qcom,core {
 		interrupts = <0x10 0x0 IRQ_TYPE_EDGE_RISING>,

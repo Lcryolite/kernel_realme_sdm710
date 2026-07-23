@@ -31,6 +31,7 @@
 
 /* MDSCR_EL1 enabling bits */
 #define DBG_MDSCR_KDE		(1 << 13)
+#define DBG_MDSCR_HDE		(1 << 14)
 #define DBG_MDSCR_MDE		(1 << 15)
 #define DBG_MDSCR_MASK		~(DBG_MDSCR_KDE | DBG_MDSCR_MDE)
 
@@ -68,6 +69,9 @@
 #define BRK64_ESR_MASK		0xFFFF
 #define BRK64_ESR_KPROBES	0x0004
 #define BRK64_OPCODE_KPROBES	(AARCH64_BREAK_MON | (BRK64_ESR_KPROBES << 5))
+/* uprobes BRK opcodes with ESR encoding  */
+#define BRK64_ESR_UPROBES	0x0005
+#define BRK64_OPCODE_UPROBES	(AARCH64_BREAK_MON | (BRK64_ESR_UPROBES << 5))
 
 /* AArch32 */
 #define DBG_ESR_EVT_BKPT	0x4

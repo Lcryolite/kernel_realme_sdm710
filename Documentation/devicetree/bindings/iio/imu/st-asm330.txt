@@ -7,6 +7,8 @@ Required properties:
 
 - compatible: "st,asm330lhh"
 - reg: the I2C address or SPI chip select the device will respond to
+- vio-supply: 1.8V regulator supply
+- vdd-supply: 3V regulator supply
 - interrupt-parent: phandle to the parent interrupt controller as documented in [interrupts][4]
 - interrupts: interrupt mapping for IRQ as documented in [interrupts][4]
 

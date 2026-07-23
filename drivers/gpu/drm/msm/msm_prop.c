@@ -207,43 +207,6 @@ void msm_property_install_volatile_range(struct msm_property_info *info,
 			min, max, init, property_idx, true);
 }
 
-void msm_property_install_rotation(struct msm_property_info *info,
-		unsigned int supported_rotations, uint32_t property_idx)
-{
-	struct drm_property **prop;
-
-	if (!info)
-		return;
-
-	++info->install_request;
-
-	if (property_idx >= info->property_count) {
-		DRM_ERROR("invalid property index %d\n", property_idx);
-	} else {
-		prop = &info->property_array[property_idx];
-		/*
-		 * Properties need to be attached to each drm object that
-		 * uses them, but only need to be created once
-		 */
-		if (*prop == 0) {
-			*prop = drm_mode_create_rotation_property(info->dev,
-					supported_rotations);
-			if (*prop == 0)
-				DRM_ERROR("create rotation property failed\n");
-		}
-
-		/* save init value for later */
-		info->property_data[property_idx].default_value = 0;
-		info->property_data[property_idx].force_dirty = false;
-
-		/* always attach property, if created */
-		if (*prop) {
-			drm_object_attach_property(info->base, *prop, 0);
-			++info->install_count;
-		}
-	}
-}
-
 void msm_property_install_enum(struct msm_property_info *info,
 		const char *name, int flags, int is_bitmask,
 		const struct drm_prop_enum_list *values, int num_values,
@@ -423,7 +386,7 @@ int msm_property_atomic_set(struct msm_property_info *info,
 
 			/* need to clear previous ref */
 			if (property_state->values[property_idx].blob)
-				drm_property_unreference_blob(
+				drm_property_blob_put(
 					property_state->values[
 						property_idx].blob);
 
@@ -580,7 +543,7 @@ void msm_property_duplicate_state(struct msm_property_info *info,
 		/* add ref count for blobs and initialize dirty nodes */
 		for (i = 0; i < info->property_count; ++i) {
 			if (property_state->values[i].blob)
-				drm_property_reference_blob(
+				drm_property_blob_get(
 						property_state->values[i].blob);
 			INIT_LIST_HEAD(&property_state->values[i].dirty_node);
 		}
@@ -599,7 +562,7 @@ void msm_property_destroy_state(struct msm_property_info *info, void *state,
 		/* remove ref count for blobs */
 		for (i = 0; i < info->property_count; ++i)
 			if (property_state->values[i].blob) {
-				drm_property_unreference_blob(
+				drm_property_blob_put(
 						property_state->values[i].blob);
 				property_state->values[i].blob = NULL;
 			}
@@ -665,13 +628,13 @@ int msm_property_set_blob(struct msm_property_info *info,
 		if (rc) {
 			DRM_ERROR("failed to set blob to property\n");
 			if (blob)
-				drm_property_unreference_blob(blob);
+				drm_property_blob_put(blob);
 			goto exit;
 		}
 
 		/* update local reference */
 		if (*blob_reference)
-			drm_property_unreference_blob(*blob_reference);
+			drm_property_blob_put(*blob_reference);
 		*blob_reference = blob;
 	}
 

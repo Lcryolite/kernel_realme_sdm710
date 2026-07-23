@@ -8,11 +8,12 @@ Required properties:
 - compatible:           Should be "qcom,dsi-ctrl-hw-v<version>". Supported
 			versions include 1.4, 2.0 and 2.2.
 			eg: qcom,dsi-ctrl-hw-v1.4, qcom,dsi-ctrl-hw-v2.0,
-			qcom,dsi-ctrl-hw-v2.2
+			qcom,dsi-ctrl-hw-v2.2, qcom,dsi-ctrl-hw-v2.3,
+			qcom,dsi-ctrl-hw-v2.4
 			And for dsi phy driver:
 			qcom,dsi-phy-v0.0-hpm, qcom,dsi-phy-v0.0-lpm,
 			qcom,dsi-phy-v1.0, qcom,dsi-phy-v2.0,
-			qcom,dsi-phy-v3.0
+			qcom,dsi-phy-v3.0, qcom,dsi-phy-v4.0
 - reg:                  Base address and length of DSI controller's memory
 			mapped regions.
 - reg-names:            A list of strings that name the list of regs.
@@ -59,17 +60,18 @@ Bus Scaling Data:
 Optional properties:
 - label:                  String to describe controller.
 - qcom,platform-te-gpio:  Specifies the gpio used for TE.
+- qcom,panel-te-source:  Specifies the source pin for Vsync from panel or WD Timer.
 - qcom,dsi-display-active: Current active display
 - qcom,dsi-ctrl: handle to dsi controller device
 - qcom,dsi-phy: handle to dsi phy device
+- qcom,dsi-ctrl-num:		Specifies the DSI controllers to use
+- qcom,dsi-phy-num:		Specifies the DSI PHYs to use
+- qcom,dsi-select-clocks:	Specifies the required clocks to use
+- qcom,dsi-display-list:	Specifies the list of supported displays.
 - qcom,dsi-manager:       Specifies dsi manager is present
 - qcom,dsi-display:       Specifies dsi display is present
 - qcom,hdmi-display:      Specifies hdmi is present
 - qcom,dp-display:        Specified dp is present
-- ports:                  This video port is used when external bridge is present. The connection is modelled
-                          using the OF graph bindings specified in Documentation/devicetree/bindings/graph.txt.
-                          Video port 0 is for the bridge output. The remote endpoint phandle should be
-                          mipi_dsi_device device node.
 - qcom,<type>-supply-entries:		A node that lists the elements of the supply used by the
 					a particular "type" of DSI module. The module "types"
 					can be "core", "ctrl", and "phy". Within the same type,
@@ -82,6 +84,7 @@ Optional properties:
 					-- qcom,supply-max-voltage: maximum voltage level (uV)
 					-- qcom,supply-enable-load: load drawn (uA) from enabled supply
 					-- qcom,supply-disable-load: load drawn (uA) from disabled supply
+					-- qcom,supply-off-min-voltage: minimum voltage level (uV) when turned off
 					-- qcom,supply-pre-on-sleep: time to sleep (ms) before turning on
 					-- qcom,supply-post-on-sleep: time to sleep (ms) after turning on
 					-- qcom,supply-pre-off-sleep: time to sleep (ms) before turning off
@@ -105,3 +108,8 @@ Optional properties:
 					only with simulator panel. It should not be enabled for
 					normal DSI panels.
 - - qcom,null-insertion-enabled:	A boolean to enable NULL packet insertion feature for DSI controller.
+- ports:				This video port is used when external bridge is present.
+					The connection is modeled using the OF graph bindings
+					specified in Documentation/devicetree/bindings/graph.txt.
+					Video port 0 reg 0 is for the bridge output. The remote
+					endpoint phandle should be mipi_dsi_device device node.

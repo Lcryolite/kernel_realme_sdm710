@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2018 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2021 The Linux Foundation. All rights reserved.
  * Copyright (C) 2013 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
  *
@@ -20,7 +20,7 @@
 #define _SDE_CRTC_H_
 
 #include <linux/kthread.h>
-#include "drm_crtc.h"
+#include <drm/drm_crtc.h>
 #include "msm_prop.h"
 #include "sde_fence.h"
 #include "sde_kms.h"
@@ -88,9 +88,7 @@ struct sde_crtc_retire_event {
  * @hw_dspp:	DSPP HW driver context
  * @hw_ds:	DS HW driver context
  * @encoder:	Encoder attached to this lm & ctl
- * @mixer_op_mode:	mixer blending operation mode
- * @flush_mask:	mixer flush mask for ctl, mixer and pipe
- * @pipe_mask:	mixer flush mask for pipe
+ * @mixer_op_mode: mixer blending operation mode
  */
 struct sde_crtc_mixer {
 	struct sde_hw_mixer *hw_lm;
@@ -99,8 +97,6 @@ struct sde_crtc_mixer {
 	struct sde_hw_ds *hw_ds;
 	struct drm_encoder *encoder;
 	u32 mixer_op_mode;
-	u32 flush_mask;
-	u32 pipe_mask;
 };
 
 /**
@@ -190,6 +186,7 @@ struct sde_crtc_fps_info {
  * @output_fence  : output release fence context
  * @stage_cfg     : H/w mixer stage configuration
  * @debugfs_root  : Parent of debugfs node
+ * @priv_handle   : Pointer to external private handle, if present
  * @vblank_cb_count : count of vblank callback since last reset
  * @play_count    : frame count between crtc enable and disable
  * @vblank_cb_time  : ktime at vblank count reset
@@ -201,15 +198,12 @@ struct sde_crtc_fps_info {
  * @enabled       : whether the SDE CRTC is currently enabled. updated in the
  *                  commit-thread, not state-swap time which is earlier, so
  *                  safe to make decisions on during VBLANK on/off work
- * @reset_request : whether or not a h/w request was requested for the previous
- *                  frame
  * @ds_reconfig   : force reconfiguration of the destination scaler block
  * @feature_list  : list of color processing features supported on a crtc
  * @active_list   : list of color processing features are active
  * @dirty_list    : list of color processing features are dirty
  * @ad_dirty: list containing ad properties that are dirty
  * @ad_active: list containing ad properties that are active
- * @ad_vsync_count : count of vblank since last reset for AD
  * @crtc_lock     : crtc lock around create, destroy and access.
  * @frame_pending : Whether or not an update is pending
  * @frame_events  : static allocation of in-flight frame events
@@ -223,18 +217,17 @@ struct sde_crtc_fps_info {
  * @misr_enable   : boolean entry indicates misr enable/disable status.
  * @misr_frame_count  : misr frame count provided by client
  * @misr_data     : store misr data before turning off the clocks.
- * @enable_sui_enhancement: indicate enable/disable of sui_enhancement feature
- *                           which is set by user-mode.
  * @sbuf_op_mode_old : inline rotator op mode for previous commit cycle
- * @sbuf_flush_mask_old: inline rotator flush mask for previous commit
- * @sbuf_flush_mask_all: inline rotator flush mask for all attached planes
- * @sbuf_flush_mask_delta: inline rotator flush mask for current delta state
+ * @sbuf_rot_id   : inline rotator block id for attached planes
+ * @sbuf_rot_id_old: inline rotator id for previous commit
+ * @sbuf_rot_id_delta: inline rotator id for current delta state
  * @idle_notify_work: delayed worker to notify idle timeout to user space
  * @early_wakeup_work: work to trigger early wakeup
  * @power_event   : registered power event handle
  * @cur_perf      : current performance committed to clock/bandwidth driver
  * @rp_lock       : serialization lock for resource pool
  * @rp_head       : list of active resource pool
+ * @plane_mask_old: keeps track of the planes used in the previous commit
  */
 struct sde_crtc {
 	struct drm_crtc base;
@@ -244,7 +237,7 @@ struct sde_crtc {
 	u32 num_ctls;
 	u32 num_mixers;
 	bool mixers_swapped;
-	struct sde_crtc_mixer mixers[MAX_MIXERS_PER_CRTC];
+	struct sde_crtc_mixer mixers[CRTC_DUAL_MIXERS];
 
 	struct drm_pending_vblank_event *event;
 	u32 vsync_count;
@@ -254,10 +247,11 @@ struct sde_crtc {
 	struct drm_property_blob *blob_info;
 
 	/* output fence support */
-	struct sde_fence_context output_fence;
+	struct sde_fence_context *output_fence;
 
 	struct sde_hw_stage_cfg stage_cfg;
 	struct dentry *debugfs_root;
+	void *priv_handle;
 
 	u32 vblank_cb_count;
 	u64 play_count;
@@ -269,7 +263,6 @@ struct sde_crtc {
 	bool vblank_requested;
 	bool suspend;
 	bool enabled;
-	bool reset_request;
 
 	bool ds_reconfig;
 	struct list_head feature_list;
@@ -278,7 +271,6 @@ struct sde_crtc {
 	struct list_head ad_dirty;
 	struct list_head ad_active;
 	struct list_head user_event_list;
-	u32 ad_vsync_count;
 
 	struct mutex crtc_lock;
 	struct mutex crtc_cp_lock;
@@ -294,14 +286,12 @@ struct sde_crtc {
 	spinlock_t event_lock;
 	bool misr_enable;
 	u32 misr_frame_count;
-	u32 misr_data[MAX_MIXERS_PER_CRTC];
-
-	bool enable_sui_enhancement;
+	u32 misr_data[CRTC_DUAL_MIXERS];
 
 	u32 sbuf_op_mode_old;
-	u32 sbuf_flush_mask_old;
-	u32 sbuf_flush_mask_all;
-	u32 sbuf_flush_mask_delta;
+	u32 sbuf_rot_id;
+	u32 sbuf_rot_id_old;
+	u32 sbuf_rot_id_delta;
 	struct kthread_delayed_work idle_notify_work;
 	struct kthread_work early_wakeup_work;
 
@@ -312,6 +302,8 @@ struct sde_crtc {
 
 	struct mutex rp_lock;
 	struct list_head rp_head;
+
+	u32 plane_mask_old;
 
 	/* blob for histogram data */
 	struct drm_property_blob *hist_blob;
@@ -330,10 +322,8 @@ struct sde_crtc_res_ops {
 };
 
 /* crtc resource type (0x0-0xffff reserved for hw block type */
-#define SDE_CRTC_RES_ROT_OUT_FBO	0x10000
-#define SDE_CRTC_RES_ROT_OUT_FB		0x10001
-#define SDE_CRTC_RES_ROT_PLANE		0x10002
-#define SDE_CRTC_RES_ROT_IN_FB		0x10003
+#define SDE_CRTC_RES_ROT_PLANE		0x10000
+#define SDE_CRTC_RES_ROT_IN_FB		0x10001
 
 #define SDE_CRTC_RES_FLAG_FREE		BIT(0)
 
@@ -407,6 +397,9 @@ struct sde_crtc_respool {
  * @sbuf_clk_rate : previous and current user specified inline rotator clock
  * @sbuf_clk_shifted : whether or not sbuf_clk_rate has been shifted as part
  *	of crtc atomic check
+ * @padding_height: panel height after line padding
+ * @padding_active: active lines in panel stacking pattern
+ * @padding_dummy: dummy lines in panel stacking pattern
  */
 struct sde_crtc_state {
 	struct drm_crtc_state base;
@@ -420,8 +413,8 @@ struct sde_crtc_state {
 
 	bool is_ppsplit;
 	struct sde_rect crtc_roi;
-	struct sde_rect lm_bounds[MAX_MIXERS_PER_CRTC];
-	struct sde_rect lm_roi[MAX_MIXERS_PER_CRTC];
+	struct sde_rect lm_bounds[CRTC_DUAL_MIXERS];
+	struct sde_rect lm_roi[CRTC_DUAL_MIXERS];
 	struct msm_roi_list user_roi_list;
 
 	struct msm_property_state property_state;
@@ -441,18 +434,15 @@ struct sde_crtc_state {
 	u64 sbuf_clk_rate[2];
 	bool sbuf_clk_shifted;
 
-	struct sde_crtc_respool rp;
+	u32 padding_height;
+	u32 padding_active;
+	u32 padding_dummy;
 
-#ifdef VENDOR_EDIT
-	bool fingerprint_mode;
-	bool fingerprint_pressed;
-	bool fingerprint_defer_sync;
-	struct sde_hw_dim_layer *fingerprint_dim_layer;
-#endif
+	struct sde_crtc_respool rp;
 };
 
 enum sde_crtc_irq_state {
-	IRQ_ENABLING,
+	IRQ_NOINIT,
 	IRQ_ENABLED,
 	IRQ_DISABLING,
 	IRQ_DISABLED,
@@ -505,7 +495,8 @@ static inline int sde_crtc_get_mixer_width(struct sde_crtc *sde_crtc,
 	if (cstate->num_ds_enabled)
 		mixer_width = cstate->ds_cfg[0].lm_width;
 	else
-		mixer_width = mode->hdisplay / sde_crtc->num_mixers;
+		mixer_width = (sde_crtc->num_mixers == CRTC_DUAL_MIXERS ?
+			mode->hdisplay / CRTC_DUAL_MIXERS : mode->hdisplay);
 
 	return mixer_width;
 }
@@ -523,6 +514,19 @@ static inline int sde_crtc_get_mixer_height(struct sde_crtc *sde_crtc,
 
 	return (cstate->num_ds_enabled ?
 			cstate->ds_cfg[0].lm_height : mode->vdisplay);
+}
+
+/**
+ * sde_crtc_get_rotator_op_mode - get the rotator op mode from the crtc state
+ * @crtc: Pointer to drm crtc object
+ */
+static inline enum sde_ctl_rot_op_mode sde_crtc_get_rotator_op_mode(
+		struct drm_crtc *crtc)
+{
+	if (!crtc || !crtc->state)
+		return SDE_CTL_ROT_OP_MODE_OFFLINE;
+
+	return to_sde_crtc_state(crtc->state)->sbuf_cfg.rot_op_mode;
 }
 
 /**
@@ -754,22 +758,6 @@ static inline int sde_crtc_get_secure_level(struct drm_crtc *crtc,
 }
 
 /**
- * sde_crtc_is_sui_enhancement_enabled - Checks if user-mode has enabled the
- *                                        sui enhancement feature
- * @crtc: Pointer to crtc
- */
-static inline bool sde_crtc_is_sui_enhancement_enabled(struct drm_crtc *crtc)
-{
-	struct sde_crtc *sde_crtc;
-
-	if (!crtc)
-		return false;
-	sde_crtc = to_sde_crtc(crtc);
-
-	return sde_crtc->enable_sui_enhancement;
-}
-
-/**
  * sde_crtc_get_secure_transition - determines the operations to be
  * performed before transitioning to secure state
  * This function should be called after swapping the new state
@@ -781,6 +769,28 @@ static inline bool sde_crtc_is_sui_enhancement_enabled(struct drm_crtc *crtc)
 int sde_crtc_get_secure_transition_ops(struct drm_crtc *crtc,
 		struct drm_crtc_state *old_crtc_state,
 		bool old_valid_fb);
+
+/**
+ * sde_crtc_find_plane_fb_modes - finds the modes of all planes attached
+ *                                  to crtc
+ * @crtc: Pointer to DRM crtc object
+ * @fb_ns: number of non secure planes
+ * @fb_sec: number of secure-playback planes
+ * @fb_sec_dir: number of secure-ui/secure-camera planes
+ */
+int sde_crtc_find_plane_fb_modes(struct drm_crtc *crtc,
+		uint32_t *fb_ns, uint32_t *fb_sec, uint32_t *fb_sec_dir);
+
+/**
+ * sde_crtc_state_find_plane_fb_modes - finds the modes of all planes attached
+ *                                       to the crtc state
+ * @crtc_state: Pointer to DRM crtc state object
+ * @fb_ns: number of non secure planes
+ * @fb_sec: number of secure-playback planes
+ * @fb_sec_dir: number of secure-ui/secure-camera planes
+ */
+int sde_crtc_state_find_plane_fb_modes(struct drm_crtc_state *state,
+		uint32_t *fb_ns, uint32_t *fb_sec, uint32_t *fb_sec_dir);
 
 /**
  * sde_crtc_secure_ctrl - Initiates the transition between secure and
@@ -807,11 +817,11 @@ int sde_crtc_helper_reset_custom_properties(struct drm_crtc *crtc,
 void sde_crtc_timeline_status(struct drm_crtc *crtc);
 
 /**
- * sde_crtc_update_cont_splash_mixer_settings - update mixer settings
+ * sde_crtc_update_cont_splash_settings - update mixer settings
  *	during device bootup for cont_splash use case
  * @crtc: Pointer to drm crtc structure
  */
-void sde_crtc_update_cont_splash_mixer_settings(
+void sde_crtc_update_cont_splash_settings(
 		struct drm_crtc *crtc);
 
 /**
@@ -829,4 +839,31 @@ uint64_t sde_crtc_get_sbuf_clk(struct drm_crtc_state *state);
  */
 void sde_crtc_misr_setup(struct drm_crtc *crtc, bool enable, u32 frame_count);
 
+/**
+ * sde_crtc_calc_vpadding_param - calculate vpadding parameters
+ * @state: Pointer to DRM crtc state object
+ * @crtc_y: Plane's CRTC_Y offset
+ * @crtc_h: Plane's CRTC_H size
+ * @padding_y: Padding Y offset
+ * @padding_start: Padding start offset
+ * @padding_height: Padding height in total
+ */
+int sde_crtc_calc_vpadding_param(struct drm_crtc_state *state,
+		uint32_t crtc_y, uint32_t crtc_h, uint32_t *padding_y,
+		uint32_t *padding_start, uint32_t *padding_height);
+
+/**
+ * sde_crtc_get_num_datapath - get the number of datapath active
+ *				of primary connector
+ * @crtc: Pointer to DRM crtc object
+ * @connector: Pointer to DRM connector object of WB in CWB case
+ */
+int sde_crtc_get_num_datapath(struct drm_crtc *crtc,
+		struct drm_connector *connector);
+
+/**
+ * _sde_crtc_clear_dim_layers_v1 - clear all dim layer settings
+ * @cstate:      Pointer to drm crtc state
+ */
+void _sde_crtc_clear_dim_layers_v1(struct drm_crtc_state *state);
 #endif /* _SDE_CRTC_H_ */

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ((GPL-2.0 WITH Linux-syscall-note) OR BSD-3-Clause) */
 /*
  * cec - HDMI Consumer Electronics Control public header
  *
@@ -33,16 +34,11 @@
  * SOFTWARE.
  */
 
-/*
- * Note: this framework is still in staging and it is likely the API
- * will change before it goes out of staging.
- *
- * Once it is moved out of staging this header will move to uapi.
- */
 #ifndef _CEC_UAPI_H
 #define _CEC_UAPI_H
 
 #include <linux/types.h>
+#include <linux/string.h>
 
 #define CEC_MAX_MSG_SIZE	16
 
@@ -135,7 +131,7 @@ static inline int cec_msg_opcode(const struct cec_msg *msg)
  * cec_msg_is_broadcast - return true if this is a broadcast message.
  * @msg:	the message structure
  */
-static inline bool cec_msg_is_broadcast(const struct cec_msg *msg)
+static inline int cec_msg_is_broadcast(const struct cec_msg *msg)
 {
 	return (msg->msg[0] & 0xf) == 0xf;
 }
@@ -165,6 +161,8 @@ static inline void cec_msg_init(struct cec_msg *msg,
  * Set the msg destination to the orig initiator and the msg initiator to the
  * orig destination. Note that msg and orig may be the same pointer, in which
  * case the change is done in place.
+ *
+ * It also zeroes the reply, timeout and flags fields.
  */
 static inline void cec_msg_set_reply_to(struct cec_msg *msg,
 					struct cec_msg *orig)
@@ -172,10 +170,15 @@ static inline void cec_msg_set_reply_to(struct cec_msg *msg,
 	/* The destination becomes the initiator and vice versa */
 	msg->msg[0] = (cec_msg_destination(orig) << 4) |
 		      cec_msg_initiator(orig);
-	msg->reply = msg->timeout = 0;
+	msg->reply = 0;
+	msg->timeout = 0;
+	msg->flags = 0;
 }
 
-/* cec status field */
+/* cec_msg flags field */
+#define CEC_MSG_FL_REPLY_TO_FOLLOWERS	(1 << 0)
+
+/* cec_msg tx/rx_status field */
 #define CEC_TX_STATUS_OK		(1 << 0)
 #define CEC_TX_STATUS_ARB_LOST		(1 << 1)
 #define CEC_TX_STATUS_NACK		(1 << 2)
@@ -187,14 +190,14 @@ static inline void cec_msg_set_reply_to(struct cec_msg *msg,
 #define CEC_RX_STATUS_TIMEOUT		(1 << 1)
 #define CEC_RX_STATUS_FEATURE_ABORT	(1 << 2)
 
-static inline bool cec_msg_status_is_ok(const struct cec_msg *msg)
+static inline int cec_msg_status_is_ok(const struct cec_msg *msg)
 {
 	if (msg->tx_status && !(msg->tx_status & CEC_TX_STATUS_OK))
-		return false;
+		return 0;
 	if (msg->rx_status && !(msg->rx_status & CEC_RX_STATUS_OK))
-		return false;
+		return 0;
 	if (!msg->tx_status && !msg->rx_status)
-		return false;
+		return 0;
 	return !(msg->rx_status & CEC_RX_STATUS_FEATURE_ABORT);
 }
 
@@ -225,7 +228,7 @@ static inline bool cec_msg_status_is_ok(const struct cec_msg *msg)
 #define CEC_LOG_ADDR_BACKUP_2		13
 #define CEC_LOG_ADDR_SPECIFIC		14
 #define CEC_LOG_ADDR_UNREGISTERED	15 /* as initiator address */
-#define CEC_LOG_ADDR_BROADCAST		15 /* ad destination address */
+#define CEC_LOG_ADDR_BROADCAST		15 /* as destination address */
 
 /* The logical address types that the CEC device wants to claim */
 #define CEC_LOG_ADDR_TYPE_TV		0
@@ -257,47 +260,47 @@ static inline bool cec_msg_status_is_ok(const struct cec_msg *msg)
 #define CEC_LOG_ADDR_MASK_SPECIFIC	(1 << CEC_LOG_ADDR_SPECIFIC)
 #define CEC_LOG_ADDR_MASK_UNREGISTERED	(1 << CEC_LOG_ADDR_UNREGISTERED)
 
-static inline bool cec_has_tv(__u16 log_addr_mask)
+static inline int cec_has_tv(__u16 log_addr_mask)
 {
 	return log_addr_mask & CEC_LOG_ADDR_MASK_TV;
 }
 
-static inline bool cec_has_record(__u16 log_addr_mask)
+static inline int cec_has_record(__u16 log_addr_mask)
 {
 	return log_addr_mask & CEC_LOG_ADDR_MASK_RECORD;
 }
 
-static inline bool cec_has_tuner(__u16 log_addr_mask)
+static inline int cec_has_tuner(__u16 log_addr_mask)
 {
 	return log_addr_mask & CEC_LOG_ADDR_MASK_TUNER;
 }
 
-static inline bool cec_has_playback(__u16 log_addr_mask)
+static inline int cec_has_playback(__u16 log_addr_mask)
 {
 	return log_addr_mask & CEC_LOG_ADDR_MASK_PLAYBACK;
 }
 
-static inline bool cec_has_audiosystem(__u16 log_addr_mask)
+static inline int cec_has_audiosystem(__u16 log_addr_mask)
 {
 	return log_addr_mask & CEC_LOG_ADDR_MASK_AUDIOSYSTEM;
 }
 
-static inline bool cec_has_backup(__u16 log_addr_mask)
+static inline int cec_has_backup(__u16 log_addr_mask)
 {
 	return log_addr_mask & CEC_LOG_ADDR_MASK_BACKUP;
 }
 
-static inline bool cec_has_specific(__u16 log_addr_mask)
+static inline int cec_has_specific(__u16 log_addr_mask)
 {
 	return log_addr_mask & CEC_LOG_ADDR_MASK_SPECIFIC;
 }
 
-static inline bool cec_is_unregistered(__u16 log_addr_mask)
+static inline int cec_is_unregistered(__u16 log_addr_mask)
 {
 	return log_addr_mask & CEC_LOG_ADDR_MASK_UNREGISTERED;
 }
 
-static inline bool cec_is_unconfigured(__u16 log_addr_mask)
+static inline int cec_is_unconfigured(__u16 log_addr_mask)
 {
 	return log_addr_mask == 0;
 }
@@ -320,6 +323,7 @@ static inline bool cec_is_unconfigured(__u16 log_addr_mask)
 #define CEC_MODE_FOLLOWER		(0x1 << 4)
 #define CEC_MODE_EXCL_FOLLOWER		(0x2 << 4)
 #define CEC_MODE_EXCL_FOLLOWER_PASSTHRU	(0x3 << 4)
+#define CEC_MODE_MONITOR_PIN		(0xd << 4)
 #define CEC_MODE_MONITOR		(0xe << 4)
 #define CEC_MODE_MONITOR_ALL		(0xf << 4)
 #define CEC_MODE_FOLLOWER_MSK		0xf0
@@ -338,6 +342,10 @@ static inline bool cec_is_unconfigured(__u16 log_addr_mask)
 #define CEC_CAP_RC		(1 << 4)
 /* Hardware can monitor all messages, not just directed and broadcast. */
 #define CEC_CAP_MONITOR_ALL	(1 << 5)
+/* Hardware can use CEC only if the HDMI HPD pin is high. */
+#define CEC_CAP_NEEDS_HPD	(1 << 6)
+/* Hardware can monitor CEC pin transitions */
+#define CEC_CAP_MONITOR_PIN	(1 << 7)
 
 /**
  * struct cec_caps - CEC capabilities structure.
@@ -391,6 +399,10 @@ struct cec_log_addrs {
 
 /* Allow a fallback to unregistered */
 #define CEC_LOG_ADDRS_FL_ALLOW_UNREG_FALLBACK	(1 << 0)
+/* Passthrough RC messages to the input subsystem */
+#define CEC_LOG_ADDRS_FL_ALLOW_RC_PASSTHRU	(1 << 1)
+/* CDC-Only device: supports only CDC messages */
+#define CEC_LOG_ADDRS_FL_CDC_ONLY		(1 << 2)
 
 /* Events */
 
@@ -401,8 +413,11 @@ struct cec_log_addrs {
  * didn't empty the message queue in time
  */
 #define CEC_EVENT_LOST_MSGS		2
+#define CEC_EVENT_PIN_CEC_LOW		3
+#define CEC_EVENT_PIN_CEC_HIGH		4
 
 #define CEC_EVENT_FL_INITIAL_STATE	(1 << 0)
+#define CEC_EVENT_FL_DROPPED_EVENTS	(1 << 1)
 
 /**
  * struct cec_event_state_change - used when the CEC adapter changes state.
@@ -415,7 +430,7 @@ struct cec_event_state_change {
 };
 
 /**
- * struct cec_event_lost_msgs - tells you how many messages were lost due.
+ * struct cec_event_lost_msgs - tells you how many messages were lost.
  * @lost_msgs: how many messages were lost.
  */
 struct cec_event_lost_msgs {
@@ -778,8 +793,8 @@ struct cec_event {
 #define CEC_MSG_SELECT_DIGITAL_SERVICE			0x93
 #define CEC_MSG_TUNER_DEVICE_STATUS			0x07
 /* Recording Flag Operand (rec_flag) */
-#define CEC_OP_REC_FLAG_USED				0
-#define CEC_OP_REC_FLAG_NOT_USED			1
+#define CEC_OP_REC_FLAG_NOT_USED			0
+#define CEC_OP_REC_FLAG_USED				1
 /* Tuner Display Info Operand (tuner_display_info) */
 #define CEC_OP_TUNER_DISPLAY_INFO_DIGITAL		0
 #define CEC_OP_TUNER_DISPLAY_INFO_NONE			1
@@ -1010,5 +1025,55 @@ struct cec_event {
 #define CEC_OP_HPD_ERROR_INITIATOR_WRONG_STATE		2
 #define CEC_OP_HPD_ERROR_OTHER				3
 #define CEC_OP_HPD_ERROR_NONE_NO_VIDEO			4
+
+/* End of Messages */
+
+/* Helper functions to identify the 'special' CEC devices */
+
+static inline int cec_is_2nd_tv(const struct cec_log_addrs *las)
+{
+	/*
+	 * It is a second TV if the logical address is 14 or 15 and the
+	 * primary device type is a TV.
+	 */
+	return las->num_log_addrs &&
+	       las->log_addr[0] >= CEC_LOG_ADDR_SPECIFIC &&
+	       las->primary_device_type[0] == CEC_OP_PRIM_DEVTYPE_TV;
+}
+
+static inline int cec_is_processor(const struct cec_log_addrs *las)
+{
+	/*
+	 * It is a processor if the logical address is 12-15 and the
+	 * primary device type is a Processor.
+	 */
+	return las->num_log_addrs &&
+	       las->log_addr[0] >= CEC_LOG_ADDR_BACKUP_1 &&
+	       las->primary_device_type[0] == CEC_OP_PRIM_DEVTYPE_PROCESSOR;
+}
+
+static inline int cec_is_switch(const struct cec_log_addrs *las)
+{
+	/*
+	 * It is a switch if the logical address is 15 and the
+	 * primary device type is a Switch and the CDC-Only flag is not set.
+	 */
+	return las->num_log_addrs == 1 &&
+	       las->log_addr[0] == CEC_LOG_ADDR_UNREGISTERED &&
+	       las->primary_device_type[0] == CEC_OP_PRIM_DEVTYPE_SWITCH &&
+	       !(las->flags & CEC_LOG_ADDRS_FL_CDC_ONLY);
+}
+
+static inline int cec_is_cdc_only(const struct cec_log_addrs *las)
+{
+	/*
+	 * It is a CDC-only device if the logical address is 15 and the
+	 * primary device type is a Switch and the CDC-Only flag is set.
+	 */
+	return las->num_log_addrs == 1 &&
+	       las->log_addr[0] == CEC_LOG_ADDR_UNREGISTERED &&
+	       las->primary_device_type[0] == CEC_OP_PRIM_DEVTYPE_SWITCH &&
+	       (las->flags & CEC_LOG_ADDRS_FL_CDC_ONLY);
+}
 
 #endif

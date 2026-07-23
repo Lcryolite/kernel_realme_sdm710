@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -18,7 +18,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/mod_devicetable.h>
 #include <linux/platform_device.h>
-#include <linux/sched.h>
+#include <linux/sched/clock.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/atomic.h>
@@ -299,7 +299,7 @@ static int msm_rtb_probe(struct platform_device *pdev)
 	md_entry.virt_addr = (uintptr_t)msm_rtb.rtb;
 	md_entry.phys_addr = msm_rtb.phys;
 	md_entry.size = msm_rtb.size;
-	if (msm_minidump_add_region(&md_entry) < 0)
+	if (msm_minidump_add_region(&md_entry))
 		pr_info("Failed to add RTB in Minidump\n");
 
 #if defined(CONFIG_QCOM_RTB_SEPARATE_CPUS)
@@ -326,6 +326,7 @@ static const struct of_device_id msm_match_table[] = {
 };
 
 static struct platform_driver msm_rtb_driver = {
+	.probe = msm_rtb_probe,
 	.driver         = {
 		.name = "msm_rtb",
 		.owner = THIS_MODULE,
@@ -335,7 +336,7 @@ static struct platform_driver msm_rtb_driver = {
 
 static int __init msm_rtb_init(void)
 {
-	return platform_driver_probe(&msm_rtb_driver, msm_rtb_probe);
+	return platform_driver_register(&msm_rtb_driver);
 }
 
 static void __exit msm_rtb_exit(void)

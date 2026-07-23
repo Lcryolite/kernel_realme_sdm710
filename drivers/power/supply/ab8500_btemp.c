@@ -76,8 +76,8 @@ struct ab8500_btemp_ranges {
  * @dev:		Pointer to the structure device
  * @node:		List of AB8500 BTEMPs, hence prepared for reentrance
  * @curr_source:	What current source we use, in uA
- * @bat_temp:		Dispatched battery temperature in degree Celcius
- * @prev_bat_temp	Last measured battery temperature in degree Celcius
+ * @bat_temp:		Dispatched battery temperature in degree Celsius
+ * @prev_bat_temp	Last measured battery temperature in degree Celsius
  * @parent:		Pointer to the struct ab8500
  * @gpadc:		Pointer to the struct gpadc
  * @fg:			Pointer to the struct fg
@@ -123,10 +123,7 @@ static LIST_HEAD(ab8500_btemp_list);
  */
 struct ab8500_btemp *ab8500_btemp_get(void)
 {
-	struct ab8500_btemp *btemp;
-	btemp = list_first_entry(&ab8500_btemp_list, struct ab8500_btemp, node);
-
-	return btemp;
+	return list_first_entry(&ab8500_btemp_list, struct ab8500_btemp, node);
 }
 EXPORT_SYMBOL(ab8500_btemp_get);
 
@@ -464,13 +461,13 @@ static int ab8500_btemp_get_batctrl_res(struct ab8500_btemp *di)
  * @tbl_size:	size of the resistance to temperature table
  * @res:	resistance to calculate the temperature from
  *
- * This function returns the battery temperature in degrees Celcius
+ * This function returns the battery temperature in degrees Celsius
  * based on the NTC resistance.
  */
 static int ab8500_btemp_res_to_temp(struct ab8500_btemp *di,
 	const struct abx500_res_to_temp *tbl, int tbl_size, int res)
 {
-	int i, temp;
+	int i;
 	/*
 	 * Calculate the formula for the straight line
 	 * Simple interpolation if we are within
@@ -488,9 +485,8 @@ static int ab8500_btemp_res_to_temp(struct ab8500_btemp *di,
 			i++;
 	}
 
-	temp = tbl[i].temp + ((tbl[i + 1].temp - tbl[i].temp) *
+	return tbl[i].temp + ((tbl[i + 1].temp - tbl[i].temp) *
 		(res - tbl[i].resist)) / (tbl[i + 1].resist - tbl[i].resist);
-	return temp;
 }
 
 /**
@@ -980,10 +976,8 @@ static int ab8500_btemp_get_ext_psy_data(struct device *dev, void *data)
  */
 static void ab8500_btemp_external_power_changed(struct power_supply *psy)
 {
-	struct ab8500_btemp *di = power_supply_get_drvdata(psy);
-
-	class_for_each_device(power_supply_class, NULL,
-		di->btemp_psy, ab8500_btemp_get_ext_psy_data);
+	class_for_each_device(power_supply_class, NULL, psy,
+			      ab8500_btemp_get_ext_psy_data);
 }
 
 /* ab8500 btemp driver interrupts and their respective isr */

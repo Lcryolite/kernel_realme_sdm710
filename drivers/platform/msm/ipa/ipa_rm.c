@@ -422,7 +422,7 @@ int ipa_rm_request_resource(enum ipa_rm_resource_name resource_name)
 	if (ipa_rm_dep_graph_get_resource(ipa_rm_ctx->dep_graph,
 			resource_name,
 			&resource) != 0) {
-		IPA_RM_ERR("resource does not exists\n");
+		IPA_RM_ERR("resource does not exist\n");
 		result = -EPERM;
 		goto bail;
 	}
@@ -889,8 +889,6 @@ int ipa_rm_wq_send_cmd(enum ipa_rm_wq_cmd wq_cmd,
 		work->notify_registered_only = notify_registered_only;
 		result = queue_work(ipa_rm_ctx->ipa_rm_wq,
 				(struct work_struct *)work);
-	} else {
-		IPA_RM_ERR("no mem\n");
 	}
 
 	return result;
@@ -911,8 +909,6 @@ int ipa_rm_wq_send_suspend_cmd(enum ipa_rm_resource_name resource_name,
 		work->needed_bw = needed_bw;
 		result = queue_work(ipa_rm_ctx->ipa_rm_wq,
 				(struct work_struct *)work);
-	} else {
-		IPA_RM_ERR("no mem\n");
 	}
 
 	return result;
@@ -1082,10 +1078,8 @@ static void ipa_rm_perf_profile_notify_to_ipa(enum ipa_voltage_level volt,
 	struct ipa_rm_notify_ipa_work_type *work;
 
 	work = kzalloc(sizeof(*work), GFP_ATOMIC);
-	if (!work) {
-		IPA_RM_ERR("no mem\n");
+	if (!work)
 		return;
-	}
 
 	INIT_WORK(&work->work, ipa_rm_perf_profile_notify_to_ipa_work);
 	work->volt = volt;

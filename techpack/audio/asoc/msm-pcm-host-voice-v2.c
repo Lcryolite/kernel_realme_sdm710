@@ -1,14 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2013-2018, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023, Qualcomm Innovation Center, Inc. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/init.h>
@@ -120,7 +112,7 @@ struct session {
 	struct tap_point rx_tap_point;
 	phys_addr_t sess_paddr;
 	void *sess_kvaddr;
-	struct ion_handle *ion_handle;
+	struct dma_buf *dma_buf;
 	struct mem_map_table tp_mem_table;
 };
 
@@ -146,7 +138,6 @@ struct hpcm_drv {
 	struct mutex lock;
 	struct session session[MAX_SESSION];
 	struct mixer_conf mixer_conf;
-	struct ion_client *ion_client;
 	struct start_cmd start_cmd;
 };
 
@@ -453,19 +444,12 @@ static void hpcm_free_allocated_mem(struct hpcm_drv *prtd)
 	paddr = sess->sess_paddr;
 
 	if (paddr) {
-		msm_audio_ion_free(prtd->ion_client, sess->ion_handle);
-		prtd->ion_client = NULL;
-		sess->ion_handle = NULL;
-		msm_audio_ion_free(sess->tp_mem_table.client,
-				   sess->tp_mem_table.handle);
-		sess->tp_mem_table.client = NULL;
-		sess->tp_mem_table.handle = NULL;
+		msm_audio_ion_free(sess->dma_buf);
+		sess->dma_buf = NULL;
+		msm_audio_ion_free(sess->tp_mem_table.dma_buf);
+		sess->tp_mem_table.dma_buf = NULL;
 		sess->sess_paddr = 0;
 		sess->sess_kvaddr = 0;
-		sess->ion_handle = 0;
-		prtd->ion_client = 0;
-		sess->tp_mem_table.client = 0;
-		sess->tp_mem_table.handle = 0;
 
 		txtp->capture_dai_data.vocpcm_ion_buffer.paddr = 0;
 		txtp->capture_dai_data.vocpcm_ion_buffer.kvaddr = 0;
@@ -532,9 +516,7 @@ static int hpcm_allocate_shared_memory(struct hpcm_drv *prtd)
 	txtp = &sess->tx_tap_point;
 	rxtp = &sess->rx_tap_point;
 
-	result = msm_audio_ion_alloc("host_pcm_buffer",
-				     &prtd->ion_client,
-				     &sess->ion_handle,
+	result = msm_audio_ion_alloc(&sess->dma_buf,
 				     VHPCM_BLOCK_SIZE,
 				     &sess->sess_paddr,
 				     &mem_len,
@@ -550,9 +532,7 @@ static int hpcm_allocate_shared_memory(struct hpcm_drv *prtd)
 	pr_debug("%s: Host PCM memory block allocated\n", __func__);
 
 	/* Allocate mem_map_table for tap point */
-	result = msm_audio_ion_alloc("host_pcm_table",
-			&sess->tp_mem_table.client,
-			&sess->tp_mem_table.handle,
+	result = msm_audio_ion_alloc(&sess->tp_mem_table.dma_buf,
 			sizeof(struct vss_imemory_table_t),
 			&sess->tp_mem_table.phys,
 			&len,
@@ -561,9 +541,8 @@ static int hpcm_allocate_shared_memory(struct hpcm_drv *prtd)
 	if (result) {
 		pr_err("%s: msm_audio_ion_alloc error, rc = %d\n",
 			__func__, result);
-		msm_audio_ion_free(prtd->ion_client, sess->ion_handle);
-		prtd->ion_client = NULL;
-		sess->ion_handle = NULL;
+		msm_audio_ion_free(sess->dma_buf);
+		sess->dma_buf = NULL;
 		sess->sess_paddr = 0;
 		sess->sess_kvaddr = 0;
 		ret = -ENOMEM;
@@ -644,6 +623,12 @@ static int hpcm_start_vocpcm(char *pcm_id, struct hpcm_drv *prtd,
 						prtd->mixer_conf.tx.sample_rate;
 			(*no_of_tp)++;
 		}
+	}
+
+	if (*no_of_tp != no_of_tp_req && *no_of_tp > 2) {
+		pr_err("%s:: Invalid hpcm start request\n", __func__);
+		memset(&prtd->start_cmd, 0, sizeof(struct start_cmd));
+		return -EINVAL;
 	}
 
 	if ((prtd->mixer_conf.tx.enable || prtd->mixer_conf.rx.enable) &&
@@ -1107,8 +1092,8 @@ done:
 }
 
 static int msm_pcm_playback_copy(struct snd_pcm_substream *substream, int a,
-				 snd_pcm_uframes_t hwoff, void __user *buf,
-				 snd_pcm_uframes_t frames)
+				 unsigned long hwoff, void __user *buf,
+				 unsigned long fbytes)
 {
 	int ret = 0;
 	struct hpcm_buf_node *buf_node = NULL;
@@ -1116,8 +1101,6 @@ static int msm_pcm_playback_copy(struct snd_pcm_substream *substream, int a,
 	struct hpcm_drv *prtd = runtime->private_data;
 	struct dai_data *dai_data = hpcm_get_dai_data(substream->pcm->id, prtd);
 	unsigned long dsp_flags;
-
-	int count = frames_to_bytes(runtime, frames);
 
 	if (dai_data == NULL) {
 		pr_err("%s, dai_data is null\n", __func__);
@@ -1131,7 +1114,7 @@ static int msm_pcm_playback_copy(struct snd_pcm_substream *substream, int a,
 				dai_data->state == HPCM_STOPPED),
 				1 * HZ);
 	if (ret > 0) {
-		if (count <= HPCM_MAX_VOC_PKT_SIZE) {
+		if (fbytes <= HPCM_MAX_VOC_PKT_SIZE) {
 			spin_lock_irqsave(&dai_data->dsp_lock, dsp_flags);
 			buf_node =
 				list_first_entry(&dai_data->free_queue,
@@ -1139,14 +1122,14 @@ static int msm_pcm_playback_copy(struct snd_pcm_substream *substream, int a,
 			list_del(&buf_node->list);
 			spin_unlock_irqrestore(&dai_data->dsp_lock, dsp_flags);
 			ret = copy_from_user(&buf_node->frame.voc_pkt, buf,
-					     count);
-			buf_node->frame.len = count;
+					     fbytes);
+			buf_node->frame.len = fbytes;
 			spin_lock_irqsave(&dai_data->dsp_lock, dsp_flags);
 			list_add_tail(&buf_node->list, &dai_data->filled_queue);
 			spin_unlock_irqrestore(&dai_data->dsp_lock, dsp_flags);
 		} else {
-			pr_err("%s: Write cnt %d is > HPCM_MAX_VOC_PKT_SIZE\n",
-				__func__, count);
+			pr_err("%s: Write cnt %lu is > HPCM_MAX_VOC_PKT_SIZE\n",
+				__func__, fbytes);
 			ret = -ENOMEM;
 		}
 	} else if (ret == 0) {
@@ -1161,11 +1144,10 @@ done:
 }
 
 static int msm_pcm_capture_copy(struct snd_pcm_substream *substream,
-				int channel, snd_pcm_uframes_t hwoff,
-				void __user *buf, snd_pcm_uframes_t frames)
+				int channel, unsigned long hwoff,
+				void __user *buf, unsigned long fbytes)
 {
 	int ret = 0;
-	int count = 0;
 	struct hpcm_buf_node *buf_node = NULL;
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct hpcm_drv *prtd = runtime->private_data;
@@ -1179,15 +1161,13 @@ static int msm_pcm_capture_copy(struct snd_pcm_substream *substream,
 		goto done;
 	}
 
-	count = frames_to_bytes(runtime, frames);
-
 	ret = wait_event_interruptible_timeout(dai_data->queue_wait,
 				(!list_empty(&dai_data->filled_queue) ||
 				dai_data->state == HPCM_STOPPED),
 				1 * HZ);
 
 	if (ret > 0) {
-		if (count <= HPCM_MAX_VOC_PKT_SIZE) {
+		if (fbytes <= HPCM_MAX_VOC_PKT_SIZE) {
 			spin_lock_irqsave(&dai_data->dsp_lock, dsp_flags);
 			buf_node = list_first_entry(&dai_data->filled_queue,
 					struct hpcm_buf_node, list);
@@ -1205,8 +1185,8 @@ static int msm_pcm_capture_copy(struct snd_pcm_substream *substream,
 			spin_unlock_irqrestore(&dai_data->dsp_lock, dsp_flags);
 
 		} else {
-			pr_err("%s: Read count %d > HPCM_MAX_VOC_PKT_SIZE\n",
-				__func__, count);
+			pr_err("%s: Read count %lu > HPCM_MAX_VOC_PKT_SIZE\n",
+				__func__, fbytes);
 			ret = -ENOMEM;
 		}
 
@@ -1223,17 +1203,17 @@ done:
 }
 
 static int msm_pcm_copy(struct snd_pcm_substream *substream, int channel,
-			snd_pcm_uframes_t hwoff, void __user *buf,
-			snd_pcm_uframes_t frames)
+			unsigned long hwoff, void __user *buf,
+			unsigned long fbytes)
 {
 	int ret = 0;
 
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
 		ret = msm_pcm_playback_copy(substream, channel,
-					    hwoff, buf, frames);
+					    hwoff, buf, fbytes);
 	else if (substream->stream == SNDRV_PCM_STREAM_CAPTURE)
 		ret = msm_pcm_capture_copy(substream, channel,
-					   hwoff, buf, frames);
+					   hwoff, buf, fbytes);
 
 	return ret;
 }
@@ -1465,7 +1445,7 @@ static const struct snd_pcm_ops msm_pcm_ops = {
 	.prepare        = msm_pcm_prepare,
 	.trigger        = msm_pcm_trigger,
 	.pointer        = msm_pcm_pointer,
-	.copy           = msm_pcm_copy,
+	.copy_user      = msm_pcm_copy,
 	.close          = msm_pcm_close,
 };
 

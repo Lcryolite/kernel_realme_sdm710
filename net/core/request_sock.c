@@ -34,8 +34,6 @@
  * and it will increase in proportion to the memory of machine.
  * Note : Dont forget somaxconn that may limit backlog too.
  */
-int sysctl_max_syn_backlog = 256;
-EXPORT_SYMBOL(sysctl_max_syn_backlog);
 
 void reqsk_queue_alloc(struct request_sock_queue *queue)
 {
@@ -102,7 +100,7 @@ void reqsk_fastopen_remove(struct sock *sk, struct request_sock *req,
 
 	fastopenq = &inet_csk(lsk)->icsk_accept_queue.fastopenq;
 
-	tcp_sk(sk)->fastopen_rsk = NULL;
+	RCU_INIT_POINTER(tcp_sk(sk)->fastopen_rsk, NULL);
 	spin_lock_bh(&fastopenq->lock);
 	fastopenq->qlen--;
 	tcp_rsk(req)->tfo_listener = false;

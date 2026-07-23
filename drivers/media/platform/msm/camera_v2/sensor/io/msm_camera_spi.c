@@ -545,10 +545,12 @@ int32_t msm_camera_spi_write(struct msm_camera_i2c_client *client,
 	goto OUT;
 NOMEM:
 	pr_err("%s: memory allocation failed\n", __func__);
+	kfree(buf);
 	return -ENOMEM;
 ERROR:
 	pr_err("%s: error write\n", __func__);
 OUT:
+	kfree(buf);
 	kfree(tx);
 	return rc;
 }

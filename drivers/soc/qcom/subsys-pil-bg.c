@@ -1,4 +1,4 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -348,8 +348,7 @@ static int bg_shutdown(const struct subsys_desc *subsys, bool force_stop)
  * Return: 0 on success. Error code on failure.
  */
 static int bg_auth_metadata(struct pil_desc *pil,
-	const u8 *metadata, size_t size,
-	phys_addr_t addr, void *sz)
+	const u8 *metadata, size_t size)
 {
 	struct pil_bg_data *bg_data = desc_to_data(pil);
 	struct tzapp_bg_req bg_tz_req;
@@ -464,6 +463,7 @@ static int bg_auth_and_xfer(struct pil_desc *pil)
 		if (is_twm_exit())
 			bg_data->subsys_desc.ramdump(true,
 				&bg_data->subsys_desc);
+
 		bg_tz_req.tzapp_bg_cmd = BGPIL_DLOAD_CONT;
 		ret = bgpil_tzapp_comm(bg_data, &bg_tz_req);
 	}

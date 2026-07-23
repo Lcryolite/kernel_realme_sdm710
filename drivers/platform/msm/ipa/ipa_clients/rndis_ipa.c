@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2018,2020 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -28,9 +28,7 @@
 #include <linux/rndis_ipa.h>
 #include <linux/workqueue.h>
 #include "../ipa_common_i.h"
-#ifdef CONFIG_IPA3
 #include "../ipa_v3/ipa_pm.h"
-#endif
 
 #define CREATE_TRACE_POINTS
 #include "rndis_ipa_trace.h"
@@ -59,7 +57,7 @@
 		(BAM_DMA_MAX_PKT_NUMBER * (sizeof(struct sps_iovec)))
 #define TX_TIMEOUT (5 * HZ)
 #define MIN_TX_ERROR_SLEEP_PERIOD 500
-#define DEFAULT_AGGR_TIME_LIMIT 1
+#define DEFAULT_AGGR_TIME_LIMIT 1000 /* 1ms */
 #define DEFAULT_AGGR_PKT_LIMIT 0
 
 #define IPA_RNDIS_IPC_LOG_PAGES 50
@@ -269,10 +267,8 @@ static void rndis_ipa_rm_notify
 	unsigned long data);
 static int rndis_ipa_create_rm_resource(struct rndis_ipa_dev *rndis_ipa_ctx);
 static int rndis_ipa_destroy_rm_resource(struct rndis_ipa_dev *rndis_ipa_ctx);
-#ifdef CONFIG_IPA3
 static int rndis_ipa_register_pm_client(struct rndis_ipa_dev *rndis_ipa_ctx);
 static int rndis_ipa_deregister_pm_client(struct rndis_ipa_dev *rndis_ipa_ctx);
-#endif
 static bool rx_filter(struct sk_buff *skb);
 static bool tx_filter(struct sk_buff *skb);
 static bool rm_enabled(struct rndis_ipa_dev *rndis_ipa_ctx);
@@ -359,7 +355,7 @@ static struct ipa_ep_cfg ipa_to_usb_ep_cfg = {
 		.aggr = IPA_GENERIC,
 		.aggr_byte_limit = 4,
 		.aggr_time_limit = DEFAULT_AGGR_TIME_LIMIT,
-		.aggr_pkt_limit = DEFAULT_AGGR_PKT_LIMIT
+		.aggr_pkt_limit = DEFAULT_AGGR_PKT_LIMIT,
 	},
 	.deaggr = {
 		.deaggr_hdr_len = 0,
@@ -550,7 +546,7 @@ int rndis_ipa_init(struct ipa_usb_init_params *params)
 		goto fail_netdev_priv;
 	}
 	memset(rndis_ipa_ctx, 0, sizeof(*rndis_ipa_ctx));
-	RNDIS_IPA_DEBUG("rndis_ipa_ctx (private)=%p\n", rndis_ipa_ctx);
+	RNDIS_IPA_DEBUG("rndis_ipa_ctx (private)=%pK\n", rndis_ipa_ctx);
 
 	spin_lock_init(&rndis_ipa_ctx->state_lock);
 
@@ -606,15 +602,14 @@ int rndis_ipa_init(struct ipa_usb_init_params *params)
 		goto fail_set_device_ethernet;
 	}
 	RNDIS_IPA_DEBUG("Device Ethernet address set %pM\n", net->dev_addr);
-#ifdef CONFIG_IPA3
-	if (ipa_is_vlan_mode(IPA_VLAN_IF_RNDIS,
+
+	if ((ipa_get_hw_type() >= IPA_HW_v3_0) &&
+		ipa_is_vlan_mode(IPA_VLAN_IF_RNDIS,
 		&rndis_ipa_ctx->is_vlan_mode)) {
 		RNDIS_IPA_ERROR("couldn't acquire vlan mode, is ipa ready?\n");
-		goto fail_hdrs_cfg;
+		goto fail_get_vlan_mode;
 	}
-#else
-	rndis_ipa_ctx->is_vlan_mode = 0;
-#endif
+
 	RNDIS_IPA_DEBUG("is_vlan_mode %d\n", rndis_ipa_ctx->is_vlan_mode);
 
 	result = rndis_ipa_hdrs_cfg
@@ -665,6 +660,7 @@ fail_register_netdev:
 fail_register_tx:
 	rndis_ipa_hdrs_destroy(rndis_ipa_ctx);
 fail_hdrs_cfg:
+fail_get_vlan_mode:
 fail_set_device_ethernet:
 	rndis_ipa_debugfs_destroy(rndis_ipa_ctx);
 fail_netdev_priv:
@@ -726,7 +722,7 @@ int rndis_ipa_pipe_connect_notify(
 		return ret;
 
 	RNDIS_IPA_DEBUG
-		("usb_to_ipa_hdl=%d, ipa_to_usb_hdl=%d, private=0x%p\n",
+		("usb_to_ipa_hdl=%d, ipa_to_usb_hdl=%d, private=0x%pK\n",
 		usb_to_ipa_hdl, ipa_to_usb_hdl, private);
 	RNDIS_IPA_DEBUG
 		("max_xfer_sz_to_dev=%d, max_pkt_num_to_dev=%d\n",
@@ -760,11 +756,9 @@ int rndis_ipa_pipe_connect_notify(
 		return -EINVAL;
 	}
 
-#ifdef CONFIG_IPA3
 	if (ipa_pm_is_used())
 		result = rndis_ipa_register_pm_client(rndis_ipa_ctx);
 	else
-#endif
 		result = rndis_ipa_create_rm_resource(rndis_ipa_ctx);
 	if (result) {
 		RNDIS_IPA_ERROR("fail on RM create\n");
@@ -848,11 +842,9 @@ int rndis_ipa_pipe_connect_notify(
 	return 0;
 
 fail:
-#ifdef CONFIG_IPA3
 	if (ipa_pm_is_used())
 		rndis_ipa_deregister_pm_client(rndis_ipa_ctx);
 	else
-#endif
 		rndis_ipa_destroy_rm_resource(rndis_ipa_ctx);
 fail_create_rm:
 	return result;
@@ -1296,7 +1288,7 @@ int rndis_ipa_pipe_disconnect_notify(void *private)
 	NULL_CHECK_RETVAL(rndis_ipa_ctx);
 	if (ret)
 		return ret;
-	RNDIS_IPA_DEBUG("private=0x%p\n", private);
+	RNDIS_IPA_DEBUG("private=0x%pK\n", private);
 
 	spin_lock_irqsave(&rndis_ipa_ctx->state_lock, flags);
 
@@ -1347,11 +1339,9 @@ int rndis_ipa_pipe_disconnect_notify(void *private)
 	rndis_ipa_ctx->net->stats.tx_dropped += outstanding_dropped_pkts;
 	atomic_set(&rndis_ipa_ctx->outstanding_pkts, 0);
 
-#ifdef CONFIG_IPA3
 	if (ipa_pm_is_used())
 		retval = rndis_ipa_deregister_pm_client(rndis_ipa_ctx);
 	else
-#endif
 		retval = rndis_ipa_destroy_rm_resource(rndis_ipa_ctx);
 	if (retval) {
 		RNDIS_IPA_ERROR("Fail to clean RM\n");
@@ -1407,17 +1397,17 @@ void rndis_ipa_cleanup(void *private)
 {
 	struct rndis_ipa_dev *rndis_ipa_ctx = private;
 	int next_state;
-	int retval;
+	int ret;
 	unsigned long flags;
 
 	RNDIS_IPA_LOG_ENTRY();
 
-	RNDIS_IPA_DEBUG("private=0x%p\n", private);
+	RNDIS_IPA_DEBUG("private=0x%pK\n", private);
 
-	if (!rndis_ipa_ctx) {
-		RNDIS_IPA_ERROR("rndis_ipa_ctx NULL pointer\n");
+	ret = 0;
+	NULL_CHECK_RETVAL(rndis_ipa_ctx);
+	if (ret)
 		return;
-	}
 
 	spin_lock_irqsave(&rndis_ipa_ctx->state_lock, flags);
 	next_state = rndis_ipa_next_state
@@ -1432,15 +1422,15 @@ void rndis_ipa_cleanup(void *private)
 
 	RNDIS_IPA_STATE_DEBUG(rndis_ipa_ctx);
 
-	retval = rndis_ipa_deregister_properties(rndis_ipa_ctx->net->name);
-	if (retval) {
+	ret = rndis_ipa_deregister_properties(rndis_ipa_ctx->net->name);
+	if (ret) {
 		RNDIS_IPA_ERROR("Fail to deregister Tx/Rx properties\n");
 		return;
 	}
 	RNDIS_IPA_DEBUG("deregister Tx/Rx properties was successful\n");
 
-	retval = rndis_ipa_hdrs_destroy(rndis_ipa_ctx);
-	if (retval)
+	ret = rndis_ipa_hdrs_destroy(rndis_ipa_ctx);
+	if (ret)
 		RNDIS_IPA_ERROR(
 			"Failed removing RNDIS headers from IPA core. Continue anyway\n");
 	else
@@ -1635,7 +1625,6 @@ static int rndis_ipa_hdrs_cfg(
 		(sizeof(*hdrs) + sizeof(*ipv4_hdr) + sizeof(*ipv6_hdr),
 		GFP_KERNEL);
 	if (!hdrs) {
-		RNDIS_IPA_ERROR("mem allocation fail for header-insertion\n");
 		result = -ENOMEM;
 		goto fail_mem;
 	}
@@ -1696,10 +1685,8 @@ static int rndis_ipa_hdrs_destroy(struct rndis_ipa_dev *rndis_ipa_ctx)
 
 	del_hdr = kzalloc(sizeof(*del_hdr) + sizeof(*ipv4) +
 			sizeof(*ipv6), GFP_KERNEL);
-	if (!del_hdr) {
-		RNDIS_IPA_ERROR("memory allocation for del_hdr failed\n");
+	if (!del_hdr)
 		return -ENOMEM;
-	}
 
 	del_hdr->commit = 1;
 	del_hdr->num_hdls = 2;
@@ -1909,7 +1896,6 @@ fail_rm_create:
 	return result;
 }
 
-#ifdef CONFIG_IPA3
 static void rndis_ipa_pm_cb(void *p, enum ipa_pm_cb_event event)
 {
 	struct rndis_ipa_dev *rndis_ipa_ctx = p;
@@ -1932,7 +1918,7 @@ static void rndis_ipa_pm_cb(void *p, enum ipa_pm_cb_event event)
 
 	RNDIS_IPA_LOG_EXIT();
 }
-#endif
+
 /**
  * rndis_ipa_destroy_rm_resource() - delete the dependency and destroy
  * the resource done on rndis_ipa_create_rm_resource()
@@ -1992,7 +1978,6 @@ bail:
 	return result;
 }
 
-#ifdef CONFIG_IPA3
 static int rndis_ipa_register_pm_client(struct rndis_ipa_dev *rndis_ipa_ctx)
 {
 	int result;
@@ -2019,7 +2004,7 @@ static int rndis_ipa_deregister_pm_client(struct rndis_ipa_dev *rndis_ipa_ctx)
 	rndis_ipa_ctx->pm_hdl = ~0;
 	return 0;
 }
-#endif
+
 /**
  * resource_request() - request for the Netdev resource
  * @rndis_ipa_ctx: main driver context
@@ -2040,10 +2025,9 @@ static int resource_request(struct rndis_ipa_dev *rndis_ipa_ctx)
 	if (!rm_enabled(rndis_ipa_ctx))
 		return result;
 
-#ifdef CONFIG_IPA3
 	if (ipa_pm_is_used())
 		return ipa_pm_activate(rndis_ipa_ctx->pm_hdl);
-#endif
+
 	return ipa_rm_inactivity_timer_request_resource(
 			DRV_RESOURCE_ID);
 
@@ -2062,11 +2046,9 @@ static void resource_release(struct rndis_ipa_dev *rndis_ipa_ctx)
 {
 	if (!rm_enabled(rndis_ipa_ctx))
 		return;
-#ifdef CONFIG_IPA3
 	if (ipa_pm_is_used())
 		ipa_pm_deferred_deactivate(rndis_ipa_ctx->pm_hdl);
 	else
-#endif
 		ipa_rm_inactivity_timer_release_resource(DRV_RESOURCE_ID);
 
 	return;
@@ -2096,7 +2078,8 @@ static struct sk_buff *rndis_encapsulate_skb(struct sk_buff *skb,
 			RNDIS_IPA_ERROR("no memory for skb expand\n");
 			return skb;
 		}
-		RNDIS_IPA_DEBUG("skb expanded. old %p new %p\n", skb, new_skb);
+		RNDIS_IPA_DEBUG("skb expanded. old %pK new %pK\n",
+			skb, new_skb);
 		dev_kfree_skb_any(skb);
 		skb = new_skb;
 	}
@@ -2342,7 +2325,6 @@ static enum rndis_ipa_state rndis_ipa_next_state(
 		break;
 	default:
 		RNDIS_IPA_ERROR("State is not supported\n");
-		WARN_ON(true);
 		break;
 	}
 

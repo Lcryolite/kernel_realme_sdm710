@@ -20,7 +20,6 @@
 #define __ASM_CACHEFLUSH_H
 
 #include <linux/mm.h>
-#include <asm/set_memory.h>
 
 /*
  * This flag is used to indicate that the page pointed to by a pte is clean
@@ -71,12 +70,14 @@
  *		- size   - region size
  */
 extern void flush_cache_all(void);
-extern void flush_cache_range(struct vm_area_struct *vma, unsigned long start, unsigned long end);
 extern void flush_icache_range(unsigned long start, unsigned long end);
 extern void __flush_dcache_area(void *addr, size_t len);
+extern void __inval_dcache_area(void *addr, size_t len);
 extern void __clean_dcache_area_poc(void *addr, size_t len);
+extern void __clean_dcache_area_pop(void *addr, size_t len);
 extern void __clean_dcache_area_pou(void *addr, size_t len);
 extern long __flush_cache_user_range(unsigned long start, unsigned long end);
+extern void sync_icache_aliases(void *kaddr, unsigned long len);
 
 static inline void flush_cache_mm(struct mm_struct *mm)
 {
@@ -87,18 +88,26 @@ static inline void flush_cache_page(struct vm_area_struct *vma,
 {
 }
 
+static inline void flush_cache_range(struct vm_area_struct *vma,
+				     unsigned long start, unsigned long end)
+{
+}
+
 /*
  * Cache maintenance functions used by the DMA API. No to be used directly.
  */
 extern void __dma_map_area(const void *, size_t, int);
 extern void __dma_unmap_area(const void *, size_t, int);
 extern void __dma_flush_area(const void *, size_t);
-extern void __dma_inv_area(const void *, size_t);
-extern void __dma_clean_area(const void *, size_t);
+extern void __dma_inv_area(const void *start, size_t size);
+extern void __dma_clean_area(const void *start, size_t size);
 
-#define dmac_flush_range(start, end) __dma_flush_area(start, (void *)(end) - (void *)(start))
-#define dmac_inv_range(start, end) __dma_inv_area(start, (void *)(end) - (void *)(start))
-#define dmac_clean_range(start, end) __dma_clean_area(start, (void *)(end) - (void *)(start))
+#define dmac_flush_range(start, end) \
+	__dma_flush_area(start, (void *)(end) - (void *)(start))
+#define dmac_inv_range(start, end) \
+	__dma_inv_area(start, (void *)(end) - (void *)(start))
+#define dmac_clean_range(start, end) \
+	__dma_clean_area(start, (void *)(end) - (void *)(start))
 
 /*
  * Copy user data from/to a page which is mapped into a different
@@ -157,9 +166,6 @@ static inline void flush_cache_vunmap(unsigned long start, unsigned long end)
 {
 }
 
-int set_memory_ro(unsigned long addr, int numpages);
-int set_memory_rw(unsigned long addr, int numpages);
-int set_memory_x(unsigned long addr, int numpages);
-int set_memory_nx(unsigned long addr, int numpages);
+int set_memory_valid(unsigned long addr, int numpages, int enable);
 
 #endif

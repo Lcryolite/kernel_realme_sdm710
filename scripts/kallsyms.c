@@ -28,7 +28,7 @@
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof(arr[0]))
 #endif
 
-#define KSYM_NAME_LEN		128
+#define KSYM_NAME_LEN		192
 
 struct sym_entry {
 	unsigned long long addr;
@@ -76,9 +76,18 @@ static void usage(void)
 {
 	fprintf(stderr, "Usage: kallsyms [--all-symbols] "
 			"[--symbol-prefix=<prefix char>] "
-			"[--page-offset=<CONFIG_PAGE_OFFSET>] "
 			"[--base-relative] < in.map > out.S\n");
 	exit(1);
+}
+
+/*
+ * This ignores the intensely annoying "mapping symbols" found
+ * in ARM ELF files: $a, $t and $d.
+ */
+static inline int is_arm_mapping_symbol(const char *str)
+{
+	return str[0] == '$' && strchr("axtd", str[1])
+	       && (str[2] == '\0' || str[2] == '.');
 }
 
 static int check_symbol_range(const char *sym, unsigned long long addr,
@@ -105,15 +114,13 @@ static int check_symbol_range(const char *sym, unsigned long long addr,
 static int read_symbol(FILE *in, struct sym_entry *s)
 {
 	char str[500];
-	char buf[LINE_MAX];
 	char *sym, stype;
 	int rc;
 
-	if (fgets(buf, sizeof(buf), in) == NULL) {
-		return -1;
-	}
-	rc = sscanf(buf, "%llx %c %499s\n", &s->addr, &stype, str);
-	if (rc < 3) {
+	rc = fscanf(in, "%llx %c %499s\n", &s->addr, &stype, str);
+	if (rc != 3) {
+		if (rc != EOF && fgets(str, 500, in) == NULL)
+			fprintf(stderr, "Read error or end of file.\n");
 		return -1;
 	}
 	if (strlen(str) > KSYM_NAME_LEN) {
@@ -144,17 +151,14 @@ static int read_symbol(FILE *in, struct sym_entry *s)
 			return -1;
 
 	}
-	else if (toupper(stype) == 'U')
+	else if (toupper(stype) == 'U' ||
+		 is_arm_mapping_symbol(sym))
 		return -1;
-	/*
-	 * Ignore generated symbols such as:
-	 *  - mapping symbols in ARM ELF files ($a, $t, and $d)
-	 *  - MIPS ELF local symbols ($L123 instead of .L123)
-	 */
+	/* exclude also MIPS ELF local symbols ($L123 instead of .L123) */
 	else if (str[0] == '$')
 		return -1;
 	/* exclude debugging symbols */
-	else if (toupper(stype) == 'N')
+	else if (stype == 'N' || stype == 'n')
 		return -1;
 	/* exclude s390 kasan local symbols */
 	else if (!strncmp(sym, ".LASANPC", 8))
@@ -176,8 +180,7 @@ static int read_symbol(FILE *in, struct sym_entry *s)
 
 	/* Record if we've found __per_cpu_start/end. */
 	check_symbol_range(sym, s->addr, &percpu_range, 1);
-	if (toupper(stype) == 'W' && strstr(sym, ".c") != NULL)
-		return -1;
+
 	return 0;
 }
 
@@ -219,6 +222,11 @@ static int symbol_valid(struct sym_entry *s)
 		"_SDA2_BASE_",		/* ppc */
 		NULL };
 
+	static char *special_prefixes[] = {
+		"__crc_",		/* modversions */
+		"__efistub_",		/* arm64 EFI stub namespace */
+		NULL };
+
 	static char *special_suffixes[] = {
 		"_veneer",		/* arm */
 		"_from_arm",		/* arm */
@@ -258,6 +266,14 @@ static int symbol_valid(struct sym_entry *s)
 	for (i = 0; special_symbols[i]; i++)
 		if (strcmp(sym_name, special_symbols[i]) == 0)
 			return 0;
+
+	for (i = 0; special_prefixes[i]; i++) {
+		int l = strlen(special_prefixes[i]);
+
+		if (l <= strlen(sym_name) &&
+		    strncmp(sym_name, special_prefixes[i], l) == 0)
+			return 0;
+	}
 
 	for (i = 0; special_suffixes[i]; i++) {
 		int l = strlen(sym_name) - strlen(special_suffixes[i]);

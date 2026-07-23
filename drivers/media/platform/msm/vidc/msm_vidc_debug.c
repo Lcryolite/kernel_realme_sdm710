@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -13,22 +13,23 @@
 
 #define CREATE_TRACE_POINTS
 #define MAX_SSR_STRING_LEN 10
+#define MAX_DEBUG_LEVEL_STRING_LEN 15
 #include "msm_vidc_debug.h"
 #include "vidc_hfi_api.h"
 
-int msm_vidc_debug = VIDC_ERR | VIDC_WARN;
+int msm_vidc_debug = VIDC_ERR | VIDC_WARN | VIDC_FW;
 EXPORT_SYMBOL(msm_vidc_debug);
 
 int msm_vidc_debug_out = VIDC_OUT_PRINTK;
 EXPORT_SYMBOL(msm_vidc_debug_out);
 
+/* 0x18 = HFI_DEBUG_MSG_FATAL | HFI_DEBUG_MSG_ERROR */
 int msm_vidc_fw_debug = 0x18;
-int msm_vidc_fw_debug_mode = 0;
+int msm_vidc_fw_debug_mode = 1;
 int msm_vidc_fw_low_power_mode = 1;
 bool msm_vidc_fw_coverage = !true;
-bool msm_vidc_sys_idle_indicator = !true;
 bool msm_vidc_thermal_mitigation_disabled = !true;
-bool msm_vidc_clock_scaling = true;
+int msm_vidc_clock_voting = !1;
 bool msm_vidc_syscache_disable = !true;
 
 #define MAX_DBG_BUF_SIZE 4096
@@ -129,9 +130,10 @@ static int trigger_ssr_open(struct inode *inode, struct file *file)
 }
 
 static ssize_t trigger_ssr_write(struct file *filp, const char __user *buf,
-		size_t count, loff_t *ppos) {
+		size_t count, loff_t *ppos)
+{
 	unsigned long ssr_trigger_val = 0;
-	int rc = 0, ret = 0;
+	int rc = 0;
 	struct msm_vidc_core *core = filp->private_data;
 	size_t size = MAX_SSR_STRING_LEN;
 	char kbuf[MAX_SSR_STRING_LEN + 1] = {0};
@@ -156,8 +158,8 @@ static ssize_t trigger_ssr_write(struct file *filp, const char __user *buf,
 		dprintk(VIDC_WARN, "returning error err %d\n", rc);
 		rc = -EINVAL;
 	} else {
-		ret = msm_vidc_trigger_ssr(core, ssr_trigger_val);
-		rc = (ret == -EBUSY ? ret : count);
+		msm_vidc_trigger_ssr(core, ssr_trigger_val);
+		rc = count;
 	}
 exit:
 	return rc;
@@ -166,6 +168,58 @@ exit:
 static const struct file_operations ssr_fops = {
 	.open = trigger_ssr_open,
 	.write = trigger_ssr_write,
+};
+
+static ssize_t debug_level_write(struct file *filp, const char __user *buf,
+		size_t count, loff_t *ppos)
+{
+	int rc = 0;
+	struct msm_vidc_core *core = filp->private_data;
+	char kbuf[MAX_DEBUG_LEVEL_STRING_LEN] = {0};
+
+	/* filter partial writes and invalid commands */
+	if (*ppos != 0 || count >= sizeof(kbuf) || count == 0) {
+		dprintk(VIDC_ERR, "returning error - pos %lld, count %ld\n",
+			*ppos, count);
+		rc = -EINVAL;
+	}
+
+	rc = simple_write_to_buffer(kbuf, sizeof(kbuf) - 1, ppos, buf, count);
+	if (rc < 0) {
+		dprintk(VIDC_ERR, "%s User memory fault\n", __func__);
+		rc = -EFAULT;
+		goto exit;
+	}
+
+	rc = kstrtoint(kbuf, 0, &msm_vidc_debug);
+	if (rc) {
+		dprintk(VIDC_ERR, "returning error err %d\n", rc);
+		rc = -EINVAL;
+	} else {
+		core->resources.msm_vidc_hw_rsp_timeout =
+			(msm_vidc_debug > (VIDC_ERR | VIDC_WARN)) ? 1500 : 1000;
+		rc = count;
+		dprintk(VIDC_DBG, "debug timeout updated to - %d\n",
+			core->resources.msm_vidc_hw_rsp_timeout);
+	}
+exit:
+	return rc;
+}
+
+static ssize_t debug_level_read(struct file *file, char __user *buf,
+		size_t count, loff_t *ppos)
+{
+	size_t len;
+	char kbuf[MAX_DEBUG_LEVEL_STRING_LEN];
+
+	len = scnprintf(kbuf, sizeof(kbuf), "0x%08x\n", msm_vidc_debug);
+	return simple_read_from_buffer(buf, count, ppos, kbuf, len);
+}
+
+static const struct file_operations debug_level_fops = {
+	.open = simple_open,
+	.write = debug_level_write,
+	.read = debug_level_read,
 };
 
 struct dentry *msm_vidc_debugfs_init_drv(void)
@@ -191,19 +245,16 @@ struct dentry *msm_vidc_debugfs_init_drv(void)
 })
 
 	ok =
-	__debugfs_create(x32, "debug_level", &msm_vidc_debug) &&
 	__debugfs_create(x32, "fw_level", &msm_vidc_fw_debug) &&
 	__debugfs_create(u32, "fw_debug_mode", &msm_vidc_fw_debug_mode) &&
 	__debugfs_create(bool, "fw_coverage", &msm_vidc_fw_coverage) &&
 	__debugfs_create(u32, "fw_low_power_mode",
 			&msm_vidc_fw_low_power_mode) &&
 	__debugfs_create(u32, "debug_output", &msm_vidc_debug_out) &&
-	__debugfs_create(bool, "sys_idle_indicator",
-			&msm_vidc_sys_idle_indicator) &&
 	__debugfs_create(bool, "disable_thermal_mitigation",
 			&msm_vidc_thermal_mitigation_disabled) &&
-	__debugfs_create(bool, "clock_scaling",
-			&msm_vidc_clock_scaling) &&
+	__debugfs_create(u32, "core_clock_voting",
+			&msm_vidc_clock_voting) &&
 	__debugfs_create(bool, "disable_video_syscache",
 			&msm_vidc_syscache_disable);
 
@@ -234,7 +285,8 @@ struct dentry *msm_vidc_debugfs_init_core(struct msm_vidc_core *core,
 
 	snprintf(debugfs_name, MAX_DEBUGFS_NAME, "core%d", core->id);
 	dir = debugfs_create_dir(debugfs_name, parent);
-	if (!dir) {
+	if (IS_ERR_OR_NULL(dir)) {
+		dir = NULL;
 		dprintk(VIDC_ERR, "Failed to create debugfs for msm_vidc\n");
 		goto failed_create_dir;
 	}
@@ -244,6 +296,11 @@ struct dentry *msm_vidc_debugfs_init_core(struct msm_vidc_core *core,
 	}
 	if (!debugfs_create_file("trigger_ssr", 0200,
 			dir, core, &ssr_fops)) {
+		dprintk(VIDC_ERR, "debugfs_create_file: fail\n");
+		goto failed_create_dir;
+	}
+	if (!debugfs_create_file("debug_level", 0644,
+			parent, core, &debug_level_fops)) {
 		dprintk(VIDC_ERR, "debugfs_create_file: fail\n");
 		goto failed_create_dir;
 	}
@@ -447,7 +504,8 @@ struct dentry *msm_vidc_debugfs_init_inst(struct msm_vidc_inst *inst,
 	idata->inst = inst;
 
 	dir = debugfs_create_dir(debugfs_name, parent);
-	if (!dir) {
+	if (IS_ERR_OR_NULL(dir)) {
+		dir = NULL;
 		dprintk(VIDC_ERR, "Failed to create debugfs for msm_vidc\n");
 		goto failed_create_dir;
 	}
@@ -535,5 +593,13 @@ void msm_vidc_debugfs_update(struct msm_vidc_inst *inst,
 		dprintk(VIDC_ERR, "Invalid state in debugfs: %d\n", e);
 		break;
 	}
+}
+
+int msm_vidc_check_ratelimit(void)
+{
+	static DEFINE_RATELIMIT_STATE(_rs,
+				VIDC_DBG_SESSION_RATELIMIT_INTERVAL,
+				VIDC_DBG_SESSION_RATELIMIT_BURST);
+	return __ratelimit(&_rs);
 }
 

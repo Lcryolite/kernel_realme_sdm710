@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *  Copyright (C) 1991, 1992  Linus Torvalds
  *  Copyright (C) 2000, 2001, 2002 Andi Kleen, SuSE Labs
@@ -15,6 +16,7 @@ enum stack_type {
 	STACK_TYPE_TASK,
 	STACK_TYPE_IRQ,
 	STACK_TYPE_SOFTIRQ,
+	STACK_TYPE_ENTRY,
 	STACK_TYPE_EXCEPTION,
 	STACK_TYPE_EXCEPTION_LAST = STACK_TYPE_EXCEPTION + N_EXCEPTION_STACKS-1,
 };
@@ -27,11 +29,12 @@ struct stack_info {
 bool in_task_stack(unsigned long *stack, struct task_struct *task,
 		   struct stack_info *info);
 
+bool in_entry_stack(unsigned long *stack, struct stack_info *info);
+
 int get_stack_info(unsigned long *stack, struct task_struct *task,
 		   struct stack_info *info, unsigned long *visit_mask);
 
-void stack_type_str(enum stack_type type, const char **begin,
-		    const char **end);
+const char *stack_type_name(enum stack_type type);
 
 static inline bool on_stack(struct stack_info *info, void *addr, size_t len)
 {
@@ -43,8 +46,6 @@ static inline bool on_stack(struct stack_info *info, void *addr, size_t len)
 		addr + len > begin && addr + len <= end);
 }
 
-extern int kstack_depth_to_print;
-
 #ifdef CONFIG_X86_32
 #define STACKSLOTS_PER_LINE 8
 #else
@@ -55,16 +56,13 @@ extern int kstack_depth_to_print;
 static inline unsigned long *
 get_frame_pointer(struct task_struct *task, struct pt_regs *regs)
 {
-	struct inactive_task_frame *frame;
-
 	if (regs)
 		return (unsigned long *)regs->bp;
 
 	if (task == current)
 		return __builtin_frame_address(0);
 
-	frame = (struct inactive_task_frame *)task->thread.sp;
-	return (unsigned long *)READ_ONCE_NOCHECK(frame->bp);
+	return &((struct inactive_task_frame *)task->thread.sp)->bp;
 }
 #else
 static inline unsigned long *
@@ -88,9 +86,6 @@ get_stack_pointer(struct task_struct *task, struct pt_regs *regs)
 
 void show_trace_log_lvl(struct task_struct *task, struct pt_regs *regs,
 			unsigned long *stack, char *log_lvl);
-
-void show_stack_log_lvl(struct task_struct *task, struct pt_regs *regs,
-			unsigned long *sp, char *log_lvl);
 
 extern unsigned int code_bytes;
 

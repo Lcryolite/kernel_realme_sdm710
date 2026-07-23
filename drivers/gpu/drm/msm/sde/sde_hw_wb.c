@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -48,11 +48,17 @@
 #define WB_CREQ_LUT_0			0x098
 #define WB_CREQ_LUT_1			0x09C
 #define WB_UBWC_STATIC_CTRL		0x144
+#define WB_MUX				0x150
 #define WB_CSC_BASE			0x260
 #define WB_DST_ADDR_SW_STATUS		0x2B0
 #define WB_CDP_CNTL			0x2B4
 #define WB_OUT_IMAGE_SIZE		0x2C0
 #define WB_OUT_XY			0x2C4
+
+#define CWB_CTRL_SRC_SEL		0x0
+#define CWB_CTRL_MODE			0x4
+#define CWB_CTRL_BLK_SIZE		0x100
+#define CWB_CTRL_BASE_OFFSET		0x83000
 
 /* WB_QOS_CTRL */
 #define WB_QOS_CTRL_DANGER_SAFE_EN	BIT(0)
@@ -75,6 +81,21 @@ static struct sde_wb_cfg *_wb_offset(enum sde_wb wb,
 		}
 	}
 	return ERR_PTR(-EINVAL);
+}
+
+static void _sde_hw_cwb_ctrl_init(struct sde_mdss_cfg *m,
+		void __iomem *addr, struct sde_hw_blk_reg_map *b)
+{
+	if (b) {
+		b->base_off = addr;
+		b->blk_off = CWB_CTRL_BASE_OFFSET;
+		b->length = CWB_CTRL_BLK_SIZE * m->pingpong_count;
+		b->hwversion = m->hwversion;
+		b->log_mask = SDE_DBG_MASK_WB;
+
+		sde_dbg_reg_register_dump_range(SDE_DBG_NAME, "cwb", b->blk_off,
+			b->blk_off + b->length, 0xff);
+	}
 }
 
 static void sde_hw_wb_setup_outaddress(struct sde_hw_wb *ctx,
@@ -150,6 +171,11 @@ static void sde_hw_wb_setup_format(struct sde_hw_wb *ctx,
 		if (IS_UBWC_20_SUPPORTED(ctx->catalog->ubwc_version))
 			SDE_REG_WRITE(c, WB_UBWC_STATIC_CTRL,
 					(ctx->mdp->ubwc_swizzle << 0) |
+					(ctx->mdp->highest_bank_bit << 4));
+		if (IS_UBWC_10_SUPPORTED(ctx->catalog->ubwc_version))
+			SDE_REG_WRITE(c, WB_UBWC_STATIC_CTRL,
+					(ctx->mdp->ubwc_swizzle << 0) |
+					BIT(8) |
 					(ctx->mdp->highest_bank_bit << 4));
 	}
 
@@ -243,6 +269,46 @@ static void sde_hw_wb_setup_cdp(struct sde_hw_wb *ctx,
 	SDE_REG_WRITE(c, WB_CDP_CNTL, cdp_cntl);
 }
 
+static void sde_hw_wb_bind_pingpong_blk(
+		struct sde_hw_wb *ctx,
+		bool enable,
+		const enum sde_pingpong pp)
+{
+	struct sde_hw_blk_reg_map *c;
+	int mux_cfg = 0xF;
+
+	if (!ctx)
+		return;
+
+	c = &ctx->hw;
+	if (enable)
+		mux_cfg = (pp - PINGPONG_0) & 0x7;
+
+	SDE_REG_WRITE(c, WB_MUX, mux_cfg);
+}
+
+static void sde_hw_wb_program_cwb_ctrl(struct sde_hw_wb *ctx,
+		const enum sde_cwb cur_idx, const enum sde_cwb data_src,
+		bool dspp_out, bool enable)
+{
+	struct sde_hw_blk_reg_map *c;
+	u32 blk_base;
+
+	if (!ctx)
+		return;
+
+	c = &ctx->cwb_hw;
+	blk_base = CWB_CTRL_BLK_SIZE * (cur_idx - CWB_0);
+
+	if (enable) {
+		SDE_REG_WRITE(c, blk_base + CWB_CTRL_SRC_SEL, data_src - CWB_0);
+		SDE_REG_WRITE(c, blk_base + CWB_CTRL_MODE, dspp_out);
+	} else {
+		SDE_REG_WRITE(c, blk_base + CWB_CTRL_SRC_SEL, 0xf);
+		SDE_REG_WRITE(c, blk_base + CWB_CTRL_MODE, 0x0);
+	}
+}
+
 static void _setup_wb_ops(struct sde_hw_wb_ops *ops,
 	unsigned long features)
 {
@@ -261,6 +327,12 @@ static void _setup_wb_ops(struct sde_hw_wb_ops *ops,
 
 	if (test_bit(SDE_WB_CDP, &features))
 		ops->setup_cdp = sde_hw_wb_setup_cdp;
+
+	if (test_bit(SDE_WB_INPUT_CTRL, &features))
+		ops->bind_pingpong_blk = sde_hw_wb_bind_pingpong_blk;
+
+	if (test_bit(SDE_WB_CWB_CTRL, &features))
+		ops->program_cwb_ctrl = sde_hw_wb_program_cwb_ctrl;
 }
 
 static struct sde_hw_blk_ops sde_hw_ops = {
@@ -307,6 +379,9 @@ struct sde_hw_wb *sde_hw_wb_init(enum sde_wb idx,
 
 	sde_dbg_reg_register_dump_range(SDE_DBG_NAME, cfg->name, c->hw.blk_off,
 			c->hw.blk_off + c->hw.length, c->hw.xin_id);
+
+	if (test_bit(SDE_WB_CWB_CTRL, &cfg->features))
+		_sde_hw_cwb_ctrl_init(m, addr, &c->cwb_hw);
 
 	return c;
 

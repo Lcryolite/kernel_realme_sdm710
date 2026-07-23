@@ -1,4 +1,4 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -44,8 +44,9 @@ enum msm_gpi_tre_type {
 #endif
 
 #define MSM_GPI_DMA_W_BUFFER_TRE_DWORD2(length) (length & 0xFFFFFF)
-#define MSM_GPI_DMA_W_BUFFER_TRE_DWORD3(bei, ieot, ieob, ch) ((0x1 << 20) | \
-	(0x0 << 16) | (bei << 10) | (ieot << 9) | (ieob << 8) | ch)
+#define MSM_GPI_DMA_W_BUFFER_TRE_DWORD3(link_rx, bei, ieot, ieob, ch) \
+	((0x1 << 20) | (0x0 << 16) | (link_rx << 11) | (bei << 10) | \
+	(ieot << 9) | (ieob << 8) | ch)
 #define MSM_GPI_DMA_W_BUFFER_TRE_GET_LEN(tre) (tre->dword[2] & 0xFFFFFF)
 #define MSM_GPI_DMA_W_BUFFER_TRE_SET_LEN(tre, length) (tre->dword[2] = \
 	MSM_GPI_DMA_W_BUFFER_TRE_DWORD2(length))
@@ -56,8 +57,9 @@ enum msm_gpi_tre_type {
 #define MSM_GPI_DMA_IMMEDIATE_TRE_DWORD1(d4, d5, d6, d7) ((d7 << 24) | \
 	(d6 << 16) | (d5 << 8) | (d4))
 #define MSM_GPI_DMA_IMMEDIATE_TRE_DWORD2(length) (length & 0xF)
-#define MSM_GPI_DMA_IMMEDIATE_TRE_DWORD3(bei, ieot, ieob, ch) ((0x1 << 20) | \
-	(0x1 << 16) | (bei << 10) | (ieot << 9) | (ieob << 8) | ch)
+#define MSM_GPI_DMA_IMMEDIATE_TRE_DWORD3(link_rx, bei, ieot, ieob, ch) \
+	((0x1 << 20) | (0x1 << 16) | (link_rx << 11) | (bei << 10) | \
+	(ieot << 9) | (ieob << 8) | ch)
 #define MSM_GPI_DMA_IMMEDIATE_TRE_GET_LEN(tre) (tre->dword[2] & 0xF)
 
 /* DMA w. Scatter/Gather List TRE */
@@ -69,8 +71,9 @@ enum msm_gpi_tre_type {
 #define MSM_GPI_SG_LIST_TRE_DWORD1(ptr) 0
 #endif
 #define MSM_GPI_SG_LIST_TRE_DWORD2(length) (length & 0xFFFF)
-#define MSM_GPI_SG_LIST_TRE_DWORD3(bei, ieot, ieob, ch) ((0x1 << 20) | \
-	(0x2 << 16) | (bei << 10) | (ieot << 9) | (ieob << 8) | ch)
+#define MSM_GPI_SG_LIST_TRE_DWORD3(link_rx, bei, ieot, ieob, ch) ((0x1 << 20) \
+	| (0x2 << 16) | (link_rx << 11) | (bei << 10) | (ieot << 9) | \
+	(ieob << 8) | ch)
 
 /* SG Element */
 #ifdef CONFIG_ARM64
@@ -87,23 +90,26 @@ enum msm_gpi_tre_type {
 #define GPI_CONFIG2_TRE_DWORD0(gr, txp) ((gr << 20) | (txp))
 #define GPI_CONFIG2_TRE_DWORD1(txp) (txp)
 #define GPI_CONFIG2_TRE_DWORD2 (0)
-#define GPI_CONFIG2_TRE_DWORD3(bei, ieot, ieob, ch) ((0x2 << 20) | \
-	(0x4 << 16) | (bei << 10) | (ieot << 9) | (ieob << 8) | ch)
+#define GPI_CONFIG2_TRE_DWORD3(link_rx, bei, ieot, ieob, ch) ((0x2 << 20) | \
+	(0x4 << 16) | (link_rx << 11) | (bei << 10) | (ieot << 9) | \
+	(ieob << 8) | ch)
 
 /* Config3 TRE */
 #define GPI_CONFIG3_TRE_DWORD0(rxp) (rxp)
 #define GPI_CONFIG3_TRE_DWORD1(rxp) (rxp)
 #define GPI_CONFIG3_TRE_DWORD2 (0)
-#define GPI_CONFIG3_TRE_DWORD3(bei, ieot, ieob, ch) ((0x2 << 20) | \
-	(0x5 << 16) | (bei << 10) | (ieot << 9) | (ieob << 8) | ch)
+#define GPI_CONFIG3_TRE_DWORD3(link_rx, bei, ieot, ieob, ch) ((0x2 << 20) \
+	| (0x5 << 16) | (link_rx << 11) | (bei << 10) | (ieot << 9) | \
+	(ieob << 8) | ch)
 
 /* SPI Go TRE */
 #define MSM_GPI_SPI_GO_TRE_DWORD0(flags, cs, command) ((flags << 24) | \
 	(cs << 8) | command)
 #define MSM_GPI_SPI_GO_TRE_DWORD1 (0)
 #define MSM_GPI_SPI_GO_TRE_DWORD2(rx_len) (rx_len)
-#define MSM_GPI_SPI_GO_TRE_DWORD3(bei, ieot, ieob, ch) ((0x2 << 20) | \
-	(0x0 << 16) | (bei << 10) | (ieot << 9) | (ieob << 8) | ch)
+#define MSM_GPI_SPI_GO_TRE_DWORD3(link_rx, bei, ieot, ieob, ch) ((0x2 << 20) | \
+	(0x0 << 16) | (link_rx << 11) | (bei << 10) | (ieot << 9) | \
+	(ieob << 8) | ch)
 
 /* SPI Config0 TRE */
 #define MSM_GPI_SPI_CONFIG0_TRE_DWORD0(pack, flags, word_size) ((pack << 24) | \
@@ -112,15 +118,17 @@ enum msm_gpi_tre_type {
 	((it_del << 16) | (cs_clk_del << 8) | iw_del)
 #define MSM_GPI_SPI_CONFIG0_TRE_DWORD2(clk_src, clk_div) ((clk_src << 16) | \
 	clk_div)
-#define MSM_GPI_SPI_CONFIG0_TRE_DWORD3(bei, ieot, ieob, ch) ((0x2 << 20) | \
-	(0x2 << 16) | (bei << 10) | (ieot << 9) | (ieob << 8) | ch)
+#define MSM_GPI_SPI_CONFIG0_TRE_DWORD3(link_rx, bei, ieot, ieob, ch) \
+	((0x2 << 20) | (0x2 << 16) | (link_rx << 11) | (bei << 10) | \
+	(ieot << 9) | (ieob << 8) | ch)
 
 /* UART Go TRE */
 #define MSM_GPI_UART_GO_TRE_DWORD0(en_hunt, command) ((en_hunt << 8) | command)
 #define MSM_GPI_UART_GO_TRE_DWORD1 (0)
 #define MSM_GPI_UART_GO_TRE_DWORD2 (0)
-#define MSM_GPI_UART_GO_TRE_DWORD3(bei, ieot, ieob, ch) ((0x2 << 20) | \
-	(0x0 << 16) | (bei << 10) | (ieot << 9) | (ieob << 8) | ch)
+#define MSM_GPI_UART_GO_TRE_DWORD3(link_rx, bei, ieot, ieob, ch) ((0x2 << 20) \
+	| (0x0 << 16) | (link_rx << 11) | (bei << 10) | (ieot << 9) | \
+	(ieob << 8) | ch)
 
 /* UART Config0 TRE */
 #define MSM_GPI_UART_CONFIG0_TRE_DWORD0(pack, hunt, flags, parity, sbl, size) \
@@ -130,16 +138,18 @@ enum msm_gpi_tre_type {
 	((rfr_level << 24) | rx_stale)
 #define MSM_GPI_UART_CONFIG0_TRE_DWORD2(clk_source, clk_div) \
 	((clk_source << 16) | clk_div)
-#define MSM_GPI_UART_CONFIG0_TRE_DWORD3(bei, ieot, ieob, ch) ((0x2 << 20) | \
-	(0x2 << 16) | (bei << 10) | (ieot << 9) | (ieob << 8) | ch)
+#define MSM_GPI_UART_CONFIG0_TRE_DWORD3(link_rx, bei, ieot, ieob, ch) \
+	((0x2 << 20) | (0x2 << 16) | (link_rx << 11) | (bei << 10) | \
+	(ieot << 9) | (ieob << 8) | ch)
 
 /* I2C GO TRE */
 #define MSM_GPI_I2C_GO_TRE_DWORD0(flags, slave, opcode) \
 	((flags << 24) | (slave << 8) | opcode)
 #define MSM_GPI_I2C_GO_TRE_DWORD1 (0)
 #define MSM_GPI_I2C_GO_TRE_DWORD2(rx_len) (rx_len)
-#define MSM_GPI_I2C_GO_TRE_DWORD3(bei, ieot, ieob, ch) ((0x2 << 20) | \
-	(0x0 << 16) | (bei << 10) | (ieot << 9) | (ieob << 8) | ch)
+#define MSM_GPI_I2C_GO_TRE_DWORD3(link_rx, bei, ieot, ieob, ch) ((0x2 << 20) | \
+	(0x0 << 16) | (link_rx << 11) | (bei << 10) | (ieot << 9) | \
+	(ieob << 8) | ch)
 
 /* I2C Config0 TRE */
 #define MSM_GPI_I2C_CONFIG0_TRE_DWORD0(pack, t_cycle, t_high, t_low) \
@@ -148,13 +158,14 @@ enum msm_gpi_tre_type {
 	((inter_delay << 16) | noise_rej)
 #define MSM_GPI_I2C_CONFIG0_TRE_DWORD2(clk_src, clk_div) \
 	((clk_src << 16) | clk_div)
-#define MSM_GPI_I2C_CONFIG0_TRE_DWORD3(bei, ieot, ieob, ch) ((0x2 << 20) | \
-	(0x2 << 16) | (bei << 10) | (ieot << 9) | (ieob << 8) | ch)
+#define MSM_GPI_I2C_CONFIG0_TRE_DWORD3(link_rx, bei, ieot, ieob, ch) \
+	((0x2 << 20) | (0x2 << 16) | (link_rx << 11) | (bei << 10) | \
+	(ieot << 9) | (ieob << 8) | ch)
 
 #ifdef CONFIG_ARM64
-#define MSM_GPI_RING_PHYS_ADDR_UPPER(ring) ((u32)(ring->phys_addr >> 32))
+#define MSM_GPI_RING_PHYS_ADDR_UPPER(ptr) ((u32)(ptr >> 32))
 #else
-#define MSM_GPI_RING_PHYS_ADDR_UPPER(ring) 0
+#define MSM_GPI_RING_PHYS_ADDR_UPPER(ptr) 0
 #endif
 
 /* cmds to perform by using dmaengine_slave_config() */

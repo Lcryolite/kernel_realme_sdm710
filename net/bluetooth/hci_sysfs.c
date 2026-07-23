@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /* Bluetooth HCI driver model support. */
 
 #include <linux/module.h>
@@ -13,14 +14,19 @@ static void bt_link_release(struct device *dev)
 	kfree(conn);
 }
 
-static struct device_type bt_link = {
+static const struct device_type bt_link = {
 	.name    = "link",
 	.release = bt_link_release,
 };
 
-static int __match_any(struct device *dev, void *unused)
+/*
+ * The rfcomm tty device will possibly retain even when conn
+ * is down, and sysfs doesn't support move zombie device,
+ * so we should move the device before conn device is destroyed.
+ */
+static int __match_tty(struct device *dev, void *data)
 {
-	return 1;
+	return !strncmp(dev_name(dev), "rfcomm", 6);
 }
 
 void hci_conn_init_sysfs(struct hci_conn *conn)
@@ -62,12 +68,10 @@ void hci_conn_del_sysfs(struct hci_conn *conn)
 	if (!device_is_registered(&conn->dev))
 		return;
 
-	/* If there are devices using the connection as parent reset it to NULL
-	 * before unregistering the device.
-	 */
 	while (1) {
 		struct device *dev;
-		dev = device_find_child(&conn->dev, NULL, __match_any);
+
+		dev = device_find_child(&conn->dev, NULL, __match_tty);
 		if (!dev)
 			break;
 		device_move(dev, NULL, DPM_ORDER_DEV_LAST);
@@ -89,7 +93,7 @@ static void bt_host_release(struct device *dev)
 	module_put(THIS_MODULE);
 }
 
-static struct device_type bt_host = {
+static const struct device_type bt_host = {
 	.name    = "host",
 	.release = bt_host_release,
 };

@@ -60,13 +60,7 @@ struct netlbl_domhsh_walk_arg {
 };
 
 /* NetLabel Generic NETLINK CIPSOv4 family */
-static struct genl_family netlbl_mgmt_gnl_family = {
-	.id = GENL_ID_GENERATE,
-	.hdrsize = 0,
-	.name = NETLBL_NLTYPE_MGMT_NAME,
-	.version = NETLBL_PROTO_VERSION,
-	.maxattr = NLBL_MGMT_A_MAX,
-};
+static struct genl_family netlbl_mgmt_gnl_family;
 
 /* NetLabel Netlink attribute policy */
 static const struct nla_policy netlbl_mgmt_genl_policy[NLBL_MGMT_A_MAX + 1] = {
@@ -453,7 +447,7 @@ static int netlbl_mgmt_add(struct sk_buff *skb, struct genl_info *info)
 	     (info->attrs[NLBL_MGMT_A_IPV6MASK] != NULL)))
 		return -EINVAL;
 
-	netlbl_netlink_auditinfo(skb, &audit_info);
+	netlbl_netlink_auditinfo(&audit_info);
 
 	return netlbl_mgmt_add_common(info, &audit_info);
 }
@@ -476,7 +470,7 @@ static int netlbl_mgmt_remove(struct sk_buff *skb, struct genl_info *info)
 	if (!info->attrs[NLBL_MGMT_A_DOMAIN])
 		return -EINVAL;
 
-	netlbl_netlink_auditinfo(skb, &audit_info);
+	netlbl_netlink_auditinfo(&audit_info);
 
 	domain = nla_data(info->attrs[NLBL_MGMT_A_DOMAIN]);
 	return netlbl_domhsh_remove(domain, AF_UNSPEC, &audit_info);
@@ -576,7 +570,7 @@ static int netlbl_mgmt_adddef(struct sk_buff *skb, struct genl_info *info)
 	     (info->attrs[NLBL_MGMT_A_IPV6MASK] != NULL)))
 		return -EINVAL;
 
-	netlbl_netlink_auditinfo(skb, &audit_info);
+	netlbl_netlink_auditinfo(&audit_info);
 
 	return netlbl_mgmt_add_common(info, &audit_info);
 }
@@ -595,7 +589,7 @@ static int netlbl_mgmt_removedef(struct sk_buff *skb, struct genl_info *info)
 {
 	struct netlbl_audit audit_info;
 
-	netlbl_netlink_auditinfo(skb, &audit_info);
+	netlbl_netlink_auditinfo(&audit_info);
 
 	return netlbl_domhsh_remove_default(AF_UNSPEC, &audit_info);
 }
@@ -835,6 +829,16 @@ static const struct genl_ops netlbl_mgmt_genl_ops[] = {
 	},
 };
 
+static struct genl_family netlbl_mgmt_gnl_family __ro_after_init = {
+	.hdrsize = 0,
+	.name = NETLBL_NLTYPE_MGMT_NAME,
+	.version = NETLBL_PROTO_VERSION,
+	.maxattr = NLBL_MGMT_A_MAX,
+	.module = THIS_MODULE,
+	.ops = netlbl_mgmt_genl_ops,
+	.n_ops = ARRAY_SIZE(netlbl_mgmt_genl_ops),
+};
+
 /*
  * NetLabel Generic NETLINK Protocol Functions
  */
@@ -849,6 +853,5 @@ static const struct genl_ops netlbl_mgmt_genl_ops[] = {
  */
 int __init netlbl_mgmt_genl_init(void)
 {
-	return genl_register_family_with_ops(&netlbl_mgmt_gnl_family,
-					     netlbl_mgmt_genl_ops);
+	return genl_register_family(&netlbl_mgmt_gnl_family);
 }

@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2015, 2018-2019 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2015, 2018-2020 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -255,12 +255,12 @@ wcnss_parse_voltage_regulator(struct wcnss_wlan_config *wlan_config,
 					"regulator get of %s failed (%d)\n",
 					pronto_vregs[vreg_i].name, rc);
 				return rc;
-			} else {
-				wcnss_log(DBG,
-				"Skip optional regulator configuration: %s\n",
-				pronto_vregs[vreg_i].name);
-				continue;
 			}
+
+			wcnss_log(DBG,
+				  "Skip optional regulator configuration: %s\n",
+				  pronto_vregs[vreg_i].name);
+			continue;
 		}
 
 		rc = wcnss_dt_parse_vreg_level(dev, vreg_i,
@@ -287,12 +287,12 @@ wcnss_parse_voltage_regulator(struct wcnss_wlan_config *wlan_config,
 					"regulator get of %s failed (%d)\n",
 					iris_vregs[vreg_i].name, rc);
 				return rc;
-			} else {
-				wcnss_log(DBG,
-				"Skip optional regulator configuration: %s\n",
-				iris_vregs[vreg_i].name);
-				continue;
 			}
+
+			wcnss_log(DBG,
+				  "Skip optional regulator configuration: %s\n",
+				  iris_vregs[vreg_i].name);
+			continue;
 		}
 
 		rc = wcnss_dt_parse_vreg_level(dev, vreg_i,
@@ -567,11 +567,8 @@ static void wcnss_vregs_off(struct vregs_info regulators[], uint size,
 			}
 
 			rc = regulator_set_voltage(regulators[i].regulator,
-						   voltage_level[i].
-						   low_power_min,
-						   voltage_level[i].
-						   max_voltage);
-
+						voltage_level[i].low_power_min,
+						voltage_level[i].max_voltage);
 			if (rc)
 				wcnss_log(ERR,
 				"regulator_set_voltage(%s) failed (%d)\n",
@@ -624,9 +621,8 @@ static int wcnss_vregs_on(struct device *dev,
 			}
 
 			rc = regulator_set_voltage(regulators[i].regulator,
-						   voltage_level[i].nominal_min,
-						   voltage_level[i].
-						   max_voltage);
+						voltage_level[i].nominal_min,
+						voltage_level[i].max_voltage);
 
 			if (rc) {
 				wcnss_log(ERR,

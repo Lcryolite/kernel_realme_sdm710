@@ -90,8 +90,8 @@ static irqreturn_t netxen_msix_intr(int irq, void *data);
 
 static void netxen_free_ip_list(struct netxen_adapter *, bool);
 static void netxen_restore_indev_addr(struct net_device *dev, unsigned long);
-static struct rtnl_link_stats64 *netxen_nic_get_stats(struct net_device *dev,
-						      struct rtnl_link_stats64 *stats);
+static void netxen_nic_get_stats(struct net_device *dev,
+				 struct rtnl_link_stats64 *stats);
 static int netxen_nic_set_mac(struct net_device *netdev, void *p);
 
 /*  PCI Device ID Table  */
@@ -1567,6 +1567,13 @@ netxen_nic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 			adapter->physical_port = i;
 	}
 
+	/* MTU range: 0 - 8000 (P2) or 9600 (P3) */
+	netdev->min_mtu = 0;
+	if (NX_IS_REVISION_P3(adapter->ahw.revision_id))
+		netdev->max_mtu = P3_MAX_MTU;
+	else
+		netdev->max_mtu = P2_MAX_MTU;
+
 	netxen_nic_clear_stats(adapter);
 
 	err = netxen_setup_intr(adapter);
@@ -2292,8 +2299,8 @@ request_reset:
 	clear_bit(__NX_RESETTING, &adapter->state);
 }
 
-static struct rtnl_link_stats64 *netxen_nic_get_stats(struct net_device *netdev,
-						      struct rtnl_link_stats64 *stats)
+static void netxen_nic_get_stats(struct net_device *netdev,
+				 struct rtnl_link_stats64 *stats)
 {
 	struct netxen_adapter *adapter = netdev_priv(netdev);
 
@@ -2303,8 +2310,6 @@ static struct rtnl_link_stats64 *netxen_nic_get_stats(struct net_device *netdev,
 	stats->tx_bytes = adapter->stats.txbytes;
 	stats->rx_dropped = adapter->stats.rxdropped;
 	stats->tx_dropped = adapter->stats.txdropped;
-
-	return stats;
 }
 
 static irqreturn_t netxen_intr(int irq, void *data)
@@ -2388,7 +2393,7 @@ static int netxen_nic_poll(struct napi_struct *napi, int budget)
 		work_done = budget;
 
 	if (work_done < budget) {
-		napi_complete(&sds_ring->napi);
+		napi_complete_done(&sds_ring->napi, work_done);
 		if (test_bit(__NX_DEV_UP, &adapter->state))
 			netxen_nic_enable_int(sds_ring);
 	}
@@ -2820,7 +2825,7 @@ netxen_show_bridged_mode(struct device *dev,
 	return sprintf(buf, "%d\n", bridged_mode);
 }
 
-static struct device_attribute dev_attr_bridged_mode = {
+static const struct device_attribute dev_attr_bridged_mode = {
        .attr = {.name = "bridged_mode", .mode = (S_IRUGO | S_IWUSR)},
        .show = netxen_show_bridged_mode,
        .store = netxen_store_bridged_mode,
@@ -2852,7 +2857,7 @@ netxen_show_diag_mode(struct device *dev,
 			!!(adapter->flags & NETXEN_NIC_DIAG_ENABLED));
 }
 
-static struct device_attribute dev_attr_diag_mode = {
+static const struct device_attribute dev_attr_diag_mode = {
 	.attr = {.name = "diag_mode", .mode = (S_IRUGO | S_IWUSR)},
 	.show = netxen_show_diag_mode,
 	.store = netxen_store_diag_mode,
@@ -2997,14 +3002,14 @@ static ssize_t netxen_sysfs_write_mem(struct file *filp, struct kobject *kobj,
 }
 
 
-static struct bin_attribute bin_attr_crb = {
+static const struct bin_attribute bin_attr_crb = {
 	.attr = {.name = "crb", .mode = (S_IRUGO | S_IWUSR)},
 	.size = 0,
 	.read = netxen_sysfs_read_crb,
 	.write = netxen_sysfs_write_crb,
 };
 
-static struct bin_attribute bin_attr_mem = {
+static const struct bin_attribute bin_attr_mem = {
 	.attr = {.name = "mem", .mode = (S_IRUGO | S_IWUSR)},
 	.size = 0,
 	.read = netxen_sysfs_read_mem,
@@ -3133,7 +3138,7 @@ out:
 
 }
 
-static struct bin_attribute bin_attr_dimm = {
+static const struct bin_attribute bin_attr_dimm = {
 	.attr = { .name = "dimm", .mode = (S_IRUGO | S_IWUSR) },
 	.size = sizeof(struct netxen_dimm_cfg),
 	.read = netxen_sysfs_read_dimm,
@@ -3256,7 +3261,7 @@ netxen_list_config_ip(struct netxen_adapter *adapter,
 		cur = kzalloc(sizeof(struct nx_ip_list), GFP_ATOMIC);
 		if (cur == NULL)
 			goto out;
-		if (dev->priv_flags & IFF_802_1Q_VLAN)
+		if (is_vlan_dev(dev))
 			dev = vlan_dev_real_dev(dev);
 		cur->master = !!netif_is_bond_master(dev);
 		cur->ip_addr = ifa->ifa_address;
@@ -3366,7 +3371,7 @@ static void netxen_config_master(struct net_device *dev, unsigned long event)
 	    !netif_is_bond_slave(dev)) {
 		netxen_config_indev_addr(adapter, master, event);
 		for_each_netdev_rcu(&init_net, slave)
-			if (slave->priv_flags & IFF_802_1Q_VLAN &&
+			if (is_vlan_dev(slave) &&
 			    vlan_dev_real_dev(slave) == master)
 				netxen_config_indev_addr(adapter, slave, event);
 	}
@@ -3392,7 +3397,7 @@ recheck:
 	if (dev == NULL)
 		goto done;
 
-	if (dev->priv_flags & IFF_802_1Q_VLAN) {
+	if (is_vlan_dev(dev)) {
 		dev = vlan_dev_real_dev(dev);
 		goto recheck;
 	}
@@ -3437,7 +3442,7 @@ recheck:
 	if (dev == NULL)
 		goto done;
 
-	if (dev->priv_flags & IFF_802_1Q_VLAN) {
+	if (is_vlan_dev(dev)) {
 		dev = vlan_dev_real_dev(dev);
 		goto recheck;
 	}

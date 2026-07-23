@@ -1,4 +1,4 @@
-/* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -72,17 +72,19 @@ TRACE_EVENT(cam_isp_activated_irq,
 );
 
 TRACE_EVENT(cam_icp_fw_dbg,
-	TP_PROTO(char *dbg_message),
-	TP_ARGS(dbg_message),
+	TP_PROTO(char *dbg_message, uint64_t timestamp),
+	TP_ARGS(dbg_message, timestamp),
 	TP_STRUCT__entry(
 		__string(dbg_message, dbg_message)
+		__field(uint64_t, timestamp)
 	),
 	TP_fast_assign(
 		__assign_str(dbg_message, dbg_message);
+		__entry->timestamp = timestamp;
 	),
 	TP_printk(
-		"%s: ",
-		__get_str(dbg_message)
+		"%llu %s: ",
+		 __entry->timestamp, __get_str(dbg_message)
 	)
 );
 
@@ -226,7 +228,7 @@ TRACE_EVENT(cam_req_mgr_add_req,
 		__entry->session   = link->parent;
 	),
 	TP_printk(
-		"ReqMgr AddRequest devname=%s devid=%d request=%lld slot=%d pd=%d readymap=%x devicemap=%d link=%pk session=%pK",
+		"ReqMgr AddRequest devname=%s devid=%d request=%lld slot=%d pd=%d readymap=%x devicemap=%d link=%pK session=%pK",
 			__get_str(name), __entry->dev_id, __entry->req_id,
 			__entry->slot_id, __entry->delay, __entry->readymap,
 			__entry->devicemap, __entry->link, __entry->session
@@ -281,6 +283,34 @@ TRACE_EVENT(cam_irq_handled,
 	TP_printk(
 		"%8s: handled irq type=%d",
 			__get_str(entity), __entry->irq_type
+	)
+);
+
+TRACE_EVENT(cam_isp_irq_delay_detect,
+	TP_PROTO(const char *text, struct cam_context *ctx,
+		uint64_t request_id, uint32_t substate,
+		uint64_t timestamp),
+	TP_ARGS(text, ctx, request_id, substate, timestamp),
+	TP_STRUCT__entry(
+		__string(text, text)
+		__field(uint32_t, ctx_id)
+		__field(uint64_t, dev_id)
+		__field(uint64_t, req_id)
+		__field(uint32_t, substate)
+		__field(uint64_t, ts)
+	),
+	TP_fast_assign(
+		__assign_str(text, text);
+		__entry->ctx_id = ctx->ctx_id;
+		__entry->dev_id = ctx->dev_id;
+		__entry->req_id = request_id;
+		__entry->substate = substate;
+		__entry->ts = timestamp;
+	),
+	TP_printk(
+		"ISP: %s ctx=%u dev_id=%u req_id=%lld substate=%u event=%u delay_by=%llu",
+			__get_str(text), __entry->ctx_id, __entry->dev_id,
+			__entry->req_id, __entry->substate, __entry->ts
 	)
 );
 

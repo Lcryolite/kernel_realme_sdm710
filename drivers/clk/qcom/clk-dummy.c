@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -10,8 +10,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
-
-#define pr_fmt(fmt) "clk: %s: " fmt, __func__
 
 #include <linux/clk-provider.h>
 #include <linux/of.h>
@@ -32,7 +30,7 @@ static int dummy_clk_set_rate(struct clk_hw *hw, unsigned long rate,
 
 	dummy->rrate = rate;
 
-	pr_debug("set rate: %lu\n", rate);
+	pr_debug("%s: rate %lu\n", __func__, rate);
 
 	return 0;
 }
@@ -48,7 +46,8 @@ static unsigned long dummy_clk_recalc_rate(struct clk_hw *hw,
 {
 	struct clk_dummy *dummy = to_clk_dummy(hw);
 
-	pr_debug("clock rate: %lu\n", dummy->rrate);
+	pr_debug("%s: returning a clock rate of %lu\n",
+				__func__, dummy->rrate);
 
 	return dummy->rrate;
 }
@@ -58,7 +57,7 @@ static int dummy_clk_set_flags(struct clk_hw *hw, unsigned int flags)
 	return 0;
 }
 
-struct clk_ops clk_dummy_ops = {
+const struct clk_ops clk_dummy_ops = {
 	.set_rate = dummy_clk_set_rate,
 	.round_rate = dummy_clk_round_rate,
 	.recalc_rate = dummy_clk_recalc_rate,
@@ -70,14 +69,12 @@ EXPORT_SYMBOL_GPL(clk_dummy_ops);
 static int dummy_reset_assert(struct reset_controller_dev *rcdev,
 				unsigned long id)
 {
-	pr_debug("\n");
 	return 0;
 }
 
 static int dummy_reset_deassert(struct reset_controller_dev *rcdev,
 				unsigned long id)
 {
-	pr_debug("\n");
 	return 0;
 }
 

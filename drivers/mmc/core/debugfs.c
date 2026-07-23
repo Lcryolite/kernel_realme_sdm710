@@ -21,6 +21,8 @@
 #include <linux/mmc/host.h>
 
 #include "core.h"
+#include "card.h"
+#include "host.h"
 #include "mmc_ops.h"
 
 #ifdef CONFIG_FAIL_MMC_REQUEST
@@ -275,7 +277,7 @@ static int mmc_scale_set(void *data, u64 val)
 	mmc_host_clk_hold(host);
 
 	/* change frequency from sysfs manually */
-	err = mmc_clk_update_freq(host, val, host->clk_scaling.state, 0);
+	err = mmc_clk_update_freq(host, val, host->clk_scaling.state);
 	if (err == -EAGAIN)
 		err = 0;
 	else if (err)
@@ -469,37 +471,42 @@ void mmc_add_host_debugfs(struct mmc_host *host)
 
 	host->debugfs_root = root;
 
-	if (!debugfs_create_file("ios", S_IRUSR, root, host, &mmc_ios_fops))
+	if (!debugfs_create_file("ios", 0400, root, host, &mmc_ios_fops))
 		goto err_node;
 
-	if (!debugfs_create_file("clock", S_IRUSR | S_IWUSR, root, host,
+	if (!debugfs_create_file("clock", 0600, root, host,
 			&mmc_clock_fops))
 		goto err_node;
 
-	if (!debugfs_create_file("max_clock", S_IRUSR | S_IWUSR, root, host,
+	if (!debugfs_create_file("max_clock", 0600, root, host,
 		&mmc_max_clock_fops))
 		goto err_node;
 
-	if (!debugfs_create_file("scale", S_IRUSR | S_IWUSR, root, host,
+	if (!debugfs_create_file("scale", 0600, root, host,
 		&mmc_scale_fops))
 		goto err_node;
 
 	if (!debugfs_create_bool("skip_clk_scale_freq_update",
-		S_IRUSR | S_IWUSR, root,
+		0600, root,
 		&host->clk_scaling.skip_clk_scale_freq_update))
 		goto err_node;
 
 	if (!debugfs_create_bool("cmdq_task_history",
-		S_IRUSR | S_IWUSR, root,
+		0600, root,
 		&host->cmdq_thist_enabled))
 		goto err_node;
 
+	if (!debugfs_create_bool("crash_on_err",
+		0600, root,
+		&host->crash_on_err))
+		goto err_node;
+
 #ifdef CONFIG_MMC_RING_BUFFER
-	if (!debugfs_create_file("ring_buffer", S_IRUSR,
+	if (!debugfs_create_file("ring_buffer", 0400,
 				root, host, &mmc_ring_buffer_fops))
 		goto err_node;
 #endif
-	if (!debugfs_create_file("err_state", S_IRUSR | S_IWUSR, root, host,
+	if (!debugfs_create_file("err_state", 0600, root, host,
 		&mmc_err_state))
 		goto err_node;
 
@@ -508,7 +515,7 @@ void mmc_add_host_debugfs(struct mmc_host *host)
 		goto err_node;
 
 #ifdef CONFIG_MMC_CLKGATE
-	if (!debugfs_create_u32("clk_delay", (S_IRUSR | S_IWUSR),
+	if (!debugfs_create_u32("clk_delay", 0600,
 				root, &host->clk_delay))
 		goto err_node;
 #endif
@@ -521,7 +528,7 @@ void mmc_add_host_debugfs(struct mmc_host *host)
 					     &host->fail_mmc_request)))
 		goto err_node;
 #endif
-	if (!debugfs_create_file("force_error", S_IWUSR, root, host,
+	if (!debugfs_create_file("force_error", 0200, root, host,
 		&mmc_force_err_fops))
 		goto err_node;
 
@@ -538,546 +545,6 @@ void mmc_remove_host_debugfs(struct mmc_host *host)
 {
 	debugfs_remove_recursive(host->debugfs_root);
 }
-
-static int mmc_dbg_card_status_get(void *data, u64 *val)
-{
-	struct mmc_card	*card = data;
-	u32		status;
-	int		ret;
-
-	mmc_get_card(card);
-	if (mmc_card_cmdq(card)) {
-		ret = mmc_cmdq_halt_on_empty_queue(card->host, 0);
-		if (ret) {
-			pr_err("%s: halt failed while doing %s err (%d)\n",
-					mmc_hostname(card->host), __func__,
-					ret);
-			goto out;
-		}
-	}
-
-	ret = mmc_send_status(data, &status);
-	if (!ret)
-		*val = status;
-
-	if (mmc_card_cmdq(card)) {
-		if (mmc_cmdq_halt(card->host, false))
-			pr_err("%s: %s: cmdq unhalt failed\n",
-			       mmc_hostname(card->host), __func__);
-	}
-out:
-	mmc_put_card(card);
-
-	return ret;
-}
-DEFINE_SIMPLE_ATTRIBUTE(mmc_dbg_card_status_fops, mmc_dbg_card_status_get,
-		NULL, "%08llx\n");
-
-#define EXT_CSD_STR_LEN 1025
-
-static int mmc_ext_csd_open(struct inode *inode, struct file *filp)
-{
-	struct mmc_card *card = inode->i_private;
-	char *buf;
-	ssize_t n = 0;
-	u8 *ext_csd;
-	int err, i;
-
-	buf = kmalloc(EXT_CSD_STR_LEN + 1, GFP_KERNEL);
-	if (!buf)
-		return -ENOMEM;
-
-	mmc_get_card(card);
-	if (mmc_card_cmdq(card)) {
-		err = mmc_cmdq_halt_on_empty_queue(card->host, 0);
-		if (err) {
-			pr_err("%s: halt failed while doing %s err (%d)\n",
-					mmc_hostname(card->host), __func__,
-					err);
-			mmc_put_card(card);
-			goto out_free_halt;
-		}
-	}
-
-	err = mmc_get_ext_csd(card, &ext_csd);
-	if (err)
-		goto out_free;
-
-	for (i = 0; i < 512; i++)
-		n += sprintf(buf + n, "%02x", ext_csd[i]);
-	n += sprintf(buf + n, "\n");
-	BUG_ON(n != EXT_CSD_STR_LEN);
-
-	filp->private_data = buf;
-
-	if (mmc_card_cmdq(card)) {
-		if (mmc_cmdq_halt(card->host, false))
-			pr_err("%s: %s: cmdq unhalt failed\n",
-			       mmc_hostname(card->host), __func__);
-	}
-
-	mmc_put_card(card);
-	kfree(ext_csd);
-	return 0;
-
-out_free:
-	if (mmc_card_cmdq(card)) {
-		if (mmc_cmdq_halt(card->host, false))
-			pr_err("%s: %s: cmdq unhalt failed\n",
-			       mmc_hostname(card->host), __func__);
-	}
-	mmc_put_card(card);
-out_free_halt:
-	kfree(buf);
-	return err;
-}
-
-static ssize_t mmc_ext_csd_read(struct file *filp, char __user *ubuf,
-				size_t cnt, loff_t *ppos)
-{
-	char *buf = filp->private_data;
-
-	return simple_read_from_buffer(ubuf, cnt, ppos,
-				       buf, EXT_CSD_STR_LEN);
-}
-
-static int mmc_ext_csd_release(struct inode *inode, struct file *file)
-{
-	kfree(file->private_data);
-	return 0;
-}
-
-static const struct file_operations mmc_dbg_ext_csd_fops = {
-	.open		= mmc_ext_csd_open,
-	.read		= mmc_ext_csd_read,
-	.release	= mmc_ext_csd_release,
-	.llseek		= default_llseek,
-};
-
-#ifdef VENDOR_EDIT
-//xiaohua.tian@Prd6.BaseDrv.Sensor,2016/10/31,add for emmc life&size display
-#define SECTOR_COUNT_BUF_LEN 16
-
-static int mmc_sector_count_open(struct inode *inode, struct file *filp)
-{
-	struct mmc_card *card = inode->i_private;
-	char *buf;
-	ssize_t n = 0;
-	u8 *ext_csd;
-	int err;
-	unsigned int sector_count = 0;
-
-	buf = kmalloc(SECTOR_COUNT_BUF_LEN, GFP_KERNEL);
-	if (!buf)
-		return -ENOMEM;
-
-	memset(buf,0,SECTOR_COUNT_BUF_LEN);
-#if 0
-	ext_csd = kmalloc(512, GFP_KERNEL);
-	if (!ext_csd) {
-		err = -ENOMEM;
-		goto out_free_halt;
-	}
-
-	memset(ext_csd,0,512);
-#endif
-	mmc_get_card(card);
-	if (mmc_card_cmdq(card)) {
-		err = mmc_cmdq_halt_on_empty_queue(card->host, 0);
-		if (err) {
-			pr_err("%s: halt failed while doing %s err (%d)\n",
-					mmc_hostname(card->host), __func__,
-					err);
-			mmc_put_card(card);
-			goto out_free_halt;
-		}
-	}
-#if 0
-	err = mmc_send_ext_csd(card, ext_csd);
-#else
-	err = mmc_get_ext_csd(card, &ext_csd);
-#endif
-	if (err)
-		goto out_free;
-	sector_count = (ext_csd[215]<<24) |(ext_csd[214]<<16)|
-			(ext_csd[213]<<8)|(ext_csd[212]);
-	n = sprintf(buf, "0x%08x", sector_count);
-
-	BUG_ON(n > SECTOR_COUNT_BUF_LEN);
-
-	filp->private_data = buf;
-
-	if (mmc_card_cmdq(card)) {
-		if (mmc_cmdq_halt(card->host, false))
-			pr_err("%s: %s: cmdq unhalt failed\n",
-			       mmc_hostname(card->host), __func__);
-	}
-
-	mmc_put_card(card);
-	kfree(ext_csd);
-	return 0;
-
-out_free:
-	if (mmc_card_cmdq(card)) {
-		if (mmc_cmdq_halt(card->host, false))
-			pr_err("%s: %s: cmdq unhalt failed\n",
-			       mmc_hostname(card->host), __func__);
-	}
-	mmc_put_card(card);
-out_free_halt:
-	kfree(buf);
-#if 0
-	kfree(ext_csd);
-#endif
-	return err;
-}
-
-static ssize_t mmc_sector_count_read(struct file *filp, char __user *ubuf,
-	size_t cnt, loff_t *ppos)
-{
-	char *buf = filp->private_data;
-	int len = strlen(buf);
-	return simple_read_from_buffer(ubuf, cnt, ppos,
-		buf, len);
-}
-
-static int mmc_sector_count_release(struct inode *inode, struct file *file)
-{
-	kfree(file->private_data);
-	return 0;
-}
-
-static const struct file_operations mmc_dbg_sector_count_fops = {
-	.open		= mmc_sector_count_open,
-	.read		= mmc_sector_count_read,
-	.release	= mmc_sector_count_release,
-	.llseek		= default_llseek,
-};
-#define LIFE_TIME_BUF_LEN 256
-static char* life_time_table[]={
-	"Not defined",
-	"0%-10% device life time used",
-	"10%-20% device life time used",
-	"20%-30% device life time used",
-	"30%-40% device life time used",
-	"30%-40% device life time used",
-	"40%-50% device life time used",
-	"60%-70% device life time used",
-	"80%-90% device life time used",
-	"90%-100% device life time used",
-	"Exceeded its maximum estimated device life time",
-	"Reserved",
-	"Reserved",
-	"Reserved",
-	"Reserved",
-	"Reserved",
-};
-
-static int mmc_life_time_open(struct inode *inode, struct file *filp)
-{
-	struct mmc_card *card = inode->i_private;
-	char *buf;
-	ssize_t n = 0;
-	u8 *ext_csd;
-	int err;
-	unsigned char life_time_A = 0;
-	unsigned char life_time_B = 0;
-
-	buf = kmalloc(LIFE_TIME_BUF_LEN, GFP_KERNEL);
-	if (!buf)
-		return -ENOMEM;
-
-	memset(buf,0,LIFE_TIME_BUF_LEN);
-#if 0
-	ext_csd = kmalloc(512, GFP_KERNEL);
-	if (!ext_csd) {
-		err = -ENOMEM;
-		goto out_free_halt;
-	}
-
-	memset(ext_csd,0,512);
-#endif
-	mmc_get_card(card);
-	if (mmc_card_cmdq(card)) {
-		err = mmc_cmdq_halt_on_empty_queue(card->host, 0);
-		if (err) {
-			pr_err("%s: halt failed while doing %s err (%d)\n",
-					mmc_hostname(card->host), __func__,
-					err);
-			mmc_put_card(card);
-			goto out_free_halt;
-		}
-	}
-#if 0
-	err = mmc_send_ext_csd(card, ext_csd);
-#else
-	err = mmc_get_ext_csd(card, &ext_csd);
-#endif
-	if (err)
-		goto out_free;
-	life_time_A = ext_csd[268];
-	life_time_B = ext_csd[269];
-	n = sprintf(buf, "type A:%s\n\rtype B:%s\n\r",
-		life_time_table[life_time_A],life_time_table[life_time_B]);
-
-	BUG_ON(n > LIFE_TIME_BUF_LEN);
-
-	filp->private_data = buf;
-
-	if (mmc_card_cmdq(card)) {
-		if (mmc_cmdq_halt(card->host, false))
-			pr_err("%s: %s: cmdq unhalt failed\n",
-			       mmc_hostname(card->host), __func__);
-	}
-
-	mmc_put_card(card);
-	kfree(ext_csd);
-	return 0;
-out_free:
-	if (mmc_card_cmdq(card)) {
-		if (mmc_cmdq_halt(card->host, false))
-			pr_err("%s: %s: cmdq unhalt failed\n",
-			       mmc_hostname(card->host), __func__);
-	}
-	mmc_put_card(card);
-out_free_halt:
-	kfree(buf);
-#if 0
-	kfree(ext_csd);
-#endif
-	return err;
-}
-
-static ssize_t mmc_life_time_read(struct file *filp, char __user *ubuf,
-	size_t cnt, loff_t *ppos)
-{
-	char *buf = filp->private_data;
-	int len = strlen(buf);
-
-	return simple_read_from_buffer(ubuf, cnt, ppos,
-		buf, len);
-	}
-
-static int mmc_life_time_release(struct inode *inode, struct file *file)
-{
-	kfree(file->private_data);
-	return 0;
-}
-
-static const struct file_operations mmc_dbg_life_time_fops = {
-	.open		= mmc_life_time_open,
-	.read		= mmc_life_time_read,
-	.release	= mmc_life_time_release,
-	.llseek		= default_llseek,
-};
-#endif /*VENDOR_EDIT*/
-
-static int mmc_wr_pack_stats_open(struct inode *inode, struct file *filp)
-{
-	struct mmc_card *card = inode->i_private;
-
-	filp->private_data = card;
-	card->wr_pack_stats.print_in_read = 1;
-	return 0;
-}
-
-#define TEMP_BUF_SIZE 256
-static ssize_t mmc_wr_pack_stats_read(struct file *filp, char __user *ubuf,
-				size_t cnt, loff_t *ppos)
-{
-	struct mmc_card *card = filp->private_data;
-	struct mmc_wr_pack_stats *pack_stats;
-	int i, ret = 0;
-	int max_num_of_packed_reqs = 0;
-	char *temp_buf, *temp_ubuf;
-	size_t tubuf_cnt = 0;
-
-	if (!card)
-		return cnt;
-
-	if (!access_ok(VERIFY_WRITE, ubuf, cnt))
-		return cnt;
-
-	if (!card->wr_pack_stats.print_in_read)
-		return 0;
-
-	if (!card->wr_pack_stats.enabled) {
-		pr_info("%s: write packing statistics are disabled\n",
-			 mmc_hostname(card->host));
-		goto exit;
-	}
-
-	pack_stats = &card->wr_pack_stats;
-
-	if (!pack_stats->packing_events) {
-		pr_info("%s: NULL packing_events\n", mmc_hostname(card->host));
-		goto exit;
-	}
-
-	max_num_of_packed_reqs = card->ext_csd.max_packed_writes;
-
-	if (cnt <= (strlen_user(ubuf) + 1))
-		goto exit;
-
-	temp_buf = kzalloc(TEMP_BUF_SIZE, GFP_KERNEL);
-	if (!temp_buf)
-		goto exit;
-
-	tubuf_cnt = cnt - strlen_user(ubuf) - 1;
-
-	temp_ubuf = kzalloc(tubuf_cnt, GFP_KERNEL);
-	if (!temp_ubuf)
-		goto cleanup;
-
-	spin_lock(&pack_stats->lock);
-
-	snprintf(temp_buf, TEMP_BUF_SIZE, "%s: write packing statistics:\n",
-		mmc_hostname(card->host));
-	strlcat(temp_ubuf, temp_buf, tubuf_cnt);
-
-	for (i = 1 ; i <= max_num_of_packed_reqs ; ++i) {
-		if (pack_stats->packing_events[i]) {
-			snprintf(temp_buf, TEMP_BUF_SIZE,
-				 "%s: Packed %d reqs - %d times\n",
-				mmc_hostname(card->host), i,
-				pack_stats->packing_events[i]);
-			strlcat(temp_ubuf, temp_buf, tubuf_cnt);
-		}
-	}
-
-	snprintf(temp_buf, TEMP_BUF_SIZE,
-		 "%s: stopped packing due to the following reasons:\n",
-		 mmc_hostname(card->host));
-	strlcat(temp_ubuf, temp_buf, tubuf_cnt);
-
-	if (pack_stats->pack_stop_reason[EXCEEDS_SEGMENTS]) {
-		snprintf(temp_buf, TEMP_BUF_SIZE,
-			 "%s: %d times: exceed max num of segments\n",
-			 mmc_hostname(card->host),
-			 pack_stats->pack_stop_reason[EXCEEDS_SEGMENTS]);
-		strlcat(temp_ubuf, temp_buf, tubuf_cnt);
-	}
-	if (pack_stats->pack_stop_reason[EXCEEDS_SECTORS]) {
-		snprintf(temp_buf, TEMP_BUF_SIZE,
-			 "%s: %d times: exceed max num of sectors\n",
-			mmc_hostname(card->host),
-			pack_stats->pack_stop_reason[EXCEEDS_SECTORS]);
-		strlcat(temp_ubuf, temp_buf, tubuf_cnt);
-	}
-	if (pack_stats->pack_stop_reason[WRONG_DATA_DIR]) {
-		snprintf(temp_buf, TEMP_BUF_SIZE,
-			 "%s: %d times: wrong data direction\n",
-			mmc_hostname(card->host),
-			pack_stats->pack_stop_reason[WRONG_DATA_DIR]);
-		strlcat(temp_ubuf, temp_buf, tubuf_cnt);
-	}
-	if (pack_stats->pack_stop_reason[FLUSH_OR_DISCARD]) {
-		snprintf(temp_buf, TEMP_BUF_SIZE,
-			 "%s: %d times: flush or discard\n",
-			mmc_hostname(card->host),
-			pack_stats->pack_stop_reason[FLUSH_OR_DISCARD]);
-		strlcat(temp_ubuf, temp_buf, tubuf_cnt);
-	}
-	if (pack_stats->pack_stop_reason[EMPTY_QUEUE]) {
-		snprintf(temp_buf, TEMP_BUF_SIZE,
-			 "%s: %d times: empty queue\n",
-			mmc_hostname(card->host),
-			pack_stats->pack_stop_reason[EMPTY_QUEUE]);
-		strlcat(temp_ubuf, temp_buf, tubuf_cnt);
-	}
-	if (pack_stats->pack_stop_reason[REL_WRITE]) {
-		snprintf(temp_buf, TEMP_BUF_SIZE,
-			 "%s: %d times: rel write\n",
-			mmc_hostname(card->host),
-			pack_stats->pack_stop_reason[REL_WRITE]);
-		strlcat(temp_ubuf, temp_buf, tubuf_cnt);
-	}
-	if (pack_stats->pack_stop_reason[THRESHOLD]) {
-		snprintf(temp_buf, TEMP_BUF_SIZE,
-			 "%s: %d times: Threshold\n",
-			mmc_hostname(card->host),
-			pack_stats->pack_stop_reason[THRESHOLD]);
-		strlcat(temp_ubuf, temp_buf, tubuf_cnt);
-	}
-
-	if (pack_stats->pack_stop_reason[LARGE_SEC_ALIGN]) {
-		snprintf(temp_buf, TEMP_BUF_SIZE,
-			 "%s: %d times: Large sector alignment\n",
-			mmc_hostname(card->host),
-			pack_stats->pack_stop_reason[LARGE_SEC_ALIGN]);
-		strlcat(temp_ubuf, temp_buf, tubuf_cnt);
-	}
-	if (pack_stats->pack_stop_reason[RANDOM]) {
-		snprintf(temp_buf, TEMP_BUF_SIZE,
-			 "%s: %d times: random request\n",
-			mmc_hostname(card->host),
-			pack_stats->pack_stop_reason[RANDOM]);
-		strlcat(temp_ubuf, temp_buf, tubuf_cnt);
-	}
-	if (pack_stats->pack_stop_reason[FUA]) {
-		snprintf(temp_buf, TEMP_BUF_SIZE,
-			 "%s: %d times: fua request\n",
-			mmc_hostname(card->host),
-			pack_stats->pack_stop_reason[FUA]);
-		strlcat(temp_ubuf, temp_buf, tubuf_cnt);
-	}
-	if (strlen_user(ubuf) < cnt - strlen(temp_ubuf))
-		ret = copy_to_user((ubuf + strlen_user(ubuf)),
-				temp_ubuf, tubuf_cnt);
-	else
-		ret = -EFAULT;
-	if (ret)
-		pr_err("%s: %s: Copy to userspace failed: %s\n",
-				mmc_hostname(card->host), __func__, ubuf);
-
-	spin_unlock(&pack_stats->lock);
-
-	kfree(temp_ubuf);
-
-cleanup:
-	kfree(temp_buf);
-
-	pr_info("%s", ubuf);
-
-exit:
-	if (card->wr_pack_stats.print_in_read == 1) {
-		card->wr_pack_stats.print_in_read = 0;
-		return strnlen(ubuf, cnt);
-	}
-
-	return 0;
-}
-
-static ssize_t mmc_wr_pack_stats_write(struct file *filp,
-				       const char __user *ubuf, size_t cnt,
-				       loff_t *ppos)
-{
-	struct mmc_card *card = filp->private_data;
-	int value;
-
-	if (!card)
-		return cnt;
-
-	if (!access_ok(VERIFY_READ, ubuf, cnt))
-		return cnt;
-
-	sscanf(ubuf, "%d", &value);
-	if (value) {
-		mmc_blk_init_packed_statistics(card);
-	} else {
-		spin_lock(&card->wr_pack_stats.lock);
-		card->wr_pack_stats.enabled = false;
-		spin_unlock(&card->wr_pack_stats.lock);
-	}
-
-	return cnt;
-}
-
-static const struct file_operations mmc_dbg_wr_pack_stats_fops = {
-	.open		= mmc_wr_pack_stats_open,
-	.read		= mmc_wr_pack_stats_read,
-	.write		= mmc_wr_pack_stats_write,
-};
 
 static int mmc_bkops_stats_read(struct seq_file *file, void *data)
 {
@@ -1181,43 +648,16 @@ void mmc_add_card_debugfs(struct mmc_card *card)
 
 	card->debugfs_root = root;
 
-	if (!debugfs_create_x32("state", S_IRUSR, root, &card->state))
+	if (!debugfs_create_x32("state", 0400, root, &card->state))
 		goto err;
-
-	if (mmc_card_mmc(card) || mmc_card_sd(card))
-		if (!debugfs_create_file("status", S_IRUSR, root, card,
-					&mmc_dbg_card_status_fops))
-			goto err;
-
-	if (mmc_card_mmc(card))
-		if (!debugfs_create_file("ext_csd", S_IRUSR, root, card,
-					&mmc_dbg_ext_csd_fops))
-			goto err;
-
-	if (mmc_card_mmc(card) && (card->ext_csd.rev >= 6) &&
-	    (card->host->caps2 & MMC_CAP2_PACKED_WR))
-		if (!debugfs_create_file("wr_pack_stats", S_IRUSR, root, card,
-					 &mmc_dbg_wr_pack_stats_fops))
-			goto err;
 
 	if (mmc_card_mmc(card) && (card->ext_csd.rev >= 5) &&
 	    (mmc_card_configured_auto_bkops(card) ||
 	     mmc_card_configured_manual_bkops(card)))
-		if (!debugfs_create_file("bkops_stats", S_IRUSR, root, card,
+		if (!debugfs_create_file("bkops_stats", 0400, root, card,
 					 &mmc_dbg_bkops_stats_fops))
 			goto err;
 
-#ifdef VENDOR_EDIT
-	if (mmc_card_mmc(card))
-		if (!debugfs_create_file("sector_count", S_IRUSR, root, card,
-						&mmc_dbg_sector_count_fops))
-			goto err;
-
-	if (mmc_card_mmc(card))
-		if (!debugfs_create_file("life_time", S_IRUGO, root, card,
-						&mmc_dbg_life_time_fops))
-			goto err;
-#endif
 	return;
 
 err:
@@ -1229,4 +669,5 @@ err:
 void mmc_remove_card_debugfs(struct mmc_card *card)
 {
 	debugfs_remove_recursive(card->debugfs_root);
+	card->debugfs_root = NULL;
 }

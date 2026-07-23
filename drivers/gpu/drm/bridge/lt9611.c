@@ -1,4 +1,4 @@
-/* Copyright (c) 2018-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -25,6 +25,7 @@
 #include <linux/gpio.h>
 #include <linux/interrupt.h>
 #include <linux/component.h>
+#include <linux/workqueue.h>
 #include <linux/of_gpio.h>
 #include <linux/of_graph.h>
 #include <linux/of_irq.h>
@@ -35,7 +36,7 @@
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_edid.h>
 #include <drm/drm_mipi_dsi.h>
-
+#include <drm/drm_crtc_helper.h>
 
 #define CFG_HPD_INTERRUPTS BIT(0)
 #define CFG_EDID_INTERRUPTS BIT(1)
@@ -43,6 +44,9 @@
 #define CFG_VID_CHK_INTERRUPTS BIT(3)
 
 #define EDID_SEG_SIZE 256
+#define READ_BUF_MAX_SIZE 9
+#define WRITE_BUF_MAX_SIZE 2
+#define HPD_UEVENT_BUFFER_SIZE 30
 
 struct lt9611_reg_cfg {
 	u8 reg;
@@ -89,6 +93,7 @@ struct lt9611 {
 
 	struct device_node *host_node;
 	struct mipi_dsi_device *dsi;
+	struct drm_connector connector;
 
 	u8 i2c_addr;
 	int irq;
@@ -106,6 +111,7 @@ struct lt9611 {
 
 	enum drm_connector_status status;
 	bool power_on;
+	bool regulator_on;
 
 	/* get display modes from device tree */
 	bool non_pluggable;
@@ -115,7 +121,12 @@ struct lt9611 {
 	struct drm_display_mode curr_mode;
 	struct lt9611_video_cfg video_cfg;
 
+	struct workqueue_struct *wq;
+	struct work_struct work;
+
 	u8 edid_buf[EDID_SEG_SIZE];
+	u8 i2c_wbuf[WRITE_BUF_MAX_SIZE];
+	u8 i2c_rbuf[READ_BUF_MAX_SIZE];
 	bool hdmi_mode;
 };
 
@@ -168,7 +179,36 @@ static struct lt9611_timing_info lt9611_supp_timing_cfg[] = {
 	{0xffff, 0xffff, 0xff, 0xff, 0xff},
 };
 
-static int cont_splash_en;
+static void lt9611_hpd_work(struct work_struct *work)
+{
+	struct drm_device *dev = NULL;
+	char name[HPD_UEVENT_BUFFER_SIZE], status[HPD_UEVENT_BUFFER_SIZE];
+	char *envp[5];
+	struct lt9611 *pdata = container_of(work, struct lt9611, work);
+
+	if (!pdata)
+		return;
+
+	dev = pdata->connector.dev;
+	pdata->connector.status =
+		pdata->connector.funcs->detect(&pdata->connector, true);
+
+	scnprintf(name, HPD_UEVENT_BUFFER_SIZE, "name=%s",
+		 pdata->connector.name);
+	scnprintf(status, HPD_UEVENT_BUFFER_SIZE, "status=%s",
+		drm_get_connector_status_name(pdata->connector.status));
+
+	pr_debug("[%s]:[%s]\n", name, status);
+	envp[0] = name;
+	envp[1] = status;
+	envp[2] = NULL;
+	envp[3] = NULL;
+	envp[4] = NULL;
+	kobject_uevent_env(&dev->primary->kdev->kobj, KOBJ_CHANGE,
+			envp);
+}
+
+static void lt9611_device_power_ctl(struct lt9611 *pdata, bool on_off);
 
 static struct lt9611 *bridge_to_lt9611(struct drm_bridge *bridge)
 {
@@ -177,21 +217,21 @@ static struct lt9611 *bridge_to_lt9611(struct drm_bridge *bridge)
 
 static struct lt9611 *connector_to_lt9611(struct drm_connector *connector)
 {
-	WARN_ON(!connector->private);
-
-	return bridge_to_lt9611(connector->private);
+	return container_of(connector, struct lt9611, connector);
 }
 
 static int lt9611_write(struct lt9611 *pdata, u8 reg, u8 val)
 {
 	struct i2c_client *client = pdata->i2c_client;
-	u8 buf[2] = {reg, val};
 	struct i2c_msg msg = {
 		.addr = client->addr,
 		.flags = 0,
 		.len = 2,
-		.buf = buf,
+		.buf = pdata->i2c_wbuf,
 	};
+
+	pdata->i2c_wbuf[0] = reg;
+	pdata->i2c_wbuf[1] = val;
 
 	if (i2c_transfer(client->adapter, &msg, 1) < 1) {
 		pr_err("i2c write failed\n");
@@ -209,20 +249,24 @@ static int lt9611_read(struct lt9611 *pdata, u8 reg, char *buf, u32 size)
 			.addr = client->addr,
 			.flags = 0,
 			.len = 1,
-			.buf = &reg,
+			.buf = pdata->i2c_wbuf,
 		},
 		{
 			.addr = client->addr,
 			.flags = I2C_M_RD,
 			.len = size,
-			.buf = buf,
+			.buf = pdata->i2c_rbuf,
 		}
 	};
+
+	pdata->i2c_wbuf[0] = reg;
 
 	if (i2c_transfer(client->adapter, msg, 2) != 2) {
 		pr_err("i2c read failed\n");
 		return -EIO;
 	}
+
+	memcpy(buf, pdata->i2c_rbuf, size);
 
 	return 0;
 }
@@ -482,7 +526,7 @@ static int lt9611_gpio_configure(struct lt9611 *pdata, bool on)
 			goto error;
 		}
 
-		ret = gpio_direction_output(pdata->reset_gpio, 1);
+		ret = gpio_direction_output(pdata->reset_gpio, 0);
 		if (ret) {
 			pr_err("lt9611 reset gpio direction failed\n");
 			goto reset_error;
@@ -566,7 +610,7 @@ static int lt9611_read_device_rev(struct lt9611 *pdata)
 	ret = lt9611_read(pdata, 0x02, &rev, 1);
 
 	if (ret == 0)
-		pr_info("LT9611 revsion: 0x%x\n", rev);
+		pr_info("LT9611 revision: 0x%x\n", rev);
 
 	return ret;
 }
@@ -978,7 +1022,7 @@ static irqreturn_t lt9611_irq_thread_handler(int irq, void *dev_id)
 	lt9611_read(pdata, 0x0c, &irq_flag0, 1);
 
 	 /* hpd changed low */
-	if (irq_flag3 & 0x80) {
+	if (irq_flag3 & BIT(7)) {
 		pr_info("hdmi cable disconnected\n");
 
 		lt9611_write(pdata, 0xff, 0x82); /* irq 3 clear flag */
@@ -986,7 +1030,7 @@ static irqreturn_t lt9611_irq_thread_handler(int irq, void *dev_id)
 		lt9611_write(pdata, 0x07, 0x3f);
 	}
 	 /* hpd changed high */
-	if (irq_flag3 & 0x40) {
+	if (irq_flag3 & BIT(6)) {
 		pr_info("hdmi cable connected\n");
 
 		lt9611_write(pdata, 0xff, 0x82); /* irq 3 clear flag */
@@ -995,7 +1039,7 @@ static irqreturn_t lt9611_irq_thread_handler(int irq, void *dev_id)
 	}
 
 	/* video input changed */
-	if (irq_flag0 & 0x01) {
+	if (irq_flag0 & BIT(0)) {
 		pr_info("video input changed\n");
 		lt9611_write(pdata, 0xff, 0x82); /* irq 0 clear flag */
 		lt9611_write(pdata, 0x9e, 0xff);
@@ -1003,6 +1047,9 @@ static irqreturn_t lt9611_irq_thread_handler(int irq, void *dev_id)
 		lt9611_write(pdata, 0x04, 0xff);
 		lt9611_write(pdata, 0x04, 0xfe);
 	}
+
+	if (irq_flag3 & (BIT(6) | BIT(7)))
+		queue_work(pdata->wq, &pdata->work);
 
 	return IRQ_HANDLED;
 }
@@ -1128,7 +1175,7 @@ static int lt9611_video_on(struct lt9611 *pdata, bool on)
 		lt9611_hdmi_tx_digital(pdata, cfg);
 		lt9611_hdmi_tx_phy(pdata, cfg);
 
-		msleep(80);
+		msleep(500);
 
 		lt9611_video_check(pdata);
 		lt9611_hdmi_output_enable(pdata);
@@ -1179,22 +1226,30 @@ static void lt9611_mipi_byte_clk_debug(struct lt9611 *pdata)
 		pr_info("port B byte clk unstable\n");
 }
 
-static void lt9611_reset(struct lt9611 *pdata)
+static void lt9611_reset(struct lt9611 *pdata, bool on_off)
 {
-	gpio_set_value(pdata->reset_gpio, 1);
-	msleep(20);
-	gpio_set_value(pdata->reset_gpio, 0);
-	msleep(20);
-	gpio_set_value(pdata->reset_gpio, 1);
-	msleep(20);
+	if (on_off) {
+		gpio_set_value(pdata->reset_gpio, 1);
+		msleep(20);
+		gpio_set_value(pdata->reset_gpio, 0);
+		msleep(20);
+		gpio_set_value(pdata->reset_gpio, 1);
+		msleep(20);
+	} else
+		gpio_set_value(pdata->reset_gpio, 0);
 }
 
-static void lt9611_assert_5v(struct lt9611 *pdata)
+static void lt9611_assert_5v(struct lt9611 *pdata, bool on_off)
 {
-	if (gpio_is_valid(pdata->hdmi_en_gpio)) {
+	if (!gpio_is_valid(pdata->hdmi_en_gpio))
+		return;
+
+	if (on_off)
 		gpio_set_value(pdata->hdmi_en_gpio, 1);
-		msleep(20);
-	}
+	else
+		gpio_set_value(pdata->hdmi_en_gpio, 0);
+
+	msleep(20);
 }
 
 static int lt9611_config_vreg(struct device *dev,
@@ -1219,16 +1274,14 @@ static int lt9611_config_vreg(struct device *dev,
 				goto vreg_get_fail;
 			}
 
-			if (!cont_splash_en) {
-				rc = regulator_set_voltage(
-						curr_vreg->vreg,
-						curr_vreg->min_voltage,
-						curr_vreg->max_voltage);
-				if (rc < 0) {
-					pr_err("%s set vltg fail\n",
-							curr_vreg->vreg_name);
-					goto vreg_set_voltage_fail;
-				}
+			rc = regulator_set_voltage(
+					curr_vreg->vreg,
+					curr_vreg->min_voltage,
+					curr_vreg->max_voltage);
+			if (rc < 0) {
+				pr_err("%s set vltg fail\n",
+						curr_vreg->vreg_name);
+				goto vreg_set_voltage_fail;
 			}
 		}
 	} else {
@@ -1431,10 +1484,12 @@ static int lt9611_enable_vreg(struct lt9611 *pdata, int enable)
 						in_vreg[i].vreg_name, rc);
 				goto vreg_set_opt_mode_fail;
 			}
+
 			need_sleep = !regulator_is_enabled(in_vreg[i].vreg);
 			if (in_vreg[i].pre_on_sleep && need_sleep)
 				usleep_range(in_vreg[i].pre_on_sleep * 1000,
 						in_vreg[i].pre_on_sleep * 1000);
+
 			rc = regulator_set_load(in_vreg[i].vreg,
 					in_vreg[i].enable_load);
 			if (rc < 0) {
@@ -1442,6 +1497,7 @@ static int lt9611_enable_vreg(struct lt9611 *pdata, int enable)
 						in_vreg[i].vreg_name);
 				goto vreg_set_opt_mode_fail;
 			}
+
 			rc = regulator_enable(in_vreg[i].vreg);
 			if (in_vreg[i].post_on_sleep && need_sleep)
 				usleep_range(in_vreg[i].post_on_sleep * 1000,
@@ -1457,9 +1513,11 @@ static int lt9611_enable_vreg(struct lt9611 *pdata, int enable)
 			if (in_vreg[i].pre_off_sleep)
 				usleep_range(in_vreg[i].pre_off_sleep * 1000,
 					in_vreg[i].pre_off_sleep * 1000);
+
 			regulator_set_load(in_vreg[i].vreg,
 					in_vreg[i].disable_load);
 			regulator_disable(in_vreg[i].vreg);
+
 			if (in_vreg[i].post_off_sleep)
 				usleep_range(in_vreg[i].post_off_sleep * 1000,
 					in_vreg[i].post_off_sleep * 1000);
@@ -1475,9 +1533,11 @@ vreg_set_opt_mode_fail:
 		if (in_vreg[i].pre_off_sleep)
 			usleep_range(in_vreg[i].pre_off_sleep * 1000,
 					in_vreg[i].pre_off_sleep * 1000);
+
 		regulator_set_load(in_vreg[i].vreg,
 				in_vreg[i].disable_load);
 		regulator_disable(in_vreg[i].vreg);
+
 		if (in_vreg[i].post_off_sleep)
 			usleep_range(in_vreg[i].post_off_sleep * 1000,
 					in_vreg[i].post_off_sleep * 1000);
@@ -1487,7 +1547,8 @@ vreg_set_opt_mode_fail:
 }
 
 static struct lt9611_timing_info *lt9611_get_supported_timing(
-		struct drm_display_mode *mode) {
+		struct drm_display_mode *mode)
+{
 	int i = 0;
 
 	while (lt9611_supp_timing_cfg[i].xres != 0xffff) {
@@ -1571,7 +1632,7 @@ static void lt9611_get_video_cfg(struct lt9611 *pdata,
 		video_cfg->pclk_khz, video_cfg->num_of_lanes,
 		video_cfg->num_of_intfs);
 
-	rc = drm_hdmi_avi_infoframe_from_display_mode(&avi_frame, mode);
+	rc = drm_hdmi_avi_infoframe_from_display_mode(&avi_frame, mode, false);
 	if (rc) {
 		pr_err("get avi frame failed ret=%d\n", rc);
 	} else {
@@ -1589,7 +1650,7 @@ lt9611_connector_detect(struct drm_connector *connector, bool force)
 {
 	struct lt9611 *pdata = connector_to_lt9611(connector);
 
-	if (!pdata->non_pluggable) {
+	if (!pdata->non_pluggable || force) {
 		u8 reg_val = 0;
 		int connected = 0;
 
@@ -1819,6 +1880,22 @@ static void lt9611_bridge_mode_set(struct drm_bridge *bridge,
 	}
 }
 
+static const struct drm_connector_helper_funcs lt9611_connector_helper_funcs = {
+	.get_modes = lt9611_connector_get_modes,
+	.mode_valid = lt9611_connector_mode_valid,
+};
+
+
+static const struct drm_connector_funcs lt9611_connector_funcs = {
+	.fill_modes = drm_helper_probe_single_connector_modes,
+	.detect = lt9611_connector_detect,
+	.destroy = drm_connector_cleanup,
+	.reset = drm_atomic_helper_connector_reset,
+	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
+	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
+};
+
+
 static int lt9611_bridge_attach(struct drm_bridge *bridge)
 {
 	struct mipi_dsi_host *host;
@@ -1835,6 +1912,32 @@ static int lt9611_bridge_attach(struct drm_bridge *bridge)
 	if (!bridge->encoder) {
 		DRM_ERROR("Parent encoder object not found");
 		return -ENODEV;
+	}
+
+	ret = drm_connector_init(bridge->dev, &pdata->connector,
+				 &lt9611_connector_funcs,
+				 DRM_MODE_CONNECTOR_HDMIA);
+	if (ret) {
+		DRM_ERROR("Failed to initialize connector: %d\n", ret);
+		return ret;
+	}
+
+	drm_connector_helper_add(&pdata->connector,
+				 &lt9611_connector_helper_funcs);
+
+	ret = drm_connector_register(&pdata->connector);
+	if (ret) {
+		DRM_ERROR("Failed to register connector: %d\n", ret);
+		return ret;
+	}
+
+	pdata->connector.polled = DRM_CONNECTOR_POLL_CONNECT;
+
+	ret = drm_mode_connector_attach_encoder(&pdata->connector,
+						bridge->encoder);
+	if (ret) {
+		DRM_ERROR("Failed to link up connector to encoder: %d\n", ret);
+		return ret;
 	}
 
 	host = of_find_mipi_dsi_host_by_node(pdata->host_node);
@@ -1878,7 +1981,7 @@ static void lt9611_bridge_pre_enable(struct drm_bridge *bridge)
 
 	pr_debug("bridge pre_enable\n");
 
-	lt9611_reset(pdata);
+	lt9611_reset(pdata, true);
 
 	lt9611_write(pdata, 0xff, 0x80);
 	lt9611_write(pdata, 0xee, 0x01);
@@ -1902,39 +2005,6 @@ static void lt9611_bridge_post_disable(struct drm_bridge *bridge)
 	lt9611_sleep_setup(pdata);
 }
 
-static struct drm_connector_funcs override_funcs;
-static struct drm_connector_helper_funcs override_helper_private;
-
-static int lt9611_bridge_connector_init(struct drm_bridge *bridge,
-	struct drm_connector *connector)
-{
-	pr_debug("bridge connector_init\n");
-
-	if (connector->encoder != bridge->encoder) {
-		pr_err("bridge and connector need attach to the same encoder\n");
-		return -EINVAL;
-	}
-
-	connector->private = bridge;
-
-	/*
-	 * Make a copy of drm_connector_funcs and drm_connector_helper_funcs. To
-	 * make sure other KMS components won't be broken. For example, if other
-	 * connectors share the implementation for ->funs, overwriting this will
-	 * break other connectors.
-	 */
-	override_funcs = *connector->funcs;
-	override_funcs.detect = lt9611_connector_detect;
-	connector->funcs = &override_funcs;
-
-	override_helper_private = *connector->helper_private;
-	override_helper_private.get_modes = lt9611_connector_get_modes;
-	override_helper_private.mode_valid = lt9611_connector_mode_valid;
-	connector->helper_private = &override_helper_private;
-
-	return 0;
-}
-
 static const struct drm_bridge_funcs lt9611_bridge_funcs = {
 	.attach = lt9611_bridge_attach,
 	.mode_fixup   = lt9611_bridge_mode_fixup,
@@ -1943,7 +2013,6 @@ static const struct drm_bridge_funcs lt9611_bridge_funcs = {
 	.disable = lt9611_bridge_disable,
 	.post_disable = lt9611_bridge_post_disable,
 	.mode_set = lt9611_bridge_mode_set,
-	.connector_init = lt9611_bridge_connector_init,
 };
 
 /* sysfs */
@@ -1959,6 +2028,8 @@ static int lt9611_dump_debug_info(struct lt9611 *pdata)
 	lt9611_pcr_mk_debug(pdata);
 
 	lt9611_mipi_byte_clk_debug(pdata);
+
+	lt9611_read_edid(pdata);
 
 	return 0;
 }
@@ -2017,20 +2088,6 @@ static void lt9611_sysfs_remove(struct device *dev)
 	sysfs_remove_group(&dev->kobj, &lt9611_sysfs_attr_grp);
 }
 
-static int lt9611_bind(struct device *dev, struct device *master, void *data)
-{
-	return 0;
-}
-
-static void lt9611_unbind(struct device *dev, struct device *master, void *data)
-{
-}
-
-static const struct component_ops lt9611_comp_ops = {
-	.bind = lt9611_bind,
-	.unbind = lt9611_unbind,
-};
-
 static int lt9611_probe(struct i2c_client *client,
 	 const struct i2c_device_id *id)
 {
@@ -2074,7 +2131,7 @@ static int lt9611_probe(struct i2c_client *client,
 		goto err_dt_supply;
 	}
 
-	lt9611_assert_5v(pdata);
+	lt9611_assert_5v(pdata, true);
 
 	ret = lt9611_enable_vreg(pdata, true);
 	if (ret) {
@@ -2082,8 +2139,9 @@ static int lt9611_probe(struct i2c_client *client,
 		goto err_dt_supply;
 	}
 
-	if (!cont_splash_en)
-		lt9611_reset(pdata);
+	lt9611_reset(pdata, true);
+
+	pdata->regulator_on = true;
 
 	ret = lt9611_read_device_rev(pdata);
 	if (ret) {
@@ -2108,16 +2166,24 @@ static int lt9611_probe(struct i2c_client *client,
 		goto err_sysfs_init;
 	}
 
-	pdata->bridge.funcs = &lt9611_bridge_funcs;
+#if IS_ENABLED(CONFIG_OF)
 	pdata->bridge.of_node = client->dev.of_node;
+#endif
+
+	pdata->bridge.funcs = &lt9611_bridge_funcs;
+	/*pdata->bridge.of_node = client->dev.of_node;*/
 
 	drm_bridge_add(&pdata->bridge);
 
-	ret = component_add(&client->dev, &lt9611_comp_ops);
-	if (ret)
-		pr_err("component add failed, rc=%d\n", ret);
+	pdata->wq = create_singlethread_workqueue("lt9611_wk");
+	if (!pdata->wq) {
+		pr_err("Error creating lt9611 wq\n");
+		return -ENOMEM;
+	}
 
-	return ret;
+	INIT_WORK(&pdata->work, lt9611_hpd_work);
+
+	return 0;
 
 err_sysfs_init:
 	disable_irq(pdata->irq);
@@ -2161,12 +2227,62 @@ static int lt9611_remove(struct i2c_client *client)
 		}
 	}
 
+	if (pdata->wq)
+		destroy_workqueue(pdata->wq);
+
 	devm_kfree(&client->dev, pdata);
 
 end:
 	return ret;
 }
 
+static void lt9611_device_power_ctl(struct lt9611 *pdata, bool on_off)
+{
+	int ret = 0;
+
+	lt9611_assert_5v(pdata, on_off);
+
+	ret = lt9611_enable_vreg(pdata, on_off);
+
+	if (ret)
+		pr_err("failed to set vreg state %d\n", on_off);
+
+	lt9611_reset(pdata, on_off);
+}
+
+#ifdef CONFIG_PM_SLEEP
+static int lt9611_suspend(struct device *dev)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct lt9611 *pdata = i2c_get_clientdata(client);
+
+	if (pdata->regulator_on) {
+		disable_irq(pdata->irq);
+		lt9611_device_power_ctl(pdata, false);
+		pdata->regulator_on = false;
+	}
+
+	return 0;
+}
+
+static int lt9611_resume(struct device *dev)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct lt9611 *pdata = i2c_get_clientdata(client);
+
+	if (!pdata->regulator_on) {
+		lt9611_device_power_ctl(pdata, true);
+		enable_irq(pdata->irq);
+		pdata->regulator_on = true;
+	}
+
+	return 0;
+}
+
+static const struct dev_pm_ops lt9611_pm = {
+	SET_SYSTEM_SLEEP_PM_OPS(lt9611_suspend, lt9611_resume)
+};
+#endif
 
 static struct i2c_device_id lt9611_id[] = {
 	{ "lt,lt9611", 0},
@@ -2183,7 +2299,12 @@ static struct i2c_driver lt9611_driver = {
 	.driver = {
 		.name = "lt9611",
 		.owner = THIS_MODULE,
+#ifdef CONFIG_OF
 		.of_match_table = lt9611_match_table,
+#endif
+#ifdef CONFIG_PM_SLEEP
+		.pm = &lt9611_pm,
+#endif
 	},
 	.probe = lt9611_probe,
 	.remove = lt9611_remove,
@@ -2200,9 +2321,6 @@ static void __exit lt9611_exit(void)
 	i2c_del_driver(&lt9611_driver);
 }
 
-module_param(cont_splash_en, int, 0600);
-MODULE_PARM_DESC(cont_splash_en,
-	"lt9611.cont_splash_en=1 or 0; where 1 represent enabled and 0 for disabled");
 module_init(lt9611_init);
 module_exit(lt9611_exit);
 

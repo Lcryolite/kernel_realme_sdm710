@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2017, 2019 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -167,21 +167,21 @@ static int __secure_tz_reset_entry2(unsigned int *scm_data, u32 size_scm_data,
 	__iowmb();
 
 	if (!is_64) {
+		struct scm_desc desc = {
+			.args[0] = scm_data[0],
+			.args[1] = scm_data[1],
+			.arginfo = SCM_ARGS(2),
+		};
 		spin_lock(&tz_lock);
-		ret = scm_call_atomic2(SCM_SVC_IO, TZ_RESET_ID, scm_data[0],
-					scm_data[1]);
+		ret = scm_call2_atomic(SCM_SIP_FNID(SCM_SVC_IO, TZ_RESET_ID),
+			&desc);
 		spin_unlock(&tz_lock);
 	} else {
-		if (is_scm_armv8()) {
-			struct scm_desc desc = {0};
+		struct scm_desc desc = {0};
 
-			desc.arginfo = 0;
-			ret = scm_call2(SCM_SIP_FNID(SCM_SVC_DCVS,
-					 TZ_RESET_ID_64), &desc);
-		} else {
-			ret = scm_call(SCM_SVC_DCVS, TZ_RESET_ID_64, scm_data,
-				size_scm_data, NULL, 0);
-		}
+		desc.arginfo = 0;
+		ret = scm_call2(SCM_SIP_FNID(SCM_SVC_DCVS,
+				 TZ_RESET_ID_64), &desc);
 	}
 	return ret;
 }
@@ -194,36 +194,37 @@ static int __secure_tz_update_entry3(unsigned int *scm_data, u32 size_scm_data,
 	__iowmb();
 
 	if (!priv->is_64) {
+		struct scm_desc desc = {
+			.args[0] = scm_data[0],
+			.args[1] = scm_data[1],
+			.args[2] = scm_data[2],
+			.arginfo = SCM_ARGS(3),
+		};
 		spin_lock(&tz_lock);
-		ret = scm_call_atomic3(SCM_SVC_IO, TZ_UPDATE_ID,
-					scm_data[0], scm_data[1], scm_data[2]);
+		ret = scm_call2_atomic(SCM_SIP_FNID(SCM_SVC_IO, TZ_UPDATE_ID),
+			&desc);
 		spin_unlock(&tz_lock);
 		*val = ret;
 	} else {
-		if (is_scm_armv8()) {
-			unsigned int cmd_id;
-			struct scm_desc desc = {0};
+		unsigned int cmd_id;
+		struct scm_desc desc = {0};
 
-			desc.args[0] = scm_data[0];
-			desc.args[1] = scm_data[1];
-			desc.args[2] = scm_data[2];
+		desc.args[0] = scm_data[0];
+		desc.args[1] = scm_data[1];
+		desc.args[2] = scm_data[2];
 
-			if (!priv->ctxt_aware_enable) {
-				desc.arginfo = SCM_ARGS(3);
-				cmd_id =  TZ_V2_UPDATE_ID_64;
-			} else {
-				/* Add context count infomration to update*/
-				desc.args[3] = scm_data[3];
-				desc.arginfo = SCM_ARGS(4);
-				cmd_id =  TZ_V2_UPDATE_WITH_CA_ID_64;
-			}
+		if (!priv->ctxt_aware_enable) {
+			desc.arginfo = SCM_ARGS(3);
+			cmd_id =  TZ_V2_UPDATE_ID_64;
+		} else {
+			/* Add context count infomration to update*/
+			desc.args[3] = scm_data[3];
+			desc.arginfo = SCM_ARGS(4);
+			cmd_id =  TZ_V2_UPDATE_WITH_CA_ID_64;
+		}
 			ret = scm_call2(SCM_SIP_FNID(SCM_SVC_DCVS, cmd_id),
 						&desc);
 			*val = desc.ret[0];
-		} else {
-			ret = scm_call(SCM_SVC_DCVS, TZ_UPDATE_ID_64, scm_data,
-				size_scm_data, val, size_val);
-		}
 	}
 	return ret;
 }
@@ -268,25 +269,11 @@ static int tz_init(struct devfreq_msm_adreno_tz_data *priv,
 {
 	int ret;
 	/* Make sure all CMD IDs are avaialble */
-	if (scm_is_call_available(SCM_SVC_DCVS, TZ_INIT_ID)) {
-		ret = scm_call(SCM_SVC_DCVS, TZ_INIT_ID, tz_pwrlevels,
-				size_pwrlevels, NULL, 0);
-		*version = 0;
-
-	} else if (scm_is_call_available(SCM_SVC_DCVS, TZ_INIT_ID_64) &&
+	if (scm_is_call_available(SCM_SVC_DCVS, TZ_INIT_ID_64) &&
 			scm_is_call_available(SCM_SVC_DCVS, TZ_UPDATE_ID_64) &&
 			scm_is_call_available(SCM_SVC_DCVS, TZ_RESET_ID_64)) {
 		struct scm_desc desc = {0};
 		u8 *tz_buf;
-
-		if (!is_scm_armv8()) {
-			ret = scm_call(SCM_SVC_DCVS, TZ_INIT_ID_64,
-				       tz_pwrlevels, size_pwrlevels,
-				       version, size_version);
-			if (!ret)
-				priv->is_64 = true;
-			return ret;
-		}
 
 		tz_buf = kzalloc(PAGE_ALIGN(size_pwrlevels), GFP_KERNEL);
 		if (!tz_buf)
@@ -318,7 +305,7 @@ static int tz_init(struct devfreq_msm_adreno_tz_data *priv,
 				TZ_V2_UPDATE_WITH_CA_ID_64))) {
 			ret = tz_init_ca(priv);
 			/*
-			 * If context aware feature intialization fails,
+			 * If context aware feature initialization fails,
 			 * just print an error message and return
 			 * success as normal DCVS will still work.
 			 */
@@ -342,19 +329,11 @@ static inline int devfreq_get_freq_level(struct devfreq *devfreq,
 	int lev;
 
 	for (lev = 0; lev < devfreq->profile->max_state; lev++)
-	if (freq == devfreq->profile->freq_table[lev])
-		return lev;
+		if (freq == devfreq->profile->freq_table[lev])
+			return lev;
 
 	return -EINVAL;
 }
-
-//static int tz_get_target_freq(struct devfreq *devfreq, unsigned long *freq)
-
-#ifdef CONFIG_SIMPLE_GPU_ALGORITHM
-extern int simple_gpu_active;
-extern int simple_gpu_algorithm(int level, int *val,
-				struct devfreq_msm_adreno_tz_data *priv);
-#endif
 
 static int tz_get_target_freq(struct devfreq *devfreq, unsigned long *freq)
 {
@@ -408,25 +387,12 @@ static int tz_get_target_freq(struct devfreq *devfreq, unsigned long *freq)
 		val = -1 * level;
 	} else {
 
-#ifdef CONFIG_SIMPLE_GPU_ALGORITHM
-		if (simple_gpu_active) {
-			simple_gpu_algorithm(level, &val, priv);
-		} else {
-			scm_data[0] = level;
-			scm_data[1] = priv->bin.total_time;
-			scm_data[2] = priv->bin.busy_time;
-			scm_data[3] = context_count;
-			__secure_tz_update_entry3(scm_data, sizeof(scm_data),
-						&val, sizeof(val), priv);
-		}
-#else
 		scm_data[0] = level;
 		scm_data[1] = priv->bin.total_time;
 		scm_data[2] = priv->bin.busy_time;
 		scm_data[3] = context_count;
 		__secure_tz_update_entry3(scm_data, sizeof(scm_data),
 					&val, sizeof(val), priv);
-#endif
 	}
 	priv->bin.total_time = 0;
 	priv->bin.busy_time = 0;
@@ -557,6 +523,37 @@ static int tz_handler(struct devfreq *devfreq, unsigned int event, void *data)
 	return result;
 }
 
+int msm_adreno_devfreq_init_tz(struct devfreq *devfreq)
+{
+	struct devfreq_msm_adreno_tz_data *priv;
+	unsigned int tz_pwrlevels[MSM_ADRENO_MAX_PWRLEVELS + 1];
+	int i, out = 1, ret;
+	unsigned int version;
+
+	if (!devfreq)
+		return -EINVAL;
+
+	priv = devfreq->data;
+
+	if (devfreq->profile->max_state < MSM_ADRENO_MAX_PWRLEVELS) {
+		for (i = 0; i < devfreq->profile->max_state; i++)
+			tz_pwrlevels[out++] = devfreq->profile->freq_table[i];
+		tz_pwrlevels[0] = i;
+	} else {
+		pr_err(TAG "tz_pwrlevels[] is too short\n");
+		return -EINVAL;
+	}
+
+	ret = tz_init(priv, tz_pwrlevels, sizeof(tz_pwrlevels), &version,
+				sizeof(version));
+	if (ret != 0 || version > MAX_TZ_VERSION) {
+		pr_err(TAG "tz_init failed\n");
+		return ret ? ret : -EINVAL;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL(msm_adreno_devfreq_init_tz);
 
 static struct devfreq_governor msm_adreno_tz = {
 	.name = "msm-adreno-tz",

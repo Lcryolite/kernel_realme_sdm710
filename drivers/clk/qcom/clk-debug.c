@@ -11,8 +11,6 @@
  * GNU General Public License for more details.
  */
 
-#define pr_fmt(fmt) "clk: %s: " fmt, __func__
-
 #include <linux/clk.h>
 #include <linux/export.h>
 #include <linux/module.h>
@@ -20,10 +18,11 @@
 #include <linux/platform_device.h>
 #include <linux/clk-provider.h>
 #include <linux/of.h>
+#include <linux/bitops.h>
+#include <linux/msm-bus.h>
 
 #include "clk-regmap.h"
 #include "clk-debug.h"
-#include "common.h"
 
 static struct clk_hw *measure;
 
@@ -36,7 +35,8 @@ static DEFINE_MUTEX(clk_debug_lock);
 
 #define XO_DIV4_CNT_DONE	BIT(25)
 #define CNT_EN			BIT(20)
-#define MEASURE_CNT		BM(24, 0)
+#define MEASURE_CNT		GENMASK(24, 0)
+#define CBCR_ENA		BIT(0)
 
 /* Sample clock for 'ticks' reference clock ticks. */
 static u32 run_measurement(unsigned int ticks, struct regmap *regmap,
@@ -143,7 +143,7 @@ static u8 clk_debug_mux_get_parent(struct clk_hw *hw)
 	for (i = 0; i < num_parents; i++) {
 		if (!strcmp(meas->parent[i].parents,
 					clk_hw_get_name(hw_clk))) {
-			pr_debug("clock parent - %s, index %d\n",
+			pr_debug("%s: clock parent - %s, index %d\n", __func__,
 					meas->parent[i].parents, i);
 			return i;
 		}
@@ -181,15 +181,6 @@ static int clk_debug_mux_set_parent(struct clk_hw *hw, u8 index)
 				meas->parent[index].post_div_shift;
 		regmap_write(meas->regmap[dbg_cc],
 				meas->parent[index].post_div_offset, regval);
-
-		/* Not all recursive muxes have a DEBUG clock. */
-		if (meas->parent[index].cbcr_offset != U32_MAX) {
-			regmap_read(meas->regmap[dbg_cc],
-				meas->parent[index].cbcr_offset, &regval);
-			regval |= BIT(0);
-			regmap_write(meas->regmap[dbg_cc],
-				meas->parent[index].cbcr_offset, regval);
-		}
 	}
 
 	/* Update the debug sel for GCC */
@@ -206,11 +197,6 @@ static int clk_debug_mux_set_parent(struct clk_hw *hw, u8 index)
 			meas->post_div_mask) << meas->post_div_shift;
 	regmap_write(meas->regmap[GCC], meas->post_div_offset, regval);
 
-	/* Turn on the GCC_DEBUG_CBCR */
-	regmap_read(meas->regmap[GCC], meas->cbcr_offset, &regval);
-	regval |= BIT(0);
-	regmap_write(meas->regmap[GCC], meas->cbcr_offset, regval);
-
 	return 0;
 }
 
@@ -219,6 +205,44 @@ const struct clk_ops clk_debug_mux_ops = {
 	.set_parent = clk_debug_mux_set_parent,
 };
 EXPORT_SYMBOL(clk_debug_mux_ops);
+
+static void enable_debug_clks(struct clk_debug_mux *meas, u8 index)
+{
+	int dbg_cc = meas->parent[index].dbg_cc;
+
+	meas->en_mask = meas->en_mask ? meas->en_mask : CBCR_ENA;
+
+	if (dbg_cc != GCC) {
+		/* Not all recursive muxes have a DEBUG clock. */
+		if (meas->parent[index].cbcr_offset != U32_MAX)
+			regmap_update_bits(meas->regmap[dbg_cc],
+					meas->parent[index].cbcr_offset,
+					meas->en_mask, meas->en_mask);
+	}
+
+	/* Turn on the GCC_DEBUG_CBCR */
+	regmap_update_bits(meas->regmap[GCC], meas->cbcr_offset,
+					meas->en_mask, meas->en_mask);
+
+}
+
+static void disable_debug_clks(struct clk_debug_mux *meas, u8 index)
+{
+	int dbg_cc = meas->parent[index].dbg_cc;
+
+	meas->en_mask = meas->en_mask ? meas->en_mask : CBCR_ENA;
+
+	/* Turn off the GCC_DEBUG_CBCR */
+	regmap_update_bits(meas->regmap[GCC], meas->cbcr_offset,
+					meas->en_mask, 0);
+
+	if (dbg_cc != GCC) {
+		if (meas->parent[index].cbcr_offset != U32_MAX)
+			regmap_update_bits(meas->regmap[dbg_cc],
+					meas->parent[index].cbcr_offset,
+					meas->en_mask, 0);
+	}
+}
 
 static int clk_debug_measure_get(void *data, u64 *val)
 {
@@ -230,10 +254,19 @@ static int clk_debug_measure_get(void *data, u64 *val)
 
 	mutex_lock(&clk_debug_lock);
 
+	/*
+	 * Vote for bandwidth to re-connect config ports
+	 * to multimedia clock controllers.
+	 */
+	if (meas->bus_cl_id)
+		msm_bus_scale_client_update_request(meas->bus_cl_id, 1);
+
 	ret = clk_set_parent(measure->clk, hw->clk);
 	if (!ret) {
 		par = measure;
 		index =  clk_debug_mux_get_parent(measure);
+
+		enable_debug_clks(meas, index);
 		while (par && par != hw) {
 			if (par->init->ops->enable)
 				par->init->ops->enable(par);
@@ -247,36 +280,100 @@ static int clk_debug_measure_get(void *data, u64 *val)
 		/* Accommodate for any pre-set dividers */
 		if (meas->parent[index].misc_div_val)
 			*val *= meas->parent[index].misc_div_val;
+	} else {
+		pr_err("Failed to set the debug mux's parent.\n");
+		goto exit;
 	}
 
 	meas_rate = clk_get_rate(hw->clk);
 	par = clk_hw_get_parent(measure);
-	if (!par)
-		return -EINVAL;
+	if (!par) {
+		ret = -EINVAL;
+		goto exit1;
+	}
 
 	sw_rate = clk_get_rate(par->clk);
 	if (sw_rate && meas_rate >= (sw_rate * 2))
 		*val *= DIV_ROUND_CLOSEST(meas_rate, sw_rate);
+exit1:
+	disable_debug_clks(meas, index);
+exit:
+	if (meas->bus_cl_id)
+		msm_bus_scale_client_update_request(meas->bus_cl_id, 0);
 	mutex_unlock(&clk_debug_lock);
-
 	return ret;
 }
 
 DEFINE_SIMPLE_ATTRIBUTE(clk_measure_fops, clk_debug_measure_get,
 							NULL, "%lld\n");
 
+static int clk_debug_read_period(void *data, u64 *val)
+{
+	struct clk_hw *hw = data;
+	struct clk_debug_mux *meas = to_clk_measure(measure);
+	int index;
+	int dbg_cc;
+	int ret = 0;
+	u32 regval;
+
+	mutex_lock(&clk_debug_lock);
+
+	ret = clk_set_parent(measure->clk, hw->clk);
+	if (!ret) {
+		index = clk_debug_mux_get_parent(measure);
+		dbg_cc = meas->parent[index].dbg_cc;
+
+		regmap_read(meas->regmap[dbg_cc], meas->period_offset, &regval);
+		if (!regval) {
+			pr_err("Error reading mccc period register, ret = %d\n",
+			       ret);
+			mutex_unlock(&clk_debug_lock);
+			return 0;
+		}
+		*val = 1000000000000UL;
+		do_div(*val, regval);
+	} else {
+		pr_err("Failed to set the debug mux's parent.\n");
+	}
+
+	mutex_unlock(&clk_debug_lock);
+	return ret;
+}
+
+DEFINE_SIMPLE_ATTRIBUTE(clk_read_period_fops, clk_debug_read_period,
+							NULL, "%lld\n");
+
 int clk_debug_measure_add(struct clk_hw *hw, struct dentry *dentry)
 {
+	int ret;
+	int index;
+	struct clk_debug_mux *meas;
+
 	if (IS_ERR_OR_NULL(measure)) {
 		pr_err_once("Please check if `measure` clk is registered.\n");
 		return 0;
 	}
 
-	if (clk_set_parent(measure->clk, hw->clk))
-		return 0;
+	meas = to_clk_measure(measure);
+	if (meas->bus_cl_id)
+		msm_bus_scale_client_update_request(meas->bus_cl_id, 1);
+	ret = clk_set_parent(measure->clk, hw->clk);
+	if (ret) {
+		pr_debug("Unable to set %s as %s's parent, ret=%d\n",
+			clk_hw_get_name(hw), clk_hw_get_name(measure), ret);
+		goto err;
+	}
 
-	debugfs_create_file("clk_measure", 0444, dentry, hw,
+	index = clk_debug_mux_get_parent(measure);
+	if (meas->parent[index].dbg_cc == MC_CC)
+		debugfs_create_file("clk_measure", 0444, dentry, hw,
+					&clk_read_period_fops);
+	else
+		debugfs_create_file("clk_measure", 0444, dentry, hw,
 					&clk_measure_fops);
+err:
+	if (meas->bus_cl_id)
+		msm_bus_scale_client_update_request(meas->bus_cl_id, 0);
 	return 0;
 }
 EXPORT_SYMBOL(clk_debug_measure_add);
@@ -295,3 +392,9 @@ int clk_debug_measure_register(struct clk_hw *hw)
 }
 EXPORT_SYMBOL(clk_debug_measure_register);
 
+void clk_debug_bus_vote(struct clk_hw *hw, bool enable)
+{
+	if (hw->init->bus_cl_id)
+		msm_bus_scale_client_update_request(hw->init->bus_cl_id,
+								enable);
+}

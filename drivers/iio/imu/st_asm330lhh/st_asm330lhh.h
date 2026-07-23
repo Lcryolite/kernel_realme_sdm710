@@ -377,6 +377,8 @@ struct st_asm330lhh_hw {
 
 	const struct st_asm330lhh_transfer_function *tf;
 	struct st_asm330lhh_transfer_buffer tb;
+	struct regulator *vdd;
+	struct regulator *vio;
 	struct iio_mount_matrix orientation;
 	int enable_gpio;
 	bool asm330_hrtimer;
@@ -427,14 +429,6 @@ static inline bool st_asm330lhh_is_fifo_enabled(struct st_asm330lhh_hw *hw)
 {
 	return hw->enable_mask & (BIT(ST_ASM330LHH_ID_GYRO) |
 				  BIT(ST_ASM330LHH_ID_ACC));
-}
-
-static inline s64 st_asm330lhh_get_time_ns(void)
-{
-	struct timespec ts;
-
-	get_monotonic_boottime(&ts);
-	return timespec_to_ns(&ts);
 }
 
 int st_asm330lhh_probe(struct device *dev, int irq,

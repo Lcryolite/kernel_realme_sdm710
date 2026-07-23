@@ -19,6 +19,7 @@ Required properties:
 -qcom,spss-test-firmware-name: test firmware file name
 -qcom,spss-prod-firmware-name: production firmware file name
 -qcom,spss-debug-reg-addr: debug register physical address
+-qcom,spss-emul-type-reg-addr: soc emulation type register physical address
 
 Example:
    qcom,spss_utils {
@@ -32,4 +33,5 @@ Example:
       qcom,spss-test-firmware-name = "spss1t";  /* 8 chars max */
       qcom,spss-prod-firmware-name = "spss1p";  /* 8 chars max */
       qcom,spss-debug-reg-addr = <0x01886020>;
+      qcom,spss-emul-type-reg-addr = <0x01fc8004>;
    };

@@ -1,8 +1,13 @@
-/* Copyright (c) 2010-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
  * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/module.h>
@@ -12,6 +17,7 @@
 #include <linux/usb/ulpi.h>
 #include <linux/gpio.h>
 #include <linux/pinctrl/consumer.h>
+#include <linux/sched/clock.h>
 
 #include "ci13xxx_udc.c"
 
@@ -42,7 +48,7 @@ static void ci13xxx_msm_suspend(void)
 {
 	struct device *dev = _udc->gadget.dev.parent;
 
-	dev_dbg(dev, "ci13xxx_msm_suspend\n");
+	dev_dbg(dev, "%s\n", __func__);
 
 	if (_udc_ctxt.wake_irq && !_udc_ctxt.wake_irq_state) {
 		enable_irq_wake(_udc_ctxt.wake_irq);
@@ -55,7 +61,7 @@ static void ci13xxx_msm_resume(void)
 {
 	struct device *dev = _udc->gadget.dev.parent;
 
-	dev_dbg(dev, "ci13xxx_msm_resume\n");
+	dev_dbg(dev, "%s\n", __func__);
 
 	if (_udc_ctxt.wake_irq && _udc_ctxt.wake_irq_state) {
 		disable_irq_wake(_udc_ctxt.wake_irq);
@@ -276,7 +282,7 @@ static int ci13xxx_msm_install_wake_gpio(struct platform_device *pdev,
 	int ret;
 	struct pinctrl_state *set_state;
 
-	dev_dbg(&pdev->dev, "ci13xxx_msm_install_wake_gpio\n");
+	dev_dbg(&pdev->dev, "%s\n", __func__);
 
 	_udc_ctxt.wake_gpio = res->start;
 	if (_udc_ctxt.ci13xxx_pinctrl) {
@@ -328,7 +334,7 @@ static void ci13xxx_msm_uninstall_wake_gpio(struct platform_device *pdev)
 {
 	struct pinctrl_state *set_state;
 
-	dev_dbg(&pdev->dev, "ci13xxx_msm_uninstall_wake_gpio\n");
+	dev_dbg(&pdev->dev, "%s\n", __func__);
 
 	if (_udc_ctxt.wake_gpio) {
 		gpio_free(_udc_ctxt.wake_gpio);
@@ -354,7 +360,7 @@ static int ci13xxx_msm_probe(struct platform_device *pdev)
 	struct ci13xxx_platform_data *pdata = pdev->dev.platform_data;
 	bool is_l1_supported = false;
 
-	dev_dbg(&pdev->dev, "ci13xxx_msm_probe\n");
+	dev_dbg(&pdev->dev, "%s\n", __func__);
 
 	if (pdata) {
 		/* Acceptable values for nz_itc are: 0,1,2,4,8,16,32,64 */

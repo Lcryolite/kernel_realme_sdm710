@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -19,7 +19,8 @@
 #include <linux/mfd/syscon.h>
 #include <linux/regmap.h>
 #include <linux/interrupt.h>
-#include "edac_core.h"
+#include "edac_mc.h"
+#include "edac_device.h"
 
 #ifdef CONFIG_EDAC_QCOM_LLCC_PANIC_ON_CE
 #define LLCC_ERP_PANIC_ON_CE 1
@@ -78,15 +79,24 @@
 #define DRP_TRP_INT_CLEAR	0x3
 #define DRP_TRP_CNT_CLEAR	0x3
 
-#ifdef CONFIG_EDAC_LLCC_POLL
+/* Config registers offsets*/
+#define DRP_ECC_ERROR_CFG	0x00040000
+
+/* TRP, DRP interrupt register offsets */
+#define CMN_INTERRUPT_0_ENABLE		0x0003001C
+#define CMN_INTERRUPT_2_ENABLE		0x0003003C
+#define TRP_INTERRUPT_0_ENABLE		0x00020488
+#define DRP_INTERRUPT_ENABLE		0x0004100C
+
+#define SB_ERROR_THRESHOLD	0x1
+#define SB_ERROR_THRESHOLD_SHIFT	24
+#define SB_DB_TRP_INTERRUPT_ENABLE	0x3
+#define TRP0_INTERRUPT_ENABLE	0x1
+#define DRP0_INTERRUPT_ENABLE	BIT(6)
+#define SB_DB_DRP_INTERRUPT_ENABLE	0x3
+
 static int poll_msec = 5000;
 module_param(poll_msec, int, 0444);
-#endif
-
-static int interrupt_mode = 1;
-module_param(interrupt_mode, int, 0444);
-MODULE_PARM_DESC(interrupt_mode,
-		 "Controls whether to use interrupt or poll mode");
 
 enum {
 	LLCC_DRAM_CE = 0,
@@ -294,13 +304,14 @@ static void dump_syn_reg(struct edac_device_ctl_info *edev_ctl,
 	errors[err_type].func(edev_ctl, 0, bank, errors[err_type].msg);
 }
 
-static void qcom_llcc_check_cache_errors
+static irqreturn_t qcom_llcc_check_cache_errors
 		(struct edac_device_ctl_info *edev_ctl)
 {
 	u32 drp_error;
 	u32 trp_error;
 	struct erp_drvdata *drv = edev_ctl->pvt_info;
 	u32 i;
+	irqreturn_t irq_rc = IRQ_NONE;
 
 	for (i = 0; i < drv->num_banks; i++) {
 		/* Look for Data RAM errors */
@@ -311,10 +322,12 @@ static void qcom_llcc_check_cache_errors
 			edac_printk(KERN_CRIT, EDAC_LLCC,
 				"Single Bit Error detected in Data Ram\n");
 			dump_syn_reg(edev_ctl, LLCC_DRAM_CE, i);
+			irq_rc = IRQ_HANDLED;
 		} else if (drp_error & DB_ECC_ERROR) {
 			edac_printk(KERN_CRIT, EDAC_LLCC,
 				"Double Bit Error detected in Data Ram\n");
 			dump_syn_reg(edev_ctl, LLCC_DRAM_UE, i);
+			irq_rc = IRQ_HANDLED;
 		}
 
 		/* Look for Tag RAM errors */
@@ -325,31 +338,57 @@ static void qcom_llcc_check_cache_errors
 			edac_printk(KERN_CRIT, EDAC_LLCC,
 				"Single Bit Error detected in Tag Ram\n");
 			dump_syn_reg(edev_ctl, LLCC_TRAM_CE, i);
+			irq_rc = IRQ_HANDLED;
 		} else if (trp_error & DB_ECC_ERROR) {
 			edac_printk(KERN_CRIT, EDAC_LLCC,
 				"Double Bit Error detected in Tag Ram\n");
 			dump_syn_reg(edev_ctl, LLCC_TRAM_UE, i);
+			irq_rc = IRQ_HANDLED;
 		}
 	}
+
+	return irq_rc;
 }
 
-#ifdef CONFIG_EDAC_LLCC_POLL
 static void qcom_llcc_poll_cache_errors(struct edac_device_ctl_info *edev_ctl)
 {
 	qcom_llcc_check_cache_errors(edev_ctl);
 }
-#endif
 
 static irqreturn_t llcc_ecc_irq_handler
 			(int irq, void *edev_ctl)
 {
-	qcom_llcc_check_cache_errors(edev_ctl);
-	return IRQ_HANDLED;
+	return qcom_llcc_check_cache_errors(edev_ctl);
+}
+
+static void qcom_llcc_core_setup(struct regmap *llcc_regmap, uint32_t b_off)
+{
+	u32 sb_err_threshold;
+
+	/* Enable TRP in instance 2 of common interrupt enable register */
+	regmap_update_bits(llcc_regmap, b_off + CMN_INTERRUPT_2_ENABLE,
+			   TRP0_INTERRUPT_ENABLE, TRP0_INTERRUPT_ENABLE);
+
+	/* Enable ECC interrupts on Tag Ram */
+	regmap_update_bits(llcc_regmap, b_off + TRP_INTERRUPT_0_ENABLE,
+		SB_DB_TRP_INTERRUPT_ENABLE, SB_DB_TRP_INTERRUPT_ENABLE);
+
+	/* Enable SB error for Data RAM */
+	sb_err_threshold = (SB_ERROR_THRESHOLD << SB_ERROR_THRESHOLD_SHIFT);
+	regmap_write(llcc_regmap, b_off + DRP_ECC_ERROR_CFG, sb_err_threshold);
+
+	/* Enable DRP in instance 2 of common interrupt enable register */
+	regmap_update_bits(llcc_regmap, b_off + CMN_INTERRUPT_2_ENABLE,
+			   DRP0_INTERRUPT_ENABLE, DRP0_INTERRUPT_ENABLE);
+
+	/* Enable ECC interrupts on Data Ram */
+	regmap_write(llcc_regmap, b_off + DRP_INTERRUPT_ENABLE,
+		     SB_DB_DRP_INTERRUPT_ENABLE);
 }
 
 static int qcom_llcc_erp_probe(struct platform_device *pdev)
 {
-	int rc = 0;
+	int irq, rc = 0;
 	struct erp_drvdata *drv;
 	struct edac_device_ctl_info *edev_ctl;
 	struct device *dev = &pdev->dev;
@@ -381,11 +420,6 @@ static int qcom_llcc_erp_probe(struct platform_device *pdev)
 	edev_ctl->mod_name = dev_name(dev);
 	edev_ctl->dev_name = dev_name(dev);
 	edev_ctl->ctl_name = "llcc";
-#ifdef CONFIG_EDAC_LLCC_POLL
-	edev_ctl->poll_msec = poll_msec;
-	edev_ctl->edac_check = qcom_llcc_poll_cache_errors;
-	edev_ctl->defer_work = 1;
-#endif
 	edev_ctl->panic_on_ce = LLCC_ERP_PANIC_ON_CE;
 	edev_ctl->panic_on_ue = LLCC_ERP_PANIC_ON_UE;
 
@@ -393,53 +427,57 @@ static int qcom_llcc_erp_probe(struct platform_device *pdev)
 	drv->num_banks = num_banks;
 	drv->llcc_map = llcc_map;
 
-	rc = edac_device_add_device(edev_ctl);
-	if (rc)
-		goto out_mem;
-
 	drv->llcc_banks = devm_kzalloc(&pdev->dev,
 		sizeof(u32) * drv->num_banks, GFP_KERNEL);
 
 	if (!drv->llcc_banks) {
 		dev_err(dev, "Cannot allocate memory for llcc_banks\n");
 		rc = -ENOMEM;
-		goto out_dev;
+		goto out_mem;
 	}
 
 	rc = of_property_read_u32_array(dev->parent->of_node,
 			"qcom,llcc-banks-off", drv->llcc_banks, drv->num_banks);
 	if (rc) {
 		dev_err(dev, "Cannot read llcc-banks-off property\n");
-		goto out_dev;
+		goto out_mem;
 	}
 
 	rc = of_property_read_u32(dev->parent->of_node,
 			"qcom,llcc-broadcast-off", &drv->b_off);
 	if (rc) {
 		dev_err(dev, "Cannot read llcc-broadcast-off property\n");
-		goto out_dev;
+		goto out_mem;
 	}
 
+
+	irq = platform_get_irq_byname(pdev, "ecc_irq");
+	if (irq <= 0) {
+		dev_info(dev, "No ECC IRQ; defaulting to polling mode\n");
+		edev_ctl->poll_msec = poll_msec;
+		edev_ctl->edac_check = qcom_llcc_poll_cache_errors;
+		edev_ctl->defer_work = 1;
+	}
+
+	rc = edac_device_add_device(edev_ctl);
+	if (rc)
+		goto out_mem;
+
 	platform_set_drvdata(pdev, edev_ctl);
-
-	if (interrupt_mode) {
-		drv->ecc_irq = platform_get_irq_byname(pdev, "ecc_irq");
-		if (!drv->ecc_irq) {
-			rc = -ENODEV;
-			goto out_dev;
-		}
-
+	if (irq > 0) {
+		qcom_llcc_core_setup(llcc_map, drv->b_off);
+		drv->ecc_irq = irq;
 		rc = devm_request_irq(dev, drv->ecc_irq, llcc_ecc_irq_handler,
-				IRQF_TRIGGER_HIGH, "llcc_ecc", edev_ctl);
+				IRQF_SHARED | IRQF_ONESHOT | IRQF_TRIGGER_HIGH,
+				"llcc_ecc", edev_ctl);
 		if (rc) {
 			dev_err(dev, "failed to request ecc irq\n");
-			goto out_dev;
+			goto del_dev;
 		}
 	}
 
 	return 0;
-
-out_dev:
+del_dev:
 	edac_device_del_device(edev_ctl->dev);
 out_mem:
 	edac_device_free_ctl_info(edev_ctl);

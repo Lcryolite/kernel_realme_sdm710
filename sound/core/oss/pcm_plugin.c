@@ -66,8 +66,8 @@ static int snd_pcm_plugin_alloc(struct snd_pcm_plugin *plugin, snd_pcm_uframes_t
 		return -ENXIO;
 	size /= 8;
 	if (plugin->buf_frames < frames) {
-		vfree(plugin->buf);
-		plugin->buf = vmalloc(size);
+		kvfree(plugin->buf);
+		plugin->buf = kvzalloc(size, GFP_KERNEL);
 		plugin->buf_frames = frames;
 	}
 	if (!plugin->buf) {
@@ -191,7 +191,7 @@ int snd_pcm_plugin_free(struct snd_pcm_plugin *plugin)
 	if (plugin->private_free)
 		plugin->private_free(plugin);
 	kfree(plugin->buf_channels);
-	vfree(plugin->buf);
+	kvfree(plugin->buf);
 	kfree(plugin);
 	return 0;
 }
@@ -294,7 +294,8 @@ snd_pcm_sframes_t snd_pcm_plug_slave_size(struct snd_pcm_substream *plug,
 	return plug_slave_size(plug, clt_frames, false);
 }
 
-static int snd_pcm_plug_formats(struct snd_mask *mask, snd_pcm_format_t format)
+static int snd_pcm_plug_formats(const struct snd_mask *mask,
+				snd_pcm_format_t format)
 {
 	struct snd_mask formats = *mask;
 	u64 linfmts = (SNDRV_PCM_FMTBIT_U8 | SNDRV_PCM_FMTBIT_S8 |
@@ -337,7 +338,7 @@ static snd_pcm_format_t preferred_formats[] = {
 };
 
 snd_pcm_format_t snd_pcm_plug_slave_format(snd_pcm_format_t format,
-					   struct snd_mask *format_mask)
+					   const struct snd_mask *format_mask)
 {
 	int i;
 

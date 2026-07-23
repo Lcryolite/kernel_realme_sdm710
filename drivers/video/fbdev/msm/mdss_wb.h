@@ -1,4 +1,4 @@
-/* Copyright (c) 2013, 2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013,2016,2018,2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -15,6 +15,7 @@
 #define MDSS_WB_H
 
 #include <linux/extcon.h>
+#include <../../../extcon/extcon.h>
 
 struct mdss_wb_ctrl {
 	struct platform_device *pdev;

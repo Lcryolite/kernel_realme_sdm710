@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2018, 2020 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -16,11 +16,6 @@
 #include <linux/clk-provider.h>
 #include "mdss-pll.h"
 #define MAX_DSI_PLL_EN_SEQS	10
-
-#define DSI_PHY_PLL_UNIPHY_PLL_GLB_CFG		(0x0020)
-#define DSI_PHY_PLL_UNIPHY_PLL_LKDET_CFG2	(0x0064)
-#define DSI_PHY_PLL_UNIPHY_PLL_TEST_CFG		(0x0068)
-#define DSI_PHY_PLL_UNIPHY_PLL_CAL_CFG1		(0x0070)
 
 /* Register offsets for 20nm PHY PLL */
 #define MMSS_DSI_PHY_PLL_PLL_CNTRL		(0x0014)
@@ -41,6 +36,7 @@ struct dsi_pll_vco_clk {
 	struct lpfr_cfg *lpfr_lut;
 	u32		lpfr_lut_size;
 	void		*priv;
+
 	int (*pll_enable_seqs[MAX_DSI_PLL_EN_SEQS])
 			(struct mdss_pll_resources *dsi_pll_Res);
 };
@@ -48,9 +44,19 @@ struct dsi_pll_vco_clk {
 int dsi_pll_clock_register_10nm(struct platform_device *pdev,
 				struct mdss_pll_resources *pll_res);
 
+int dsi_pll_clock_register_7nm(struct platform_device *pdev,
+				struct mdss_pll_resources *pll_res);
+int dsi_pll_clock_register_28lpm(struct platform_device *pdev,
+				struct mdss_pll_resources *pll_res);
+int dsi_pll_clock_register_12nm(struct platform_device *pdev,
+				struct mdss_pll_resources *pll_res);
+
+
 static inline struct dsi_pll_vco_clk *to_vco_clk_hw(struct clk_hw *hw)
 {
 	return container_of(hw, struct dsi_pll_vco_clk, hw);
 }
 
+int dsi_pll_clock_register_14nm(struct platform_device *pdev,
+				struct mdss_pll_resources *pll_res);
 #endif

@@ -137,4 +137,3 @@ Example:
 			<0x1b0 0x31>;
 		status = "ok";
 	};
-

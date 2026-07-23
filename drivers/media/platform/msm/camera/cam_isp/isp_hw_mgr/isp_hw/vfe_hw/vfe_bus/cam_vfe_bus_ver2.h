@@ -1,4 +1,4 @@
-/* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -16,7 +16,10 @@
 #include "cam_irq_controller.h"
 #include "cam_vfe_bus.h"
 
-#define CAM_VFE_BUS_VER2_MAX_CLIENTS 20
+#define CAM_VFE_BUS_VER2_MAX_CLIENTS 24
+
+#define CAM_VFE_BUS_ENABLE_DMI_DUMP                     BIT(0)
+#define CAM_VFE_BUS_ENABLE_STATS_REG_DUMP               BIT(1)
 
 enum cam_vfe_bus_ver2_vfe_core_id {
 	CAM_VFE_BUS_VER2_VFE_CORE_0,
@@ -60,7 +63,41 @@ enum cam_vfe_bus_ver2_vfe_out_type {
 	CAM_VFE_BUS_VER2_VFE_OUT_STATS_RS,
 	CAM_VFE_BUS_VER2_VFE_OUT_STATS_CS,
 	CAM_VFE_BUS_VER2_VFE_OUT_STATS_IHIST,
+	CAM_VFE_BUS_VER2_VFE_OUT_FULL_DISP,
+	CAM_VFE_BUS_VER2_VFE_OUT_DS4_DISP,
+	CAM_VFE_BUS_VER2_VFE_OUT_DS16_DISP,
+	CAM_VFE_BUS_VER2_VFE_OUT_2PD,
 	CAM_VFE_BUS_VER2_VFE_OUT_MAX,
+};
+
+struct cam_vfe_bus_ver2_dmi_lut_bank_info {
+	uint32_t size;
+	uint32_t bank_0;
+	uint32_t bank_1;
+};
+
+struct cam_vfe_bus_ver2_stats_cfg_offset {
+	uint32_t res_index;
+	uint32_t cfg_offset;
+	uint32_t num_cfg;
+	uint32_t cfg_size;
+	uint32_t is_lut;
+	struct cam_vfe_bus_ver2_dmi_lut_bank_info lut;
+};
+
+struct cam_vfe_bus_ver2_dmi_offset_common {
+	uint32_t auto_increment;
+	uint32_t cfg_offset;
+	uint32_t addr_offset;
+	uint32_t data_hi_offset;
+	uint32_t data_lo_offset;
+};
+
+struct cam_vfe_bus_ver2_stats_cfg_info {
+	struct cam_vfe_bus_ver2_dmi_offset_common
+		dmi_offset_info;
+	struct cam_vfe_bus_ver2_stats_cfg_offset
+		stats_cfg_offset[CAM_VFE_BUS_VER2_VFE_OUT_MAX];
 };
 
 /*
@@ -83,6 +120,8 @@ struct cam_vfe_bus_ver2_reg_offset_common {
 	uint32_t addr_sync_cfg;
 	uint32_t addr_sync_frame_hdr;
 	uint32_t addr_sync_no_sync;
+	uint32_t debug_status_cfg;
+	uint32_t debug_status_0;
 };
 
 /*
@@ -97,9 +136,29 @@ struct cam_vfe_bus_ver2_reg_offset_ubwc_client {
 	uint32_t meta_addr;
 	uint32_t meta_offset;
 	uint32_t meta_stride;
-	uint32_t mode_cfg;
+	uint32_t mode_cfg_0;
 	uint32_t bw_limit;
 };
+
+/*
+ * struct cam_vfe_bus_ver2_reg_offset_ubwc_client:
+ *
+ * @Brief:        UBWC register offsets for BUS Clients
+ */
+struct cam_vfe_bus_ver2_reg_offset_ubwc_3_client {
+	uint32_t tile_cfg;
+	uint32_t h_init;
+	uint32_t v_init;
+	uint32_t meta_addr;
+	uint32_t meta_offset;
+	uint32_t meta_stride;
+	uint32_t mode_cfg_0;
+	uint32_t mode_cfg_1;
+	uint32_t bw_limit;
+	uint32_t threshlod_lossy_0;
+	uint32_t threshlod_lossy_1;
+};
+
 
 /*
  * struct cam_vfe_bus_ver2_reg_offset_bus_client:
@@ -124,7 +183,7 @@ struct cam_vfe_bus_ver2_reg_offset_bus_client {
 	uint32_t framedrop_pattern;
 	uint32_t frame_inc;
 	uint32_t burst_limit;
-	struct cam_vfe_bus_ver2_reg_offset_ubwc_client *ubwc_regs;
+	void    *ubwc_regs;
 };
 
 /*
@@ -151,6 +210,19 @@ struct cam_vfe_bus_ver2_vfe_out_hw_info {
 };
 
 /*
+ * struct cam_vfe_bus_ver2_reg_data:
+ *
+ * @Brief:        Holds the bus register data
+ */
+
+struct cam_vfe_bus_ver2_reg_data {
+	uint32_t      ubwc_10bit_threshold_lossy_0;
+	uint32_t      ubwc_10bit_threshold_lossy_1;
+	uint32_t      ubwc_8bit_threshold_lossy_0;
+	uint32_t      ubwc_8bit_threshold_lossy_1;
+};
+
+/*
  * struct cam_vfe_bus_ver2_hw_info:
  *
  * @Brief:            HW register info for entire Bus
@@ -159,6 +231,7 @@ struct cam_vfe_bus_ver2_vfe_out_hw_info {
  * @bus_client_reg:   Bus client register info
  * @comp_reg_grp:     Composite group register info
  * @vfe_out_hw_info:  VFE output capability
+ * @reg_data:         bus register data;
  */
 struct cam_vfe_bus_ver2_hw_info {
 	struct cam_vfe_bus_ver2_reg_offset_common common_reg;
@@ -170,6 +243,8 @@ struct cam_vfe_bus_ver2_hw_info {
 	uint32_t num_out;
 	struct cam_vfe_bus_ver2_vfe_out_hw_info
 		vfe_out_hw_info[CAM_VFE_BUS_VER2_VFE_OUT_MAX];
+	struct cam_vfe_bus_ver2_reg_data  reg_data;
+	struct cam_vfe_bus_ver2_stats_cfg_info *stats_data;
 };
 
 /*

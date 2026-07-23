@@ -56,7 +56,8 @@ Require Properties:
 	Usage: required
 	Value Type: <u32 array>
 	Definition: Offsets of llcc banks from llcc base address starting from
-		    LLCC bank0.
+		LLCC bank0.
+
 - llcc-broadcast-off:
 	Usage: required
 	Value Type: <u32>
@@ -78,6 +79,13 @@ Optional Properties:
 	Value type: <string>
 	Definition: Property to enable or disable the driver
 
+- cap-based-alloc-and-pwr-collapse:
+	Usage: optional
+	Value Type: Boolean
+	Definition: Property to express that HLOS can enable/disable capacity
+	based allocation and power collapse retention for a client. Include
+	this property to set it. If not set, it will be treated as false.
+
 == llcc amon device ==
 
 Optional Properties:
@@ -87,7 +95,12 @@ Optional Properties:
 compatible devices:
 		qcom,sdm845-llcc,
 		qcom,sdm670-llcc,
-		qcom,qcs605-llcc
+		qcom,sm8150-llcc,
+		qcom,sdmshrike-llcc,
+		qcom,sm6150-llcc,
+		qcom,sdmmagpie-llcc,
+		qcom,sdxprairie-llcc,
+		qcom,atoll-llcc
 
 Example:
 

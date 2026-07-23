@@ -1,4 +1,5 @@
-/* Copyright (c) 2012-2022, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -26,6 +27,7 @@
 #include <linux/reboot.h>
 #include <asm/current.h>
 #include <soc/qcom/restart.h>
+#include <linux/sched/signal.h>
 #include <linux/vmalloc.h>
 #ifdef CONFIG_DIAG_OVER_USB
 #include <linux/usb/usbdiag.h>
@@ -133,7 +135,8 @@ void diag_dci_record_traffic(int read_bytes, uint8_t ch_type,
 }
 #else
 void diag_dci_record_traffic(int read_bytes, uint8_t ch_type,
-			     uint8_t peripheral, uint8_t proc) { }
+			     uint8_t peripheral, uint8_t proc)
+{ }
 #endif
 
 static int check_peripheral_dci_support(int peripheral_id, int dci_proc_id)
@@ -247,8 +250,6 @@ static void dci_chk_handshake(unsigned long data)
 	if (index < 0 || index >= NUM_DCI_PROC)
 		return;
 
-	queue_work(driver->diag_dci_wq,
-		   &dci_channel_status[index].handshake_work);
 }
 #endif
 
@@ -933,15 +934,13 @@ static void dci_process_ctrl_handshake_pkt(unsigned char *buf, int len,
 	if (header->magic == DCI_MAGIC) {
 		dci_channel_status[token].open = 1;
 		err = dci_ops_tbl[token].send_log_mask(token);
-		if (err) {
+		if (err && err != DIAG_DCI_NO_ERROR)
 			pr_err("diag: In %s, unable to send log mask to token: %d, err: %d\n",
 			       __func__, token, err);
-		}
 		err = dci_ops_tbl[token].send_event_mask(token);
-		if (err) {
+		if (err && err != DIAG_DCI_NO_ERROR)
 			pr_err("diag: In %s, unable to send event mask to token: %d, err: %d\n",
 			       __func__, token, err);
-		}
 	}
 }
 
@@ -1662,7 +1661,7 @@ static int diag_send_dci_pkt(struct diag_cmd_reg_t *entry,
 #ifdef CONFIG_DIAGFWD_BRIDGE_CODE
 unsigned char *dci_get_buffer_from_bridge(int token)
 {
-	uint8_t retries = 0, max_retries = 3;
+	uint8_t retries = 0, max_retries = 50;
 	unsigned char *buf = NULL;
 	unsigned long flags;
 
@@ -2675,7 +2674,7 @@ static int dci_fill_log_mask(unsigned char *dest_ptr, unsigned char *src_ptr)
 	int header_len = sizeof(struct diag_ctrl_log_mask);
 
 	header.cmd_type = DIAG_CTRL_MSG_LOG_MASK;
-	header.num_items = DCI_MAX_ITEMS_PER_LOG_CODE;
+	header.num_items = LOG_SIZE_TO_ITEMS(DCI_MAX_ITEMS_PER_LOG_CODE);
 	header.data_len = 11 + DCI_MAX_ITEMS_PER_LOG_CODE;
 	header.stream_id = DCI_MASK_STREAM;
 	header.status = 3;
@@ -2818,8 +2817,8 @@ static void diag_dci_init_handshake_remote(void)
 	for (i = DCI_REMOTE_BASE; i < NUM_DCI_PROC; i++) {
 		temp = &dci_channel_status[i];
 		temp->id = i;
-		setup_timer(&temp->wait_time, dci_chk_handshake, i);
 		INIT_WORK(&temp->handshake_work, dci_handshake_work_fn);
+		setup_timer(&temp->wait_time, dci_chk_handshake, i);
 	}
 }
 
@@ -2848,6 +2847,11 @@ int diag_dci_init_remote(void)
 
 	diag_dci_init_handshake_remote();
 
+	return 0;
+}
+#else
+int diag_dci_init_remote(void)
+{
 	return 0;
 }
 #endif
@@ -3024,6 +3028,8 @@ int diag_dci_register_client(struct diag_dci_reg_tbl_t *reg_entry)
 	int i, err = 0;
 	struct diag_dci_client_tbl *new_entry = NULL;
 	struct diag_dci_buf_peripheral_t *proc_buf = NULL;
+	struct pid *pid_struct = NULL;
+	struct task_struct *task_s = NULL;
 
 	if (!reg_entry)
 		return DIAG_DCI_NO_REG;
@@ -3039,14 +3045,25 @@ int diag_dci_register_client(struct diag_dci_reg_tbl_t *reg_entry)
 	if (driver->num_dci_client >= MAX_DCI_CLIENTS)
 		return DIAG_DCI_NO_REG;
 
-	new_entry = kzalloc(sizeof(struct diag_dci_client_tbl), GFP_KERNEL);
-	if (!new_entry)
+	pid_struct = find_get_pid(current->tgid);
+	if (!pid_struct)
 		return DIAG_DCI_NO_REG;
+	task_s = get_pid_task(pid_struct, PIDTYPE_PID);
+	if (!task_s) {
+		put_pid(pid_struct);
+		return DIAG_DCI_NO_REG;
+	}
+	new_entry = kzalloc(sizeof(struct diag_dci_client_tbl), GFP_KERNEL);
+	if (!new_entry) {
+		put_pid(pid_struct);
+		put_task_struct(task_s);
+		return DIAG_DCI_NO_REG;
+	}
+
+	get_task_struct(task_s);
 
 	mutex_lock(&driver->dci_mutex);
-
-	get_task_struct(current);
-	new_entry->client = current;
+	new_entry->client = task_s;
 	new_entry->tgid = current->tgid;
 	new_entry->client_info.notification_list =
 				reg_entry->notification_list;
@@ -3080,7 +3097,7 @@ int diag_dci_register_client(struct diag_dci_reg_tbl_t *reg_entry)
 		goto fail_alloc;
 	create_dci_event_mask_tbl(new_entry->dci_event_mask);
 
-	new_entry->buffers = kzalloc(new_entry->num_buffers *
+	new_entry->buffers = kcalloc(new_entry->num_buffers,
 				     sizeof(struct diag_dci_buf_peripheral_t),
 					GFP_KERNEL);
 	if (!new_entry->buffers) {
@@ -3135,7 +3152,8 @@ int diag_dci_register_client(struct diag_dci_reg_tbl_t *reg_entry)
 		diag_update_proc_vote(DIAG_PROC_DCI, VOTE_UP, reg_entry->token);
 	queue_work(driver->diag_real_time_wq, &driver->diag_real_time_work);
 	mutex_unlock(&driver->dci_mutex);
-
+	put_pid(pid_struct);
+	put_task_struct(task_s);
 	return reg_entry->client_id;
 
 fail_alloc:
@@ -3172,8 +3190,10 @@ fail_alloc:
 		kfree(new_entry);
 		new_entry = NULL;
 	}
-	put_task_struct(current);
 	mutex_unlock(&driver->dci_mutex);
+	put_task_struct(task_s);
+	put_task_struct(task_s);
+	put_pid(pid_struct);
 	return DIAG_DCI_NO_REG;
 }
 

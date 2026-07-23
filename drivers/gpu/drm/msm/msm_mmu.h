@@ -33,17 +33,18 @@ enum msm_mmu_domain_type {
 struct msm_mmu_funcs {
 	int (*attach)(struct msm_mmu *mmu, const char * const *names, int cnt);
 	void (*detach)(struct msm_mmu *mmu, const char * const *names, int cnt);
-	int (*map)(struct msm_mmu *mmu, uint32_t iova, struct sg_table *sgt,
-			int prot);
-	int (*unmap)(struct msm_mmu *mmu, uint32_t iova, struct sg_table *sgt);
+	int (*map)(struct msm_mmu *mmu, uint64_t iova, struct sg_table *sgt,
+			unsigned int len, int prot);
+	int (*unmap)(struct msm_mmu *mmu, uint64_t iova, struct sg_table *sgt,
+			unsigned int len);
 	int (*map_sg)(struct msm_mmu *mmu, struct sg_table *sgt,
 			enum dma_data_direction dir);
 	void (*unmap_sg)(struct msm_mmu *mmu, struct sg_table *sgt,
 		enum dma_data_direction dir);
 	int (*map_dma_buf)(struct msm_mmu *mmu, struct sg_table *sgt,
-			struct dma_buf *dma_buf, int dir, u32 flags);
+			int dir, u32 flags);
 	void (*unmap_dma_buf)(struct msm_mmu *mmu, struct sg_table *sgt,
-			struct dma_buf *dma_buf, int dir);
+			int dir, u32 flags);
 	void (*destroy)(struct msm_mmu *mmu);
 	bool (*is_domain_secure)(struct msm_mmu *mmu);
 	int (*set_attribute)(struct msm_mmu *mmu,
@@ -52,11 +53,15 @@ struct msm_mmu_funcs {
 			uint32_t dest_address, uint32_t size, int prot);
 	int (*one_to_one_unmap)(struct msm_mmu *mmu, uint32_t dest_address,
 					uint32_t size);
+	phys_addr_t (*iova_to_phys)(struct msm_mmu *mmu, dma_addr_t iova);
+	struct device *(*get_dev)(struct msm_mmu *mmu);
 };
 
 struct msm_mmu {
 	const struct msm_mmu_funcs *funcs;
 	struct device *dev;
+	int (*handler)(void *arg, unsigned long iova, int flags);
+	void *arg;
 };
 
 static inline void msm_mmu_init(struct msm_mmu *mmu, struct device *dev,
@@ -69,6 +74,13 @@ static inline void msm_mmu_init(struct msm_mmu *mmu, struct device *dev,
 struct msm_mmu *msm_iommu_new(struct device *dev, struct iommu_domain *domain);
 struct msm_mmu *msm_smmu_new(struct device *dev,
 	enum msm_mmu_domain_type domain);
+
+static inline void msm_mmu_set_fault_handler(struct msm_mmu *mmu, void *arg,
+		int (*handler)(void *arg, unsigned long iova, int flags))
+{
+	mmu->arg = arg;
+	mmu->handler = handler;
+}
 
 /* SDE smmu driver initialize and cleanup functions */
 int __init msm_smmu_driver_init(void);

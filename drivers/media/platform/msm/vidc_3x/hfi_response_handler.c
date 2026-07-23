@@ -1,4 +1,5 @@
-/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+/*
+ * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -8,7 +9,6 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
  */
 
 #include <linux/bitops.h>
@@ -16,7 +16,8 @@
 #include <linux/list.h>
 #include <linux/interrupt.h>
 #include <linux/hash.h>
-#include <soc/qcom/smem.h>
+#include <linux/soc/qcom/smem.h>
+#include <soc/qcom/socinfo.h>
 #include "vidc_hfi_helper.h"
 #include "vidc_hfi_io.h"
 #include "msm_vidc_debug.h"
@@ -364,8 +365,8 @@ static int hfi_process_event_notify(u32 device_id,
 		struct msm_vidc_cb_info *info)
 {
 	struct hfi_msg_event_notify_packet *pkt = _pkt;
-	dprintk(VIDC_DBG, "Received: EVENT_NOTIFY\n");
 
+	dprintk(VIDC_DBG, "Received: EVENT_NOTIFY\n");
 	if (pkt->size < sizeof(struct hfi_msg_event_notify_packet)) {
 		dprintk(VIDC_ERR, "Invalid Params\n");
 		return -E2BIG;
@@ -617,7 +618,8 @@ static inline void copy_cap_prop(
 }
 
 static int hfi_fill_codec_info(u8 *data_ptr,
-		struct vidc_hal_sys_init_done *sys_init_done, u32 rem_size) {
+		struct vidc_hal_sys_init_done *sys_init_done, u32 rem_size)
+{
 	u32 i;
 	u32 codecs = 0, codec_count = 0, size = 0;
 	struct msm_vidc_capability *capability;
@@ -997,16 +999,17 @@ static enum vidc_status hfi_parse_init_done_properties(
 				break;
 			}
 			while (prof_count) {
+				struct hal_profile_level_supported  *caps_pl;
+
+				caps_pl = &capability.profile_level;
 				prof_level = (struct hfi_profile_level *)ptr;
 				VALIDATE_PROPERTY_STRUCTURE_SIZE(rem_bytes -
 					next_offset,
 					sizeof(*prof_level));
-				capability.
-				profile_level.profile_level[count].profile
-					= prof_level->profile;
-				capability.
-				profile_level.profile_level[count].level
-					= prof_level->level;
+				caps_pl->profile_level[count].profile =
+					prof_level->profile;
+				caps_pl->profile_level[count].level =
+					prof_level->level;
 				prof_count--;
 				count++;
 				ptr += sizeof(struct hfi_profile_level);
@@ -1237,6 +1240,7 @@ static void hfi_process_sess_get_prop_buf_req(
 {
 	struct hfi_buffer_requirements *hfi_buf_req;
 	u32 req_bytes;
+	u32 count_min = 0, count_actual = 0;
 
 	if (!prop) {
 		dprintk(VIDC_ERR,
@@ -1265,11 +1269,11 @@ static void hfi_process_sess_get_prop_buf_req(
 	}
 
 	while (req_bytes) {
-		if (hfi_buf_req->buffer_size &&
-			hfi_buf_req->buffer_count_min > hfi_buf_req->
-			buffer_count_actual)
+		count_min = hfi_buf_req->buffer_count_min;
+		count_actual =  hfi_buf_req->buffer_count_actual;
+		if (hfi_buf_req->buffer_size && count_min > count_actual)
 			dprintk(VIDC_WARN,
-				"Bad buffer requirements for %#x: min %d, actual %d\n",
+				"Bad buff req for %#x: min %d, actual %d\n",
 				hfi_buf_req->buffer_type,
 				hfi_buf_req->buffer_count_min,
 				hfi_buf_req->buffer_count_actual);
@@ -1383,6 +1387,7 @@ static int hfi_process_session_prop_info(u32 device_id,
 		cmd_done.data.property.buf_req = buff_req;
 		cmd_done.size = sizeof(buff_req);
 		break;
+
 	case HFI_PROPERTY_PARAM_PROFILE_LEVEL_CURRENT:
 		hfi_process_sess_get_prop_profile_level(pkt, &profile_level);
 		cmd_done.device_id = device_id;
@@ -1395,6 +1400,7 @@ static int hfi_process_session_prop_info(u32 device_id,
 			};
 		cmd_done.size = sizeof(struct hal_profile_level);
 		break;
+
 	case HFI_PROPERTY_CONFIG_VDEC_ENTROPY:
 		hfi_process_sess_get_prop_dec_entropy(pkt, &entropy);
 		cmd_done.device_id = device_id;
@@ -1403,18 +1409,19 @@ static int hfi_process_session_prop_info(u32 device_id,
 		cmd_done.data.property.h264_entropy = entropy;
 		cmd_done.size = sizeof(enum hal_h264_entropy);
 		break;
+
 	default:
 		dprintk(VIDC_DBG,
 				"hal_process_session_prop_info: unknown_prop_id: %x\n",
 				pkt->rg_property_data[0]);
 		return -ENOTSUPP;
 	}
+
 	*info = (struct msm_vidc_cb_info) {
-			.response_type =  HAL_SESSION_PROPERTY_INFO,
-			.response.cmd = cmd_done,
+		.response_type =  HAL_SESSION_PROPERTY_INFO,
+		.response.cmd = cmd_done,
 	};
 	return 0;
-
 }
 
 static int hfi_process_session_init_done(u32 device_id,
@@ -1552,9 +1559,9 @@ static int hfi_process_session_etb_done(u32 device_id,
 	data_done.input_done.offset = pkt->offset;
 	data_done.input_done.filled_len = pkt->filled_len;
 	data_done.input_done.packet_buffer =
-		(ion_phys_addr_t)pkt->packet_buffer;
+		(phys_addr_t)pkt->packet_buffer;
 	data_done.input_done.extra_data_buffer =
-		(ion_phys_addr_t)pkt->extra_data_buffer;
+		(phys_addr_t)pkt->extra_data_buffer;
 	data_done.input_done.status =
 		hfi_map_err_status(pkt->error_type);
 	is_sync_frame = pkt->rgData[0];
@@ -1648,9 +1655,9 @@ static int hfi_process_session_ftb_done(
 		data_done.output_done.filled_len1 = pkt->filled_len;
 		data_done.output_done.picture_type = pkt->picture_type;
 		data_done.output_done.packet_buffer1 =
-			(ion_phys_addr_t)pkt->packet_buffer;
+			(phys_addr_t)pkt->packet_buffer;
 		data_done.output_done.extra_data_buffer =
-			(ion_phys_addr_t)pkt->extra_data_buffer;
+			(phys_addr_t)pkt->extra_data_buffer;
 		data_done.output_done.buffer_type = HAL_BUFFER_OUTPUT;
 	} else /* if (is_decoder) */ {
 		struct hfi_msg_session_fbd_uncompressed_plane0_packet *pkt =
@@ -1916,7 +1923,7 @@ static int hfi_process_session_get_seq_hdr_done(
 	data_done.session_id = (void *)(uintptr_t)pkt->session_id;
 	data_done.status = hfi_map_err_status(pkt->error_type);
 	data_done.output_done.packet_buffer1 =
-		(ion_phys_addr_t)pkt->sequence_header;
+		(phys_addr_t)pkt->sequence_header;
 	data_done.output_done.filled_len1 = pkt->header_len;
 	dprintk(VIDC_INFO, "seq_hdr: %#x, Length: %d\n",
 			pkt->sequence_header, pkt->header_len);
@@ -1933,7 +1940,7 @@ static void hfi_process_sys_get_prop_image_version(
 		struct hfi_msg_sys_property_info_packet *pkt)
 {
 	int i = 0;
-	u32 smem_block_size = 0;
+	size_t smem_block_size = 0;
 	u8 *smem_table_ptr;
 	char version[256];
 	const u32 version_string_size = 128;
@@ -1946,8 +1953,7 @@ static void hfi_process_sys_get_prop_image_version(
 			!pkt->rg_property_data[1] ||
 			pkt->num_properties > 1) {
 		dprintk(VIDC_ERR,
-				"hfi_process_sys_get_prop_image_version: bad_pkt: %d\n",
-				req_bytes);
+				"%s: bad_pkt: %d\n", __func__, req_bytes);
 		return;
 	}
 	str_image_version = (u8 *)&pkt->rg_property_data[1];
@@ -1965,8 +1971,8 @@ static void hfi_process_sys_get_prop_image_version(
 	version[i] = '\0';
 	dprintk(VIDC_DBG, "F/W version: %s\n", version);
 
-	smem_table_ptr = smem_get_entry(SMEM_IMAGE_VERSION_TABLE,
-			&smem_block_size, 0, SMEM_ANY_HOST_FLAG);
+	smem_table_ptr = qcom_smem_get(QCOM_SMEM_HOST_ANY,
+				SMEM_IMAGE_VERSION_TABLE, &smem_block_size);
 	if ((smem_image_index_venus + version_string_size) <= smem_block_size &&
 			smem_table_ptr)
 		memcpy(smem_table_ptr + smem_image_index_venus,
@@ -1978,16 +1984,17 @@ static int hfi_process_sys_property_info(u32 device_id,
 		struct msm_vidc_cb_info *info)
 {
 	struct hfi_msg_sys_property_info_packet *pkt = _pkt;
+
 	if (!pkt) {
 		dprintk(VIDC_ERR, "%s: invalid param\n", __func__);
 		return -EINVAL;
 	} else if (pkt->size < sizeof(*pkt)) {
 		dprintk(VIDC_ERR,
-				"hfi_process_sys_property_info: bad_pkt_size\n");
+				"%s: bad_pkt_size\n", __func__);
 		return -E2BIG;
 	} else if (!pkt->num_properties) {
 		dprintk(VIDC_ERR,
-				"hfi_process_sys_property_info: no_properties\n");
+				"%s: no_properties\n", __func__);
 		return -EINVAL;
 	}
 
@@ -2001,7 +2008,7 @@ static int hfi_process_sys_property_info(u32 device_id,
 		return 0;
 	default:
 		dprintk(VIDC_DBG,
-				"hfi_process_sys_property_info: unknown_prop_id: %x\n",
+				"%s: unknown_prop_id: %x\n", __func__,
 				pkt->rg_property_data[0]);
 		return -ENOTSUPP;
 	}

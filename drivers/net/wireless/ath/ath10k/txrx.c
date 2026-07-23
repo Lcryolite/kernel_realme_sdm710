@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2005-2011 Atheros Communications Inc.
- * Copyright (c) 2011-2013 Qualcomm Atheros, Inc.
+ * Copyright (c) 2011-2016 Qualcomm Atheros, Inc.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -34,7 +34,8 @@ static void ath10k_report_offchan_tx(struct ath10k *ar, struct sk_buff *skb)
 	/* If the original wait_for_completion() timed out before
 	 * {data,mgmt}_tx_completed() was called then we could complete
 	 * offchan_tx_completed for a different skb. Prevent this by using
-	 * offchan_tx_skb. */
+	 * offchan_tx_skb.
+	 */
 	spin_lock_bh(&ar->data_lock);
 	if (ar->offchan_tx_skb != skb) {
 		ath10k_warn(ar, "completed old offchannel frame\n");

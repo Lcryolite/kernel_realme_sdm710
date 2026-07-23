@@ -13,6 +13,7 @@
 #include <linux/uaccess.h>
 #include <linux/module.h>
 #include <linux/ftrace.h>
+#include <linux/sched/clock.h>
 #include <linux/sched/sysctl.h>
 
 #include "trace.h"
@@ -39,12 +40,6 @@ static int save_flags;
 
 static void stop_irqsoff_tracer(struct trace_array *tr, int graph);
 static int start_irqsoff_tracer(struct trace_array *tr, int graph);
-
-/*
- * irqsoff stack tracing threshold in ns.
- * default: 1ms
- */
-unsigned int sysctl_irqsoff_tracing_threshold_ns = 1000000UL;
 
 #ifdef CONFIG_PREEMPT_TRACER
 static inline int
@@ -186,6 +181,18 @@ static int irqsoff_graph_entry(struct ftrace_graph_ent *trace)
 	int ret;
 	int pc;
 
+	if (ftrace_graph_ignore_func(trace))
+		return 0;
+	/*
+	 * Do not trace a function if it's filtered by set_graph_notrace.
+	 * Make the index of ret stack negative to indicate that it should
+	 * ignore further functions.  But it needs its own ret stack entry
+	 * to recover the original index in order to continue tracing after
+	 * returning from the function.
+	 */
+	if (ftrace_graph_notrace_addr(trace->func))
+		return 1;
+
 	if (!func_prolog_dec(tr, &data, &flags))
 		return 0;
 
@@ -203,6 +210,8 @@ static void irqsoff_graph_return(struct ftrace_graph_ret *trace)
 	unsigned long flags;
 	int pc;
 
+	ftrace_graph_addr_finish(trace);
+
 	if (!func_prolog_dec(tr, &data, &flags))
 		return;
 
@@ -215,6 +224,8 @@ static void irqsoff_trace_open(struct trace_iterator *iter)
 {
 	if (is_graph(iter->tr))
 		graph_trace_open(iter);
+	else
+		iter->private = NULL;
 }
 
 static void irqsoff_trace_close(struct trace_iterator *iter)
@@ -296,7 +307,7 @@ static void irqsoff_print_header(struct seq_file *s)
 /*
  * Should this new latency be reported/recorded?
  */
-static bool report_latency(struct trace_array *tr, cycle_t delta)
+static bool report_latency(struct trace_array *tr, u64 delta)
 {
 	if (tracing_thresh) {
 		if (delta < tracing_thresh)
@@ -314,7 +325,7 @@ check_critical_timing(struct trace_array *tr,
 		      unsigned long parent_ip,
 		      int cpu)
 {
-	cycle_t T0, T1, delta;
+	u64 T0, T1, delta;
 	unsigned long flags;
 	int pc;
 
@@ -461,12 +472,18 @@ void time_hardirqs_off(unsigned long a0, unsigned long a1)
 #else /* !CONFIG_PROVE_LOCKING */
 
 #ifdef CONFIG_PREEMPTIRQ_EVENTS
+/*
+ * irqsoff stack tracing threshold in ns.
+ * default: 1ms
+ */
+unsigned int sysctl_irqsoff_tracing_threshold_ns = 1000000UL;
+
 struct irqsoff_store {
 	u64 ts;
 	unsigned long caddr[4];
 };
 
-static DEFINE_PER_CPU(struct irqsoff_store, the_irqsoff);
+DEFINE_PER_CPU(struct irqsoff_store, the_irqsoff);
 #endif /* CONFIG_PREEMPTIRQ_EVENTS */
 
 /*
@@ -806,6 +823,7 @@ static inline void tracer_preempt_off(unsigned long a0, unsigned long a1) { }
 #if defined(CONFIG_TRACE_IRQFLAGS) && !defined(CONFIG_PROVE_LOCKING)
 /* Per-cpu variable to prevent redundant calls when IRQs already off */
 static DEFINE_PER_CPU(int, tracing_irq_cpu);
+
 void trace_hardirqs_on(void)
 {
 	if (!this_cpu_read(tracing_irq_cpu))

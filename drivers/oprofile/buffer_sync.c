@@ -31,6 +31,8 @@
 #include <linux/fs.h>
 #include <linux/oprofile.h>
 #include <linux/sched.h>
+#include <linux/sched/mm.h>
+#include <linux/sched/task.h>
 #include <linux/gfp.h>
 
 #include "oprofile_stats.h"
@@ -114,7 +116,7 @@ module_load_notify(struct notifier_block *self, unsigned long val, void *data)
 {
 #ifdef CONFIG_MODULES
 	if (val != MODULE_STATE_COMING)
-		return 0;
+		return NOTIFY_DONE;
 
 	/* FIXME: should we process all CPU buffers ? */
 	mutex_lock(&buffer_mutex);
@@ -122,7 +124,7 @@ module_load_notify(struct notifier_block *self, unsigned long val, void *data)
 	add_event_entry(MODULE_LOADED_CODE);
 	mutex_unlock(&buffer_mutex);
 #endif
-	return 0;
+	return NOTIFY_OK;
 }
 
 
@@ -206,7 +208,7 @@ void sync_stop(void)
  * because we cannot reach this code without at least one
  * dcookie user still being registered (namely, the reader
  * of the event buffer). */
-static inline unsigned long fast_get_dcookie(struct path *path)
+static inline unsigned long fast_get_dcookie(const struct path *path)
 {
 	unsigned long cookie;
 

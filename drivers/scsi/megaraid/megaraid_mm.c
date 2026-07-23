@@ -578,7 +578,7 @@ mraid_mm_attach_buf(mraid_mmadp_t *adp, uioc_t *kioc, int xferlen)
 
 	kioc->pool_index	= right_pool;
 	kioc->free_buf		= 1;
-	kioc->buf_vaddr 	= pci_pool_alloc(pool->handle, GFP_KERNEL,
+	kioc->buf_vaddr		= dma_pool_alloc(pool->handle, GFP_ATOMIC,
 							&kioc->buf_paddr);
 	spin_unlock_irqrestore(&pool->lock, flags);
 
@@ -662,7 +662,7 @@ mraid_mm_dealloc_kioc(mraid_mmadp_t *adp, uioc_t *kioc)
 		 * not in use
 		 */
 		if (kioc->free_buf == 1)
-			pci_pool_free(pool->handle, kioc->buf_vaddr, 
+			dma_pool_free(pool->handle, kioc->buf_vaddr, 
 							kioc->buf_paddr);
 		else
 			pool->in_use = 0;
@@ -949,8 +949,8 @@ mraid_mm_register_adp(mraid_mmadp_t *lld_adp)
 						GFP_KERNEL);
 	adapter->mbox_list	= kmalloc(sizeof(mbox64_t) * lld_adp->max_kioc,
 						GFP_KERNEL);
-	adapter->pthru_dma_pool = pci_pool_create("megaraid mm pthru pool",
-						adapter->pdev,
+	adapter->pthru_dma_pool = dma_pool_create("megaraid mm pthru pool",
+						&adapter->pdev->dev,
 						sizeof(mraid_passthru_t),
 						16, 0);
 
@@ -979,7 +979,7 @@ mraid_mm_register_adp(mraid_mmadp_t *lld_adp)
 
 		kioc		= adapter->kioc_list + i;
 		kioc->cmdbuf	= (uint64_t)(unsigned long)(mbox_list + i);
-		kioc->pthru32	= pci_pool_alloc(adapter->pthru_dma_pool,
+		kioc->pthru32	= dma_pool_alloc(adapter->pthru_dma_pool,
 						GFP_KERNEL, &kioc->pthru32_h);
 
 		if (!kioc->pthru32) {
@@ -1015,7 +1015,7 @@ pthru_dma_pool_error:
 	for (i = 0; i < lld_adp->max_kioc; i++) {
 		kioc = adapter->kioc_list + i;
 		if (kioc->pthru32) {
-			pci_pool_free(adapter->pthru_dma_pool, kioc->pthru32,
+			dma_pool_free(adapter->pthru_dma_pool, kioc->pthru32,
 				kioc->pthru32_h);
 		}
 	}
@@ -1026,7 +1026,7 @@ memalloc_error:
 	kfree(adapter->mbox_list);
 
 	if (adapter->pthru_dma_pool)
-		pci_pool_destroy(adapter->pthru_dma_pool);
+		dma_pool_destroy(adapter->pthru_dma_pool);
 
 	kfree(adapter);
 
@@ -1095,14 +1095,15 @@ mraid_mm_setup_dma_pools(mraid_mmadp_t *adp)
 		pool->buf_size = bufsize;
 		spin_lock_init(&pool->lock);
 
-		pool->handle = pci_pool_create("megaraid mm data buffer",
-						adp->pdev, bufsize, 16, 0);
+		pool->handle = dma_pool_create("megaraid mm data buffer",
+						&adp->pdev->dev, bufsize,
+						16, 0);
 
 		if (!pool->handle) {
 			goto dma_pool_setup_error;
 		}
 
-		pool->vaddr = pci_pool_alloc(pool->handle, GFP_KERNEL,
+		pool->vaddr = dma_pool_alloc(pool->handle, GFP_KERNEL,
 							&pool->paddr);
 
 		if (!pool->vaddr)
@@ -1172,14 +1173,14 @@ mraid_mm_free_adp_resources(mraid_mmadp_t *adp)
 
 		kioc = adp->kioc_list + i;
 
-		pci_pool_free(adp->pthru_dma_pool, kioc->pthru32,
+		dma_pool_free(adp->pthru_dma_pool, kioc->pthru32,
 				kioc->pthru32_h);
 	}
 
 	kfree(adp->kioc_list);
 	kfree(adp->mbox_list);
 
-	pci_pool_destroy(adp->pthru_dma_pool);
+	dma_pool_destroy(adp->pthru_dma_pool);
 
 
 	return;
@@ -1203,10 +1204,10 @@ mraid_mm_teardown_dma_pools(mraid_mmadp_t *adp)
 		if (pool->handle) {
 
 			if (pool->vaddr)
-				pci_pool_free(pool->handle, pool->vaddr,
+				dma_pool_free(pool->handle, pool->vaddr,
 							pool->paddr);
 
-			pci_pool_destroy(pool->handle);
+			dma_pool_destroy(pool->handle);
 			pool->handle = NULL;
 		}
 	}

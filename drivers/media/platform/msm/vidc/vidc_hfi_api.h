@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -19,7 +19,7 @@
 #include <linux/types.h>
 #include <linux/errno.h>
 #include <linux/hash.h>
-#include <media/msm_vidc.h>
+#include "msm_vidc.h"
 #include "msm_vidc_resources.h"
 
 #define CONTAINS(__a, __sz, __t) (\
@@ -34,16 +34,13 @@
 
 #define HAL_BUFFERFLAG_EOS              0x00000001
 #define HAL_BUFFERFLAG_STARTTIME        0x00000002
-#define HAL_BUFFERFLAG_DECODEONLY       0x00000004
 #define HAL_BUFFERFLAG_DATACORRUPT      0x00000008
 #define HAL_BUFFERFLAG_ENDOFFRAME       0x00000010
 #define HAL_BUFFERFLAG_SYNCFRAME        0x00000020
 #define HAL_BUFFERFLAG_EXTRADATA        0x00000040
 #define HAL_BUFFERFLAG_CODECCONFIG      0x00000080
-#define HAL_BUFFERFLAG_TIMESTAMPINVALID 0x00000100
 #define HAL_BUFFERFLAG_READONLY         0x00000200
 #define HAL_BUFFERFLAG_ENDOFSUBFRAME    0x00000400
-#define HAL_BUFFERFLAG_EOSEQ            0x00200000
 #define HAL_BUFFERFLAG_MBAFF            0x08000000
 #define HAL_BUFFERFLAG_YUV_601_709_CSC_CLAMP   0x10000000
 #define HAL_BUFFERFLAG_DROP_FRAME       0x20000000
@@ -100,41 +97,35 @@ enum vidc_status {
 
 enum hal_extradata_id {
 	HAL_EXTRADATA_NONE,
-	HAL_EXTRADATA_MB_QUANTIZATION,
 	HAL_EXTRADATA_INTERLACE_VIDEO,
 	HAL_EXTRADATA_TIMESTAMP,
 	HAL_EXTRADATA_S3D_FRAME_PACKING,
 	HAL_EXTRADATA_FRAME_RATE,
 	HAL_EXTRADATA_PANSCAN_WINDOW,
 	HAL_EXTRADATA_RECOVERY_POINT_SEI,
-	HAL_EXTRADATA_MULTISLICE_INFO,
 	HAL_EXTRADATA_INDEX,
 	HAL_EXTRADATA_NUM_CONCEALED_MB,
-	HAL_EXTRADATA_METADATA_FILLER,
 	HAL_EXTRADATA_ASPECT_RATIO,
 	HAL_EXTRADATA_MPEG2_SEQDISP,
 	HAL_EXTRADATA_STREAM_USERDATA,
 	HAL_EXTRADATA_DEC_FRAME_QP,
 	HAL_EXTRADATA_ENC_FRAME_QP,
-	HAL_EXTRADATA_FRAME_BITS_INFO,
-	HAL_EXTRADATA_INPUT_CROP,
-	HAL_EXTRADATA_DIGITAL_ZOOM,
 	HAL_EXTRADATA_LTR_INFO,
-	HAL_EXTRADATA_METADATA_MBI,
-	HAL_EXTRADATA_VQZIP_SEI,
-	HAL_EXTRADATA_YUV_STATS,
 	HAL_EXTRADATA_ROI_QP,
 	HAL_EXTRADATA_OUTPUT_CROP,
 	HAL_EXTRADATA_MASTERING_DISPLAY_COLOUR_SEI,
 	HAL_EXTRADATA_CONTENT_LIGHT_LEVEL_SEI,
-	HAL_EXTRADATA_PQ_INFO,
 	HAL_EXTRADATA_VUI_DISPLAY_INFO,
 	HAL_EXTRADATA_VPX_COLORSPACE,
 	HAL_EXTRADATA_UBWC_CR_STATS_INFO,
+	HAL_EXTRADATA_HDR10PLUS_METADATA,
+	HAL_EXTRADATA_ENC_DTS_METADATA,
+	HAL_EXTRADATA_INPUT_CROP,
 };
 
 enum hal_property {
 	HAL_CONFIG_FRAME_RATE = 0x04000001,
+	HAL_CONFIG_OPERATING_RATE,
 	HAL_PARAM_UNCOMPRESSED_FORMAT_SELECT,
 	HAL_PARAM_UNCOMPRESSED_PLANE_ACTUAL_CONSTRAINTS_INFO,
 	HAL_PARAM_UNCOMPRESSED_PLANE_ACTUAL_INFO,
@@ -162,6 +153,7 @@ enum hal_property {
 	HAL_PARAM_VENC_SESSION_QP_RANGE,
 	HAL_CONFIG_VENC_INTRA_PERIOD,
 	HAL_CONFIG_VENC_IDR_PERIOD,
+	HAL_PARAM_VENC_ADAPTIVE_B,
 	HAL_PARAM_VPE_ROTATION,
 	HAL_PARAM_VENC_INTRA_REFRESH,
 	HAL_PARAM_VENC_MULTI_SLICE_CONTROL,
@@ -192,7 +184,6 @@ enum hal_property {
 	HAL_CONFIG_VENC_TIMESTAMP_SCALE,
 	HAL_PARAM_VENC_SYNC_FRAME_SEQUENCE_HEADER,
 	HAL_PARAM_VDEC_SYNC_FRAME_DECODE,
-	HAL_PARAM_VENC_H264_ENTROPY_CABAC_MODEL,
 	HAL_CONFIG_VENC_MAX_BITRATE,
 	HAL_PARAM_VENC_VUI_TIMING_INFO,
 	HAL_PARAM_VENC_GENERATE_AUDNAL,
@@ -219,7 +210,6 @@ enum hal_property {
 	HAL_PARAM_SYNC_BASED_INTERRUPT,
 	HAL_CONFIG_VENC_FRAME_QP,
 	HAL_CONFIG_VENC_BASELAYER_PRIORITYID,
-	HAL_PARAM_VENC_VQZIP_SEI,
 	HAL_PROPERTY_PARAM_VENC_ASPECT_RATIO,
 	HAL_CONFIG_VDEC_ENTROPY,
 	HAL_PARAM_VENC_BITRATE_TYPE,
@@ -232,16 +222,18 @@ enum hal_property {
 	HAL_PARAM_VIDEO_WORK_MODE,
 	HAL_PARAM_SECURE,
 	HAL_PARAM_VENC_HDR10_PQ_SEI,
-	HAL_CONFIG_HEIC_FRAME_CROP_INFO,
+	HAL_PARAM_VIDEO_WORK_ROUTE,
+	HAL_CONFIG_VENC_VBV_HRD_BUF_SIZE,
 	HAL_CONFIG_HEIC_FRAME_QUALITY,
 	HAL_CONFIG_HEIC_GRID_ENABLE,
-	HAL_CONFIG_VENC_FRAME_QP_RANGE,
+	HAL_PARAM_VENC_BITRATE_SAVINGS,
 };
 
 enum hal_domain {
 	HAL_VIDEO_DOMAIN_VPE,
 	HAL_VIDEO_DOMAIN_ENCODER,
 	HAL_VIDEO_DOMAIN_DECODER,
+	HAL_VIDEO_DOMAIN_CVP,
 	HAL_UNUSED_DOMAIN = 0x10000000,
 };
 
@@ -284,6 +276,7 @@ enum hal_video_codec {
 	HAL_VIDEO_CODEC_HEVC     = 0x00002000,
 	HAL_VIDEO_CODEC_VP9      = 0x00004000,
 	HAL_VIDEO_CODEC_TME      = 0x00008000,
+	HAL_VIDEO_CODEC_CVP      = 0x00010000,
 	HAL_VIDEO_CODEC_HEVC_HYBRID     = 0x80000000,
 	HAL_UNUSED_CODEC = 0x10000000,
 };
@@ -331,6 +324,9 @@ enum hal_h264_level {
 	HAL_H264_LEVEL_5  = 0x00004000,
 	HAL_H264_LEVEL_51 = 0x00008000,
 	HAL_H264_LEVEL_52 = 0x00010000,
+	HAL_H264_LEVEL_6  = 0x00020000,
+	HAL_H264_LEVEL_61 = 0x00040000,
+	HAL_H264_LEVEL_62 = 0x00080000,
 };
 
 enum hal_hevc_profile {
@@ -418,11 +414,17 @@ enum hal_vp9_level {
 	HAL_VP9_LEVEL_41 = 0x00000080,
 	HAL_VP9_LEVEL_5  = 0x00000100,
 	HAL_VP9_LEVEL_51 = 0x00000200,
+	HAL_VP9_LEVEL_6  = 0x00000400,
+	HAL_VP9_LEVEL_61 = 0x00000800,
 };
 
 struct hal_frame_rate {
 	enum hal_buffer buffer_type;
 	u32 frame_rate;
+};
+
+struct hal_operating_rate {
+	u32 operating_rate;
 };
 
 enum hal_uncompressed_format {
@@ -444,6 +446,7 @@ enum hal_uncompressed_format {
 	HAL_COLOR_FORMAT_RGBA8888       = 0x00008000,
 	HAL_COLOR_FORMAT_RGBA8888_UBWC  = 0x00010000,
 	HAL_COLOR_FORMAT_P010           = 0x00020000,
+	HAL_COLOR_FORMAT_NV12_512       = 0x00040000,
 	HAL_UNUSED_COLOR                = 0x10000000,
 };
 
@@ -591,25 +594,16 @@ enum hal_h264_entropy {
 	HAL_UNUSED_ENTROPY = 0x10000000,
 };
 
-enum hal_h264_cabac_model {
-	HAL_H264_CABAC_MODEL_0 = 1,
-	HAL_H264_CABAC_MODEL_1 = 2,
-	HAL_H264_CABAC_MODEL_2 = 4,
-	HAL_UNUSED_CABAC = 0x10000000,
-};
-
 struct hal_h264_entropy_control {
 	enum hal_h264_entropy entropy_mode;
-	enum hal_h264_cabac_model cabac_model;
 };
 
 enum hal_rate_control {
+	HAL_RATE_CONTROL_VBR,
+	HAL_RATE_CONTROL_CBR,
+	HAL_RATE_CONTROL_MBR,
 	HAL_RATE_CONTROL_OFF,
-	HAL_RATE_CONTROL_VBR_VFR,
-	HAL_RATE_CONTROL_VBR_CFR,
 	HAL_RATE_CONTROL_CBR_VFR,
-	HAL_RATE_CONTROL_CBR_CFR,
-	HAL_RATE_CONTROL_MBR_CFR,
 	HAL_RATE_CONTROL_MBR_VFR,
 	HAL_RATE_CONTROL_CQ,
 	HAL_UNUSED_RC = 0x10000000,
@@ -667,24 +661,16 @@ struct hal_heic_grid_enable {
 	u32 grid_enable;
 };
 
-enum hal_rotate {
-	HAL_ROTATE_NONE,
-	HAL_ROTATE_90,
-	HAL_ROTATE_180,
-	HAL_ROTATE_270,
-	HAL_UNUSED_ROTATE = 0x10000000,
-};
-
 enum hal_flip {
 	HAL_FLIP_NONE,
-	HAL_FLIP_HORIZONTAL,
 	HAL_FLIP_VERTICAL,
+	HAL_FLIP_HORIZONTAL,
 	HAL_FLIP_BOTH,
 	HAL_UNUSED_FLIP = 0x10000000,
 };
 
 struct hal_vpe_rotation {
-	enum hal_rotate rotate;
+	u32 rotate;
 	enum hal_flip flip;
 };
 
@@ -811,7 +797,8 @@ enum hal_capability {
 	HAL_CAPABILITY_MAX_VIDEOCORES,
 	HAL_CAPABILITY_MAX_WORKMODES,
 	HAL_CAPABILITY_UBWC_CR_STATS,
-	HAL_CAPABILITY_IMG_GRID_DIMENSION,
+	HAL_CAPABILITY_ROTATION,
+	HAL_CAPABILITY_COLOR_SPACE_CONVERSION,
 	HAL_UNUSED_CAPABILITY = 0x10000000,
 };
 
@@ -849,13 +836,6 @@ enum hal_buffer_layout_type {
 struct hal_aspect_ratio {
 	u32 aspect_width;
 	u32 aspect_height;
-};
-
-struct hal_frame_crop {
-	u32 left;
-	u32 top;
-	u32 width;
-	u32 height;
 };
 
 struct hal_codec_supported {
@@ -904,6 +884,10 @@ struct hal_video_work_mode {
 	u32 video_work_mode;
 };
 
+struct hal_video_work_route {
+	u32 video_work_route;
+};
+
 struct hal_vpe_color_space_conversion {
 	u32 input_color_primaries;
 	u32 custom_matrix_enabled;
@@ -935,6 +919,24 @@ enum vidc_resource_id {
 struct vidc_resource_hdr {
 	enum vidc_resource_id resource_id;
 	void *resource_handle;
+};
+
+struct vidc_register_buffer {
+	enum hal_buffer type;
+	u32 index;
+	u32 size;
+	u32 device_addr;
+	u32 response_required;
+	u32 client_data;
+};
+
+struct vidc_unregister_buffer {
+	enum hal_buffer type;
+	u32 index;
+	u32 size;
+	u32 device_addr;
+	u32 response_required;
+	u32 client_data;
 };
 
 struct vidc_buffer_addr_info {
@@ -993,10 +995,9 @@ struct hal_fw_info {
 };
 
 enum hal_flush {
-	HAL_FLUSH_INPUT,
-	HAL_FLUSH_OUTPUT,
-	HAL_FLUSH_ALL,
-	HAL_UNUSED_FLUSH = 0x10000000,
+	HAL_FLUSH_INPUT = BIT(0),
+	HAL_FLUSH_OUTPUT = BIT(1),
+	HAL_FLUSH_ALL = HAL_FLUSH_INPUT | HAL_FLUSH_OUTPUT,
 };
 
 enum hal_event_type {
@@ -1143,6 +1144,8 @@ enum hal_command_response {
 	HAL_SESSION_SET_PROP_DONE,
 	HAL_SESSION_GET_PROP_DONE,
 	HAL_SESSION_RELEASE_BUFFER_DONE,
+	HAL_SESSION_REGISTER_BUFFER_DONE,
+	HAL_SESSION_UNREGISTER_BUFFER_DONE,
 	HAL_SESSION_RELEASE_RESOURCE_DONE,
 	HAL_SESSION_PROPERTY_INFO,
 	HAL_SESSION_ERROR,
@@ -1248,6 +1251,8 @@ struct msm_vidc_capability {
 	struct hal_capability_supported rc_modes;
 	struct hal_capability_supported blur_width;
 	struct hal_capability_supported blur_height;
+	struct hal_capability_supported color_space_caps;
+	struct hal_capability_supported rotation;
 	struct hal_capability_supported slice_delivery_mode;
 	struct hal_capability_supported slice_bytes;
 	struct hal_capability_supported slice_mbs;
@@ -1256,7 +1261,6 @@ struct msm_vidc_capability {
 	struct hal_capability_supported max_video_cores;
 	struct hal_capability_supported max_work_modes;
 	struct hal_capability_supported ubwc_cr_stats;
-	struct hal_capability_supported img_grid_dimension;
 	struct hal_profile_level_supported profile_level;
 	struct hal_uncompressed_format_supported uncomp_format;
 	struct hal_interlace_format_supported HAL_format;
@@ -1296,6 +1300,8 @@ struct msm_vidc_cb_cmd_done {
 		struct vidc_hal_sys_init_done sys_init_done;
 		struct vidc_hal_session_init_done session_init_done;
 		struct hal_buffer_info buffer_info;
+		struct vidc_register_buffer regbuf;
+		struct vidc_unregister_buffer unregbuf;
 		union hal_get_property property;
 		enum hal_flush flush_type;
 	} data;
@@ -1317,7 +1323,7 @@ struct msm_vidc_cb_event {
 	enum vidc_status status;
 	u32 height;
 	u32 width;
-	enum msm_vidc_pixel_depth bit_depth;
+	int bit_depth;
 	u32 hal_event_type;
 	u32 packet_buffer;
 	u32 extra_data_buffer;
@@ -1408,11 +1414,14 @@ struct vidc_bus_vote_data {
 	enum hal_video_codec codec;
 	enum hal_uncompressed_format color_formats[2];
 	int num_formats; /* 1 = DPB-OPB unified; 2 = split */
-	u32 input_height, input_width, fps, bitrate;
-	u32 output_height, output_width;
-	uint64_t compression_ratio;
-	uint64_t complexity_factor;
-	u32 input_cr;
+	int input_height, input_width, fps, bitrate;
+	int output_height, output_width;
+	int rotation;
+	int compression_ratio;
+	int complexity_factor;
+	int input_cr;
+	u32 ddr_bw;
+	u32 sys_cache_bw;
 	bool use_dpb_read;
 	unsigned int lcu_size;
 	enum msm_vidc_power_mode power_mode;
@@ -1440,6 +1449,10 @@ struct hal_hdr10_pq_sei {
 	struct msm_vidc_content_light_level_sei_payload cll_sei;
 };
 
+struct hal_vbv_hdr_buf_size {
+	u32 vbv_hdr_buf_size;
+};
+
 #define call_hfi_op(q, op, args...)			\
 	(((q) && (q)->op) ? ((q)->op(args)) : 0)
 
@@ -1460,6 +1473,10 @@ struct hfi_device {
 				struct vidc_buffer_addr_info *buffer_info);
 	int (*session_release_buffers)(void *sess,
 				struct vidc_buffer_addr_info *buffer_info);
+	int (*session_register_buffer)(void *sess,
+				struct vidc_register_buffer *buffer);
+	int (*session_unregister_buffer)(void *sess,
+				struct vidc_unregister_buffer *buffer);
 	int (*session_load_res)(void *sess);
 	int (*session_release_res)(void *sess);
 	int (*session_start)(void *sess);
@@ -1475,6 +1492,8 @@ struct hfi_device {
 	int (*session_set_property)(void *sess, enum hal_property ptype,
 			void *pdata);
 	int (*session_get_property)(void *sess, enum hal_property ptype);
+	int (*session_pause)(void *sess);
+	int (*session_resume)(void *sess);
 	int (*scale_clocks)(void *dev, u32 freq);
 	int (*vote_bus)(void *dev, struct vidc_bus_vote_data *data,
 			int num_data);
@@ -1487,8 +1506,7 @@ struct hfi_device {
 	enum hal_default_properties (*get_default_properties)(void *dev);
 };
 
-typedef void (*hfi_cmd_response_callback) (enum hal_command_response cmd,
-			void *data);
+typedef void (*hfi_cmd_response_callback) (u32 cmd, void *data);
 typedef void (*msm_vidc_callback) (u32 response, void *callback);
 
 struct hfi_device *vidc_hfi_initialize(enum msm_vidc_hfi_type hfi_type,

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __ASM_ARM_CPUTYPE_H
 #define __ASM_ARM_CPUTYPE_H
 
@@ -82,7 +83,6 @@
 #define ARM_CPU_PART_CORTEX_A73		0x4100d090
 #define ARM_CPU_PART_CORTEX_A75		0x4100d0a0
 #define ARM_CPU_PART_MASK		0xff00fff0
-#define ARM_CPU_PART_KRYO2XX_GOLD       0x51008000
 
 /* Broadcom cores */
 #define ARM_CPU_PART_BRAHMA_B15		0x420000f0

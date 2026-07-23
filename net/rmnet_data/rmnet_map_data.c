@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2020 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -56,7 +56,7 @@ struct agg_work {
 #define RMNET_MAP_DEAGGR_SPACING  64
 #define RMNET_MAP_DEAGGR_HEADROOM (RMNET_MAP_DEAGGR_SPACING / 2)
 
-/* rmnet_map_add_map_header() - Adds MAP header to front of skb->data
+/* rmnet_data_map_add_map_header() - Adds MAP header to front of skb->data
  * @skb:        Socket buffer ("packet") to modify
  * @hdrlen:     Number of bytes of header data which should not be included in
  *              MAP length field
@@ -71,8 +71,8 @@ struct agg_work {
  *      - 0 (null) if insufficient headroom
  *      - 0 (null) if insufficient tailroom for padding bytes
  */
-struct rmnet_map_header_s *rmnet_map_add_map_header(struct sk_buff *skb,
-						    int hdrlen, int pad)
+struct rmnet_map_header_s *rmnet_data_map_add_map_header(struct sk_buff *skb,
+							 int hdrlen, int pad)
 {
 	u32 padding, map_datalen;
 	u8 *padbytes;
@@ -110,7 +110,7 @@ done:
 	return map_header;
 }
 
-/* rmnet_map_deaggregate() - Deaggregates a single packet
+/* rmnet_data_map_deaggregate() - Deaggregates a single packet
  * @skb:        Source socket buffer containing multiple MAP frames
  * @config:     Physical endpoint configuration of the ingress device
  *
@@ -123,8 +123,8 @@ done:
  *     - Pointer to new skb
  *     - 0 (null) if no more aggregated packets
  */
-struct sk_buff *rmnet_map_deaggregate(struct sk_buff *skb,
-				      struct rmnet_phys_ep_config *config)
+struct sk_buff *rmnet_data_map_deaggregate(struct sk_buff *skb,
+					   struct rmnet_phys_ep_config *config)
 {
 	struct sk_buff *skbn;
 	struct rmnet_map_header_s *maph;
@@ -241,7 +241,8 @@ enum hrtimer_restart rmnet_map_flush_packet_queue(struct hrtimer *t)
  * function.
  */
 void rmnet_map_aggregate(struct sk_buff *skb,
-			 struct rmnet_phys_ep_config *config) {
+			 struct rmnet_phys_ep_config *config)
+{
 	u8 *dest_buff;
 	unsigned long flags;
 	struct sk_buff *agg_skb;
@@ -261,10 +262,8 @@ new_packet:
 		 * sparse, don't aggregate. We will need to tune this later
 		 */
 		diff = timespec_sub(config->agg_last, last);
-		size = config->egress_agg_size - skb->len;
 
-		if ((diff.tv_sec > 0) || (diff.tv_nsec > agg_bypass_time) ||
-		    (size <= 0)) {
+		if ((diff.tv_sec > 0) || (diff.tv_nsec > agg_bypass_time)) {
 			spin_unlock_irqrestore(&config->agg_lock, flags);
 			LOGL("delta t: %ld.%09lu\tcount: bypass", diff.tv_sec,
 			     diff.tv_nsec);
@@ -276,6 +275,7 @@ new_packet:
 			return;
 		}
 
+		size = config->egress_agg_size - skb->len;
 		config->agg_skb = skb_copy_expand(skb, 0, size, GFP_ATOMIC);
 		if (!config->agg_skb) {
 			config->agg_skb = 0;
@@ -293,7 +293,7 @@ new_packet:
 		config->agg_count = 1;
 		getnstimeofday(&config->agg_time);
 		trace_rmnet_start_aggregation(skb);
-		dev_kfree_skb_any(skb);
+		rmnet_kfree_skb(skb, RMNET_STATS_SKBFREE_AGG_CPY_EXPAND);
 		goto schedule;
 	}
 	diff = timespec_sub(config->agg_last, config->agg_time);
@@ -322,7 +322,7 @@ new_packet:
 	dest_buff = skb_put(config->agg_skb, skb->len);
 	memcpy(dest_buff, skb->data, skb->len);
 	config->agg_count++;
-	dev_kfree_skb_any(skb);
+	rmnet_kfree_skb(skb, RMNET_STATS_SKBFREE_AGG_INTO_BUFF);
 
 schedule:
 	if (config->agg_state != RMNET_MAP_TXFER_SCHEDULED) {
@@ -558,7 +558,7 @@ static int rmnet_map_validate_ipv6_packet_checksum
 		return RMNET_MAP_CHECKSUM_VALIDATION_FAILED;
 	}
 
-/* rmnet_map_checksum_downlink_packet() - Validates checksum on
+/* rmnet_map_data_checksum_downlink_packet() - Validates checksum on
  * a downlink packet
  * @skb:	Pointer to the packet's skb.
  *
@@ -579,7 +579,7 @@ static int rmnet_map_validate_ipv6_packet_checksum
  *   - RMNET_MAP_CHECKSUM_ERR_UNKNOWN_IP_VERSION: Unrecognized IP header.
  *   - RMNET_MAP_CHECKSUM_VALIDATION_FAILED: In case the validation failed.
  */
-int rmnet_map_checksum_downlink_packet(struct sk_buff *skb)
+int rmnet_map_data_checksum_downlink_packet(struct sk_buff *skb)
 {
 	struct rmnet_map_dl_checksum_trailer_s *cksum_trailer;
 	unsigned int data_len;
@@ -625,9 +625,9 @@ static void rmnet_map_fill_ipv4_packet_ul_checksum_header
 	ul_header->checksum_insert_offset = skb->csum_offset;
 	ul_header->cks_en = 1;
 	if (ip4h->protocol == IPPROTO_UDP)
-		ul_header->udp_ind = 1;
+		ul_header->udp_ip4_ind = 1;
 	else
-		ul_header->udp_ind = 0;
+		ul_header->udp_ip4_ind = 0;
 	/* Changing checksum_insert_offset to network order */
 	hdr++;
 	*hdr = htons(*hdr);
@@ -638,18 +638,13 @@ static void rmnet_map_fill_ipv6_packet_ul_checksum_header
 	(void *iphdr, struct rmnet_map_ul_checksum_header_s *ul_header,
 	 struct sk_buff *skb)
 {
-	struct ipv6hdr *ip6h = (struct ipv6hdr *)iphdr;
 	unsigned short *hdr = (unsigned short *)ul_header;
 
 	ul_header->checksum_start_offset = htons((unsigned short)
 		(skb_transport_header(skb) - (unsigned char *)iphdr));
 	ul_header->checksum_insert_offset = skb->csum_offset;
 	ul_header->cks_en = 1;
-
-	if (ip6h->nexthdr == IPPROTO_UDP)
-		ul_header->udp_ind = 1;
-	else
-		ul_header->udp_ind = 0;
+	ul_header->udp_ip4_ind = 0;
 	/* Changing checksum_insert_offset to network order */
 	hdr++;
 	*hdr = htons(*hdr);
@@ -699,9 +694,9 @@ static void rmnet_map_complement_ipv6_txporthdr_csum_field(void *ip6hdr)
  *   - RMNET_MAP_CHECKSUM_ERR_UNKNOWN_IP_VERSION: Unrecognized IP header.
  *   - RMNET_MAP_CHECKSUM_SW: Unsupported packet for UL checksum offload.
  */
-int rmnet_map_checksum_uplink_packet(struct sk_buff *skb,
-				     struct net_device *orig_dev,
-				     u32 egress_data_format)
+int rmnet_map_data_checksum_uplink_packet(struct sk_buff *skb,
+					  struct net_device *orig_dev,
+					  u32 egress_data_format)
 {
 	unsigned char ip_version;
 	struct rmnet_map_ul_checksum_header_s *ul_header;
@@ -752,7 +747,7 @@ sw_checksum:
 	ul_header->checksum_start_offset = 0;
 	ul_header->checksum_insert_offset = 0;
 	ul_header->cks_en = 0;
-	ul_header->udp_ind = 0;
+	ul_header->udp_ip4_ind = 0;
 done:
 	return ret;
 }
@@ -762,7 +757,7 @@ int rmnet_ul_aggregation_skip(struct sk_buff *skb, int offset)
 	unsigned char *packet_start = skb->data + offset;
 	int is_icmp = 0;
 
-	if ((skb->data[offset]) >> 4 == 0x04) {
+	if (skb->data[offset] >> 4 == 0x04) {
 		struct iphdr *ip4h = (struct iphdr *)(packet_start);
 
 		if (ip4h->protocol == IPPROTO_ICMP)

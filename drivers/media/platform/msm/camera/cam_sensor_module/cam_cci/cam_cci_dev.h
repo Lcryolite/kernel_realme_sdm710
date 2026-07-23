@@ -1,4 +1,4 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -26,6 +26,7 @@
 #include <linux/timer.h>
 #include <linux/kernel.h>
 #include <linux/platform_device.h>
+#include <linux/semaphore.h>
 #include <media/cam_sensor.h>
 #include <media/v4l2-event.h>
 #include <media/v4l2-ioctl.h>
@@ -45,7 +46,7 @@
 #define CYCLES_PER_MICRO_SEC_DEFAULT 4915
 #define CCI_MAX_DELAY 1000000
 
-#define CCI_TIMEOUT msecs_to_jiffies(500)
+#define CCI_TIMEOUT msecs_to_jiffies(1500)
 
 #define NUM_MASTERS 2
 #define NUM_QUEUES 2
@@ -65,27 +66,15 @@
 #define MAX_LRME_V4l2_EVENTS 30
 
 /* Max bytes that can be read per CCI read transaction */
-#define CCI_READ_MAX 12
+#define CCI_READ_MAX 256
 #define CCI_I2C_READ_MAX_RETRIES 3
-#ifndef VENDOR_EDIT
 #define CCI_I2C_MAX_READ 8192
-#else
-#define CCI_I2C_MAX_READ 16384
-#endif
 #define CCI_I2C_MAX_WRITE 8192
+#define CCI_I2C_MAX_BYTE_COUNT 65535
 
 #define CAMX_CCI_DEV_NAME "cam-cci-driver"
 
-/* Max bytes that can be read per CCI read transaction */
-#define CCI_READ_MAX 12
-#define CCI_I2C_READ_MAX_RETRIES 3
-#ifndef VENDOR_EDIT
-#define CCI_I2C_MAX_READ 8192
-#else
-#define CCI_I2C_MAX_READ 16384
-#endif
-
-#define CCI_I2C_MAX_WRITE 8192
+#define MAX_CCI 2
 
 #define PRIORITY_QUEUE (QUEUE_0)
 #define SYNC_QUEUE (QUEUE_1)
@@ -134,6 +123,7 @@ struct cam_cci_read_cfg {
 	uint16_t addr_type;
 	uint8_t *data;
 	uint16_t num_byte;
+	uint16_t data_type;
 };
 
 struct cam_cci_i2c_queue_info {
@@ -150,10 +140,16 @@ struct cam_cci_master_info {
 	uint8_t reset_pending;
 	struct mutex mutex;
 	struct completion reset_complete;
+	struct completion rd_done;
+	struct completion th_complete;
 	struct mutex mutex_q[NUM_QUEUES];
 	struct completion report_q[NUM_QUEUES];
 	atomic_t done_pending[NUM_QUEUES];
 	spinlock_t lock_q[NUM_QUEUES];
+	spinlock_t freq_cnt;
+	struct semaphore master_sem;
+	bool is_first_req;
+	uint16_t freq_ref_cnt;
 };
 
 struct cam_cci_clk_params_t {
@@ -177,44 +173,47 @@ enum cam_cci_state_t {
 
 /**
  * struct cci_device
- * @pdev: Platform device
- * @subdev: V4L2 sub device
- * @base: Base address of CCI device
- * @hw_version: Hardware version
- * @ref_count: Reference Count
- * @cci_state: CCI state machine
- * @num_clk: Number of CCI clock
- * @cci_clk: CCI clock structure
- * @cci_clk_info: CCI clock information
- * @cam_cci_i2c_queue_info: CCI queue information
- * @i2c_freq_mode: I2C frequency of operations
- * @cci_clk_params: CCI hw clk params
- * @cci_gpio_tbl: CCI GPIO table
- * @cci_gpio_tbl_size: GPIO table size
- * @cci_pinctrl: Pinctrl structure
- * @cci_pinctrl_status: CCI pinctrl status
- * @cci_clk_src: CCI clk src rate
- * @cci_vreg: CCI regulator structure
- * @cci_reg_ptr: CCI individual regulator structure
- * @regulator_count: Regulator count
- * @support_seq_write:
- *     Set this flag when sequential write is enabled
- * @write_wq: Work queue structure
- * @valid_sync: Is it a valid sync with CSID
- * @v4l2_dev_str: V4L2 device structure
- * @cci_wait_sync_cfg: CCI sync config
- * @cycles_per_us: Cycles per micro sec
- * @payload_size: CCI packet payload size
+ * @pdev:                       Platform device
+ * @subdev:                     V4L2 sub device
+ * @base:                       Base address of CCI device
+ * @hw_version:                 Hardware version
+ * @ref_count:                  Reference Count
+ * @cci_state:                  CCI state machine
+ * @num_clk:                    Number of CCI clock
+ * @cci_clk:                    CCI clock structure
+ * @cci_clk_info:               CCI clock information
+ * @cam_cci_i2c_queue_info:     CCI queue information
+ * @i2c_freq_mode:              I2C frequency of operations
+ * @cci_clk_params:             CCI hw clk params
+ * @cci_gpio_tbl:               CCI GPIO table
+ * @cci_gpio_tbl_size:          GPIO table size
+ * @cci_pinctrl:                Pinctrl structure
+ * @cci_pinctrl_status:         CCI pinctrl status
+ * @cci_clk_src:                CCI clk src rate
+ * @cci_vreg:                   CCI regulator structure
+ * @cci_reg_ptr:                CCI individual regulator structure
+ * @regulator_count:            Regulator count
+ * @support_seq_write:          Set this flag when sequential write is enabled
+ * @write_wq:                   Work queue structure
+ * @valid_sync:                 Is it a valid sync with CSID
+ * @v4l2_dev_str:               V4L2 device structure
+ * @cci_wait_sync_cfg:          CCI sync config
+ * @cycles_per_us:              Cycles per micro sec
+ * @payload_size:               CCI packet payload size
+ * @irq_status1:                Store irq_status1 to be cleared after
+ *                              draining FIFO buffer for burst read
+ * @lock_status:                to protect changes to irq_status1
+ * @is_burst_read:              Flag to determine if we are performing
+ *                              a burst read operation or not
+ * @irqs_disabled:              Mask for IRQs that are disabled
+ * @init_mutex:                 Mutex for maintaining refcount for attached
+ *                              devices to cci during init/deinit.
  */
 struct cci_device {
 	struct v4l2_subdev subdev;
 	struct cam_hw_soc_info soc_info;
 	uint32_t hw_version;
 	uint8_t ref_count;
-	#ifdef VENDOR_EDIT
-	/*Added by houyujun@Camera 20180616 for cci sync*/
-	struct mutex cci_lock;
-	#endif
 	enum cam_cci_state_t cci_state;
 	struct cam_cci_i2c_queue_info
 		cci_i2c_queue_info[NUM_MASTERS][NUM_QUEUES];
@@ -233,6 +232,11 @@ struct cci_device {
 	uint8_t payload_size;
 	char device_name[20];
 	uint32_t cpas_handle;
+	uint32_t irq_status1;
+	spinlock_t lock_status;
+	bool is_burst_read;
+	uint32_t irqs_disabled;
+	struct mutex init_mutex;
 };
 
 enum cam_cci_i2c_cmd_type {
@@ -278,6 +282,7 @@ struct cam_sensor_cci_client {
 	uint32_t timeout;
 	uint16_t retries;
 	uint16_t id_map;
+	uint16_t cci_device;
 };
 
 struct cam_cci_ctrl {
@@ -303,20 +308,15 @@ struct cci_write_async {
 irqreturn_t cam_cci_irq(int irq_num, void *data);
 
 #ifdef CONFIG_SPECTRA_CAMERA
-extern struct v4l2_subdev *cam_cci_get_subdev(void);
+extern struct v4l2_subdev *cam_cci_get_subdev(int cci_dev_index);
 #else
-static inline struct v4l2_subdev *cam_cci_get_subdev(void)
+static inline struct v4l2_subdev *cam_cci_get_subdev(int cci_dev_index)
 {
 	return NULL;
 }
 #endif
 
-#ifdef VENDOR_EDIT_REALME
 #define VIDIOC_MSM_CCI_CFG \
 	_IOWR('V', BASE_VIDIOC_PRIVATE + 23, struct cam_cci_ctrl)
-#else
-#define VIDIOC_MSM_CCI_CFG \
-	_IOWR('V', BASE_VIDIOC_PRIVATE + 23, struct cam_cci_ctrl *)
-#endif
 
 #endif /* _CAM_CCI_DEV_H_ */

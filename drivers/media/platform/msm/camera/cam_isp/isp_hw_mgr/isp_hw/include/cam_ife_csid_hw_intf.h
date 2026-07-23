@@ -1,4 +1,4 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -28,6 +28,7 @@ enum cam_ife_pix_path_res_id {
 	CAM_IFE_PIX_PATH_RES_RDI_2,
 	CAM_IFE_PIX_PATH_RES_RDI_3,
 	CAM_IFE_PIX_PATH_RES_IPP,
+	CAM_IFE_PIX_PATH_RES_PPP,
 	CAM_IFE_PIX_PATH_RES_MAX,
 };
 
@@ -44,19 +45,31 @@ enum cam_ife_cid_res_id {
 
 /**
  * struct cam_ife_csid_hw_caps- get the CSID hw capability
- * @no_rdis :       number of rdis supported by CSID HW device
- * @no_pix:         number of pixel path supported by CSID HW device
+ * @num_rdis:       number of rdis supported by CSID HW device
+ * @num_pix:        number of pxl paths supported by CSID HW device
+ * @num_ppp:        number of ppp paths supported by CSID HW device
  * @major_version : major version
  * @minor_version:  minor version
  * @version_incr:   version increment
  *
  */
 struct cam_ife_csid_hw_caps {
-	uint32_t      no_rdis;
-	uint32_t      no_pix;
+	uint32_t      num_rdis;
+	uint32_t      num_pix;
+	uint32_t      num_ppp;
 	uint32_t      major_version;
 	uint32_t      minor_version;
 	uint32_t      version_incr;
+};
+
+/**
+ * struct cam_csid_hw_evt_payload- handle csid error
+ * @hw_idx :     Hw index of csid
+ * @evt_type :   Event type from CSID
+ */
+struct cam_csid_hw_evt_payload {
+	uint32_t            hw_idx;
+	uint32_t            evt_type;
 };
 
 /**
@@ -75,6 +88,8 @@ struct cam_ife_csid_hw_caps {
  * @cid:          cid (DT_ID) value for path, this is applicable for CSID path
  *                reserve
  * @node_res :    Reserved resource structure pointer
+ * @event_cb :    CSID Event Callback to hw manager
+ * @ctx:          Hw Manager Context for this acquire
  *
  */
 struct cam_csid_hw_reserve_resource_args {
@@ -86,6 +101,8 @@ struct cam_csid_hw_reserve_resource_args {
 	uint32_t                                  master_idx;
 	uint32_t                                  cid;
 	struct cam_isp_resource_node             *node_res;
+	void                                     *ctx;
+	cam_hw_mgr_event_cb_func                  event_cb;
 };
 
 /**
@@ -153,6 +170,9 @@ struct cam_csid_get_time_stamp_args {
 enum cam_ife_csid_cmd_type {
 	CAM_IFE_CSID_CMD_GET_TIME_STAMP,
 	CAM_IFE_CSID_SET_CSID_DEBUG,
+	CAM_IFE_CSID_SOF_IRQ_DEBUG,
+	CAM_IFE_CSID_SET_INIT_FRAME_DROP,
+	CAM_IFE_CSID_SET_SENSOR_DIMENSION_CFG,
 	CAM_IFE_CSID_CMD_MAX,
 };
 
@@ -166,5 +186,27 @@ enum cam_ife_csid_cmd_type {
  */
 int cam_ife_csid_hw_init(struct cam_hw_intf **ife_csid_hw,
 	uint32_t hw_idx);
+
+/*
+ * struct cam_ife_csid_clock_update_args:
+ *
+ * @clk_rate:                Clock rate requested
+ */
+struct cam_ife_csid_clock_update_args {
+	uint64_t                           clk_rate;
+};
+
+/*
+ * struct cam_ife_sensor_dim_update_args:
+ *
+ * @ppp_path:             expected ppp path configuration
+ * @ipp_path:             expected ipp path configuration
+ * @rdi_path:             expected rdi path configuration
+ */
+struct cam_ife_sensor_dimension_update_args {
+	struct cam_isp_sensor_dimension  ppp_path;
+	struct cam_isp_sensor_dimension  ipp_path;
+	struct cam_isp_sensor_dimension  rdi_path[4];
+};
 
 #endif /* _CAM_CSID_HW_INTF_H_ */

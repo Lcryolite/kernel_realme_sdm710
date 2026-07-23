@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0
 menu "Device Drivers"
 
 source "drivers/amba/Kconfig"
@@ -7,6 +8,8 @@ source "drivers/base/Kconfig"
 source "drivers/bus/Kconfig"
 
 source "drivers/connector/Kconfig"
+
+source "drivers/gnss/Kconfig"
 
 source "drivers/mtd/Kconfig"
 
@@ -56,9 +59,9 @@ source "drivers/i2c/Kconfig"
 
 source "drivers/spi/Kconfig"
 
-source "drivers/slimbus/Kconfig"
-
 source "drivers/spmi/Kconfig"
+
+source "drivers/slimbus/Kconfig"
 
 source "drivers/hsi/Kconfig"
 
@@ -69,6 +72,8 @@ source "drivers/ptp/Kconfig"
 source "drivers/pinctrl/Kconfig"
 
 source "drivers/gpio/Kconfig"
+
+source "drivers/gnsssirf/Kconfig"
 
 source "drivers/w1/Kconfig"
 
@@ -113,8 +118,6 @@ source "drivers/infiniband/Kconfig"
 source "drivers/edac/Kconfig"
 
 source "drivers/rtc/Kconfig"
-
-source "drivers/esoc/Kconfig"
 
 source "drivers/dma/Kconfig"
 
@@ -174,6 +177,8 @@ source "drivers/vme/Kconfig"
 
 source "drivers/pwm/Kconfig"
 
+source "drivers/gpu/msm/Kconfig"
+
 source "drivers/irqchip/Kconfig"
 
 source "drivers/ipack/Kconfig"
@@ -196,6 +201,8 @@ source "drivers/thunderbolt/Kconfig"
 
 source "drivers/android/Kconfig"
 
+source "drivers/gpu/trace/Kconfig"
+
 source "drivers/nvdimm/Kconfig"
 
 source "drivers/dax/Kconfig"
@@ -208,15 +215,14 @@ source "drivers/hwtracing/intel_th/Kconfig"
 
 source "drivers/fpga/Kconfig"
 
-source "drivers/sensors/Kconfig"
+source "drivers/fsi/Kconfig"
 
 source "drivers/tee/Kconfig"
 
-source "drivers/kernelsu/Kconfig"
+source "drivers/mux/Kconfig"
 
-#ifdef OPLUS_NFC_BRINGUP
-#Add for the kernel Macro for NXP PN557 NFC kernel
-source "drivers/nfc/pn553-i2c/Kconfig"
-source "drivers/nfc/p73-spi/Kconfig"
-#endif /*OPLUS_NFC_BRINGUP*/
+source "drivers/sensors/Kconfig"
+
+source "drivers/esoc/Kconfig"
+
 endmenu

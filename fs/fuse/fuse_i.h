@@ -24,6 +24,8 @@
 #include <linux/workqueue.h>
 #include <linux/kref.h>
 #include <linux/xattr.h>
+#include <linux/pid_namespace.h>
+#include <linux/refcount.h>
 
 /** Max number of pages that can be used in a single read request */
 #define FUSE_MAX_PAGES_PER_REQ 32
@@ -121,6 +123,17 @@ enum {
 
 struct fuse_conn;
 
+/**
+ * Reference to lower filesystem file for read/write operations handled in
+ * passthrough mode.
+ * This struct also tracks the credentials to be used for handling read/write
+ * operations.
+ */
+struct fuse_passthrough {
+	struct file *filp;
+	struct cred *cred;
+};
+
 /** FUSE specific file data */
 struct fuse_file {
 	/** Fuse connection for this file */
@@ -139,13 +152,16 @@ struct fuse_file {
 	u64 nodeid;
 
 	/** Refcount */
-	atomic_t count;
+	refcount_t count;
 
 	/** FOPEN_* flags returned by open */
 	u32 open_flags;
 
 	/** Entry on inode's write_files list */
 	struct list_head write_entry;
+
+	/** Container for data related to the passthrough functionality */
+	struct fuse_passthrough passthrough;
 
 	/** RB node to be linked on fuse_conn->polled_files */
 	struct rb_node polled_node;
@@ -155,14 +171,6 @@ struct fuse_file {
 
 	/** Has flock been performed on this file? */
 	bool flock:1;
-
-	/* the read write file */
-	struct file *passthrough_filp;
-	bool passthrough_enabled;
-#ifdef CONFIG_OPLUS_FEATURE_FUSE_FS_SHORTCIRCUIT
-	/* the read write file */
-	struct file *rw_lower_file;
-#endif /* CONFIG_OPLUS_FEATURE_FUSE_FS_SHORTCIRCUIT */
 };
 
 /** One input argument of a request */
@@ -220,9 +228,6 @@ struct fuse_out {
 
 	/** Array of arguments */
 	struct fuse_arg args[2];
-
-	/* Path used for completing d_canonical_path */
-	struct path *canonical_path;
 };
 
 /** FUSE page descriptor */
@@ -245,16 +250,7 @@ struct fuse_args {
 		unsigned argvar:1;
 		unsigned numargs;
 		struct fuse_arg args[2];
-
-		/* Path used for completing d_canonical_path */
-		struct path *canonical_path;
-		struct file *passthrough_filp;
 	} out;
-#ifdef CONFIG_OPLUS_FEATURE_FUSE_FS_SHORTCIRCUIT
-	/** fuse shortcircuit file  */
-	struct file *private_lower_rw_file;
-	char *iname;
-#endif /* CONFIG_OPLUS_FEATURE_FUSE_FS_SHORTCIRCUIT */
 };
 
 #define FUSE_ARGS(args) struct fuse_args args = {}
@@ -269,18 +265,18 @@ struct fuse_io_priv {
 	size_t size;
 	__u64 offset;
 	bool write;
+	bool should_dirty;
 	int err;
 	struct kiocb *iocb;
-	struct file *file;
 	struct completion *done;
 	bool blocking;
 };
 
-#define FUSE_IO_PRIV_SYNC(f) \
+#define FUSE_IO_PRIV_SYNC(i) \
 {					\
-	.refcnt = { ATOMIC_INIT(1) },	\
+	.refcnt = KREF_INIT(1),		\
 	.async = 0,			\
-	.file = f,			\
+	.iocb = i,			\
 }
 
 /**
@@ -328,7 +324,7 @@ struct fuse_req {
 	struct list_head intr_entry;
 
 	/** refcount */
-	atomic_t count;
+	refcount_t count;
 
 	bool user_pages;
 
@@ -392,6 +388,9 @@ struct fuse_req {
 	/** Inode used in the request or NULL */
 	struct inode *inode;
 
+	/** Path used for completing d_canonical_path */
+	struct path *canonical_path;
+
 	/** AIO control block */
 	struct fuse_io_priv *io;
 
@@ -403,22 +402,11 @@ struct fuse_req {
 
 	/** Request is stolen from fuse_file->reserved_req */
 	struct file *stolen_file;
-
-	/** fuse passthrough file  */
-	struct file *passthrough_filp;
-#ifdef CONFIG_OPLUS_FEATURE_FUSE_FS_SHORTCIRCUIT
-	/** fuse shortcircuit file  */
-	struct file *private_lower_rw_file;
-	char *iname;
-#endif /* CONFIG_OPLUS_FEATURE_FUSE_FS_SHORTCIRCUIT */
 };
 
 struct fuse_iqueue {
 	/** Connection established */
 	unsigned connected;
-
-	/** Lock protecting accesses to members of this structure */
-	spinlock_t lock;
 
 	/** Readers of the connection are waiting on this */
 	wait_queue_head_t waitq;
@@ -483,7 +471,7 @@ struct fuse_conn {
 	spinlock_t lock;
 
 	/** Refcount */
-	atomic_t count;
+	refcount_t count;
 
 	/** Number of fuse_dev's */
 	atomic_t dev_count;
@@ -495,6 +483,9 @@ struct fuse_conn {
 
 	/** The group id for this mount */
 	kgid_t group_id;
+
+	/** The pid namespace for this mount */
+	struct pid_namespace *pid_ns;
 
 	/** Maximum read size */
 	unsigned max_read;
@@ -562,9 +553,6 @@ struct fuse_conn {
 	/** Filesystem supports NFS exporting.  Only set in INIT */
 	unsigned export_support:1;
 
-	/** Set if bdi is valid */
-	unsigned bdi_initialized:1;
-
 	/** write-back cache policy (default is write-through) */
 	unsigned writeback_cache:1;
 
@@ -573,14 +561,6 @@ struct fuse_conn {
 
 	/** handle fs handles killing suid/sgid/cap on write/chown/trunc */
 	unsigned handle_killpriv:1;
-
-#ifdef CONFIG_OPLUS_FEATURE_FUSE_FS_SHORTCIRCUIT
-	/** Shortcircuited IO. */
-	unsigned shortcircuit_io:1;
-#endif /* CONFIG_OPLUS_FEATURE_FUSE_FS_SHORTCIRCUIT */
-
-	/** passthrough IO. */
-	unsigned passthrough:1;
 
 	/*
 	 * The following bitfields are only for optimization purposes
@@ -668,14 +648,14 @@ struct fuse_conn {
 	/** Allow other than the mounter user to access the filesystem ? */
 	unsigned allow_other:1;
 
+	/** Passthrough mode for read/write IO */
+	unsigned int passthrough:1;
+
 	/** The number of requests waiting for completion */
 	atomic_t num_waiting;
 
 	/** Negotiated minor version */
 	unsigned minor;
-
-	/** Backing dev info */
-	struct backing_dev_info bdi;
 
 	/** Entry on the fuse_conn_list */
 	struct list_head entry;
@@ -709,6 +689,12 @@ struct fuse_conn {
 
 	/** List of device instances belonging to this connection */
 	struct list_head devices;
+
+	/** IDR for passthrough requests */
+	struct idr passthrough_req;
+
+	/** Protects passthrough_req */
+	spinlock_t passthrough_req_lock;
 };
 
 static inline struct fuse_conn *get_fuse_conn_super(struct super_block *sb)
@@ -785,7 +771,6 @@ void fuse_read_fill(struct fuse_req *req, struct file *file,
 int fuse_open_common(struct inode *inode, struct file *file, bool isdir);
 
 struct fuse_file *fuse_file_alloc(struct fuse_conn *fc);
-struct fuse_file *fuse_file_get(struct fuse_file *ff);
 void fuse_file_free(struct fuse_file *ff);
 void fuse_finish_open(struct inode *inode, struct file *file);
 
@@ -794,7 +779,7 @@ void fuse_sync_release(struct fuse_file *ff, int flags);
 /**
  * Send RELEASE or RELEASEDIR request
  */
-void fuse_release_common(struct file *file, int opcode);
+void fuse_release_common(struct file *file, bool isdir);
 
 /**
  * Send FSYNC or FSYNCDIR request
@@ -962,8 +947,7 @@ u64 fuse_lock_owner_id(struct fuse_conn *fc, fl_owner_t id);
 
 void fuse_update_ctime(struct inode *inode);
 
-int fuse_update_attributes(struct inode *inode, struct kstat *stat,
-			   struct file *file, bool *refreshed);
+int fuse_update_attributes(struct inode *inode, struct file *file);
 
 void fuse_flush_writepages(struct inode *inode);
 
@@ -1039,13 +1023,13 @@ struct posix_acl;
 struct posix_acl *fuse_get_acl(struct inode *inode, int type);
 int fuse_set_acl(struct inode *inode, struct posix_acl *acl, int type);
 
-#ifdef CONFIG_OPLUS_FEATURE_ACM
-void acm_fuse_init_cache(void);
-void acm_fuse_free_cache(void);
-#endif
-
-#ifdef CONFIG_OPLUS_FEATURE_FUSE_FS_SHORTCIRCUIT
-extern int sct_mode;
-#endif /* CONFIG_OPLUS_FEATURE_FUSE_FS_SHORTCIRCUIT */
+/* passthrough.c */
+int fuse_passthrough_open(struct fuse_dev *fud, u32 lower_fd);
+int fuse_passthrough_setup(struct fuse_conn *fc, struct fuse_file *ff,
+			   struct fuse_open_out *openarg);
+void fuse_passthrough_release(struct fuse_passthrough *passthrough);
+ssize_t fuse_passthrough_read_iter(struct kiocb *iocb, struct iov_iter *to);
+ssize_t fuse_passthrough_write_iter(struct kiocb *iocb, struct iov_iter *from);
+ssize_t fuse_passthrough_mmap(struct file *file, struct vm_area_struct *vma);
 
 #endif /* _FS_FUSE_I_H */

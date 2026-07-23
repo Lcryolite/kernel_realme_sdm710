@@ -42,6 +42,7 @@
  */
 
 /dts-v1/;
+#include <dt-bindings/gpio/gpio.h>
 #include "imx23.dtsi"
 
 / {
@@ -149,9 +150,8 @@
 		regulator-name = "vdd-touchpad0";
 		regulator-min-microvolt = <3300000>;
 		regulator-max-microvolt = <3300000>;
-		gpio = <&gpio0 26 0>;
+		gpio = <&gpio0 26 GPIO_ACTIVE_LOW>;
 		regulator-always-on;
-		enable-active-low;
 	};
 
 	reg_vdd_tuner: regulator-vdd-tuner0 {
@@ -159,9 +159,8 @@
 		regulator-name = "vdd-tuner0";
 		regulator-min-microvolt = <3300000>;
 		regulator-max-microvolt = <3300000>;
-		gpio = <&gpio0 29 0>;
+		gpio = <&gpio0 29 GPIO_ACTIVE_LOW>;
 		regulator-always-on;
-		enable-active-low;
 	};
 
 	backlight {
@@ -175,10 +174,8 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 		compatible = "i2c-gpio";
-		gpios = <
-			&gpio1 24 0		/* SDA */
-			&gpio1 22 0		/* SCL */
-		>;
+		sda-gpios = <&gpio1 24 0>;
+		scl-gpios = <&gpio1 22 0>;
 		i2c-gpio,delay-us = <2>;	/* ~100 kHz */
 	};
 
@@ -186,10 +183,8 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 		compatible = "i2c-gpio";
-		gpios = <
-			&gpio0 31 0		/* SDA */
-			&gpio0 30 0		/* SCL */
-		>;
+		sda-gpios = <&gpio0 31 0>;
+		scl-gpios = <&gpio0 30 0>;
 		i2c-gpio,delay-us = <2>;	/* ~100 kHz */
 
 		touch: touch@20 {

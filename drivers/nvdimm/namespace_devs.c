@@ -1,23 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright(c) 2013-2015 Intel Corporation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of version 2 of the GNU General Public License as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
  */
 #include <linux/module.h>
 #include <linux/device.h>
 #include <linux/sort.h>
 #include <linux/slab.h>
-#include <linux/pmem.h>
 #include <linux/list.h>
 #include <linux/nd.h>
 #include "nd-core.h"
+#include "pmem.h"
 #include "nd.h"
 
 static void namespace_io_release(struct device *dev)
@@ -52,17 +44,17 @@ static void namespace_blk_release(struct device *dev)
 	kfree(nsblk);
 }
 
-static struct device_type namespace_io_device_type = {
+static const struct device_type namespace_io_device_type = {
 	.name = "nd_namespace_io",
 	.release = namespace_io_release,
 };
 
-static struct device_type namespace_pmem_device_type = {
+static const struct device_type namespace_pmem_device_type = {
 	.name = "nd_namespace_pmem",
 	.release = namespace_pmem_release,
 };
 
-static struct device_type namespace_blk_device_type = {
+static const struct device_type namespace_blk_device_type = {
 	.name = "nd_namespace_blk",
 	.release = namespace_blk_release,
 };
@@ -112,7 +104,7 @@ static int is_uuid_busy(struct device *dev, void *data)
 
 static int is_namespace_uuid_busy(struct device *dev, void *data)
 {
-	if (is_nd_pmem(dev) || is_nd_blk(dev))
+	if (is_nd_region(dev))
 		return device_for_each_child(dev, data, is_uuid_busy);
 	return 0;
 }
@@ -159,13 +151,32 @@ bool pmem_should_map_pages(struct device *dev)
 				IORES_DESC_NONE) == REGION_MIXED)
 		return false;
 
-#ifdef ARCH_MEMREMAP_PMEM
 	return ARCH_MEMREMAP_PMEM == MEMREMAP_WB;
-#else
-	return false;
-#endif
 }
 EXPORT_SYMBOL(pmem_should_map_pages);
+
+unsigned int pmem_sector_size(struct nd_namespace_common *ndns)
+{
+	if (is_namespace_pmem(&ndns->dev)) {
+		struct nd_namespace_pmem *nspm;
+
+		nspm = to_nd_namespace_pmem(&ndns->dev);
+		if (nspm->lbasize == 0 || nspm->lbasize == 512)
+			/* default */;
+		else if (nspm->lbasize == 4096)
+			return 4096;
+		else
+			dev_WARN(&ndns->dev, "unsupported sector size: %ld\n",
+					nspm->lbasize);
+	}
+
+	/*
+	 * There is no namespace label (is_namespace_io()), or the label
+	 * indicates the default sector size.
+	 */
+	return 512;
+}
+EXPORT_SYMBOL(pmem_sector_size);
 
 const char *nvdimm_namespace_disk_name(struct nd_namespace_common *ndns,
 		char *name)
@@ -791,7 +802,7 @@ static int __reserve_free_pmem(struct device *dev, void *data)
 	struct nd_label_id label_id;
 	int i;
 
-	if (!is_nd_pmem(dev))
+	if (!is_memory(dev))
 		return 0;
 
 	nd_region = to_nd_region(dev);
@@ -1136,7 +1147,7 @@ static ssize_t size_show(struct device *dev,
 	return sprintf(buf, "%llu\n", (unsigned long long)
 			nvdimm_namespace_capacity(to_ndns(dev)));
 }
-static DEVICE_ATTR(size, S_IRUGO, size_show, size_store);
+static DEVICE_ATTR(size, 0444, size_show, size_store);
 
 static u8 *namespace_to_uuid(struct device *dev)
 {
@@ -1302,28 +1313,49 @@ static ssize_t resource_show(struct device *dev,
 }
 static DEVICE_ATTR_RO(resource);
 
-static const unsigned long ns_lbasize_supported[] = { 512, 520, 528,
+static const unsigned long blk_lbasize_supported[] = { 512, 520, 528,
 	4096, 4104, 4160, 4224, 0 };
+
+static const unsigned long pmem_lbasize_supported[] = { 512, 4096, 0 };
 
 static ssize_t sector_size_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
-	struct nd_namespace_blk *nsblk = to_nd_namespace_blk(dev);
+	if (is_namespace_blk(dev)) {
+		struct nd_namespace_blk *nsblk = to_nd_namespace_blk(dev);
 
-	if (!is_namespace_blk(dev))
-		return -ENXIO;
+		return nd_size_select_show(nsblk->lbasize,
+				blk_lbasize_supported, buf);
+	}
 
-	return nd_sector_size_show(nsblk->lbasize, ns_lbasize_supported, buf);
+	if (is_namespace_pmem(dev)) {
+		struct nd_namespace_pmem *nspm = to_nd_namespace_pmem(dev);
+
+		return nd_size_select_show(nspm->lbasize,
+				pmem_lbasize_supported, buf);
+	}
+	return -ENXIO;
 }
 
 static ssize_t sector_size_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t len)
 {
-	struct nd_namespace_blk *nsblk = to_nd_namespace_blk(dev);
 	struct nd_region *nd_region = to_nd_region(dev->parent);
+	const unsigned long *supported;
+	unsigned long *lbasize;
 	ssize_t rc = 0;
 
-	if (!is_namespace_blk(dev))
+	if (is_namespace_blk(dev)) {
+		struct nd_namespace_blk *nsblk = to_nd_namespace_blk(dev);
+
+		lbasize = &nsblk->lbasize;
+		supported = blk_lbasize_supported;
+	} else if (is_namespace_pmem(dev)) {
+		struct nd_namespace_pmem *nspm = to_nd_namespace_pmem(dev);
+
+		lbasize = &nspm->lbasize;
+		supported = pmem_lbasize_supported;
+	} else
 		return -ENXIO;
 
 	device_lock(dev);
@@ -1331,8 +1363,7 @@ static ssize_t sector_size_store(struct device *dev,
 	if (to_ndns(dev)->claim)
 		rc = -EBUSY;
 	if (rc >= 0)
-		rc = nd_sector_size_store(dev, buf, &nsblk->lbasize,
-				ns_lbasize_supported);
+		rc = nd_size_select_store(dev, buf, lbasize, supported);
 	if (rc >= 0)
 		rc = nd_namespace_label_update(nd_region, dev);
 	dev_dbg(dev, "%s: result: %zd %s: %s%s", __func__,
@@ -1387,6 +1418,67 @@ static ssize_t dpa_extents_show(struct device *dev,
 }
 static DEVICE_ATTR_RO(dpa_extents);
 
+static int btt_claim_class(struct device *dev)
+{
+	struct nd_region *nd_region = to_nd_region(dev->parent);
+	int i, loop_bitmask = 0;
+
+	for (i = 0; i < nd_region->ndr_mappings; i++) {
+		struct nd_mapping *nd_mapping = &nd_region->mapping[i];
+		struct nvdimm_drvdata *ndd = to_ndd(nd_mapping);
+		struct nd_namespace_index *nsindex;
+
+		/*
+		 * If any of the DIMMs do not support labels the only
+		 * possible BTT format is v1.
+		 */
+		if (!ndd) {
+			loop_bitmask = 0;
+			break;
+		}
+
+		nsindex = to_namespace_index(ndd, ndd->ns_current);
+		if (nsindex == NULL)
+			loop_bitmask |= 1;
+		else {
+			/* check whether existing labels are v1.1 or v1.2 */
+			if (__le16_to_cpu(nsindex->major) == 1
+					&& __le16_to_cpu(nsindex->minor) == 1)
+				loop_bitmask |= 2;
+			else
+				loop_bitmask |= 4;
+		}
+	}
+	/*
+	 * If nsindex is null loop_bitmask's bit 0 will be set, and if an index
+	 * block is found, a v1.1 label for any mapping will set bit 1, and a
+	 * v1.2 label will set bit 2.
+	 *
+	 * At the end of the loop, at most one of the three bits must be set.
+	 * If multiple bits were set, it means the different mappings disagree
+	 * about their labels, and this must be cleaned up first.
+	 *
+	 * If all the label index blocks are found to agree, nsindex of NULL
+	 * implies labels haven't been initialized yet, and when they will,
+	 * they will be of the 1.2 format, so we can assume BTT2.0
+	 *
+	 * If 1.1 labels are found, we enforce BTT1.1, and if 1.2 labels are
+	 * found, we enforce BTT2.0
+	 *
+	 * If the loop was never entered, default to BTT1.1 (legacy namespaces)
+	 */
+	switch (loop_bitmask) {
+	case 0:
+	case 2:
+		return NVDIMM_CCLASS_BTT;
+	case 1:
+	case 4:
+		return NVDIMM_CCLASS_BTT2;
+	default:
+		return -ENXIO;
+	}
+}
+
 static ssize_t holder_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -1400,6 +1492,74 @@ static ssize_t holder_show(struct device *dev,
 	return rc;
 }
 static DEVICE_ATTR_RO(holder);
+
+static ssize_t __holder_class_store(struct device *dev, const char *buf)
+{
+	struct nd_namespace_common *ndns = to_ndns(dev);
+
+	if (dev->driver || ndns->claim)
+		return -EBUSY;
+
+	if (strcmp(buf, "btt") == 0 || strcmp(buf, "btt\n") == 0)
+		ndns->claim_class = btt_claim_class(dev);
+	else if (strcmp(buf, "pfn") == 0 || strcmp(buf, "pfn\n") == 0)
+		ndns->claim_class = NVDIMM_CCLASS_PFN;
+	else if (strcmp(buf, "dax") == 0 || strcmp(buf, "dax\n") == 0)
+		ndns->claim_class = NVDIMM_CCLASS_DAX;
+	else if (strcmp(buf, "") == 0 || strcmp(buf, "\n") == 0)
+		ndns->claim_class = NVDIMM_CCLASS_NONE;
+	else
+		return -EINVAL;
+
+	/* btt_claim_class() could've returned an error */
+	if (ndns->claim_class < 0)
+		return ndns->claim_class;
+
+	return 0;
+}
+
+static ssize_t holder_class_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t len)
+{
+	struct nd_region *nd_region = to_nd_region(dev->parent);
+	ssize_t rc;
+
+	device_lock(dev);
+	nvdimm_bus_lock(dev);
+	wait_nvdimm_bus_probe_idle(dev);
+	rc = __holder_class_store(dev, buf);
+	if (rc >= 0)
+		rc = nd_namespace_label_update(nd_region, dev);
+	dev_dbg(dev, "%s: %s(%zd)\n", __func__, rc < 0 ? "fail " : "", rc);
+	nvdimm_bus_unlock(dev);
+	device_unlock(dev);
+
+	return rc < 0 ? rc : len;
+}
+
+static ssize_t holder_class_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct nd_namespace_common *ndns = to_ndns(dev);
+	ssize_t rc;
+
+	device_lock(dev);
+	if (ndns->claim_class == NVDIMM_CCLASS_NONE)
+		rc = sprintf(buf, "\n");
+	else if ((ndns->claim_class == NVDIMM_CCLASS_BTT) ||
+			(ndns->claim_class == NVDIMM_CCLASS_BTT2))
+		rc = sprintf(buf, "btt\n");
+	else if (ndns->claim_class == NVDIMM_CCLASS_PFN)
+		rc = sprintf(buf, "pfn\n");
+	else if (ndns->claim_class == NVDIMM_CCLASS_DAX)
+		rc = sprintf(buf, "dax\n");
+	else
+		rc = sprintf(buf, "<unknown>\n");
+	device_unlock(dev);
+
+	return rc;
+}
+static DEVICE_ATTR_RW(holder_class);
 
 static ssize_t mode_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -1459,6 +1619,7 @@ static struct attribute *nd_namespace_attributes[] = {
 	&dev_attr_force_raw.attr,
 	&dev_attr_sector_size.attr,
 	&dev_attr_dpa_extents.attr,
+	&dev_attr_holder_class.attr,
 	NULL,
 };
 
@@ -1475,16 +1636,14 @@ static umode_t namespace_visible(struct kobject *kobj,
 
 	if (is_namespace_pmem(dev) || is_namespace_blk(dev)) {
 		if (a == &dev_attr_size.attr)
-			return S_IWUSR | S_IRUGO;
-
-		if (is_namespace_pmem(dev) && a == &dev_attr_sector_size.attr)
-			return 0;
+			return 0644;
 
 		return a->mode;
 	}
 
 	if (a == &dev_attr_nstype.attr || a == &dev_attr_size.attr
 			|| a == &dev_attr_holder.attr
+			|| a == &dev_attr_holder_class.attr
 			|| a == &dev_attr_force_raw.attr
 			|| a == &dev_attr_mode.attr)
 		return a->mode;
@@ -1618,6 +1777,8 @@ static bool has_uuid_at_pos(struct nd_region *nd_region, u8 *uuid,
 
 	for (i = 0; i < nd_region->ndr_mappings; i++) {
 		struct nd_mapping *nd_mapping = &nd_region->mapping[i];
+		struct nd_interleave_set *nd_set = nd_region->nd_set;
+		struct nvdimm_drvdata *ndd = to_ndd(nd_mapping);
 		struct nd_label_ent *label_ent;
 		bool found_uuid = false;
 
@@ -1638,8 +1799,17 @@ static bool has_uuid_at_pos(struct nd_region *nd_region, u8 *uuid,
 			if (memcmp(nd_label->uuid, uuid, NSLABEL_UUID_LEN) != 0)
 				continue;
 
+			if (namespace_label_has(ndd, type_guid)
+					&& !guid_equal(&nd_set->type_guid,
+						&nd_label->type_guid)) {
+				dev_dbg(ndd->dev, "expect type_guid %pUb got %pUb\n",
+						nd_set->type_guid.b,
+						nd_label->type_guid.b);
+				continue;
+			}
+
 			if (found_uuid) {
-				dev_dbg(to_ndd(nd_mapping)->dev,
+				dev_dbg(ndd->dev,
 						"%s duplicate entry for uuid\n",
 						__func__);
 				return false;
@@ -1672,7 +1842,7 @@ static int select_pmem_id(struct nd_region *nd_region, u8 *pmem_id)
 		u64 hw_start, hw_end, pmem_start, pmem_end;
 		struct nd_label_ent *label_ent;
 
-		WARN_ON(!mutex_is_locked(&nd_mapping->lock));
+		lockdep_assert_held(&nd_mapping->lock);
 		list_for_each_entry(label_ent, &nd_mapping->labels, list) {
 			nd_label = label_ent->label;
 			if (!nd_label)
@@ -1717,10 +1887,11 @@ static int select_pmem_id(struct nd_region *nd_region, u8 *pmem_id)
  * @nd_label: target pmem namespace label to evaluate
  */
 struct device *create_namespace_pmem(struct nd_region *nd_region,
+		struct nd_namespace_index *nsindex,
 		struct nd_namespace_label *nd_label)
 {
+	u64 cookie = nd_region_interleave_set_cookie(nd_region, nsindex);
 	u64 altcookie = nd_region_interleave_set_altcookie(nd_region);
-	u64 cookie = nd_region_interleave_set_cookie(nd_region);
 	struct nd_label_ent *label_ent;
 	struct nd_namespace_pmem *nspm;
 	struct nd_mapping *nd_mapping;
@@ -1794,11 +1965,12 @@ struct device *create_namespace_pmem(struct nd_region *nd_region,
 	/* Calculate total size and populate namespace properties from label0 */
 	for (i = 0; i < nd_region->ndr_mappings; i++) {
 		struct nd_namespace_label *label0;
+		struct nvdimm_drvdata *ndd;
 
 		nd_mapping = &nd_region->mapping[i];
 		label_ent = list_first_entry_or_null(&nd_mapping->labels,
 				typeof(*label_ent), list);
-		label0 = label_ent ? label_ent->label : 0;
+		label0 = label_ent ? label_ent->label : NULL;
 
 		if (!label0) {
 			WARN_ON(1);
@@ -1813,6 +1985,12 @@ struct device *create_namespace_pmem(struct nd_region *nd_region,
 				NSLABEL_NAME_LEN, GFP_KERNEL);
 		nspm->uuid = kmemdup((void __force *) label0->uuid,
 				NSLABEL_UUID_LEN, GFP_KERNEL);
+		nspm->lbasize = __le64_to_cpu(label0->lbasize);
+		ndd = to_ndd(nd_mapping);
+		if (namespace_label_has(ndd, abstraction_guid))
+			nspm->nsio.common.claim_class
+				= to_nvdimm_cclass(&label0->abstraction_guid);
+
 	}
 
 	if (!nspm->alt_name || !nspm->uuid) {
@@ -1895,7 +2073,7 @@ static struct device *nd_namespace_pmem_create(struct nd_region *nd_region)
 	struct resource *res;
 	struct device *dev;
 
-	if (!is_nd_pmem(&nd_region->dev))
+	if (!is_memory(&nd_region->dev))
 		return NULL;
 
 	nspm = kzalloc(sizeof(*nspm), GFP_KERNEL);
@@ -2024,11 +2202,28 @@ struct device *create_namespace_blk(struct nd_region *nd_region,
 {
 
 	struct nd_mapping *nd_mapping = &nd_region->mapping[0];
+	struct nd_interleave_set *nd_set = nd_region->nd_set;
 	struct nvdimm_drvdata *ndd = to_ndd(nd_mapping);
 	struct nd_namespace_blk *nsblk;
-	char *name[NSLABEL_NAME_LEN];
+	char name[NSLABEL_NAME_LEN];
 	struct device *dev = NULL;
 	struct resource *res;
+
+	if (namespace_label_has(ndd, type_guid)) {
+		if (!guid_equal(&nd_set->type_guid, &nd_label->type_guid)) {
+			dev_dbg(ndd->dev, "expect type_guid %pUb got %pUb\n",
+					nd_set->type_guid.b,
+					nd_label->type_guid.b);
+			return ERR_PTR(-EAGAIN);
+		}
+
+		if (nd_label->isetcookie != __cpu_to_le64(nd_set->cookie2)) {
+			dev_dbg(ndd->dev, "expect cookie %#llx got %#llx\n",
+					nd_set->cookie2,
+					__le64_to_cpu(nd_label->isetcookie));
+			return ERR_PTR(-EAGAIN);
+		}
+	}
 
 	nsblk = kzalloc(sizeof(*nsblk), GFP_KERNEL);
 	if (!nsblk)
@@ -2040,6 +2235,9 @@ struct device *create_namespace_blk(struct nd_region *nd_region,
 	nsblk->lbasize = __le64_to_cpu(nd_label->lbasize);
 	nsblk->uuid = kmemdup(nd_label->uuid, NSLABEL_UUID_LEN,
 			GFP_KERNEL);
+	if (namespace_label_has(ndd, abstraction_guid))
+		nsblk->common.claim_class
+			= to_nvdimm_cclass(&nd_label->abstraction_guid);
 	if (!nsblk->uuid)
 		goto blk_err;
 	memcpy(name, nd_label->name, NSLABEL_NAME_LEN);
@@ -2109,8 +2307,9 @@ static struct device **scan_labels(struct nd_region *nd_region)
 			continue;
 
 		/* skip labels that describe extents outside of the region */
-		if (nd_label->dpa < nd_mapping->start || nd_label->dpa > map_end)
-			continue;
+		if (__le64_to_cpu(nd_label->dpa) < nd_mapping->start ||
+		    __le64_to_cpu(nd_label->dpa) > map_end)
+				continue;
 
 		i = add_namespace_resource(nd_region, nd_label, devs, count);
 		if (i < 0)
@@ -2124,27 +2323,30 @@ static struct device **scan_labels(struct nd_region *nd_region)
 		kfree(devs);
 		devs = __devs;
 
-		if (is_nd_blk(&nd_region->dev)) {
+		if (is_nd_blk(&nd_region->dev))
 			dev = create_namespace_blk(nd_region, nd_label, count);
-			if (IS_ERR(dev))
-				goto err;
-			devs[count++] = dev;
-		} else {
-			dev = create_namespace_pmem(nd_region, nd_label);
-			if (IS_ERR(dev)) {
-				switch (PTR_ERR(dev)) {
-				case -EAGAIN:
-					/* skip invalid labels */
-					continue;
-				case -ENODEV:
-					/* fallthrough to seed creation */
-					break;
-				default:
-					goto err;
-				}
-			} else
-				devs[count++] = dev;
+		else {
+			struct nvdimm_drvdata *ndd = to_ndd(nd_mapping);
+			struct nd_namespace_index *nsindex;
+
+			nsindex = to_namespace_index(ndd, ndd->ns_current);
+			dev = create_namespace_pmem(nd_region, nsindex, nd_label);
 		}
+
+		if (IS_ERR(dev)) {
+			switch (PTR_ERR(dev)) {
+			case -EAGAIN:
+				/* skip invalid labels */
+				continue;
+			case -ENODEV:
+				/* fallthrough to seed creation */
+				break;
+			default:
+				goto err;
+			}
+		} else
+			devs[count++] = dev;
+
 	}
 
 	dev_dbg(&nd_region->dev, "%s: discovered %d %s namespace%s\n",
@@ -2178,7 +2380,7 @@ static struct device **scan_labels(struct nd_region *nd_region)
 		}
 		dev->parent = &nd_region->dev;
 		devs[count++] = dev;
-	} else if (is_nd_pmem(&nd_region->dev)) {
+	} else if (is_memory(&nd_region->dev)) {
 		/* clean unselected labels */
 		for (i = 0; i < nd_region->ndr_mappings; i++) {
 			struct list_head *l, *e;
@@ -2258,14 +2460,21 @@ static int init_active_labels(struct nd_region *nd_region)
 		int count, j;
 
 		/*
-		 * If the dimm is disabled then prevent the region from
-		 * being activated if it aliases DPA.
+		 * If the dimm is disabled then we may need to prevent
+		 * the region from being activated.
 		 */
 		if (!ndd) {
-			if ((nvdimm->flags & NDD_ALIASING) == 0)
+			if (test_bit(NDD_LOCKED, &nvdimm->flags))
+				/* fail, label data may be unreadable */;
+			else if (test_bit(NDD_ALIASING, &nvdimm->flags))
+				/* fail, labels needed to disambiguate dpa */;
+			else
 				return 0;
-			dev_dbg(&nd_region->dev, "%s: is disabled, failing probe\n",
-					dev_name(&nd_mapping->nvdimm->dev));
+
+			dev_err(&nd_region->dev, "%s: is %s, failing probe\n",
+					dev_name(&nd_mapping->nvdimm->dev),
+					test_bit(NDD_LOCKED, &nvdimm->flags)
+					? "locked" : "disabled");
 			return -ENXIO;
 		}
 		nd_mapping->ndd = ndd;

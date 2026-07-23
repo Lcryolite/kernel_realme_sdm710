@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
  * only version 2 as published by the Free Software Foundation.
@@ -15,7 +15,7 @@
 
 #include <sound/soc.h>
 #define DSP_BIT_WIDTH_MIXER_CTL "ASM Bit Width"
-#if IS_ENABLED(CONFIG_QTI_PP)
+#ifdef CONFIG_QTI_PP
 int msm_adsp_inform_mixer_ctl(struct snd_soc_pcm_runtime *rtd,
 			uint32_t *payload);
 int msm_adsp_init_mixer_ctl_pp_event_queue(struct snd_soc_pcm_runtime *rtd);
@@ -34,6 +34,10 @@ int msm_qti_pp_send_stereo_to_custom_stereo_cmd(int port_id, int copp_idx,
 						uint16_t op_FR_ip_FL_weight,
 						uint16_t op_FR_ip_FR_weight);
 void msm_qti_pp_add_controls(struct snd_soc_platform *platform);
+int msm_qti_pp_send_chmix_cfg_cmd(int port_id, int copp_idx,
+				  unsigned int session_id, int ip_channel_count,
+				  int out_channel_cnt, int *ch_wght_coeff,
+				  int session_type, int stream_type);
 #else /* CONFIG_QTI_PP */
 static inline int msm_adsp_inform_mixer_ctl(struct snd_soc_pcm_runtime *rtd,
 			uint32_t *payload)
@@ -71,6 +75,13 @@ static inline int msm_adsp_stream_callback_info(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
+int msm_qti_pp_send_chmix_cfg_cmd(int port_id, int copp_idx,
+				  unsigned int session_id, int ip_channel_count,
+				  int out_channel_cnt, int *ch_wght_coeff,
+				  int session_type, int stream_type)
+{
+	return 0;
+}
 #define msm_qti_pp_send_eq_values(fedai_id) do {} while (0)
 #define msm_qti_pp_send_stereo_to_custom_stereo_cmd(port_id, copp_idx, \
 			session_id, op_FL_ip_FL_weight, op_FL_ip_FR_weight, \
@@ -78,7 +89,8 @@ static inline int msm_adsp_stream_callback_info(struct snd_kcontrol *kcontrol,
 #define msm_qti_pp_add_controls(platform) do {} while (0)
 #endif /* CONFIG_QTI_PP */
 
-#if IS_ENABLED(CONFIG_QTI_PP) && IS_ENABLED(CONFIG_QTI_PP_AUDIOSPHERE)
+
+#if defined(CONFIG_QTI_PP) && defined(CONFIG_QTI_PP_AUDIOSPHERE)
 int msm_qti_pp_asphere_init(int port_id, int copp_idx);
 void msm_qti_pp_asphere_deinit(int port_id);
 #else

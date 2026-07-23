@@ -1,4 +1,4 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -19,9 +19,8 @@
 #define IPA_PM_MAX_CLIENTS 32 /* actual max is value -1 since we start from 1*/
 #define IPA_PM_MAX_EX_CL 64
 #define IPA_PM_THRESHOLD_MAX 5
-#define IPA_PM_EXCEPTION_MAX 2
+#define IPA_PM_EXCEPTION_MAX 5
 #define IPA_PM_DEFERRED_TIMEOUT 100
-#define IPA_PM_STATE_MAX 7
 
 /*
  * ipa_pm group names
@@ -98,7 +97,7 @@ int ipa_pm_activate(u32 hdl);
 int ipa_pm_activate_sync(u32 hdl);
 int ipa_pm_deferred_deactivate(u32 hdl);
 int ipa_pm_deactivate_sync(u32 hdl);
-int ipa_pm_set_perf_profile(u32 hdl, int throughput);
+int ipa_pm_set_throughput(u32 hdl, int throughput);
 int ipa_pm_deregister(u32 hdl);
 
 /* IPA Internal Functions */
@@ -108,6 +107,9 @@ int ipa_pm_handle_suspend(u32 pipe_bitmask);
 int ipa_pm_deactivate_all_deferred(void);
 int ipa_pm_stat(char *buf, int size);
 int ipa_pm_exceptions_stat(char *buf, int size);
+void ipa_pm_set_clock_index(int index);
+int ipa_pm_add_dummy_clients(s8 power_plan);
+int ipa_pm_remove_dummy_clients(void);
 
 #else
 
@@ -143,7 +145,7 @@ static inline int ipa_pm_deactivate_sync(u32 hdl)
 	return -EPERM;
 }
 
-static inline int ipa_pm_set_perf_profile(u32 hdl, int throughput)
+static inline int ipa_pm_set_throughput(u32 hdl, int throughput)
 {
 	return -EPERM;
 }
@@ -180,6 +182,16 @@ static inline int ipa_pm_stat(char *buf, int size)
 }
 
 static inline int ipa_pm_exceptions_stat(char *buf, int size)
+{
+	return -EPERM;
+}
+
+static inline int ipa_pm_add_dummy_clients(s8 power_plan)
+{
+	return -EPERM;
+}
+
+static inline int ipa_pm_remove_dummy_clients(void)
 {
 	return -EPERM;
 }

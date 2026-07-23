@@ -74,7 +74,7 @@ module_param_named(roamoff, brcmf_roamoff, int, S_IRUSR);
 MODULE_PARM_DESC(roamoff, "Do not use internal roaming engine");
 
 #ifdef DEBUG
-/* always succeed brcmf_bus_start() */
+/* always succeed brcmf_bus_started() */
 static int brcmf_ignore_probe_fail;
 module_param_named(ignore_probe_fail, brcmf_ignore_probe_fail, int, 0);
 MODULE_PARM_DESC(ignore_probe_fail, "always succeed probe for debugging");
@@ -157,11 +157,12 @@ int brcmf_c_preinit_dcmds(struct brcmf_if *ifp)
 			  err);
 		goto done;
 	}
+	buf[sizeof(buf) - 1] = '\0';
 	ptr = (char *)buf;
 	strsep(&ptr, "\n");
 
 	/* Print fw version info */
-	brcmf_err("Firmware version = %s\n", buf);
+	brcmf_info("Firmware version = %s\n", buf);
 
 	/* locate firmware version number for ethtool */
 	ptr = strrchr(buf, ' ') + 1;
@@ -217,6 +218,22 @@ int brcmf_c_preinit_dcmds(struct brcmf_if *ifp)
 done:
 	return err;
 }
+
+#ifndef CONFIG_BRCM_TRACING
+void __brcmf_err(const char *func, const char *fmt, ...)
+{
+	struct va_format vaf;
+	va_list args;
+
+	va_start(args, fmt);
+
+	vaf.fmt = fmt;
+	vaf.va = &args;
+	pr_err("%s: %pV", func, &vaf);
+
+	va_end(args);
+}
+#endif
 
 #if defined(CONFIG_BRCM_TRACING) || defined(CONFIG_BRCMDBG)
 void __brcmf_dbg(u32 level, const char *func, const char *fmt, ...)
@@ -299,11 +316,9 @@ struct brcmf_mp_device *brcmf_get_module_param(struct device *dev,
 			}
 		}
 	}
-	if ((bus_type == BRCMF_BUSTYPE_SDIO) && (!found)) {
-		/* No platform data for this device. In case of SDIO try OF
-		 * (Open Firwmare) Device Tree.
-		 */
-		brcmf_of_probe(dev, &settings->bus.sdio);
+	if (!found) {
+		/* No platform data for this device, try OF (Open Firwmare) */
+		brcmf_of_probe(dev, bus_type, settings);
 	}
 	return settings;
 }

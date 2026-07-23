@@ -78,38 +78,18 @@ struct topa_entry {
 	u64	rsvd2	: 1;
 	u64	size	: 4;
 	u64	rsvd3	: 2;
-	u64	base	: 36;
-	u64	rsvd4	: 16;
+	u64	base	: 40;
+	u64	rsvd4	: 12;
 };
-
-#define PT_CPUID_LEAVES		2
-#define PT_CPUID_REGS_NUM	4 /* number of regsters (eax, ebx, ecx, edx) */
 
 /* TSC to Core Crystal Clock Ratio */
 #define CPUID_TSC_LEAF		0x15
-
-enum pt_capabilities {
-	PT_CAP_max_subleaf = 0,
-	PT_CAP_cr3_filtering,
-	PT_CAP_psb_cyc,
-	PT_CAP_ip_filtering,
-	PT_CAP_mtc,
-	PT_CAP_ptwrite,
-	PT_CAP_power_event_trace,
-	PT_CAP_topa_output,
-	PT_CAP_topa_multiple_entries,
-	PT_CAP_single_range_output,
-	PT_CAP_payloads_lip,
-	PT_CAP_num_address_ranges,
-	PT_CAP_mtc_periods,
-	PT_CAP_cycle_thresholds,
-	PT_CAP_psb_periods,
-};
 
 struct pt_pmu {
 	struct pmu		pmu;
 	u32			caps[PT_CPUID_REGS_NUM * PT_CPUID_LEAVES];
 	bool			vmx;
+	bool			branch_en_always_on;
 	unsigned long		max_nonturbo_ratio;
 	unsigned int		tsc_art_num;
 	unsigned int		tsc_art_den;
@@ -143,7 +123,6 @@ struct pt_buffer {
 	size_t			output_off;
 	unsigned long		nr_pages;
 	local_t			data_size;
-	local_t			lost;
 	local64_t		head;
 	bool			snapshot;
 	unsigned long		stop_pos, intr_pos;

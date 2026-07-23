@@ -574,7 +574,7 @@ int brcmf_fw_map_chip_to_name(u32 chip, u32 chiprev,
 
 	if (chiprev >= BITS_PER_TYPE(u32)) {
 		brcmf_err("Invalid chip revision %u\n", chiprev);
-		return NULL;
+		return -EINVAL;
 	}
 
 	for (i = 0; i < table_size; i++) {
@@ -607,6 +607,9 @@ int brcmf_fw_map_chip_to_name(u32 chip, u32 chiprev,
 	strlcat(fw_name, mapping_table[i].fw, BRCMF_FW_NAME_LEN);
 	if ((nvram_name) && (mapping_table[i].nvram))
 		strlcat(nvram_name, mapping_table[i].nvram, BRCMF_FW_NAME_LEN);
+
+	brcmf_info("using %s for chip %#08x(%d) rev %#08x\n",
+		   fw_name, chip, chip, chiprev);
 
 	return 0;
 }

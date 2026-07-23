@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -26,10 +26,10 @@
 #include <linux/regulator/consumer.h>
 #include <linux/interrupt.h>
 #include <linux/dma-mapping.h>
-#include <linux/of_gpio.h>
 #include <soc/qcom/subsystem_restart.h>
 #include <soc/qcom/ramdump.h>
-#include <soc/qcom/smem.h>
+#include <linux/soc/qcom/smem.h>
+#include <linux/soc/qcom/smem_state.h>
 
 #include "peripheral-loader.h"
 #include "pil-q6v5.h"
@@ -41,49 +41,32 @@
 
 #define subsys_to_drv(d) container_of(d, struct modem_data, subsys_desc)
 
-#ifdef OPLUS_FEATURE_MODEM_MINIDUMP
-//Add for customized subsystem ramdump to skip generate dump cause by SAU
-bool SKIP_GENERATE_RAMDUMP = false;
-extern void mdmreason_set(char * buf);
-#endif
-
-
-static void log_modem_sfr(void)
+static void log_modem_sfr(struct modem_data *drv)
 {
-	u32 size;
+	size_t size;
 	char *smem_reason, reason[MAX_SSR_REASON_LEN];
 
-	smem_reason = smem_get_entry_no_rlock(SMEM_SSR_REASON_MSS0, &size, 0,
-							SMEM_ANY_HOST_FLAG);
-	if (!smem_reason || !size) {
-		pr_err("modem subsystem failure reason: (unknown, smem_get_entry_no_rlock failed).\n");
+	if (drv->q6->smem_id == -1)
+		return;
+
+	smem_reason = qcom_smem_get(QCOM_SMEM_HOST_ANY, drv->q6->smem_id,
+								&size);
+	if (IS_ERR(smem_reason) || !size) {
+		pr_err("modem SFR: (unknown, qcom_smem_get failed).\n");
 		return;
 	}
 	if (!smem_reason[0]) {
-		pr_err("modem subsystem failure reason: (unknown, empty string found).\n");
+		pr_err("modem SFR: (unknown, empty string found).\n");
 		return;
 	}
 
-	strlcpy(reason, smem_reason, min(size, MAX_SSR_REASON_LEN));
+	strlcpy(reason, smem_reason, min(size, (size_t)MAX_SSR_REASON_LEN));
 	pr_err("modem subsystem failure reason: %s.\n", reason);
-
-	#ifdef OPLUS_FEATURE_MODEM_MINIDUMP
-	//Add for customized subsystem ramdump to skip generate dump cause by SAU
-	mdmreason_set(reason);
-
-	pr_err("oppo debug modem subsystem failure reason: %s.\n", reason);
-
-	if(strstr(reason, "OPPO_MODEM_NO_RAMDUMP_EXPECTED") || strstr(reason, "oppomsg:go_to_error_fatal")){
-		pr_err("%s will subsys reset",__func__);
-		SKIP_GENERATE_RAMDUMP = true;
-	}
-	#endif
-
 }
 
 static void restart_modem(struct modem_data *drv)
 {
-	log_modem_sfr();
+	log_modem_sfr(drv);
 	drv->ignore_errors = true;
 	subsystem_restart_dev(drv->subsys);
 }
@@ -92,7 +75,7 @@ static irqreturn_t modem_err_fatal_intr_handler(int irq, void *dev_id)
 {
 	struct modem_data *drv = subsys_to_drv(dev_id);
 
-	/* Ignore if we're the one that set the force stop GPIO */
+	/* Ignore if we're the one that set the force stop BIT */
 	if (drv->crash_shutdown)
 		return IRQ_HANDLED;
 
@@ -111,6 +94,24 @@ static irqreturn_t modem_stop_ack_intr_handler(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
+static irqreturn_t modem_shutdown_ack_intr_handler(int irq, void *dev_id)
+{
+	struct modem_data *drv = subsys_to_drv(dev_id);
+
+	pr_info("Received stop shutdown interrupt from modem\n");
+	complete_shutdown_ack(drv->subsys);
+	return IRQ_HANDLED;
+}
+
+static irqreturn_t modem_ramdump_disable_intr_handler(int irq, void *dev_id)
+{
+	struct modem_data *drv = subsys_to_drv(dev_id);
+
+	pr_info("Received ramdump disable interrupt from modem\n");
+	drv->subsys_desc.ramdump_disable = 1;
+	return IRQ_HANDLED;
+}
+
 static int modem_shutdown(const struct subsys_desc *subsys, bool force_stop)
 {
 	struct modem_data *drv = subsys_to_drv(subsys);
@@ -120,19 +121,19 @@ static int modem_shutdown(const struct subsys_desc *subsys, bool force_stop)
 		return 0;
 
 	if (!subsys_get_crash_status(drv->subsys) && force_stop &&
-	    subsys->force_stop_gpio) {
-		gpio_set_value(subsys->force_stop_gpio, 1);
+	    subsys->force_stop_bit) {
+		qcom_smem_state_update_bits(subsys->state,
+				BIT(subsys->force_stop_bit), 1);
 		ret = wait_for_completion_timeout(&drv->stop_ack,
 				msecs_to_jiffies(STOP_ACK_TIMEOUT_MS));
 		if (!ret)
 			pr_warn("Timed out on stop ack from modem.\n");
-		gpio_set_value(subsys->force_stop_gpio, 0);
+		qcom_smem_state_update_bits(subsys->state,
+				BIT(subsys->force_stop_bit), 0);
 	}
 
-	if (drv->subsys_desc.ramdump_disable_gpio) {
-		drv->subsys_desc.ramdump_disable = gpio_get_value(
-					drv->subsys_desc.ramdump_disable_gpio);
-		 pr_warn("Ramdump disable gpio value is %d\n",
+	if (drv->subsys_desc.ramdump_disable_irq) {
+		pr_warn("Ramdump disable value is %d\n",
 			drv->subsys_desc.ramdump_disable);
 	}
 
@@ -165,9 +166,12 @@ static void modem_crash_shutdown(const struct subsys_desc *subsys)
 
 	drv->crash_shutdown = true;
 	if (!subsys_get_crash_status(drv->subsys) &&
-		subsys->force_stop_gpio) {
-		gpio_set_value(subsys->force_stop_gpio, 1);
-		mdelay(STOP_ACK_TIMEOUT_MS);
+		subsys->state) {
+		qcom_smem_state_update_bits(subsys->state,
+				BIT(subsys->force_stop_bit),
+				BIT(subsys->force_stop_bit));
+		drv->ignore_errors = true;
+		msleep(STOP_ACK_TIMEOUT_MS);
 	}
 }
 
@@ -183,9 +187,11 @@ static int modem_ramdump(int enable, const struct subsys_desc *subsys)
 	if (ret)
 		return ret;
 
+#ifdef CONFIG_QCOM_MINIDUMP
 	ret = pil_mss_debug_reset(&drv->q6->desc);
 	if (ret)
 		return ret;
+#endif
 
 	pil_mss_remove_proxy_votes(&drv->q6->desc);
 	ret = pil_mss_make_proxy_votes(&drv->q6->desc);
@@ -196,8 +202,13 @@ static int modem_ramdump(int enable, const struct subsys_desc *subsys)
 	if (ret)
 		return ret;
 
+#ifdef CONFIG_QCOM_MINIDUMP
 	ret = pil_do_ramdump(&drv->q6->desc,
 			drv->ramdump_dev, drv->minidump_dev);
+#else
+	ret = pil_do_ramdump(&drv->q6->desc,
+			drv->ramdump_dev, NULL);
+#endif
 	if (ret < 0)
 		pr_err("Unable to dump modem fw memory (rc = %d).\n", ret);
 
@@ -217,8 +228,7 @@ static irqreturn_t modem_wdog_bite_intr_handler(int irq, void *dev_id)
 		return IRQ_HANDLED;
 
 	pr_err("Watchdog bite received from modem software!\n");
-	if (drv->subsys_desc.system_debug &&
-			!gpio_get_value(drv->subsys_desc.err_fatal_gpio))
+	if (drv->subsys_desc.system_debug)
 		panic("%s: System ramdump requested. Triggering device restart!\n",
 							__func__);
 	subsys_set_crash_status(drv->subsys, CRASH_STATUS_WDOG_BITE);
@@ -241,6 +251,9 @@ static int pil_subsys_init(struct modem_data *drv,
 	drv->subsys_desc.err_fatal_handler = modem_err_fatal_intr_handler;
 	drv->subsys_desc.stop_ack_handler = modem_stop_ack_intr_handler;
 	drv->subsys_desc.wdog_bite_handler = modem_wdog_bite_intr_handler;
+	drv->subsys_desc.ramdump_disable_handler =
+					modem_ramdump_disable_intr_handler;
+	drv->subsys_desc.shutdown_ack_handler = modem_shutdown_ack_intr_handler;
 
 	if (IS_ERR_OR_NULL(drv->q6)) {
 		ret = PTR_ERR(drv->q6);
@@ -279,6 +292,8 @@ static int pil_subsys_init(struct modem_data *drv,
 		ret = -ENOMEM;
 		goto err_ramdump;
 	}
+
+#ifdef CONFIG_QCOM_MINIDUMP
 	drv->minidump_dev = create_ramdump_device("md_modem", &pdev->dev);
 	if (!drv->minidump_dev) {
 		pr_err("%s: Unable to create a modem minidump device.\n",
@@ -286,11 +301,13 @@ static int pil_subsys_init(struct modem_data *drv,
 		ret = -ENOMEM;
 		goto err_minidump;
 	}
-
+#endif
 	return 0;
 
+#ifdef CONFIG_QCOM_MINIDUMP
 err_minidump:
 	destroy_ramdump_device(drv->ramdump_dev);
+#endif
 err_ramdump:
 	subsys_unregister(drv->subsys);
 err_subsys:
@@ -318,6 +335,8 @@ static int pil_mss_loadable_init(struct modem_data *drv,
 
 	q6_desc->ops = &pil_msa_mss_ops;
 
+	q6_desc->sequential_loading = of_property_read_bool(pdev->dev.of_node,
+						"qcom,sequential-fw-load");
 	q6->reset_clk = of_property_read_bool(pdev->dev.of_node,
 							"qcom,reset-clk");
 	q6->self_auth = of_property_read_bool(pdev->dev.of_node,
@@ -426,6 +445,19 @@ static int pil_mss_loadable_init(struct modem_data *drv,
 			"qcom,active-clock-names", "mnoc_axi_clk") >= 0)
 		q6->mnoc_axi_clk = devm_clk_get(&pdev->dev, "mnoc_axi_clk");
 
+	/* Defaulting smem_id to be not present */
+	q6->smem_id = -1;
+
+	if (of_find_property(pdev->dev.of_node, "qcom,smem-id", NULL)) {
+		ret = of_property_read_u32(pdev->dev.of_node, "qcom,smem-id",
+					   &q6->smem_id);
+		if (ret) {
+			dev_err(&pdev->dev, "Failed to get the smem_id(ret:%d)\n",
+				ret);
+			return ret;
+		}
+	}
+
 	ret = pil_desc_init(q6_desc);
 
 	return ret;
@@ -466,7 +498,9 @@ static int pil_mss_driver_exit(struct platform_device *pdev)
 
 	subsys_unregister(drv->subsys);
 	destroy_ramdump_device(drv->ramdump_dev);
+#ifdef CONFIG_QCOM_MINIDUMP
 	destroy_ramdump_device(drv->minidump_dev);
+#endif
 	pil_desc_release(&drv->q6->desc);
 	return 0;
 }

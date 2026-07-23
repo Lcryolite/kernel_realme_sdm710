@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -69,19 +69,21 @@ static void dsi_catalog_cmn_init(struct dsi_ctrl_hw *ctrl,
 	ctrl->ops.get_hw_version = dsi_ctrl_hw_cmn_get_hw_version;
 	ctrl->ops.wait_for_cmd_mode_mdp_idle =
 		dsi_ctrl_hw_cmn_wait_for_cmd_mode_mdp_idle;
+	ctrl->ops.setup_avr = dsi_ctrl_hw_cmn_setup_avr;
 	ctrl->ops.set_continuous_clk = dsi_ctrl_hw_cmn_set_continuous_clk;
 	ctrl->ops.wait4dynamic_refresh_done =
 		dsi_ctrl_hw_cmn_wait4dynamic_refresh_done;
+	ctrl->ops.hs_req_sel = dsi_ctrl_hw_cmn_hs_req_sel;
 
 	switch (version) {
 	case DSI_CTRL_VERSION_1_4:
 		ctrl->ops.setup_lane_map = dsi_ctrl_hw_14_setup_lane_map;
-		ctrl->ops.ulps_ops.ulps_request = dsi_ctrl_hw_14_ulps_request;
-		ctrl->ops.ulps_ops.ulps_exit = dsi_ctrl_hw_14_ulps_exit;
+		ctrl->ops.ulps_ops.ulps_request = dsi_ctrl_hw_cmn_ulps_request;
+		ctrl->ops.ulps_ops.ulps_exit = dsi_ctrl_hw_cmn_ulps_exit;
 		ctrl->ops.wait_for_lane_idle =
 			dsi_ctrl_hw_14_wait_for_lane_idle;
 		ctrl->ops.ulps_ops.get_lanes_in_ulps =
-			dsi_ctrl_hw_14_get_lanes_in_ulps;
+			dsi_ctrl_hw_cmn_get_lanes_in_ulps;
 		ctrl->ops.clamp_enable = dsi_ctrl_hw_14_clamp_enable;
 		ctrl->ops.clamp_disable = dsi_ctrl_hw_14_clamp_disable;
 		ctrl->ops.reg_dump_to_buffer =
@@ -89,6 +91,7 @@ static void dsi_catalog_cmn_init(struct dsi_ctrl_hw *ctrl,
 		ctrl->ops.schedule_dma_cmd = NULL;
 		ctrl->ops.get_cont_splash_status = NULL;
 		ctrl->ops.kickoff_command_non_embedded_mode = NULL;
+		ctrl->ops.config_clk_gating = NULL;
 		break;
 	case DSI_CTRL_VERSION_2_0:
 		ctrl->ops.setup_lane_map = dsi_ctrl_hw_20_setup_lane_map;
@@ -104,9 +107,13 @@ static void dsi_catalog_cmn_init(struct dsi_ctrl_hw *ctrl,
 		ctrl->ops.schedule_dma_cmd = NULL;
 		ctrl->ops.get_cont_splash_status = NULL;
 		ctrl->ops.kickoff_command_non_embedded_mode = NULL;
+		ctrl->ops.config_clk_gating = NULL;
 		break;
 	case DSI_CTRL_VERSION_2_2:
+	case DSI_CTRL_VERSION_2_3:
+	case DSI_CTRL_VERSION_2_4:
 		ctrl->ops.phy_reset_config = dsi_ctrl_hw_22_phy_reset_config;
+		ctrl->ops.config_clk_gating = dsi_ctrl_hw_22_config_clk_gating;
 		ctrl->ops.get_cont_splash_status =
 			dsi_ctrl_hw_22_get_cont_splash_status;
 		ctrl->ops.setup_lane_map = dsi_ctrl_hw_20_setup_lane_map;
@@ -114,9 +121,10 @@ static void dsi_catalog_cmn_init(struct dsi_ctrl_hw *ctrl,
 			dsi_ctrl_hw_20_wait_for_lane_idle;
 		ctrl->ops.reg_dump_to_buffer =
 			dsi_ctrl_hw_20_reg_dump_to_buffer;
-		ctrl->ops.ulps_ops.ulps_request = NULL;
-		ctrl->ops.ulps_ops.ulps_exit = NULL;
-		ctrl->ops.ulps_ops.get_lanes_in_ulps = NULL;
+		ctrl->ops.ulps_ops.ulps_request = dsi_ctrl_hw_cmn_ulps_request;
+		ctrl->ops.ulps_ops.ulps_exit = dsi_ctrl_hw_cmn_ulps_exit;
+		ctrl->ops.ulps_ops.get_lanes_in_ulps =
+			dsi_ctrl_hw_cmn_get_lanes_in_ulps;
 		ctrl->ops.clamp_enable = NULL;
 		ctrl->ops.clamp_disable = NULL;
 		ctrl->ops.schedule_dma_cmd = dsi_ctrl_hw_22_schedule_dma_cmd;
@@ -167,6 +175,8 @@ int dsi_catalog_ctrl_setup(struct dsi_ctrl_hw *ctrl,
 		break;
 	case DSI_CTRL_VERSION_2_0:
 	case DSI_CTRL_VERSION_2_2:
+	case DSI_CTRL_VERSION_2_3:
+	case DSI_CTRL_VERSION_2_4:
 		ctrl->phy_isolation_enabled = phy_isolation_enabled;
 		dsi_catalog_cmn_init(ctrl, version);
 		break;
@@ -193,6 +203,15 @@ static void dsi_catalog_phy_2_0_init(struct dsi_phy_hw *phy)
 	phy->ops.calculate_timing_params =
 		dsi_phy_hw_calculate_timing_params;
 	phy->ops.phy_timing_val = dsi_phy_hw_timing_val_v2_0;
+	phy->ops.clamp_ctrl = dsi_phy_hw_v2_0_clamp_ctrl;
+	phy->ops.dyn_refresh_ops.dyn_refresh_config =
+		dsi_phy_hw_v2_0_dyn_refresh_config;
+	phy->ops.dyn_refresh_ops.dyn_refresh_pipe_delay =
+		dsi_phy_hw_v2_0_dyn_refresh_pipe_delay;
+	phy->ops.dyn_refresh_ops.dyn_refresh_helper =
+		dsi_phy_hw_v2_0_dyn_refresh_helper;
+	phy->ops.dyn_refresh_ops.cache_phy_timings =
+		dsi_phy_hw_v2_0_cache_phy_timings;
 }
 
 /**
@@ -231,6 +250,34 @@ static void dsi_catalog_phy_3_0_init(struct dsi_phy_hw *phy)
 }
 
 /**
+ * dsi_catalog_phy_4_0_init() - catalog init for DSI PHY 7nm
+ */
+static void dsi_catalog_phy_4_0_init(struct dsi_phy_hw *phy)
+{
+	phy->ops.regulator_enable = NULL;
+	phy->ops.regulator_disable = NULL;
+	phy->ops.enable = dsi_phy_hw_v4_0_enable;
+	phy->ops.disable = dsi_phy_hw_v4_0_disable;
+	phy->ops.calculate_timing_params =
+		dsi_phy_hw_calculate_timing_params;
+	phy->ops.ulps_ops.wait_for_lane_idle =
+		dsi_phy_hw_v4_0_wait_for_lane_idle;
+	phy->ops.ulps_ops.ulps_request =
+		dsi_phy_hw_v4_0_ulps_request;
+	phy->ops.ulps_ops.ulps_exit =
+		dsi_phy_hw_v4_0_ulps_exit;
+	phy->ops.ulps_ops.get_lanes_in_ulps =
+		dsi_phy_hw_v4_0_get_lanes_in_ulps;
+	phy->ops.ulps_ops.is_lanes_in_ulps =
+		dsi_phy_hw_v4_0_is_lanes_in_ulps;
+	phy->ops.phy_timing_val = dsi_phy_hw_timing_val_v4_0;
+	phy->ops.phy_lane_reset = dsi_phy_hw_v4_0_lane_reset;
+	phy->ops.toggle_resync_fifo = dsi_phy_hw_v4_0_toggle_resync_fifo;
+	phy->ops.reset_clk_en_sel = dsi_phy_hw_v4_0_reset_clk_en_sel;
+	phy->ops.set_continuous_clk = dsi_phy_hw_v4_0_set_continuous_clk;
+}
+
+/**
  * dsi_catalog_phy_setup() - return catalog info for dsi phy hardware
  * @ctrl:        Pointer to DSI PHY hw object.
  * @version:     DSI PHY version.
@@ -263,6 +310,9 @@ int dsi_catalog_phy_setup(struct dsi_phy_hw *phy,
 		break;
 	case DSI_PHY_VERSION_3_0:
 		dsi_catalog_phy_3_0_init(phy);
+		break;
+	case DSI_PHY_VERSION_4_0:
+		dsi_catalog_phy_4_0_init(phy);
 		break;
 	case DSI_PHY_VERSION_0_0_HPM:
 	case DSI_PHY_VERSION_0_0_LPM:

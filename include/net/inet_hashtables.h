@@ -32,7 +32,7 @@
 #include <net/tcp_states.h>
 #include <net/netns/hash.h>
 
-#include <linux/atomic.h>
+#include <linux/refcount.h>
 #include <asm/byteorder.h>
 
 /* This is for all connections with a full identity, no wildcards.
@@ -74,13 +74,21 @@ struct inet_ehash_bucket {
  * users logged onto your box, isn't it nice to know that new data
  * ports are created in O(1) time?  I thought so. ;-)	-DaveM
  */
+#define FASTREUSEPORT_ANY	1
+#define FASTREUSEPORT_STRICT	2
+
 struct inet_bind_bucket {
 	possible_net_t		ib_net;
 	unsigned short		port;
 	signed char		fastreuse;
 	signed char		fastreuseport;
 	kuid_t			fastuid;
-	int			num_owners;
+#if IS_ENABLED(CONFIG_IPV6)
+	struct in6_addr		fast_v6_rcv_saddr;
+#endif
+	__be32			fast_rcv_saddr;
+	unsigned short		fast_sk_family;
+	bool			fast_ipv6_only;
 	struct hlist_node	node;
 	struct hlist_head	owners;
 };
@@ -106,6 +114,7 @@ struct inet_bind_hashbucket {
 #define LISTENING_NULLS_BASE (1U << 29)
 struct inet_listen_hashbucket {
 	spinlock_t		lock;
+	unsigned int		count;
 	union {
 		struct hlist_head	head;
 		struct hlist_nulls_head	nulls_head;
@@ -130,12 +139,13 @@ struct inet_hashinfo {
 	/* Ok, let's try this, I give up, we do need a local binding
 	 * TCP hash as well as the others for fast bind/connect.
 	 */
-	struct inet_bind_hashbucket	*bhash;
-
-	unsigned int			bhash_size;
-	/* 4 bytes hole on 64 bit */
-
 	struct kmem_cache		*bind_bucket_cachep;
+	struct inet_bind_hashbucket	*bhash;
+	unsigned int			bhash_size;
+
+	/* The 2nd listener table hashed by local port and address */
+	unsigned int			lhash2_mask;
+	struct inet_listen_hashbucket	*lhash2;
 
 	/* All the above members are written once at bootup and
 	 * never written again _or_ are predominantly read-access.
@@ -143,13 +153,24 @@ struct inet_hashinfo {
 	 * Now align to a new cache line as all the following members
 	 * might be often dirty.
 	 */
-	/* All sockets in TCP_LISTEN state will be in here.  This is the only
-	 * table where wildcard'd TCP sockets can exist.  Hash function here
-	 * is just local port number.
+	/* All sockets in TCP_LISTEN state will be in listening_hash.
+	 * This is the only table where wildcard'd TCP sockets can
+	 * exist.  listening_hash is only hashed by local port number.
+	 * If lhash2 is initialized, the same socket will also be hashed
+	 * to lhash2 by port and address.
 	 */
 	struct inet_listen_hashbucket	listening_hash[INET_LHTABLE_SIZE]
 					____cacheline_aligned_in_smp;
 };
+
+#define inet_lhash2_for_each_icsk_rcu(__icsk, list) \
+	hlist_for_each_entry_rcu(__icsk, list, icsk_listen_portaddr_node)
+
+static inline struct inet_listen_hashbucket *
+inet_lhash2_bucket(struct inet_hashinfo *h, u32 hash)
+{
+	return &h->lhash2[hash & h->lhash2_mask];
+}
 
 static inline struct inet_ehash_bucket *inet_ehash_bucket(
 	struct inet_hashinfo *hashinfo,
@@ -206,13 +227,15 @@ int __inet_inherit_port(const struct sock *sk, struct sock *child);
 void inet_put_port(struct sock *sk);
 
 void inet_hashinfo_init(struct inet_hashinfo *h);
+void inet_hashinfo2_init(struct inet_hashinfo *h, const char *name,
+			 unsigned long numentries, int scale,
+			 unsigned long low_limit,
+			 unsigned long high_limit);
 
-bool inet_ehash_insert(struct sock *sk, struct sock *osk);
-bool inet_ehash_nolisten(struct sock *sk, struct sock *osk);
-int __inet_hash(struct sock *sk, struct sock *osk,
-		int (*saddr_same)(const struct sock *sk1,
-				  const struct sock *sk2,
-				  bool match_wildcard));
+bool inet_ehash_insert(struct sock *sk, struct sock *osk, bool *found_dup_sk);
+bool inet_ehash_nolisten(struct sock *sk, struct sock *osk,
+			 bool *found_dup_sk);
+int __inet_hash(struct sock *sk, struct sock *osk);
 int inet_hash(struct sock *sk);
 void inet_unhash(struct sock *sk);
 
@@ -337,7 +360,7 @@ static inline struct sock *inet_lookup(struct net *net,
 	sk = __inet_lookup(net, hashinfo, skb, doff, saddr, sport, daddr,
 			   dport, dif, 0, &refcounted);
 
-	if (sk && !refcounted && !atomic_inc_not_zero(&sk->sk_refcnt))
+	if (sk && !refcounted && !refcount_inc_not_zero(&sk->sk_refcnt))
 		sk = NULL;
 	return sk;
 }
@@ -350,10 +373,9 @@ static inline struct sock *__inet_lookup_skb(struct inet_hashinfo *hashinfo,
 					     const int sdif,
 					     bool *refcounted)
 {
-	struct sock *sk = skb_steal_sock(skb);
+	struct sock *sk = skb_steal_sock(skb, refcounted);
 	const struct iphdr *iph = ip_hdr(skb);
 
-	*refcounted = true;
 	if (sk)
 		return sk;
 
@@ -363,7 +385,6 @@ static inline struct sock *__inet_lookup_skb(struct inet_hashinfo *hashinfo,
 			     refcounted);
 }
 
-u32 sk_ehashfn(const struct sock *sk);
 u32 inet6_ehashfn(const struct net *net,
 		  const struct in6_addr *laddr, const u16 lport,
 		  const struct in6_addr *faddr, const __be16 fport);
@@ -392,4 +413,10 @@ int __inet_hash_connect(struct inet_timewait_death_row *death_row,
 
 int inet_hash_connect(struct inet_timewait_death_row *death_row,
 		      struct sock *sk);
+
+struct sock *lookup_reuseport(struct net *net, struct sock *sk,
+					    struct sk_buff *skb,
+					    __be32 saddr, __be16 sport,
+					    __be32 daddr, unsigned short hnum);
+
 #endif /* _INET_HASHTABLES_H */

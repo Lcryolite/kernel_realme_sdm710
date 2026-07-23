@@ -1,4 +1,4 @@
-/* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -52,6 +52,17 @@ int32_t cam_actuator_parse_dt(struct cam_actuator_ctrl_t *a_ctrl,
 			rc = -EFAULT;
 			return rc;
 		}
+
+		rc = of_property_read_u32(of_node, "cci-device",
+			&a_ctrl->cci_num);
+		CAM_DBG(CAM_ACTUATOR, "cci-device %d, rc %d",
+			a_ctrl->cci_num, rc);
+		if (rc < 0) {
+			/* Set default master 0 */
+			a_ctrl->cci_num = CCI_DEVICE_0;
+			rc = 0;
+		}
+		a_ctrl->io_master_info.cci_client->cci_device = a_ctrl->cci_num;
 	}
 
 	if (!soc_info->gpio_data) {

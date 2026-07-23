@@ -312,12 +312,15 @@ void msm_isp_update_req_history(uint32_t client, uint64_t ab,
 		ib;
 
 	for (i = 0; i < MAX_ISP_CLIENT; i++) {
-		msm_isp_bw_request_history[msm_isp_bw_request_history_idx].
-			client_info[i].active = client_info[i].active;
-		msm_isp_bw_request_history[msm_isp_bw_request_history_idx].
-			client_info[i].ab = client_info[i].ab;
-		msm_isp_bw_request_history[msm_isp_bw_request_history_idx].
-			client_info[i].ib = client_info[i].ib;
+		msm_isp_bw_request_history[
+			msm_isp_bw_request_history_idx].client_info[i].active =
+				client_info[i].active;
+		msm_isp_bw_request_history[
+			msm_isp_bw_request_history_idx].client_info[i].ab =
+				client_info[i].ab;
+		msm_isp_bw_request_history[
+			msm_isp_bw_request_history_idx].client_info[i].ib =
+				client_info[i].ib;
 	}
 
 	msm_isp_bw_request_history_idx = (msm_isp_bw_request_history_idx + 1)

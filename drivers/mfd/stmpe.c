@@ -568,6 +568,8 @@ static const u8 stmpe1600_regs[] = {
 	[STMPE_IDX_GPMR_CSB]	= STMPE1600_REG_GPMR_MSB,
 	[STMPE_IDX_GPSR_LSB]	= STMPE1600_REG_GPSR_LSB,
 	[STMPE_IDX_GPSR_CSB]	= STMPE1600_REG_GPSR_MSB,
+	[STMPE_IDX_GPCR_LSB]	= STMPE1600_REG_GPSR_LSB,
+	[STMPE_IDX_GPCR_CSB]	= STMPE1600_REG_GPSR_MSB,
 	[STMPE_IDX_GPDR_LSB]	= STMPE1600_REG_GPDR_LSB,
 	[STMPE_IDX_GPDR_CSB]	= STMPE1600_REG_GPDR_MSB,
 	[STMPE_IDX_IEGPIOR_LSB]	= STMPE1600_REG_IEGPIOR_LSB,
@@ -1426,9 +1428,9 @@ int stmpe_probe(struct stmpe_client_info *ci, enum stmpe_partnum partnum)
 
 int stmpe_remove(struct stmpe *stmpe)
 {
-	if (!IS_ERR(stmpe->vio))
+	if (!IS_ERR(stmpe->vio) && regulator_is_enabled(stmpe->vio))
 		regulator_disable(stmpe->vio);
-	if (!IS_ERR(stmpe->vcc))
+	if (!IS_ERR(stmpe->vcc) && regulator_is_enabled(stmpe->vcc))
 		regulator_disable(stmpe->vcc);
 
 	mfd_remove_devices(stmpe->dev);

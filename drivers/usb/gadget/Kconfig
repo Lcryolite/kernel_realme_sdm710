@@ -41,7 +41,7 @@ menuconfig USB_GADGET
 	   don't have this kind of hardware (except maybe inside Linux PDAs).
 
 	   For more information, see <http://www.linux-usb.org/gadget> and
-	   the kernel DocBook documentation for this API.
+	   the kernel documentation for this API.
 
 if USB_GADGET
 
@@ -96,8 +96,8 @@ config USB_GADGET_DEBUG_FS
 	   to conserve kernel memory, say "N".
 
 config USB_GADGET_VBUS_DRAW
-	int "Maximum VBUS Power usage (2-500 mA)"
-	range 2 500
+	int "Maximum VBUS Power usage (2-900 mA)"
+	range 2 900
 	default 2
 	help
 	   Some devices need to draw power from USB when they are
@@ -106,7 +106,9 @@ config USB_GADGET_VBUS_DRAW
 	   such as an AC adapter or batteries.
 
 	   Enter the maximum power your device draws through USB, in
-	   milliAmperes.  The permitted range of values is 2 - 500 mA;
+	   milliAmperes.  The permitted range of values depends on the
+	   connected speed: for SuperSpeed and up it is 2 - 900 mA, but
+	   connections at High Speed or slower will be capped at 500 mA;
 	   0 mA would be legal, but can make some hosts misbehave.
 
 	   This value will be used except for system-specific gadget
@@ -130,7 +132,7 @@ config USB_GADGET_STORAGE_NUM_BUFFERS
 
 config U_SERIAL_CONSOLE
 	bool "Serial gadget console support"
-	depends on USB_G_SERIAL
+	depends on USB_U_SERIAL
 	help
 	   It supports the serial gadget can be used as a console.
 
@@ -156,6 +158,9 @@ config USB_U_SERIAL
 	tristate
 
 config USB_U_ETHER
+	tristate
+
+config USB_U_AUDIO
 	tristate
 
 config USB_F_SERIAL
@@ -188,9 +193,6 @@ config USB_F_RNDIS
 config USB_F_QCRNDIS
 	tristate
 
-config USB_F_RMNET_BAM
-	tristate
-
 config USB_F_MASS_STORAGE
 	tristate
 
@@ -198,6 +200,9 @@ config USB_F_FS
 	tristate
 
 config USB_F_UAC1
+	tristate
+
+config USB_F_UAC1_LEGACY
 	tristate
 
 config USB_F_UAC2
@@ -248,10 +253,19 @@ config USB_F_QDSS
 config USB_F_IPC
 	tristate
 
+config USB_F_MDM_DATA
+	tristate
+
+config USB_F_RMNET_BAM
+	tristate
+
+config USB_F_MBIM_BAM
+        tristate
+
 # this first set of drivers all depend on bulk-capable hardware.
 
 config USB_CONFIGFS
-	tristate "USB functions configurable through configfs"
+	tristate "USB Gadget functions configurable through configfs"
 	select USB_LIBCOMPOSITE
 	help
 	  A Linux USB "gadget" can be set up through configfs.
@@ -328,8 +342,8 @@ config USB_CONFIGFS_ECM_SUBSET
 config USB_CONFIGFS_QCRNDIS
 	bool "QCRNDIS"
 	depends on USB_CONFIGFS
-	depends on RNDIS_IPA
 	depends on NET
+	depends on RNDIS_IPA
 	select USB_U_ETHER
 	select USB_RNDIS
 	select USB_F_QCRNDIS
@@ -354,8 +368,26 @@ config USB_CONFIGFS_RNDIS
 config USB_CONFIGFS_RMNET_BAM
 	bool "RMNET_BAM"
 	depends on USB_CONFIGFS
-	depends on IPA
 	select USB_F_RMNET_BAM
+	help
+	   RmNet interface is a new logical device in QMI framework for data
+	   services. RmNet in accordance with QMI architecture uses Data I/O
+	   channel for IP data transfer and control I/O channel for QMI
+	   messaging (functionality similar to AT commands).
+	   RmNet interface is an alternative to standard CDC-ECM and windows
+	   RNDIS.
+
+config USB_CONFIGFS_MBIM_BAM
+        bool "MBIM_BAM"
+        depends on USB_CONFIGFS
+        select USB_F_MBIM_BAM
+	help
+	   Mbim interface is a new logical device in QMI framework for data
+	   services. Mbim in accordance with QMI architecture uses Data I/O
+	   channel for IP data transfer and control I/O channel for QMI
+	   messaging (functionality similar to AT commands).
+	   Mbim interface is an alternative to standard CDC-ECM and windows
+	   RNDIS.
 
 config USB_CONFIGFS_EEM
 	bool "Ethernet Emulation Model (EEM)"
@@ -464,12 +496,30 @@ config USB_CONFIGFS_F_UAC1
 	depends on SND
 	select USB_LIBCOMPOSITE
 	select SND_PCM
+	select USB_U_AUDIO
 	select USB_F_UAC1
 	help
 	  This Audio function implements 1 AudioControl interface,
 	  1 AudioStreaming Interface each for USB-OUT and USB-IN.
-	  This driver requires a real Audio codec to be present
-	  on the device.
+	  This driver doesn't expect any real Audio codec to be present
+	  on the device - the audio streams are simply sinked to and
+	  sourced from a virtual ALSA sound card created. The user-space
+	  application may choose to do whatever it wants with the data
+	  received from the USB Host and choose to provide whatever it
+	  wants as audio data to the USB Host.
+
+config USB_CONFIGFS_F_UAC1_LEGACY
+	bool "Audio Class 1.0 (legacy implementation)"
+	depends on USB_CONFIGFS
+	depends on SND
+	select USB_LIBCOMPOSITE
+	select SND_PCM
+	select USB_F_UAC1_LEGACY
+	help
+	  This Audio function implements 1 AudioControl interface,
+	  1 AudioStreaming Interface each for USB-OUT and USB-IN.
+	  This is a legacy driver and requires a real Audio codec
+	  to be present on the device.
 
 config USB_CONFIGFS_F_UAC2
 	bool "Audio Class 2.0"
@@ -477,6 +527,7 @@ config USB_CONFIGFS_F_UAC2
 	depends on SND
 	select USB_LIBCOMPOSITE
 	select SND_PCM
+	select USB_U_AUDIO
 	select USB_F_UAC2
 	help
 	  This Audio function is compatible with USB Audio Class
@@ -518,7 +569,6 @@ config USB_CONFIGFS_F_UVC
 	depends on USB_CONFIGFS
 	depends on VIDEO_V4L2
 	depends on VIDEO_DEV
-	select VIDEOBUF2_DMA_SG
 	select VIDEOBUF2_VMALLOC
 	select USB_F_UVC
 	help
@@ -567,65 +617,62 @@ config USB_CONFIGFS_F_CDEV
 	select USB_F_CDEV
 	depends on USB_CONFIGFS
 	help
-	  Generic USB serial character function driver to support DUN/NMEA.
+	  The serial character function is a generic function driver that
+	  exposes a pair of bulk IN and OUT endpoints which are backed by
+	  a character device and mapped to its read/write routines. The
+	  function also supports a single interrupt IN endpoint for
+	  asynchronous notification to the host. This driver is typically
+	  used to support DUN/NMEA functions.
 
 config USB_CONFIGFS_F_CCID
 	bool "USB CCID function"
 	select USB_F_CCID
 	depends on USB_CONFIGFS
 	help
-	  USB CCID function driver creates transport layer between the
-	  userspace CCID component and the Windows Host.
+	  The Chip Card Interface Device (CCID) function implements a USB
+	  interface that exposes a standard CSCID class that consists of a
+	  pair of bulk IN and OUT endpoints and a single interrupt IN
+	  endpoint. This driver provides a character device interface
+	  allowing a userspace component to be able to provide the
+	  implementation necessary to interface with the smartcard.
 
 config USB_CONFIGFS_F_GSI
 	bool "USB GSI function"
 	select USB_F_GSI
-	select USB_U_ETHER
 	select USB_RNDIS
+	select USB_U_ETHER
 	depends on USB_CONFIGFS
 	help
-	  Generic function driver to support h/w acceleration to IPA over GSI.
+	  The GSI function supports the IPA Generic Software Interface found
+	  on various Qualcomm SoCs. This provides a hardware accelerated
+	  datapath for various tethered data functions, such as RmNet, RNDIS,
+	  MBIM, and CDC ECM. The function is configurable when instantiating
+	  through ConfigFS. This driver can be used instead of the standard
+	  implementations in case your hardware supports this.
 
 config USB_CONFIGFS_F_QDSS
-        bool "USB QDSS function"
+	bool "USB QDSS function"
 	select USB_F_QDSS
 	depends on USB_CONFIGFS
 	help
-          USB QDSS function driver to get hwtracing related data over USB.
+	  USB QDSS function driver to get hwtracing related data over USB.
 
 config USB_CONFIGFS_F_IPC
 	bool "USB IPC function"
 	select USB_F_IPC
-	depends on USB_CONFIGFS && !USB_QCOM_IPC_BRIDGE
+	depends on USB_CONFIGFS
 	help
 	  IPC function driver enables support for IPC messages port over USB.
-	  This driver and the host mode ipc_bridge driver are mutually exclusive
-	  and the IPC router USB transport layer can interface with only one on
-	  a given platform. Hence, enable this config only if host driver is not
-	  being compiled.
+	  This driver provides USB gadget access to the QRTR USB device mode
+	  transport.
 
-choice
-	tristate "USB Gadget Drivers"
-	default USB_ETH
-	optional
+config USB_CONFIGFS_F_MDM_DATA
+	bool "USB QTI Modem Data function"
+	select USB_F_MDM_DATA
+	depends on USB_CONFIGFS && USB_QTI_MDM_DATA_BRIDGE
 	help
-	  A Linux "Gadget Driver" talks to the USB Peripheral Controller
-	  driver through the abstract "gadget" API.  Some other operating
-	  systems call these "client" drivers, of which "class drivers"
-	  are a subset (implementing a USB device class specification).
-	  A gadget driver implements one or more USB functions using
-	  the peripheral hardware.
-
-	  Gadget drivers are hardware-neutral, or "platform independent",
-	  except that they sometimes must understand quirks or limitations
-	  of the particular controllers they work with.  For example, when
-	  a controller doesn't support alternate configurations or provide
-	  enough of the right types of endpoints, the gadget driver might
-	  not be able work with that controller, or might need to implement
-	  a less common variant of a device class protocol.
+	  USB QTI modem data function driver.
 
 source "drivers/usb/gadget/legacy/Kconfig"
-
-endchoice
 
 endif # USB_GADGET

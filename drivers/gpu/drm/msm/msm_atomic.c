@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
  * Copyright (C) 2014 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
  *
@@ -31,6 +31,7 @@ struct msm_commit {
 	struct drm_device *dev;
 	struct drm_atomic_state *state;
 	uint32_t crtc_mask;
+	uint32_t plane_mask;
 	bool nonblock;
 	struct kthread_work commit_work;
 };
@@ -72,34 +73,28 @@ EXPORT_SYMBOL(msm_drm_unregister_client);
  * @v: notifier data, inculde display id and display blank
  *     event(unblank or power down).
  */
-#ifndef VENDOR_EDIT
 static int msm_drm_notifier_call_chain(unsigned long val, void *v)
 {
 	return blocking_notifier_call_chain(&msm_drm_notifier_list, val,
 					    v);
 }
-#else /*VENDOR_EDIT*/
-int msm_drm_notifier_call_chain(unsigned long val, void *v)
-{
-	return blocking_notifier_call_chain(&msm_drm_notifier_list, val,
-					    v);
-}
-EXPORT_SYMBOL(msm_drm_notifier_call_chain);
-#endif /*VENDOR_EDIT*/
 
 /* block until specified crtcs are no longer pending update, and
  * atomically mark them as pending update
  */
-static int start_atomic(struct msm_drm_private *priv, uint32_t crtc_mask)
+static int start_atomic(struct msm_drm_private *priv, uint32_t crtc_mask,
+			uint32_t plane_mask)
 {
 	int ret;
 
 	spin_lock(&priv->pending_crtcs_event.lock);
 	ret = wait_event_interruptible_locked(priv->pending_crtcs_event,
-			!(priv->pending_crtcs & crtc_mask));
+			!(priv->pending_crtcs & crtc_mask) &&
+			!(priv->pending_planes & plane_mask));
 	if (ret == 0) {
 		DBG("start: %08x", crtc_mask);
 		priv->pending_crtcs |= crtc_mask;
+		priv->pending_planes |= plane_mask;
 	}
 	spin_unlock(&priv->pending_crtcs_event.lock);
 
@@ -108,18 +103,20 @@ static int start_atomic(struct msm_drm_private *priv, uint32_t crtc_mask)
 
 /* clear specified crtcs (no longer pending update)
  */
-static void end_atomic(struct msm_drm_private *priv, uint32_t crtc_mask)
+static void end_atomic(struct msm_drm_private *priv, uint32_t crtc_mask,
+			uint32_t plane_mask)
 {
 	spin_lock(&priv->pending_crtcs_event.lock);
 	DBG("end: %08x", crtc_mask);
 	priv->pending_crtcs &= ~crtc_mask;
+	priv->pending_planes &= ~plane_mask;
 	wake_up_all_locked(&priv->pending_crtcs_event);
 	spin_unlock(&priv->pending_crtcs_event.lock);
 }
 
 static void commit_destroy(struct msm_commit *c)
 {
-	end_atomic(c->dev->dev_private, c->crtc_mask);
+	end_atomic(c->dev->dev_private, c->crtc_mask, c->plane_mask);
 	if (c->nonblock)
 		kfree(c);
 }
@@ -134,6 +131,7 @@ static inline bool _msm_seamless_for_crtc(struct drm_atomic_state *state,
 
 	if (msm_is_mode_seamless(&crtc_state->mode) ||
 		msm_is_mode_seamless_vrr(&crtc_state->adjusted_mode) ||
+		msm_is_mode_seamless_poms(&crtc_state->adjusted_mode) ||
 		msm_is_mode_seamless_dyn_clk(&crtc_state->adjusted_mode))
 		return true;
 
@@ -194,18 +192,13 @@ static void msm_atomic_wait_for_commit_done(
 		struct drm_atomic_state *old_state)
 {
 	struct drm_crtc *crtc;
-	struct drm_crtc_state *crtc_state;
+	struct drm_crtc_state *new_crtc_state;
 	struct msm_drm_private *priv = old_state->dev->dev_private;
 	struct msm_kms *kms = priv->kms;
 	int i;
 
-	for_each_crtc_in_state(old_state, crtc, crtc_state, i) {
-		if (!crtc->state->enable)
-			continue;
-
-		/* Legacy cursor ioctls are completely unsynced, and userspace
-		 * relies on that (by doing tons of cursor updates). */
-		if (old_state->legacy_cursor_update)
+	for_each_new_crtc_in_state(old_state, crtc, new_crtc_state, i) {
+		if (!new_crtc_state->active)
 			continue;
 
 		if (drm_crtc_vblank_get(crtc))
@@ -242,8 +235,8 @@ msm_disable_outputs(struct drm_device *dev, struct drm_atomic_state *old_state)
 			continue;
 
 		crtc_idx = drm_crtc_index(old_conn_state->crtc);
-		old_crtc_state = drm_atomic_get_existing_crtc_state(old_state,
-						    old_conn_state->crtc);
+		old_crtc_state = drm_atomic_get_old_crtc_state(old_state,
+							old_conn_state->crtc);
 
 		if (!old_crtc_state->active ||
 		    !drm_atomic_crtc_needs_modeset(old_conn_state->crtc->state))
@@ -265,13 +258,14 @@ msm_disable_outputs(struct drm_device *dev, struct drm_atomic_state *old_state)
 		DRM_DEBUG_ATOMIC("disabling [ENCODER:%d:%s]\n",
 				 encoder->base.id, encoder->name);
 
-#ifdef VENDOR_EDIT
-		blank = MSM_DRM_BLANK_POWERDOWN;
-		notifier_data.data = &blank;
-		notifier_data.id = crtc_idx;
-		//msm_drm_notifier_call_chain(MSM_DRM_EARLY_EVENT_BLANK,
-					     //&notifier_data);
-#endif
+		if (connector->state->crtc &&
+			connector->state->crtc->state->active_changed) {
+			blank = MSM_DRM_BLANK_POWERDOWN;
+			notifier_data.data = &blank;
+			notifier_data.id = crtc_idx;
+			msm_drm_notifier_call_chain(MSM_DRM_EARLY_EVENT_BLANK,
+						     &notifier_data);
+		}
 		/*
 		 * Each encoder has at most one connector (since we always steal
 		 * it away), so we won't call disable hooks twice.
@@ -287,10 +281,12 @@ msm_disable_outputs(struct drm_device *dev, struct drm_atomic_state *old_state)
 			funcs->dpms(encoder, DRM_MODE_DPMS_OFF);
 
 		drm_bridge_post_disable(encoder->bridge);
-#ifdef VENDOR_EDIT
-		//msm_drm_notifier_call_chain(MSM_DRM_EVENT_BLANK,
-		//			    &notifier_data);
-#endif
+		if (connector->state->crtc &&
+			connector->state->crtc->state->active_changed) {
+			DRM_DEBUG_ATOMIC("Notify blank\n");
+			msm_drm_notifier_call_chain(MSM_DRM_EVENT_BLANK,
+						&notifier_data);
+		}
 	}
 
 	for_each_crtc_in_state(old_state, crtc, old_crtc_state, i) {
@@ -428,23 +424,26 @@ static void msm_atomic_helper_commit_modeset_enables(struct drm_device *dev,
 {
 	struct drm_crtc *crtc;
 	struct drm_crtc_state *old_crtc_state;
+	struct drm_crtc_state *new_crtc_state;
 	struct drm_connector *connector;
-	struct drm_connector_state *old_conn_state;
+	struct drm_connector_state *new_conn_state;
 	struct msm_drm_notifier notifier_data;
 	struct msm_drm_private *priv = dev->dev_private;
 	struct msm_kms *kms = priv->kms;
 	int bridge_enable_count = 0;
 	int i, blank;
+	bool splash = false;
 
 	SDE_ATRACE_BEGIN("msm_enable");
-	for_each_crtc_in_state(old_state, crtc, old_crtc_state, i) {
+	for_each_oldnew_crtc_in_state(old_state, crtc, old_crtc_state,
+			new_crtc_state, i) {
 		const struct drm_crtc_helper_funcs *funcs;
 
 		/* Need to filter out CRTCs where only planes change. */
-		if (!drm_atomic_crtc_needs_modeset(crtc->state))
+		if (!drm_atomic_crtc_needs_modeset(new_crtc_state))
 			continue;
 
-		if (!crtc->state->active)
+		if (!new_crtc_state->active)
 			continue;
 
 		if (_msm_seamless_for_crtc(old_state, crtc->state, true))
@@ -456,28 +455,34 @@ static void msm_atomic_helper_commit_modeset_enables(struct drm_device *dev,
 			DRM_DEBUG_ATOMIC("enabling [CRTC:%d]\n",
 					 crtc->base.id);
 
-			if (funcs->enable)
-				funcs->enable(crtc);
+			if (funcs->atomic_enable)
+				funcs->atomic_enable(crtc, old_crtc_state);
 			else
 				funcs->commit(crtc);
 		}
 
-		if (msm_needs_vblank_pre_modeset(&crtc->state->adjusted_mode))
+		if (msm_needs_vblank_pre_modeset(
+					&new_crtc_state->adjusted_mode))
 			drm_crtc_wait_one_vblank(crtc);
+
 	}
 
-	for_each_connector_in_state(old_state, connector, old_conn_state, i) {
+	for_each_new_connector_in_state(old_state, connector,
+			new_conn_state, i) {
 		const struct drm_encoder_helper_funcs *funcs;
 		struct drm_encoder *encoder;
+		struct drm_connector_state *old_conn_state;
 
-		if (!connector->state->best_encoder)
+		if (!new_conn_state->best_encoder)
 			continue;
 
-		if (!connector->state->crtc->state->active ||
-		    !drm_atomic_crtc_needs_modeset(
-				    connector->state->crtc->state))
+		if (!new_conn_state->crtc->state->active ||
+				!drm_atomic_crtc_needs_modeset(
+					new_conn_state->crtc->state))
 			continue;
 
+		old_conn_state = drm_atomic_get_old_connector_state(
+				old_state, connector);
 		if (_msm_seamless_for_conn(connector, old_conn_state, true))
 			continue;
 
@@ -487,16 +492,18 @@ static void msm_atomic_helper_commit_modeset_enables(struct drm_device *dev,
 		DRM_DEBUG_ATOMIC("enabling [ENCODER:%d:%s]\n",
 				 encoder->base.id, encoder->name);
 
-		if (connector->state->crtc->state->active_changed) {
+		if (kms && kms->funcs && kms->funcs->check_for_splash)
+			splash = kms->funcs->check_for_splash(kms);
+
+		if (splash || (connector->state->crtc &&
+			connector->state->crtc->state->active_changed)) {
 			blank = MSM_DRM_BLANK_UNBLANK;
 			notifier_data.data = &blank;
 			notifier_data.id =
 				connector->state->crtc->index;
 			DRM_DEBUG_ATOMIC("Notify early unblank\n");
-			#ifdef VENDOR_EDIT
-			//msm_drm_notifier_call_chain(MSM_DRM_EARLY_EVENT_BLANK,
-			//    &notifier_data);
-			#endif /*VENDOR_EDIT*/
+			msm_drm_notifier_call_chain(MSM_DRM_EARLY_EVENT_BLANK,
+					    &notifier_data);
 		}
 		/*
 		 * Each encoder has at most one connector (since we always steal
@@ -511,7 +518,7 @@ static void msm_atomic_helper_commit_modeset_enables(struct drm_device *dev,
 			funcs->commit(encoder);
 	}
 
-	if (kms->funcs->commit) {
+	if (kms && kms->funcs && kms->funcs->commit) {
 		DRM_DEBUG_ATOMIC("triggering commit\n");
 		kms->funcs->commit(kms, old_state);
 	}
@@ -522,17 +529,21 @@ static void msm_atomic_helper_commit_modeset_enables(struct drm_device *dev,
 		return;
 	}
 
-	for_each_connector_in_state(old_state, connector, old_conn_state, i) {
+	for_each_new_connector_in_state(old_state, connector,
+			new_conn_state, i) {
 		struct drm_encoder *encoder;
+		struct drm_connector_state *old_conn_state;
 
-		if (!connector->state->best_encoder)
+		if (!new_conn_state->best_encoder)
 			continue;
 
-		if (!connector->state->crtc->state->active ||
+		if (!new_conn_state->crtc->state->active ||
 		    !drm_atomic_crtc_needs_modeset(
-				    connector->state->crtc->state))
+				    new_conn_state->crtc->state))
 			continue;
 
+		old_conn_state = drm_atomic_get_old_connector_state(
+				old_state, connector);
 		if (_msm_seamless_for_conn(connector, old_conn_state, true))
 			continue;
 
@@ -542,12 +553,12 @@ static void msm_atomic_helper_commit_modeset_enables(struct drm_device *dev,
 				 encoder->base.id, encoder->name);
 
 		drm_bridge_enable(encoder->bridge);
-		if (connector->state->crtc->state->active_changed) {
+
+		if (splash || (connector->state->crtc &&
+			connector->state->crtc->state->active_changed)) {
 			DRM_DEBUG_ATOMIC("Notify unblank\n");
-			#ifdef VENDOR_EDIT
-			//msm_drm_notifier_call_chain(MSM_DRM_EVENT_BLANK,
-			//		    &notifier_data);
-			#endif /*VENDOR_EDIT*/
+			msm_drm_notifier_call_chain(MSM_DRM_EVENT_BLANK,
+					    &notifier_data);
 		}
 	}
 	SDE_ATRACE_END("msm_enable");
@@ -592,7 +603,7 @@ static void complete_commit(struct msm_commit *c)
 
 	kms->funcs->complete_commit(kms, state);
 
-	drm_atomic_state_free(state);
+	drm_atomic_state_put(state);
 
 	commit_destroy(c);
 }
@@ -710,7 +721,7 @@ int msm_atomic_commit(struct drm_device *dev,
 	struct drm_crtc *crtc;
 	struct drm_crtc_state *crtc_state;
 	struct drm_plane *plane;
-	struct drm_plane_state *plane_state;
+	struct drm_plane_state *old_plane_state, *new_plane_state;
 	int i, ret;
 
 	if (!priv || priv->shutdown_in_progress) {
@@ -734,19 +745,21 @@ int msm_atomic_commit(struct drm_device *dev,
 	/*
 	 * Figure out what crtcs we have:
 	 */
-	for_each_crtc_in_state(state, crtc, crtc_state, i)
+	for_each_new_crtc_in_state(state, crtc, crtc_state, i)
 		c->crtc_mask |= drm_crtc_mask(crtc);
 
 	/*
 	 * Figure out what fence to wait for:
 	 */
-	for_each_plane_in_state(state, plane, plane_state, i) {
-		if ((plane->state->fb != plane_state->fb) && plane_state->fb) {
-			struct drm_gem_object *obj = msm_framebuffer_bo(plane_state->fb, 0);
+	for_each_oldnew_plane_in_state(state, plane, old_plane_state, new_plane_state, i) {
+		if ((new_plane_state->fb != old_plane_state->fb) && new_plane_state->fb) {
+			struct drm_gem_object *obj = msm_framebuffer_bo(new_plane_state->fb, 0);
 			struct msm_gem_object *msm_obj = to_msm_bo(obj);
+			struct dma_fence *fence = reservation_object_get_excl_rcu(msm_obj->resv);
 
-			plane_state->fence = reservation_object_get_excl_rcu(msm_obj->resv);
+			drm_atomic_set_fence_for_plane(new_plane_state, fence);
 		}
+		c->plane_mask |= (1 << drm_plane_index(plane));
 	}
 
 	/* Protection for prepare_fence callback */
@@ -763,19 +776,21 @@ retry:
 	 * Wait for pending updates on any of the same crtc's and then
 	 * mark our set of crtc's as busy:
 	 */
-	ret = start_atomic(dev->dev_private, c->crtc_mask);
-	if (ret) {
-		kfree(c);
-		goto error;
-	}
+	ret = start_atomic(dev->dev_private, c->crtc_mask, c->plane_mask);
+	if (ret)
+		goto err_free;
+
+	BUG_ON(drm_atomic_helper_swap_state(state, false) < 0);
 
 	/*
 	 * This is the point of no return - everything below never fails except
 	 * when the hw goes bonghits. Which means we can commit the new state on
 	 * the software side now.
+	 *
+	 * swap driver private state while still holding state_lock
 	 */
-
-	drm_atomic_helper_swap_state(state, true);
+	if (to_kms_state(state)->state)
+		priv->kms->funcs->swap_state(priv->kms, state);
 
 	/*
 	 * Provide the driver a chance to prepare for output fences. This is
@@ -802,12 +817,43 @@ retry:
 	 * current layout.
 	 */
 
+	drm_atomic_state_get(state);
 	msm_atomic_commit_dispatch(dev, state, c);
+
 	SDE_ATRACE_END("atomic_commit");
 	return 0;
 
+err_free:
+	kfree(c);
 error:
 	drm_atomic_helper_cleanup_planes(dev, state);
 	SDE_ATRACE_END("atomic_commit");
 	return ret;
+}
+
+struct drm_atomic_state *msm_atomic_state_alloc(struct drm_device *dev)
+{
+	struct msm_kms_state *state = kzalloc(sizeof(*state), GFP_KERNEL);
+
+	if (!state || drm_atomic_state_init(dev, &state->base) < 0) {
+		kfree(state);
+		return NULL;
+	}
+
+	return &state->base;
+}
+
+void msm_atomic_state_clear(struct drm_atomic_state *s)
+{
+	struct msm_kms_state *state = to_kms_state(s);
+	drm_atomic_state_default_clear(&state->base);
+	kfree(state->state);
+	state->state = NULL;
+}
+
+void msm_atomic_state_free(struct drm_atomic_state *state)
+{
+	kfree(to_kms_state(state)->state);
+	drm_atomic_state_default_release(state);
+	kfree(state);
 }

@@ -17,7 +17,7 @@
 #include <linux/linkage.h>
 
 #include <asm/cache.h>
-#include <asm/uaccess.h>
+#include <asm/asm-uaccess.h>
 
 /*
  * Copy to user space from a kernel buffer (alignment handled by the hardware)
@@ -74,7 +74,6 @@ ENDPROC(__arch_copy_to_user)
 	.section .fixup,"ax"
 	.align	2
 9998:	sub	x0, end, dst			// bytes not copied
-ALTERNATIVE("nop", __stringify(SET_PSTATE_PAN(1)), ARM64_ALT_PAN_NOT_UAO, \
-	    CONFIG_ARM64_PAN)
+	uaccess_disable_not_uao x3, x4
 	ret
 	.previous

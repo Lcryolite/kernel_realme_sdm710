@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014-2015, 2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2015, 2017-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -25,10 +25,8 @@ int ringbuf_init(struct seemp_logk_dev *sdev)
 
 	if (kmalloc_flag) {
 		sdev->ring = kmalloc(sdev->ring_sz, GFP_KERNEL);
-		if (sdev->ring == NULL) {
-			pr_err("kmalloc failed, ring_sz= %d\n", sdev->ring_sz);
+		if (sdev->ring == NULL)
 			return -ENOMEM;
-		}
 
 		buf = (char *)sdev->ring;
 
@@ -40,10 +38,9 @@ int ringbuf_init(struct seemp_logk_dev *sdev)
 		}
 	} else {
 		sdev->ring = vmalloc(sdev->ring_sz);
-		if (sdev->ring == NULL) {
-			pr_err("vmalloc failed, ring_sz = %d\n", sdev->ring_sz);
+		if (sdev->ring == NULL)
 			return -ENOMEM;
-		}
+
 		buf = (char *)sdev->ring;
 
 		/*reserve vmalloc memory as pages to make them remapable*/

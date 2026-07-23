@@ -7,9 +7,9 @@ Required properties:
 - compatible : should be "qcom,bg-daemon"
 - qcom,bg-reset-gpio : gpio for the apps processor use to soft reset BG
 - ssr-reg1-supply : Power supply needed to power up the BG device.
-		When BG brought up this regulator will be in normal power mode.
+                When BG brought up this regulator will be in normal power mode.
 - ssr-reg2-supply : Power supply needed to power up the BG device.
-		When BG BG brought up this regulator will be in normal power mode.
+                When BG BG brought up this regulator will be in normal power mode.
 
 Example:
 	qcom,bg-daemon {

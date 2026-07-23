@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -363,9 +363,9 @@ static const unsigned int a5xx_registers[] = {
 	0x04E0, 0x04F4, 0X04F8, 0x0529, 0x0531, 0x0533, 0x0540, 0x0555,
 	0xF400, 0xF400, 0xF800, 0xF807,
 	/* CP */
-	0x0800, 0x081A, 0x081F, 0x0841, 0x0860, 0x0860, 0x0880, 0x08A0,
-	0x0B00, 0x0B12, 0x0B15, 0X0B1C, 0X0B1E, 0x0B28, 0x0B78, 0x0B7F,
-	0x0BB0, 0x0BBD,
+	0x0800, 0x0803, 0x0806, 0x081A, 0x081F, 0x0841, 0x0860, 0x0860,
+	0x0880, 0x08A0, 0x0B00, 0x0B12, 0x0B15, 0X0B1C, 0X0B1E, 0x0B28,
+	0x0B78, 0x0B7F, 0x0BB0, 0x0BBD,
 	/* VSC */
 	0x0BC0, 0x0BC6, 0x0BD0, 0x0C53, 0x0C60, 0x0C61,
 	/* GRAS */
@@ -739,7 +739,7 @@ out:
 }
 
 /* Snapshot a preemption record buffer */
-static size_t snapshot_preemption_record(struct kgsl_device *device, u8 *buf,
+size_t a5xx_snapshot_preemption(struct kgsl_device *device, u8 *buf,
 	size_t remain, void *priv)
 {
 	struct kgsl_memdesc *memdesc = priv;
@@ -865,8 +865,6 @@ void a5xx_snapshot(struct adreno_device *adreno_dev,
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct adreno_gpudev *gpudev = ADRENO_GPU_DEVICE(adreno_dev);
 	struct adreno_snapshot_data *snap_data = gpudev->snapshot_data;
-	unsigned int reg, i;
-	struct adreno_ringbuffer *rb;
 	struct registers regs;
 
 	/* Disable Clock gating temporarily for the debug bus to work */
@@ -918,16 +916,6 @@ void a5xx_snapshot(struct adreno_device *adreno_dev,
 		A5XX_CP_DRAW_STATE_ADDR, A5XX_CP_DRAW_STATE_DATA,
 		0, 1 << A5XX_CP_DRAW_STATE_ADDR_WIDTH);
 
-	/*
-	 * CP needs to be halted on a530v1 before reading CP_PFP_UCODE_DBG_DATA
-	 * and CP_PM4_UCODE_DBG_DATA registers
-	 */
-	if (adreno_is_a530v1(adreno_dev)) {
-		adreno_readreg(adreno_dev, ADRENO_REG_CP_ME_CNTL, &reg);
-		reg |= (1 << 27) | (1 << 28);
-		adreno_writereg(adreno_dev, ADRENO_REG_CP_ME_CNTL, reg);
-	}
-
 	/* ME_UCODE Cache */
 	kgsl_snapshot_indexed_registers(device, snapshot,
 		A5XX_CP_ME_UCODE_DBG_ADDR, A5XX_CP_ME_UCODE_DBG_DATA,
@@ -964,16 +952,6 @@ void a5xx_snapshot(struct adreno_device *adreno_dev,
 
 	/* Debug bus */
 	a5xx_snapshot_debugbus(device, snapshot);
-
-	/* Preemption record */
-	if (adreno_is_preemption_enabled(adreno_dev)) {
-		FOR_EACH_RINGBUFFER(adreno_dev, rb, i) {
-			kgsl_snapshot_add_section(device,
-				KGSL_SNAPSHOT_SECTION_GPU_OBJECT_V2,
-				snapshot, snapshot_preemption_record,
-				&rb->preemption_desc);
-		}
-	}
 
 }
 

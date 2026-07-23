@@ -60,7 +60,7 @@ unsigned char  raydium_read_fpc_flash(struct i2c_client *client,
 	unsigned int u32_read;
 	unsigned char u8_buf[4];
 
-	pr_debug("[touch]raydium_read_fpc_flash\n");
+	pr_debug("[touch]%s\n", __func__);
 
 	if (raydium_i2c_pda_read(client, 0x40000000, u8_buf, 4) == ERROR)
 		return ERROR;

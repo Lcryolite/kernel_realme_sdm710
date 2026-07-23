@@ -7,26 +7,25 @@ ifeq ($(call is-board-platform,sdm845),true)
 AUDIO_SELECT  := CONFIG_SND_SOC_SDM845=m
 endif
 
-ifeq ($(call is-board-platform-in-list,sdm710 qcs605),true)
+ifeq ($(call is-board-platform,sdm660),true)
+AUDIO_SELECT  := CONFIG_SND_SOC_SDM660=m
+endif
+
+ifeq ($(call is-board-platform-in-list,msm8953 sdm670 qcs605),true)
 AUDIO_SELECT  := CONFIG_SND_SOC_SDM670=m
 endif
 
-ifeq ($(call is-board-platform-in-list,msm8953 msm8937),true)
-AUDIO_SELECT  := CONFIG_SND_SOC_SDM450=m
+ifeq ($(call is-board-platform,msmnile),true)
+AUDIO_SELECT  := CONFIG_SND_SOC_SM8150=m
 endif
 
-ifeq ($(strip $(AUDIO_FEATURE_ENABLED_DLKM_8909W)),true)
-AUDIO_SELECT  += CONFIG_SND_SOC_BG_8909=m
-AUDIO_SELECT  += CONFIG_SND_SOC_8909_DIG_CDC=m
-endif
-
-ifeq ($(strip $(TARGET_ROARING_LIONUS)),true)
-AUDIO_SELECT  += CONFIG_MSM_8905=m
+ifeq ($(call is-board-platform-in-list,$(MSMSTEPPE) atoll $(TRINKET)),true)
+AUDIO_SELECT  := CONFIG_SND_SOC_SM6150=m
 endif
 
 AUDIO_CHIPSET := audio
 # Build/Package only in case of supported target
-ifeq ($(call is-board-platform-in-list,msm8953 msm8937 sdm845 sdm710 qcs605),true)
+ifeq ($(call is-board-platform-in-list,msm8953 sdm845 sdm670 sdm660 qcs605 msmnile $(MSMSTEPPE) atoll $(TRINKET)),true)
 
 LOCAL_PATH := $(call my-dir)
 
@@ -37,11 +36,7 @@ ifneq ($(findstring opensource,$(LOCAL_PATH)),)
 	AUDIO_BLD_DIR := $(shell pwd)/vendor/qcom/opensource/audio-kernel
 endif # opensource
 
-ifeq ($(AUDIO_FEATURE_ENABLED_DLKM_8909W),true)
-DLKM_DIR := $(TOP)/device/qcom/msm8909w/common/dlkm
-else
 DLKM_DIR := $(TOP)/device/qcom/common/dlkm
-endif
 
 # Build audio.ko as $(AUDIO_CHIPSET)_audio.ko
 ###########################################################

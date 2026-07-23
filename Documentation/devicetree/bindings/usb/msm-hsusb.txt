@@ -1,5 +1,114 @@
 MSM SoC HSUSB controllers
 
+EHCI
+
+Required properties:
+- compatible:	Should contain "qcom,ehci-host"
+- regs:			offset and length of the register set in the memory map
+- usb-phy:		phandle for the PHY device
+
+Example EHCI controller device node:
+
+	ehci: ehci@f9a55000 {
+		compatible = "qcom,ehci-host";
+		reg = <0xf9a55000 0x400>;
+		usb-phy = <&usb_otg>;
+	};
+
+USB PHY with optional OTG:
+
+Required properties:
+- compatible:   Should contain:
+  "qcom,usb-otg-ci" for chipsets with ChipIdea 45nm PHY
+  "qcom,usb-otg-snps" for chipsets with Synopsys 28nm PHY
+  "qcom,hsusb-otg"  for chipsets with ChipIdea 45nm PHY
+
+- regs:         Offset and length of the register set in the memory map
+- interrupts:   interrupt-specifier for the OTG interrupt.
+
+- clocks:       A list of phandle + clock-specifier pairs for the
+                clocks listed in clock-names
+- clock-names:  Should contain the following:
+  "phy"         USB PHY reference clock
+  "core"        Protocol engine clock
+  "iface"       Interface bus clock
+  "alt_core"    Protocol engine clock for targets with asynchronous
+                reset methodology. (optional)
+
+- vdccx-supply: phandle to the regulator for the vdd supply for
+                digital circuit operation.
+- v1p8-supply:  phandle to the regulator for the 1.8V supply
+- v3p3-supply:  phandle to the regulator for the 3.3V supply
+
+- resets:       A list of phandle + reset-specifier pairs for the
+                resets listed in reset-names
+- reset-names:  Should contain the following:
+  "phy"         USB PHY controller reset
+  "link"        USB LINK controller reset
+
+- qcom,otg-control: OTG control (VBUS and ID notifications) can be one of
+                1 - PHY control
+                2 - PMIC control
+
+Optional properties:
+- dr_mode:      One of "host", "peripheral" or "otg". Defaults to "otg"
+
+- switch-gpio:  A phandle + gpio-specifier pair. Some boards are using Dual
+                SPDT USB Switch, witch is cotrolled by GPIO to de/multiplex
+                D+/D- USB lines between connectors.
+
+- qcom,phy-init-sequence: PHY configuration sequence values. This is related to Device
+                Mode Eye Diagram test. Start address at which these values will be
+                written is ULPI_EXT_VENDOR_SPECIFIC. Value of -1 is reserved as
+                "do not overwrite default value at this address".
+                For example: qcom,phy-init-sequence = < -1 0x63 >;
+                Will update only value at address ULPI_EXT_VENDOR_SPECIFIC + 1.
+
+- qcom,phy-num: Select number of pyco-phy to use, can be one of
+                0 - PHY one, default
+                1 - Second PHY
+                Some platforms may have configuration to allow USB
+                controller work with any of the two HSPHYs present.
+
+- qcom,vdd-levels: This property must be a list of three integer values
+                (no, min, max) where each value represents either a voltage
+                in microvolts or a value corresponding to voltage corner.
+
+- qcom,manual-pullup: If present, vbus is not routed to USB controller/phy
+                and controller driver therefore enables pull-up explicitly
+                before starting controller using usbcmd run/stop bit.
+
+- extcon:       phandles to external connector devices. First phandle
+                should point to external connector, which provide "USB"
+                cable events, the second should point to external connector
+                device, which provide "USB-HOST" cable events. If one of
+                the external connector devices is not required empty <0>
+                phandle should be specified.
+
+Example HSUSB OTG controller device node:
+
+    usb@f9a55000 {
+        compatible = "qcom,usb-otg-snps";
+        reg = <0xf9a55000 0x400>;
+        interrupts = <0 134 0>;
+        dr_mode = "peripheral";
+
+        clocks = <&gcc GCC_XO_CLK>, <&gcc GCC_USB_HS_SYSTEM_CLK>,
+                <&gcc GCC_USB_HS_AHB_CLK>;
+
+        clock-names = "phy", "core", "iface";
+
+        vddcx-supply = <&pm8841_s2_corner>;
+        v1p8-supply = <&pm8941_l6>;
+        v3p3-supply = <&pm8941_l24>;
+
+        resets = <&gcc GCC_USB2A_PHY_BCR>, <&gcc GCC_USB_HS_BCR>;
+        reset-names = "phy", "link";
+
+        qcom,otg-control = <1>;
+        qcom,phy-init-sequence = < -1 0x63 >;
+        qcom,vdd-levels = <1 5 7>;
+	};
 OTG:
 
 Required properties :
@@ -7,12 +116,12 @@ Required properties :
 - regs : Array of offset and length of the register sets in the memory map
 - reg-names : indicates various iomem resources passed by name. The possible
 	strings in this field are:
-	    "core": USB controller register space. (Required)
-	    "tcsr": TCSR register for routing USB Controller signals to
-		    either picoPHY0 or picoPHY1. (Optional)
-	    "phy_csr": PHY Wrapper CSR register space. Provides register level
-		       interface through AHB2PHY for performing PHY related
-		       operations like retention and HV interrupts management.
+	"core": USB controller register space. (Required)
+	"tcsr": TCSR register for routing USB Controller signals to
+	either picoPHY0 or picoPHY1. (Optional)
+	"phy_csr": PHY Wrapper CSR register space. Provides register level
+	interface through AHB2PHY for performing PHY related operations
+	like retention and HV interrupts management.
 - interrupts: IRQ line
 - interrupt-names: OTG interrupt name(s) referenced in interrupts above
             HSUSB OTG expects "core_irq" which is IRQ line from CORE and
@@ -68,10 +177,6 @@ Required properties :
 		mode for achieving max throughput.
 - qcom,max-nominal-sysclk-rate: Indicates maximum nominal frequency for which
 	system clock should be voted whenever streaming mode is enabled.
-- resets: reset specifier pair consists of phandle for the reset provider
-	and reset lines used by this controller.
-- reset-names: reset signal name strings sorted in the same order as the resets
-	property.
 
 Optional properties :
 - interrupt-names : Optional interrupt resource entries are:
@@ -125,6 +230,10 @@ Optional properties :
 - qcom,hsusb-l1-supported: If present, the device supports l1 (Link power
 	management).
 - qcom,no-selective-suspend: If present selective suspend is disabled on hub ports.
+- qcom,hsusb-otg-mpm-dpsehv-int: If present, indicates mpm interrupt to be
+	configured for detection of dp line transition during VDD minimization.
+- qcom,hsusb-otg-mpm-dmsehv-int: If present, indicates mpm interrupt to be
+	configured for detection of dm line transition during VDD minimization.
 - pinctrl-names : This should be defined if a target uses gpio and pinctrl framework.
   See "pinctrl" in Documentation/devicetree/bindings/pinctrl/msm-pinctrl.txt.
   It should specify the names of the configs that pinctrl can install in driver
@@ -171,6 +280,8 @@ Optional properties :
 	devicetree/bindings/usb/android-dev.txt for details about "streaming-func" property.
 - qcom,axi-prefetch-enable: If present, AXI64 interface will be used for transferring data
        to/from DDR by controller.
+- qcom,enable-sdp-typec-current-limit: Indicates whether type-c current for SDP CHARGER to
+	be limited.
 - qcom,enable-phy-id-pullup: If present, PHY can keep D+ pull-up resistor on USB ID line
 	during cable disconnect.
 - qcom,max-svs-sysclk-rate: Indicates system clock frequency voted by driver in
@@ -184,13 +295,6 @@ Optional properties :
 - qcom,usbeth-reset-gpio: If present then an external usb-to-eth is connected to
 	the USB host controller and its RESET_N signal is connected to this
 	usbeth-reset-gpio GPIO. It should be driven LOW to RESET the usb-to-eth.
-- extcon: phandles to external connector devices. First phandle should point to
-	external connector, which provide "USB" cable events, the second should
-	point to external connector device, which provide "USB-HOST" cable events.
-	A single phandle may be specified if a single connector device provides
-	both "USB" and "USB-HOST" events.
-- qcom,phy-id-high-as-peripheral: If present, specifies device to switch to device mode
-	if PHY ID state is high or host mode if PHY ID state is low.
 - qcom,enumeration-check-for-sdp: If present, start timer for SDP charger to check enumeration
 	happen or not.
 
@@ -218,6 +322,8 @@ Example HSUSB OTG controller device node :
                 HSUSB_3p3-supply = <&pm8226_l20>;
 		qcom,vdd-voltage-level = <1 5 7>;
 		qcom,dp-manual-pullup;
+		qcom,hsusb-otg-mpm-dpsehv-int = <49>;
+		qcom,hsusb-otg-mpm-dmsehv-int = <58>;
 		qcom,max-nominal-sysclk-rate = <133330000>;
 		qcom,max-svs-sysclk-rate = <100000000>;
 		qcom,pm-qos-latency = <59>;
@@ -235,77 +341,4 @@ Example HSUSB OTG controller device node :
 		qcom,disable-retention-with-vdd-min;
 		qcom,usbin-vadc = <&pm8226_vadc>;
 		qcom,usbid-gpio = <&msm_gpio 110 0>;
-	};
-
-MSM HSUSB EHCI controller
-
-Required properties :
-- compatible : should be "qcom,ehci-host"
-- reg : offset and length of the register set in the memory map
-- interrupts: IRQ lines used by this controller
-- interrupt-names : Required interrupt resource entries are:
-            HSUSB EHCI expects "core_irq" and optionally "async_irq".
-- <supply-name>-supply: handle to the regulator device tree node
-  Required "supply-name" is either "hsusb_vdd_dig" or "HSUSB_VDDCX"
-  "HSUSB_1p8-supply" "HSUSB_3p3-supply".
-- qcom,usb2-power-budget: maximum vbus power (in mA) that can be provided.
-- qcom,vdd-voltage-level: This property must be a list of five integer
-  values (no, 0.5vsuspend, 0.75suspend, min, max) where each value respresents
-  either a voltage in microvolts or a value corresponding to voltage corner.
-  First value represents value to vote when USB is not at all active, second
-  value represents value to vote when target is not connected to dock during low
-  power mode, third value represents vlaue to vote when target is connected to dock
-  and no peripheral connected over dock during low power mode, fourth value represents
-  minimum value to vote when USB is operational, fifth item represents maximum value
-  to vote for USB is operational.
-
-Optional properties :
-- qcom,usb2-enable-hsphy2: If present, select second PHY for USB operation.
-- pinctrl-names : This should be defined if a target uses pinctrl framework.
-  See "pinctrl" in Documentation/devicetree/bindings/pinctrl/msm-pinctrl.txt.
-  It should specify the names of the configs that pinctrl can install in driver
-  Following are the pinctrl configs that can be installed
-	"ehci_active" : Active configuration of pins, this should specify active
-	config defined in pin groups of used gpio's from resume and
-	ext-hub-reset.
-	"ehci_sleep" : Disabled configuration of pins, this should specify sleep
-	config defined in pin groups of used gpio's from resume and
-	ext-hub-reset.
-- qcom,resume-gpio: if present then peripheral connected to usb controller
-  cannot wakeup from XO shutdown using in-band usb bus resume. Use resume
-  gpio to wakeup peripheral.
-- qcom,ext-hub-reset-gpio: If present then an external HUB is connected to
-  the USB host controller and its RESET_N signal is connected to this
-  ext-hub-reset-gpio GPIO. It should be driven LOW to RESET the HUB.
-- qcom,usb2-enable-uicc: If present, usb2 port will be used for uicc card connection.
-- usb-phy: phandle for the PHY device, if described as a separate device tree node
-- qcom,pm-qos-latency: This property represents the maximum tolerable CPU latency in
-  microsecs, which is used as a vote to keep the CPUs in a high enough power state when
-  USB bus is in use (not suspended).
-- Refer to "Documentation/devicetree/bindings/arm/msm/msm-bus.txt" for
-  below optional properties:
-    - qcom,msm-bus,name
-    - qcom,msm-bus,num_cases - Two cases (NONE and MAX) for voting are supported.
-    - qcom,msm-bus,num_paths
-    - qcom,msm-bus,vectors
-
-Example MSM HSUSB EHCI controller device node :
-	ehci: qcom,ehci-host@f9a55000 {
-		compatible = "qcom,ehci-host";
-		reg = <0xf9a55000 0x400>;
-		interrupts = <0 134 0>, <0 140 0>;
-		interrupt-names = "core_irq", "async_irq";
-		/* If pinctrl is used and ext-hub-reset and resume gpio's are present*/
-		pinctrl-names = "ehci_active","ehci_sleep";
-		pinctrl-0 = <&ehci_reset_act &resume_act>;
-		pinctrl-1 = <&ehci_reset_sus &resume_sus>;
-		qcom,resume-gpio = <&msm_gpio 80 0>;
-		qcom,ext-hub-reset-gpio = <&msm_gpio 0 0>;
-		hsusb_vdd_dig-supply = <&pm8841_s2_corner>;
-		HSUSB_1p8-supply = <&pm8941_l6>;
-		HSUSB_3p3-supply = <&pm8941_l24>;
-		qcom,usb2-enable-hsphy2;
-		qcom,usb2-power-budget = <500>;
-		qcom,vdd-voltage-level = <1 2 3 5 7>;
-		qcom,usb2-enable-uicc;
 	};

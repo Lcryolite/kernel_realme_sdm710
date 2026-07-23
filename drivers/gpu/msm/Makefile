@@ -1,4 +1,4 @@
-ccflags-y := -Iinclude/linux
+ccflags-y := -I$(srctree)/include/linux
 
 msm_kgsl_core-y = \
 	kgsl.o \
@@ -12,7 +12,9 @@ msm_kgsl_core-y = \
 	kgsl_snapshot.o \
 	kgsl_events.o \
 	kgsl_pool.o \
+	kgsl_gmu_core.o \
 	kgsl_gmu.o \
+	kgsl_rgmu.o \
 	kgsl_hfi.o
 
 msm_kgsl_core-$(CONFIG_QCOM_KGSL_IOMMU) += kgsl_iommu.o
@@ -26,7 +28,6 @@ msm_adreno-y += \
 	adreno_drawctxt.o \
 	adreno_dispatch.o \
 	adreno_snapshot.o \
-	adreno_coresight.o \
 	adreno_trace.o \
 	adreno_a3xx.o \
 	adreno_a4xx.o \
@@ -39,6 +40,8 @@ msm_adreno-y += \
 	adreno_a4xx_preempt.o \
 	adreno_a5xx_preempt.o \
 	adreno_a6xx_preempt.o \
+	adreno_a6xx_gmu.o \
+	adreno_a6xx_rgmu.o \
 	adreno_sysfs.o \
 	adreno.o \
 	adreno_cp_parser.o \
@@ -47,11 +50,10 @@ msm_adreno-y += \
 msm_adreno-$(CONFIG_QCOM_KGSL_IOMMU) += adreno_iommu.o
 msm_adreno-$(CONFIG_DEBUG_FS) += adreno_debugfs.o adreno_profile.o
 msm_adreno-$(CONFIG_COMPAT) += adreno_compat.o
+msm_adreno-$(CONFIG_CORESIGHT_ADRENO) += adreno_coresight.o
 
 msm_kgsl_core-objs = $(msm_kgsl_core-y)
 msm_adreno-objs = $(msm_adreno-y)
 
 obj-$(CONFIG_QCOM_KGSL) += msm_kgsl_core.o
 obj-$(CONFIG_QCOM_KGSL) += msm_adreno.o
-
-ccflags-y += -Wno-unused-variable

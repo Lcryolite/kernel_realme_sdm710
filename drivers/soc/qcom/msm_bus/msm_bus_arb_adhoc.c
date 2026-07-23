@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2016, 2018-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -252,8 +252,7 @@ static int prune_path(struct list_head *route_list, int dest, int src,
 						&msm_bus_type,
 						NULL,
 						(void *)
-						&bus_node->node_info->
-						id,
+						&bus_node->node_info->id,
 						msm_bus_device_match_adhoc);
 
 					if (!dest_dev) {
@@ -350,28 +349,26 @@ static int getpath(struct device *src_dev, int dest, const char *cl_name)
 				/* Setup list of black-listed nodes */
 				setup_bl_list(bus_node, &black_list);
 
-				for (i = 0; i < bus_node->node_info->
-						num_connections; i++) {
+				for (i = 0; i <
+				bus_node->node_info->num_connections; i++) {
 					bool skip;
 					struct msm_bus_node_device_type
 							*node_conn;
-					node_conn =
-					to_msm_bus_node(bus_node->node_info->
-						dev_connections[i]);
-					if (node_conn->node_info->
-							is_traversed) {
+					node_conn = to_msm_bus_node(
+				bus_node->node_info->dev_connections[i]);
+					if (
+					node_conn->node_info->is_traversed) {
 						MSM_BUS_ERR("Circ Path %d\n",
 						node_conn->node_info->id);
 						goto reset_traversed;
 					}
 					skip = chk_bl_list(&black_list,
-							bus_node->node_info->
-							connections[i]);
+					bus_node->node_info->connections[i]);
 					if (!skip) {
-						list_add_tail(&node_conn->link,
-							&edge_list);
-						node_conn->node_info->
-							is_traversed = true;
+						list_add_tail(
+						&node_conn->link, &edge_list);
+					node_conn->node_info->is_traversed =
+									true;
 					}
 				}
 			}
@@ -381,7 +378,7 @@ static int getpath(struct device *src_dev, int dest, const char *cl_name)
 					 GFP_KERNEL);
 			INIT_LIST_HEAD(&search_node->node_list);
 			list_splice_init(&traverse_list,
-					 &search_node->node_list);
+					&search_node->node_list);
 			/* Add the previous search list to a route list */
 			list_add_tail(&search_node->link, &route_list);
 			/* Advancing the list depth */
@@ -550,6 +547,7 @@ static uint64_t aggregate_bus_req(struct msm_bus_node_device_type *bus_dev,
 	struct msm_bus_node_device_type *fab_dev = NULL;
 	uint32_t agg_scheme;
 	uint64_t max_ib = 0;
+	uint64_t max_ab = 0;
 	uint64_t sum_ab = 0;
 
 	if (!bus_dev || !to_msm_bus_node(bus_dev->node_info->bus_device)) {
@@ -557,14 +555,25 @@ static uint64_t aggregate_bus_req(struct msm_bus_node_device_type *bus_dev,
 		goto exit_agg_bus_req;
 	}
 
+	bus_dev->node_bw[ctx].max_ib_cl_name = NULL;
+	bus_dev->node_bw[ctx].max_ab_cl_name = NULL;
 	fab_dev = to_msm_bus_node(bus_dev->node_info->bus_device);
 	for (i = 0; i < bus_dev->num_lnodes; i++) {
+		if (bus_dev->lnode_list[i].lnode_ib[ctx] > max_ib)
+			bus_dev->node_bw[ctx].max_ib_cl_name =
+					bus_dev->lnode_list[i].cl_name;
 		max_ib = max(max_ib, bus_dev->lnode_list[i].lnode_ib[ctx]);
+		if (bus_dev->lnode_list[i].lnode_ab[ctx] > max_ab) {
+			max_ab = bus_dev->lnode_list[i].lnode_ab[ctx];
+			bus_dev->node_bw[ctx].max_ab_cl_name =
+					bus_dev->lnode_list[i].cl_name;
+		}
 		sum_ab += bus_dev->lnode_list[i].lnode_ab[ctx];
 	}
 
 	bus_dev->node_bw[ctx].sum_ab = sum_ab;
 	bus_dev->node_bw[ctx].max_ib = max_ib;
+	bus_dev->node_bw[ctx].max_ab = max_ab;
 
 	if (bus_dev->node_info->agg_params.agg_scheme != AGG_SCHEME_NONE)
 		agg_scheme = bus_dev->node_info->agg_params.agg_scheme;
@@ -988,7 +997,7 @@ static uint32_t register_client_adhoc(struct msm_bus_scale_pdata *pdata)
 	}
 	client->src_pnode = lnode;
 
-	client->src_devs = kzalloc(pdata->usecase->num_paths *
+	client->src_devs = kcalloc(pdata->usecase->num_paths,
 					sizeof(struct device *), GFP_KERNEL);
 	if (IS_ERR_OR_NULL(client->src_devs)) {
 		MSM_BUS_ERR("%s: Error allocating pathnode ptr!", __func__);

@@ -10,6 +10,7 @@
 #define __LINUX_UIO_H
 
 #include <linux/kernel.h>
+#include <linux/thread_info.h>
 #include <uapi/linux/uio.h>
 
 struct page;
@@ -20,7 +21,7 @@ struct kvec {
 	size_t iov_len;
 };
 
-enum {
+enum iter_type {
 	ITER_IOVEC = 0,
 	ITER_KVEC = 2,
 	ITER_BVEC = 4,
@@ -45,6 +46,36 @@ struct iov_iter {
 		};
 	};
 };
+
+static inline enum iter_type iov_iter_type(const struct iov_iter *i)
+{
+	return i->type & ~(READ | WRITE);
+}
+
+static inline bool iter_is_iovec(const struct iov_iter *i)
+{
+	return iov_iter_type(i) == ITER_IOVEC;
+}
+
+static inline bool iov_iter_is_kvec(const struct iov_iter *i)
+{
+	return iov_iter_type(i) == ITER_KVEC;
+}
+
+static inline bool iov_iter_is_bvec(const struct iov_iter *i)
+{
+	return iov_iter_type(i) == ITER_BVEC;
+}
+
+static inline bool iov_iter_is_pipe(const struct iov_iter *i)
+{
+	return iov_iter_type(i) == ITER_PIPE;
+}
+
+static inline unsigned char iov_iter_rw(const struct iov_iter *i)
+{
+	return i->type & (READ | WRITE);
+}
 
 /*
  * Total number of bytes covered by an iovec.
@@ -73,7 +104,8 @@ static inline struct iovec iov_iter_iovec(const struct iov_iter *iter)
 }
 
 #define iov_for_each(iov, iter, start)				\
-	if (!((start).type & (ITER_BVEC | ITER_PIPE)))		\
+	if (iov_iter_type(start) == ITER_IOVEC ||		\
+	    iov_iter_type(start) == ITER_KVEC)			\
 	for (iter = (start);					\
 	     (iter).count &&					\
 	     ((iov = iov_iter_iovec(&(iter))), 1);		\
@@ -91,9 +123,79 @@ size_t copy_page_to_iter(struct page *page, size_t offset, size_t bytes,
 			 struct iov_iter *i);
 size_t copy_page_from_iter(struct page *page, size_t offset, size_t bytes,
 			 struct iov_iter *i);
-size_t copy_to_iter(const void *addr, size_t bytes, struct iov_iter *i);
-size_t copy_from_iter(void *addr, size_t bytes, struct iov_iter *i);
-size_t copy_from_iter_nocache(void *addr, size_t bytes, struct iov_iter *i);
+
+size_t _copy_to_iter(const void *addr, size_t bytes, struct iov_iter *i);
+size_t _copy_from_iter(void *addr, size_t bytes, struct iov_iter *i);
+bool _copy_from_iter_full(void *addr, size_t bytes, struct iov_iter *i);
+size_t _copy_from_iter_nocache(void *addr, size_t bytes, struct iov_iter *i);
+bool _copy_from_iter_full_nocache(void *addr, size_t bytes, struct iov_iter *i);
+
+static __always_inline __must_check
+size_t copy_to_iter(const void *addr, size_t bytes, struct iov_iter *i)
+{
+	if (unlikely(!check_copy_size(addr, bytes, true)))
+		return 0;
+	else
+		return _copy_to_iter(addr, bytes, i);
+}
+
+static __always_inline __must_check
+size_t copy_from_iter(void *addr, size_t bytes, struct iov_iter *i)
+{
+	if (unlikely(!check_copy_size(addr, bytes, false)))
+		return 0;
+	else
+		return _copy_from_iter(addr, bytes, i);
+}
+
+static __always_inline __must_check
+bool copy_from_iter_full(void *addr, size_t bytes, struct iov_iter *i)
+{
+	if (unlikely(!check_copy_size(addr, bytes, false)))
+		return false;
+	else
+		return _copy_from_iter_full(addr, bytes, i);
+}
+
+static __always_inline __must_check
+size_t copy_from_iter_nocache(void *addr, size_t bytes, struct iov_iter *i)
+{
+	if (unlikely(!check_copy_size(addr, bytes, false)))
+		return 0;
+	else
+		return _copy_from_iter_nocache(addr, bytes, i);
+}
+
+static __always_inline __must_check
+bool copy_from_iter_full_nocache(void *addr, size_t bytes, struct iov_iter *i)
+{
+	if (unlikely(!check_copy_size(addr, bytes, false)))
+		return false;
+	else
+		return _copy_from_iter_full_nocache(addr, bytes, i);
+}
+
+#ifdef CONFIG_ARCH_HAS_UACCESS_FLUSHCACHE
+/*
+ * Note, users like pmem that depend on the stricter semantics of
+ * copy_from_iter_flushcache() than copy_from_iter_nocache() must check for
+ * IS_ENABLED(CONFIG_ARCH_HAS_UACCESS_FLUSHCACHE) before assuming that the
+ * destination is flushed from the cache on return.
+ */
+size_t _copy_from_iter_flushcache(void *addr, size_t bytes, struct iov_iter *i);
+#else
+#define _copy_from_iter_flushcache _copy_from_iter_nocache
+#endif
+
+static __always_inline __must_check
+size_t copy_from_iter_flushcache(void *addr, size_t bytes, struct iov_iter *i)
+{
+	if (unlikely(!check_copy_size(addr, bytes, false)))
+		return 0;
+	else
+		return _copy_from_iter_flushcache(addr, bytes, i);
+}
+
 size_t iov_iter_zero(size_t bytes, struct iov_iter *);
 unsigned long iov_iter_alignment(const struct iov_iter *i);
 unsigned long iov_iter_gap_alignment(const struct iov_iter *i);
@@ -117,19 +219,6 @@ static inline size_t iov_iter_count(const struct iov_iter *i)
 {
 	return i->count;
 }
-
-static inline bool iter_is_iovec(const struct iov_iter *i)
-{
-	return !(i->type & (ITER_BVEC | ITER_KVEC | ITER_PIPE));
-}
-
-/*
- * Get one of READ or WRITE out of iter->type without any other flags OR'd in
- * with it.
- *
- * The ?: is just for type safety.
- */
-#define iov_iter_rw(i) ((0 ? (struct iov_iter *)0 : (i))->type & RW_MASK)
 
 /*
  * Cap the iov_iter by given limit; note that the second argument is
@@ -159,6 +248,7 @@ static inline void iov_iter_reexpand(struct iov_iter *i, size_t count)
 }
 size_t csum_and_copy_to_iter(const void *addr, size_t bytes, __wsum *csum, struct iov_iter *i);
 size_t csum_and_copy_from_iter(void *addr, size_t bytes, __wsum *csum, struct iov_iter *i);
+bool csum_and_copy_from_iter_full(void *addr, size_t bytes, __wsum *csum, struct iov_iter *i);
 
 int import_iovec(int type, const struct iovec __user * uvector,
 		 unsigned nr_segs, unsigned fast_segs,

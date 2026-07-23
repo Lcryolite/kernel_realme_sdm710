@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -51,6 +51,21 @@ enum cam_smmu_region_id {
 };
 
 /**
+ * @brief        : Callback function type that gets called back on cam
+ *                     smmu page fault.
+ *
+ * @param domain   : Iommu domain received in iommu page fault handler
+ * @param dev      : Device received in iommu page fault handler
+ * @param iova     : IOVA where page fault occurred
+ * @param flags    : Flags received in iommu page fault handler
+ * @param token    : Userdata given during callback registration
+ * @param buf_info : Closest mapped buffer info
+ */
+typedef void (*cam_smmu_client_page_fault_handler)(struct iommu_domain *domain,
+	struct device *dev, unsigned long iova, int flags, void *token,
+	uint32_t buf_info);
+
+/**
  * @brief            : Structure to store region information
  *
  * @param iova_start : Start address of region
@@ -100,8 +115,8 @@ int cam_smmu_ops(int handle, enum cam_smmu_ops_param op);
  * @len_ptr     : Length of buffer mapped returned by CAM SMMU driver.
  * @return Status of operation. Negative in case of error. Zero otherwise.
  */
-int cam_smmu_map_user_iova(int handle,
-	int ion_fd, enum cam_smmu_map_dir dir,
+int cam_smmu_map_user_iova(int handle, int ion_fd,
+	struct dma_buf *dmabuf, enum cam_smmu_map_dir dir,
 	dma_addr_t *dma_addr, size_t *len_ptr,
 	enum cam_smmu_region_id region_id);
 
@@ -215,13 +230,19 @@ int cam_smmu_find_index_by_handle(int hdl);
  * @brief       : Registers smmu fault handler for client
  *
  * @param handle: Handle to identify the CAM SMMU client (VFE, CPP, FD etc.)
- * @param client_page_fault_handler: It is triggered in IOMMU page fault
+ * @param handler_cb: It is triggered in IOMMU page fault
  * @param token: It is input param when trigger page fault handler
  */
-void cam_smmu_reg_client_page_fault_handler(int handle,
-	void (*client_page_fault_handler)(struct iommu_domain *,
-	struct device *, unsigned long,
-	int, void*), void *token);
+void cam_smmu_set_client_page_fault_handler(int handle,
+	cam_smmu_client_page_fault_handler handler_cb, void *token);
+
+/**
+ * @brief       : Unregisters smmu fault handler for client
+ *
+ * @param handle: Handle to identify the CAM SMMU client (VFE, CPP, FD etc.)
+ * @param token: It is input param when trigger page fault handler
+ */
+void cam_smmu_unset_client_page_fault_handler(int handle, void *token);
 
 /**
  * @brief Maps memory from an ION fd into IOVA space
@@ -248,6 +269,7 @@ int cam_smmu_get_iova(int handle, int ion_fd,
  */
 int cam_smmu_get_stage2_iova(int handle, int ion_fd,
 	dma_addr_t *paddr_ptr, size_t *len_ptr);
+
 /**
  * @brief Unmaps memory from context bank
  *
@@ -264,15 +286,14 @@ int cam_smmu_put_iova(int handle, int ion_fd);
  * @param handle: SMMU handle identifying secure context bank
  * @param ion_fd: ION fd to map securely
  * @param dir: DMA Direction for the mapping
- * @param client: Ion client passed by caller
  * @param dma_addr: Returned IOVA address after mapping
  * @param len_ptr: Length of memory mapped
  *
  * @return Status of operation. Negative in case of error. Zero otherwise.
  */
-int cam_smmu_map_stage2_iova(int handle,
-	int ion_fd, enum cam_smmu_map_dir dir, struct ion_client *client,
-	ion_phys_addr_t *dma_addr, size_t *len_ptr);
+int cam_smmu_map_stage2_iova(int handle, int ion_fd,
+	struct dma_buf *dmabuf, enum cam_smmu_map_dir dir,
+	dma_addr_t *dma_addr, size_t *len_ptr);
 
 /**
  * @brief Unmaps secure memopry for SMMU handle
@@ -283,7 +304,6 @@ int cam_smmu_map_stage2_iova(int handle,
  * @return Status of operation. Negative in case of error. Zero otherwise.
  */
 int cam_smmu_unmap_stage2_iova(int handle, int ion_fd);
-
 
 /**
  * @brief Allocates firmware for context bank
@@ -297,7 +317,7 @@ int cam_smmu_unmap_stage2_iova(int handle, int ion_fd);
  */
 int cam_smmu_alloc_firmware(int32_t smmu_hdl,
 	dma_addr_t *iova,
-	uint64_t *kvaddr,
+	uintptr_t *kvaddr,
 	size_t *len);
 
 /**
@@ -345,20 +365,7 @@ int cam_smmu_reserve_sec_heap(int32_t smmu_hdl,
  * @return Status of operation. Negative in case of error. Zero otherwise.
  */
 int cam_smmu_release_sec_heap(int32_t smmu_hdl);
-#ifdef VENDOR_EDIT
-//zemin.lai add for qcom patch caseID03917490
-/**
- * @brief Get start addr & len of I/O region for a given cb
- *
- * @param smmu_hdl: SMMU handle identifying the context bank
- * @param iova: IOVA address of allocated I/O region
- * @param len: Length of allocated I/O memory
- *
- * @return Status of operation. Negative in case of error. Zero otherwise.
- */
-int cam_smmu_get_io_region_info(int32_t smmu_hdl,
-	dma_addr_t *iova, size_t *len);
-#endif
+
 /**
  * @brief Allocates qdss for context bank
  *
@@ -380,5 +387,17 @@ int cam_smmu_alloc_qdss(int32_t smmu_hdl,
  * @return Status of operation. Negative in case of error. Zero otherwise.
  */
 int cam_smmu_dealloc_qdss(int32_t smmu_hdl);
+
+/**
+ * @brief Get start addr & len of I/O region for a given cb
+ *
+ * @param smmu_hdl: SMMU handle identifying the context bank
+ * @param iova: IOVA address of allocated I/O region
+ * @param len: Length of allocated I/O memory
+ *
+ * @return Status of operation. Negative in case of error. Zero otherwise.
+ */
+int cam_smmu_get_io_region_info(int32_t smmu_hdl,
+	dma_addr_t *iova, size_t *len);
 
 #endif /* _CAM_SMMU_API_H_ */

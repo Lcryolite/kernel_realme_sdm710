@@ -13,7 +13,6 @@
 #include <linux/device.h>
 #include <linux/platform_device.h>
 #include <linux/reboot.h>
-#include <linux/slab.h>
 #include <asm/prom.h>
 #include <asm/smu.h>
 

@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2017, 2019 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -124,7 +124,7 @@ static inline int _rmnet_is_physical_endpoint_associated(struct net_device *dev)
 
 	rx_handler = rcu_dereference(dev->rx_handler);
 
-	if (rx_handler == rmnet_rx_handler)
+	if (rx_handler == rmnet_data_rx_handler)
 		return 1;
 	else
 		return 0;
@@ -326,7 +326,7 @@ static void _rmnet_netlink_get_logical_ep_config
 	dev = dev_get_by_name(&init_net,
 			      rmnet_header->local_ep_config.dev);
 
-	if (dev)
+	if (dev) {
 		resp_rmnet->return_code =
 			rmnet_get_logical_endpoint_config(
 				dev,
@@ -334,7 +334,7 @@ static void _rmnet_netlink_get_logical_ep_config
 				&resp_rmnet->local_ep_config.operating_mode,
 				resp_rmnet->local_ep_config.next_dev,
 				sizeof(resp_rmnet->local_ep_config.next_dev));
-	else {
+	} else {
 		resp_rmnet->return_code = RMNET_CONFIG_NO_SUCH_DEVICE;
 		return;
 	}
@@ -800,7 +800,6 @@ int rmnet_set_egress_data_format(struct net_device *dev,
 				 u16 agg_count)
 {
 	struct rmnet_phys_ep_config *config;
-	unsigned long flags;
 
 	ASSERT_RTNL();
 
@@ -816,11 +815,8 @@ int rmnet_set_egress_data_format(struct net_device *dev,
 		return RMNET_CONFIG_UNKNOWN_ERROR;
 
 	config->egress_data_format = egress_data_format;
-
-	spin_lock_irqsave(&config->agg_lock, flags);
 	config->egress_agg_size = agg_size;
 	config->egress_agg_count = agg_count;
-	spin_unlock_irqrestore(&config->agg_lock, flags);
 
 	return RMNET_CONFIG_OK;
 }
@@ -876,7 +872,7 @@ int rmnet_associate_network_device(struct net_device *dev)
 	config->recycle = kfree_skb;
 	hrtimer_init(&conf->hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	conf->hrtimer.function = rmnet_map_flush_packet_queue;
-	rc = netdev_rx_handler_register(dev, rmnet_rx_handler, config);
+	rc = netdev_rx_handler_register(dev, rmnet_data_rx_handler, config);
 
 	if (rc) {
 		LOGM("netdev_rx_handler_register returns %d", rc);

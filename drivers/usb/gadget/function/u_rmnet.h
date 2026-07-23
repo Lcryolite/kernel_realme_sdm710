@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2017, 2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -22,7 +22,7 @@
 
 enum bam_dmux_func_type {
 	BAM_DMUX_FUNC_RMNET,
-	BAM_DMUX_FUNC_MBIM,
+	BAM_DMUX_FUNC_MBIM = 0,
 	BAM_DMUX_FUNC_DPL,
 	BAM_DMUX_NUM_FUNCS,
 };

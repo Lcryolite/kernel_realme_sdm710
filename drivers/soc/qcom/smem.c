@@ -1,6 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2015, Sony Mobile Communications AB.
- * Copyright (c) 2012-2013, 2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2013, 2017, 2019-2020 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -52,8 +53,13 @@
  *
  * Items in the non-cached region are allocated from the start of the partition
  * while items in the cached region are allocated from the end. The free area
- * is hence the region between the cached and non-cached offsets.
+ * is hence the region between the cached and non-cached offsets. The header of
+ * cached items comes after the data.
  *
+ * Version 12 (SMEM_GLOBAL_PART_VERSION) changes the item alloc/get procedure
+ * for the global heap. A new global partition is created from the global heap
+ * region with partition type (SMEM_GLOBAL_HOST) and the max smem item count is
+ * set by the bootloader.
  *
  * To synchronize allocations in the shared memory heaps a remote spinlock must
  * be held - currently lock number 3 of the sfpb or tcsr is used for this on all
@@ -62,13 +68,13 @@
  */
 
 /*
- * Item 3 of the global heap contains an array of versions for the various
- * software components in the SoC. We verify that the boot loader version is
- * what the expected version (SMEM_EXPECTED_VERSION) as a sanity check.
+ * The version member of the smem header contains an array of versions for the
+ * various software components in the SoC. We verify that the boot loader
+ * version is a valid version as a sanity check.
  */
-#define SMEM_ITEM_VERSION	3
-#define  SMEM_MASTER_SBL_VERSION_INDEX	7
-#define  SMEM_EXPECTED_VERSION		11
+#define SMEM_MASTER_SBL_VERSION_INDEX	7
+#define SMEM_GLOBAL_HEAP_VERSION	11
+#define SMEM_GLOBAL_PART_VERSION	12
 
 /*
  * The first 8 items are only to be allocated by the boot loader while
@@ -82,8 +88,11 @@
 /* Processor/host identifier for the application processor */
 #define SMEM_HOST_APPS		0
 
+/* Processor/host identifier for the global partition */
+#define SMEM_GLOBAL_HOST	0xfffe
+
 /* Max number of processors/hosts in a system */
-#define SMEM_HOST_COUNT		9
+#define SMEM_HOST_COUNT		13
 
 /* Entry range check
  * ptr >= start : Checks if ptr is greater than the start of access region
@@ -151,6 +160,7 @@ struct smem_header {
  * @flags:	flags for the partition (currently unused)
  * @host0:	first processor/host with access to this partition
  * @host1:	second processor/host with access to this partition
+ * @cacheline:	alignment for "cached" entries
  * @reserved:	reserved entries for later use
  */
 struct smem_ptable_entry {
@@ -159,7 +169,8 @@ struct smem_ptable_entry {
 	__le32 flags;
 	__le16 host0;
 	__le16 host1;
-	__le32 reserved[8];
+	__le32 cacheline;
+	__le32 reserved[7];
 };
 
 /**
@@ -224,6 +235,24 @@ struct smem_private_entry {
 #define SMEM_PRIVATE_CANARY	0xa5a5
 
 /**
+ * struct smem_info - smem region info located after the table of contents
+ * @magic:	magic number, must be SMEM_INFO_MAGIC
+ * @size:	size of the smem region
+ * @base_addr:	base address of the smem region
+ * @reserved:	for now reserved entry
+ * @num_items:	highest accepted item number
+ */
+struct smem_info {
+	u8 magic[4];
+	__le32 size;
+	__le32 base_addr;
+	__le32 reserved;
+	__le16 num_items;
+};
+
+static const u8 SMEM_INFO_MAGIC[] = { 0x53, 0x49, 0x49, 0x49 }; /* SIII */
+
+/**
  * struct smem_region - representation of a chunk of memory used for smem
  * @aux_base:	identifier of aux_mem base
  * @virt_base:	virtual base address of memory with this aux_mem identifier
@@ -239,8 +268,10 @@ struct smem_region {
  * struct qcom_smem - device data for the smem device
  * @dev:	device pointer
  * @hwlock:	reference to a hwspinlock
+ * @global_partition_entry: pointer to global partition entry when in use
  * @ptable_entries: list of pointers to partitions table entry of current
  *		processor/host
+ * @item_count: max accepted item number
  * @num_regions: number of @regions
  * @regions:	list of the memory regions defining the shared memory
  */
@@ -249,7 +280,9 @@ struct qcom_smem {
 
 	struct hwspinlock *hwlock;
 
+	struct smem_ptable_entry *global_partition_entry;
 	struct smem_ptable_entry *ptable_entries[SMEM_HOST_COUNT];
+	u32 item_count;
 
 	unsigned num_regions;
 	struct smem_region regions[0];
@@ -257,6 +290,9 @@ struct qcom_smem {
 
 /* Pointer to the one and only smem handle */
 static struct qcom_smem *__smem;
+
+/* default smem host id for apps is SMEM_HOST_APPS */
+static u32 smem_host_id = SMEM_HOST_APPS;
 
 /* Timeout (ms) for the trylock of remote spinlocks */
 #define HWSPINLOCK_TIMEOUT	1000
@@ -268,14 +304,22 @@ ptable_entry_to_phdr(struct smem_ptable_entry *entry)
 }
 
 static struct smem_private_entry *
-phdr_to_last_private_entry(struct smem_partition_header *phdr)
+phdr_to_last_uncached_entry(struct smem_partition_header *phdr)
 {
 	void *p = phdr;
 
 	return p + le32_to_cpu(phdr->offset_free_uncached);
 }
 
-static void *phdr_to_first_cached_entry(struct smem_partition_header *phdr)
+static void *phdr_to_first_cached_entry(struct smem_partition_header *phdr,
+					size_t cacheline)
+{
+	void *p = phdr;
+
+	return p + le32_to_cpu(phdr->size) - ALIGN(sizeof(*phdr), cacheline);
+}
+
+static void *phdr_to_last_cached_entry(struct smem_partition_header *phdr)
 {
 	void *p = phdr;
 
@@ -283,7 +327,7 @@ static void *phdr_to_first_cached_entry(struct smem_partition_header *phdr)
 }
 
 static struct smem_private_entry *
-phdr_to_first_private_entry(struct smem_partition_header *phdr)
+phdr_to_first_uncached_entry(struct smem_partition_header *phdr)
 {
 	void *p = phdr;
 
@@ -291,7 +335,7 @@ phdr_to_first_private_entry(struct smem_partition_header *phdr)
 }
 
 static struct smem_private_entry *
-private_entry_next(struct smem_private_entry *e)
+uncached_entry_next(struct smem_private_entry *e)
 {
 	void *p = e;
 
@@ -299,11 +343,26 @@ private_entry_next(struct smem_private_entry *e)
 	       le32_to_cpu(e->size);
 }
 
-static void *entry_to_item(struct smem_private_entry *e)
+static struct smem_private_entry *
+cached_entry_next(struct smem_private_entry *e, size_t cacheline)
+{
+	void *p = e;
+
+	return p - le32_to_cpu(e->size) - ALIGN(sizeof(*e), cacheline);
+}
+
+static void *uncached_entry_to_item(struct smem_private_entry *e)
 {
 	void *p = e;
 
 	return p + sizeof(*e) + le16_to_cpu(e->padding_hdr);
+}
+
+static void *cached_entry_to_item(struct smem_private_entry *e)
+{
+	void *p = e;
+
+	return p - le32_to_cpu(e->size);
 }
 
 static int qcom_smem_alloc_private(struct qcom_smem *smem,
@@ -313,6 +372,7 @@ static int qcom_smem_alloc_private(struct qcom_smem *smem,
 {
 	struct smem_private_entry *hdr, *end;
 	struct smem_partition_header *phdr;
+	struct smem_private_entry *next_hdr;
 	size_t alloc_size;
 	void *cached;
 	void *p_end;
@@ -320,18 +380,18 @@ static int qcom_smem_alloc_private(struct qcom_smem *smem,
 	phdr = ptable_entry_to_phdr(entry);
 	p_end = (void *)phdr + le32_to_cpu(entry->size);
 
-	hdr = phdr_to_first_private_entry(phdr);
-	end = phdr_to_last_private_entry(phdr);
-	cached = phdr_to_first_cached_entry(phdr);
+	hdr = phdr_to_first_uncached_entry(phdr);
+	end = phdr_to_last_uncached_entry(phdr);
+	cached = phdr_to_last_cached_entry(phdr);
 
 	if (WARN_ON(!IN_PARTITION_RANGE(end, 0, phdr, cached) ||
 						cached > p_end))
 		return -EINVAL;
 
-	while (hdr < end) {
+	while ((hdr < end) && ((hdr + 1) < end)) {
 		if (hdr->canary != SMEM_PRIVATE_CANARY) {
 			dev_err(smem->dev,
-				"Found invalid canary in host %d:%d partition\n",
+				"Found invalid canary in hosts %d:%d partition\n",
 				phdr->host0, phdr->host1);
 			return -EINVAL;
 		}
@@ -339,9 +399,15 @@ static int qcom_smem_alloc_private(struct qcom_smem *smem,
 		if (le16_to_cpu(hdr->item) == item)
 			return -EEXIST;
 
-		hdr = private_entry_next(hdr);
+		next_hdr = uncached_entry_next(hdr);
+
+		if (WARN_ON(next_hdr <= hdr))
+			return -EINVAL;
+
+		hdr = next_hdr;
 	}
-	if (WARN_ON((void *)hdr > p_end))
+
+	if (WARN_ON((void *)hdr > (void *)end))
 		return -EINVAL;
 
 	/* Check that we don't grow into the cached region */
@@ -372,11 +438,8 @@ static int qcom_smem_alloc_global(struct qcom_smem *smem,
 				  unsigned item,
 				  size_t size)
 {
-	struct smem_header *header;
 	struct smem_global_entry *entry;
-
-	if (WARN_ON(item >= SMEM_ITEM_COUNT))
-		return -EINVAL;
+	struct smem_header *header;
 
 	header = smem->regions[0].virt_base;
 	entry = &header->toc[item];
@@ -428,6 +491,9 @@ int qcom_smem_alloc(unsigned host, unsigned item, size_t size)
 		return -EINVAL;
 	}
 
+	if (WARN_ON(item >= __smem->item_count))
+		return -EINVAL;
+
 	ret = hwspin_lock_timeout_irqsave(__smem->hwlock,
 					  HWSPINLOCK_TIMEOUT,
 					  &flags);
@@ -436,6 +502,9 @@ int qcom_smem_alloc(unsigned host, unsigned item, size_t size)
 
 	if (host < SMEM_HOST_COUNT && __smem->ptable_entries[host]) {
 		entry = __smem->ptable_entries[host];
+		ret = qcom_smem_alloc_private(__smem, entry, item, size);
+	} else if (__smem->global_partition_entry) {
+		entry = __smem->global_partition_entry;
 		ret = qcom_smem_alloc_private(__smem, entry, item, size);
 	} else {
 		ret = qcom_smem_alloc_global(__smem, item, size);
@@ -458,9 +527,6 @@ static void *qcom_smem_get_global(struct qcom_smem *smem,
 	u32 e_size;
 	u32 aux_base;
 	unsigned i;
-
-	if (WARN_ON(item >= SMEM_ITEM_COUNT))
-		return ERR_PTR(-EINVAL);
 
 	header = smem->regions[0].virt_base;
 	entry = &header->toc[item];
@@ -494,31 +560,32 @@ static void *qcom_smem_get_private(struct qcom_smem *smem,
 				   unsigned item,
 				   size_t *size)
 {
-	struct smem_partition_header *phdr;
-	struct smem_private_entry *e, *end;
+	struct smem_private_entry *e, *uncached_end, *cached_end;
 	struct smem_private_entry *next_e;
+	struct smem_partition_header *phdr;
 	void *item_ptr, *p_end;
+	size_t entry_size = 0;
 	u32 partition_size;
+	size_t cacheline;
 	u32 padding_data;
 	u32 e_size;
 
 	phdr = ptable_entry_to_phdr(entry);
 	partition_size = le32_to_cpu(entry->size);
 	p_end = (void *)phdr + partition_size;
+	cacheline = le32_to_cpu(entry->cacheline);
 
-	e = phdr_to_first_private_entry(phdr);
-	end = phdr_to_last_private_entry(phdr);
+	e = phdr_to_first_uncached_entry(phdr);
+	uncached_end = phdr_to_last_uncached_entry(phdr);
+	cached_end = phdr_to_last_cached_entry(phdr);
 
-	if (WARN_ON((void *)end > p_end))
+	if (WARN_ON(!IN_PARTITION_RANGE(uncached_end, 0, phdr, cached_end)
+					|| (void *)cached_end > p_end))
 		return ERR_PTR(-EINVAL);
 
-	while ((e < end) && ((e + 1) < end)) {
-		if (e->canary != SMEM_PRIVATE_CANARY) {
-			dev_err(smem->dev,
-				"Found invalid canary in host %d:%d partition\n",
-				phdr->host0, phdr->host1);
-			return ERR_PTR(-EINVAL);
-		}
+	while ((e < uncached_end) && ((e + 1) < uncached_end)) {
+		if (e->canary != SMEM_PRIVATE_CANARY)
+			goto invalid_canary;
 
 		if (le16_to_cpu(e->item) == item) {
 			e_size = le32_to_cpu(e->size);
@@ -529,10 +596,10 @@ static void *qcom_smem_get_private(struct qcom_smem *smem,
 			else
 				return ERR_PTR(-EINVAL);
 
-			item_ptr = entry_to_item(e);
+			item_ptr =  uncached_entry_to_item(e);
 
-			if (WARN_ON(!IN_PARTITION_RANGE(item_ptr, entry_size,
-								    e, end)))
+			if (WARN_ON(!IN_PARTITION_RANGE(item_ptr, entry_size, e,
+								uncached_end)))
 				return ERR_PTR(-EINVAL);
 
 			if (size != NULL)
@@ -541,12 +608,67 @@ static void *qcom_smem_get_private(struct qcom_smem *smem,
 			return item_ptr;
 		}
 
-		e = private_entry_next(e);
+		next_e = uncached_entry_next(e);
+		if (WARN_ON(next_e <= e))
+			return ERR_PTR(-EINVAL);
+
+		e = next_e;
 	}
-	if (WARN_ON((void *)e > p_end))
+	if (WARN_ON((void *)e > (void *)uncached_end))
+		return ERR_PTR(-EINVAL);
+
+	/* Item was not found in the uncached list, search the cached list */
+
+	if (cached_end == p_end)
+		return ERR_PTR(-ENOENT);
+
+	e = phdr_to_first_cached_entry(phdr, cacheline);
+
+	if (WARN_ON(!IN_PARTITION_RANGE(cached_end, 0, uncached_end, p_end) ||
+			!IN_PARTITION_RANGE(e, sizeof(*e), cached_end, p_end)))
+		return ERR_PTR(-EINVAL);
+
+	while (e > cached_end) {
+		if (e->canary != SMEM_PRIVATE_CANARY)
+			goto invalid_canary;
+
+		if (le16_to_cpu(e->item) == item) {
+			e_size = le32_to_cpu(e->size);
+			padding_data = le16_to_cpu(e->padding_data);
+
+			if (e_size < partition_size && padding_data < e_size)
+				entry_size  = e_size - padding_data;
+			else
+				return ERR_PTR(-EINVAL);
+
+			item_ptr =  cached_entry_to_item(e);
+			if (WARN_ON(!IN_PARTITION_RANGE(item_ptr, entry_size,
+							cached_end, e)))
+				return ERR_PTR(-EINVAL);
+
+			if (size != NULL)
+				*size = entry_size;
+
+			return item_ptr;
+		}
+
+		next_e = cached_entry_next(e, cacheline);
+		if (WARN_ON(next_e >= e))
+			return ERR_PTR(-EINVAL);
+
+		e = next_e;
+	}
+
+	if (WARN_ON((void *)e < (void *)phdr))
 		return ERR_PTR(-EINVAL);
 
 	return ERR_PTR(-ENOENT);
+
+invalid_canary:
+	dev_err(smem->dev, "Found invalid canary in hosts %d:%d partition\n",
+			phdr->host0, phdr->host1);
+
+	return ERR_PTR(-EINVAL);
 }
 
 /**
@@ -568,6 +690,9 @@ void *qcom_smem_get(unsigned host, unsigned item, size_t *size)
 	if (!__smem)
 		return ptr;
 
+	if (WARN_ON(item >= __smem->item_count))
+		return ERR_PTR(-EINVAL);
+
 	ret = hwspin_lock_timeout_irqsave(__smem->hwlock,
 					  HWSPINLOCK_TIMEOUT,
 					  &flags);
@@ -577,9 +702,13 @@ void *qcom_smem_get(unsigned host, unsigned item, size_t *size)
 	if (host < SMEM_HOST_COUNT && __smem->ptable_entries[host]) {
 		entry = __smem->ptable_entries[host];
 		ptr = qcom_smem_get_private(__smem, entry, item, size);
+	} else if (__smem->global_partition_entry) {
+		entry = __smem->global_partition_entry;
+		ptr = qcom_smem_get_private(__smem, entry, item, size);
 	} else {
 		ptr = qcom_smem_get_global(__smem, item, size);
 	}
+
 	hwspin_unlock_irqrestore(__smem->hwlock, &flags);
 
 	return ptr;
@@ -613,6 +742,15 @@ int qcom_smem_get_free_space(unsigned host)
 
 		if (ret > le32_to_cpu(entry->size))
 			return -EINVAL;
+	} else if (__smem->global_partition_entry) {
+		entry = __smem->global_partition_entry;
+		phdr = ptable_entry_to_phdr(entry);
+
+		ret = le32_to_cpu(phdr->offset_free_cached) -
+		      le32_to_cpu(phdr->offset_free_uncached);
+
+		if (ret > le32_to_cpu(entry->size))
+			return -EINVAL;
 	} else {
 		header = __smem->regions[0].virt_base;
 		ret = le32_to_cpu(header->available);
@@ -625,45 +763,159 @@ int qcom_smem_get_free_space(unsigned host)
 }
 EXPORT_SYMBOL(qcom_smem_get_free_space);
 
+/**
+ * qcom_smem_virt_to_phys() - Convert SMEM address to physical address.
+ * @smem_address	Address of SMEM item (returned by qcom_smem_get())
+
+ * This function should only be used if an SMEM item needs to be handed off
+ * to a DMA engine.
+ */
+phys_addr_t qcom_smem_virt_to_phys(void *addr)
+{
+	phys_addr_t phys_addr = 0;
+	struct smem_region *area;
+	void *end;
+	int i;
+
+	if (!__smem)
+		return phys_addr;
+
+	for (i = 0; i < __smem->num_regions; i++) {
+		area = &__smem->regions[i];
+		end = area->virt_base + area->size;
+		if (addr >= area->virt_base && addr < end)
+			phys_addr = addr - area->virt_base + area->aux_base;
+	}
+
+	return phys_addr;
+}
+EXPORT_SYMBOL(qcom_smem_virt_to_phys);
+
 static int qcom_smem_get_sbl_version(struct qcom_smem *smem)
 {
+	struct smem_header *header;
 	__le32 *versions;
-	size_t size;
 
-	versions = qcom_smem_get_global(smem, SMEM_ITEM_VERSION, &size);
-	if (IS_ERR(versions)) {
-		dev_err(smem->dev, "Unable to read the version item\n");
-		return -ENOENT;
-	}
-
-	if (size < sizeof(unsigned) * SMEM_MASTER_SBL_VERSION_INDEX) {
-		dev_err(smem->dev, "Version item is too small\n");
-		return -EINVAL;
-	}
+	header = smem->regions[0].virt_base;
+	versions = header->version;
 
 	return le32_to_cpu(versions[SMEM_MASTER_SBL_VERSION_INDEX]);
 }
 
-static int qcom_smem_enumerate_partitions(struct qcom_smem *smem,
-					  unsigned local_host)
+static struct smem_ptable *qcom_smem_get_ptable(struct qcom_smem *smem)
 {
-	struct smem_partition_header *header;
-	struct smem_ptable_entry *entry;
 	struct smem_ptable *ptable;
-	unsigned remote_host;
-	u32 version, host0, host1;
-	int i;
+	u32 version;
 
 	ptable = smem->regions[0].virt_base + smem->regions[0].size - SZ_4K;
 	if (memcmp(ptable->magic, SMEM_PTABLE_MAGIC, sizeof(ptable->magic)))
-		return 0;
+		return NULL;
 
 	version = le32_to_cpu(ptable->version);
 	if (version != 1) {
 		dev_err(smem->dev,
 			"Unsupported partition header version %d\n", version);
+		return ERR_PTR(-EINVAL);
+	}
+	return ptable;
+}
+
+static u32 qcom_smem_get_dynamic_item(struct qcom_smem *smem)
+{
+	struct smem_ptable *ptable;
+	struct smem_info *info;
+
+	ptable = qcom_smem_get_ptable(smem);
+	if (IS_ERR_OR_NULL(ptable))
+		return SMEM_ITEM_COUNT;
+
+	info = (struct smem_info *)&ptable->entry[ptable->num_entries];
+	if (memcmp(info->magic, SMEM_INFO_MAGIC, sizeof(info->magic)))
+		return SMEM_ITEM_COUNT;
+
+	return le16_to_cpu(info->num_items);
+}
+
+static int qcom_smem_set_global_partition(struct qcom_smem *smem)
+{
+	struct smem_partition_header *header;
+	struct smem_ptable_entry *entry = NULL;
+	struct smem_ptable *ptable;
+	u32 host0, host1, size;
+	int i;
+
+	ptable = qcom_smem_get_ptable(smem);
+	if (IS_ERR_OR_NULL(ptable))
+		return -EINVAL;
+
+	for (i = 0; i < le32_to_cpu(ptable->num_entries); i++) {
+		entry = &ptable->entry[i];
+		host0 = le16_to_cpu(entry->host0);
+		host1 = le16_to_cpu(entry->host1);
+
+		if (host0 == SMEM_GLOBAL_HOST && host0 == host1)
+			break;
+	}
+
+	if (!entry) {
+		dev_err(smem->dev, "Missing entry for global partition\n");
 		return -EINVAL;
 	}
+
+	if (!le32_to_cpu(entry->offset) || !le32_to_cpu(entry->size)) {
+		dev_err(smem->dev, "Invalid entry for global partition\n");
+		return -EINVAL;
+	}
+
+	if (smem->global_partition_entry) {
+		dev_err(smem->dev, "Already found the global partition\n");
+		return -EINVAL;
+	}
+
+	header = smem->regions[0].virt_base + le32_to_cpu(entry->offset);
+	host0 = le16_to_cpu(header->host0);
+	host1 = le16_to_cpu(header->host1);
+
+	if (memcmp(header->magic, SMEM_PART_MAGIC, sizeof(header->magic))) {
+		dev_err(smem->dev, "Global partition has invalid magic\n");
+		return -EINVAL;
+	}
+
+	if (host0 != SMEM_GLOBAL_HOST && host1 != SMEM_GLOBAL_HOST) {
+		dev_err(smem->dev, "Global partition hosts are invalid\n");
+		return -EINVAL;
+	}
+
+	if (le32_to_cpu(header->size) != le32_to_cpu(entry->size)) {
+		dev_err(smem->dev, "Global partition has invalid size\n");
+		return -EINVAL;
+	}
+
+	size = le32_to_cpu(header->offset_free_uncached);
+	if (size > le32_to_cpu(header->size)) {
+		dev_err(smem->dev,
+			"Global partition has invalid free pointer\n");
+		return -EINVAL;
+	}
+
+	smem->global_partition_entry = entry;
+
+	return 0;
+}
+
+static int qcom_smem_enumerate_partitions(struct qcom_smem *smem,
+					  unsigned int local_host)
+{
+	struct smem_partition_header *header;
+	struct smem_ptable_entry *entry;
+	struct smem_ptable *ptable;
+	unsigned int remote_host;
+	u32 host0, host1;
+	int i;
+
+	ptable = qcom_smem_get_ptable(smem);
+	if (IS_ERR_OR_NULL(ptable))
+		return PTR_ERR(ptable);
 
 	for (i = 0; i < le32_to_cpu(ptable->num_entries); i++) {
 		entry = &ptable->entry[i];
@@ -775,6 +1027,7 @@ static int qcom_smem_probe(struct platform_device *pdev)
 	int hwlock_id;
 	u32 version;
 	int ret;
+	u32 host_id;
 
 	num_regions = 1;
 	if (of_find_property(pdev->dev.of_node, "qcom,rpm-msg-ram", NULL))
@@ -796,6 +1049,10 @@ static int qcom_smem_probe(struct platform_device *pdev)
 					"qcom,rpm-msg-ram", 1)))
 		return ret;
 
+	ret = of_property_read_u32(pdev->dev.of_node, "smem-host-id", &host_id);
+	if (!ret)
+		smem_host_id = host_id;
+
 	header = smem->regions[0].virt_base;
 	if (le32_to_cpu(header->initialized) != 1 ||
 	    le32_to_cpu(header->reserved)) {
@@ -804,12 +1061,22 @@ static int qcom_smem_probe(struct platform_device *pdev)
 	}
 
 	version = qcom_smem_get_sbl_version(smem);
-	if (version >> 16 != SMEM_EXPECTED_VERSION) {
+	switch (version >> 16) {
+	case SMEM_GLOBAL_PART_VERSION:
+		ret = qcom_smem_set_global_partition(smem);
+		if (ret < 0)
+			return ret;
+		smem->item_count = qcom_smem_get_dynamic_item(smem);
+		break;
+	case SMEM_GLOBAL_HEAP_VERSION:
+		smem->item_count = SMEM_ITEM_COUNT;
+		break;
+	default:
 		dev_err(&pdev->dev, "Unsupported SMEM version 0x%x\n", version);
 		return -EINVAL;
 	}
 
-	ret = qcom_smem_enumerate_partitions(smem, SMEM_HOST_APPS);
+	ret = qcom_smem_enumerate_partitions(smem, smem_host_id);
 	if (ret < 0)
 		return ret;
 
@@ -832,10 +1099,51 @@ static int qcom_smem_probe(struct platform_device *pdev)
 static int qcom_smem_remove(struct platform_device *pdev)
 {
 	hwspin_lock_free(__smem->hwlock);
+	/* In case of Hibernation Restore __smem object is still valid
+	 * and we call probe again so same object get allocated again
+	 * that result into possible memory leak, hence explicitly freeing
+	 * it here.
+	 */
+	devm_kfree(&pdev->dev, __smem);
 	__smem = NULL;
 
 	return 0;
 }
+
+static int qcom_smem_freeze(struct device *dev)
+{
+	struct platform_device *pdev = container_of(dev, struct
+					platform_device, dev);
+	dev_dbg(dev, "%s\n", __func__);
+
+	qcom_smem_remove(pdev);
+
+	return 0;
+}
+
+static int qcom_smem_restore(struct device *dev)
+{
+	int ret = 0;
+	struct platform_device *pdev = container_of(dev, struct
+					platform_device, dev);
+	dev_dbg(dev, "%s\n", __func__);
+
+	/*
+	 * SMEM related information has to fetched again
+	 * during resuming from Hibernation, Hence call probe.
+	 */
+	ret = qcom_smem_probe(pdev);
+	if (ret)
+		dev_err(dev, "Error getting SMEM information");
+
+	return ret;
+}
+
+static const struct dev_pm_ops qcom_smem_pm_ops = {
+	.freeze_late = qcom_smem_freeze,
+	.restore_early = qcom_smem_restore,
+	.thaw_early = qcom_smem_restore,
+};
 
 static const struct of_device_id qcom_smem_of_match[] = {
 	{ .compatible = "qcom,smem" },
@@ -850,6 +1158,7 @@ static struct platform_driver qcom_smem_driver = {
 		.name = "qcom-smem",
 		.of_match_table = qcom_smem_of_match,
 		.suppress_bind_attrs = true,
+		.pm = &qcom_smem_pm_ops,
 	},
 };
 

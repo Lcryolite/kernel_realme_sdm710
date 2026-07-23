@@ -1,6 +1,7 @@
 menuconfig PM_DEVFREQ
 	bool "Generic Dynamic Voltage and Frequency Scaling (DVFS) support"
 	select SRCU
+	select PM_OPP
 	help
 	  A device may have a list of frequencies and voltages available.
 	  devfreq, a generic DVFS framework can be registered for a device
@@ -79,12 +80,6 @@ config DEVFREQ_GOV_CPUFREQ
 	  Chooses frequency based on the online CPUs' current frequency and a
 	  CPU frequency to device frequency mapping table(s). This governor
 	  can be useful for controlling devices such as DDR, cache, CCI, etc.
-
-config SIMPLE_GPU_ALGORITHM
-	bool "Simple GPU algorithm"
-	depends on DEVFREQ_GOV_QCOM_ADRENO_TZ
-	help
-	  Simple user configurable GPU controlling algorithm
 
 config QCOM_BIMC_BWMON
 	tristate "QCOM BIMC Bandwidth monitor hardware"
@@ -249,7 +244,7 @@ config SPDM_SCM
 	help
 	  SPDM driver support the dcvs algorithm logic being accessed via
 	  scm or hvc calls. This adds the support for SPDM interaction to
-          tz via SCM based call. If not selected then Hypervior interaction
+          tz via SCM based call. If not selected then Hypervisor interaction
           will be activated.
 
 config DEVFREQ_SPDM
@@ -260,6 +255,13 @@ config DEVFREQ_SPDM
 	  This adds the support for SPDM based bandwidth voting on QTI chipsets.
 	  This driver allows any SPDM based client to vote for bandwidth.
 	  Used with the QTI SPDM Hypervisor Governor.
+
+config DEVFREQ_GOV_CDSPL3
+	bool "QTI DEVFREQ governor for CDSP L3 requests"
+	depends on QCOM_CDSP_RM
+	help
+	  CDSP resource manager will use this governor to vote for L3 clock
+	  for IO-coherent traffic generated from CDSP
 
 source "drivers/devfreq/event/Kconfig"
 

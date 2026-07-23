@@ -19,11 +19,15 @@
 #include <linux/kernfs.h>
 
 struct kernfs_iattrs {
-	struct iattr		ia_iattr;
-	void			*ia_secdata;
-	u32			ia_secdata_len;
+	kuid_t			ia_uid;
+	kgid_t			ia_gid;
+	struct timespec64	ia_atime;
+	struct timespec64	ia_mtime;
+	struct timespec64	ia_ctime;
 
 	struct simple_xattrs	xattrs;
+	atomic_t		nr_user_xattrs;
+	atomic_t		user_xattr_size;
 };
 
 /* +1 to avoid triggering overflow warning when negating it */
@@ -70,6 +74,13 @@ struct kernfs_super_info {
 };
 #define kernfs_info(SB) ((struct kernfs_super_info *)(SB->s_fs_info))
 
+static inline struct kernfs_node *kernfs_dentry_node(struct dentry *dentry)
+{
+	if (d_really_is_negative(dentry))
+		return NULL;
+	return d_inode(dentry)->i_private;
+}
+
 extern const struct super_operations kernfs_sops;
 extern struct kmem_cache *kernfs_node_cache;
 
@@ -83,6 +94,7 @@ int kernfs_iop_setattr(struct dentry *dentry, struct iattr *iattr);
 int kernfs_iop_getattr(const struct path *path, struct kstat *stat,
 		       u32 request_mask, unsigned int query_flags);
 ssize_t kernfs_iop_listxattr(struct dentry *dentry, char *buf, size_t size);
+int __kernfs_setattr(struct kernfs_node *kn, const struct iattr *iattr);
 
 /*
  * dir.c
@@ -97,6 +109,7 @@ void kernfs_put_active(struct kernfs_node *kn);
 int kernfs_add_one(struct kernfs_node *kn);
 struct kernfs_node *kernfs_new_node(struct kernfs_node *parent,
 				    const char *name, umode_t mode,
+				    kuid_t uid, kgid_t gid,
 				    unsigned flags);
 struct kernfs_node *kernfs_find_and_get_node_by_ino(struct kernfs_root *root,
 						    unsigned int ino);
@@ -106,7 +119,6 @@ struct kernfs_node *kernfs_find_and_get_node_by_ino(struct kernfs_root *root,
  */
 extern const struct file_operations kernfs_file_fops;
 
-void __init init_kernfs_file_pool(void);
 void kernfs_drain_open_files(struct kernfs_node *kn);
 
 /*

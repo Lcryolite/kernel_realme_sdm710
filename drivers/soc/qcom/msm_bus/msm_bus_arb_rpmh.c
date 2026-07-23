@@ -339,8 +339,7 @@ static int prune_path(struct list_head *route_list, int dest, int src,
 						&msm_bus_type,
 						NULL,
 						(void *)
-						&bus_node->node_info->
-						id,
+						&bus_node->node_info->id,
 						msm_bus_device_match_adhoc);
 
 					if (!dest_dev) {
@@ -422,6 +421,7 @@ static int getpath(struct device *src_dev, int dest, const char *cl_name)
 
 	while ((!found && !list_empty(&traverse_list))) {
 		struct msm_bus_node_device_type *bus_node = NULL;
+		unsigned int i;
 		/* Locate dest_id in the traverse list */
 		list_for_each_entry(bus_node, &traverse_list, link) {
 			if (bus_node->node_info->id == dest) {
@@ -430,54 +430,53 @@ static int getpath(struct device *src_dev, int dest, const char *cl_name)
 			}
 		}
 
-		if (!found) {
-			unsigned int i;
-			/* Setup the new edge list */
-			list_for_each_entry(bus_node, &traverse_list, link) {
-				/* Setup list of black-listed nodes */
-				setup_bl_list(bus_node, &black_list);
+		/* Setup the new edge list */
+		list_for_each_entry(bus_node, &traverse_list, link) {
+			/* Setup list of black-listed nodes */
+			setup_bl_list(bus_node, &black_list);
 
-				for (i = 0; i < bus_node->node_info->
-						num_connections; i++) {
-					bool skip;
-					struct msm_bus_node_device_type
-							*node_conn;
-					node_conn =
-					to_msm_bus_node(bus_node->node_info->
-						dev_connections[i]);
-					if (node_conn->node_info->
-							is_traversed) {
-						MSM_BUS_ERR("Circ Path %d\n",
-						node_conn->node_info->id);
-						goto reset_traversed;
-					}
-					skip = chk_bl_list(&black_list,
-							bus_node->node_info->
-							connections[i]);
-					if (!skip) {
-						list_add_tail(&node_conn->link,
-							&edge_list);
-						node_conn->node_info->
-							is_traversed = true;
-					}
+			for (i = 0; i < bus_node->node_info->num_connections;
+									i++) {
+				bool skip = false;
+				struct msm_bus_node_device_type
+						*node_conn;
+				node_conn =
+				to_msm_bus_node(
+				bus_node->node_info->dev_connections[i]);
+				if (node_conn->node_info->is_traversed &&
+				    node_conn->node_info->num_connections) {
+					MSM_BUS_ERR("Circ Path %d\n",
+					node_conn->node_info->id);
+					goto reset_traversed;
+				}
+				if (node_conn->node_info->is_traversed &&
+				    !node_conn->node_info->num_connections)
+					skip = true;
+
+				skip |= chk_bl_list(&black_list,
+					bus_node->node_info->connections[i]);
+				if (!skip) {
+					list_add_tail(&node_conn->link,
+						&edge_list);
+					node_conn->node_info->is_traversed =
+									true;
 				}
 			}
-
-			/* Keep tabs of the previous search list */
-			search_node = kzalloc(sizeof(struct bus_search_type),
-					 GFP_KERNEL);
-			if (!search_node)
-				goto exit_getpath;
-
-			INIT_LIST_HEAD(&search_node->node_list);
-			list_splice_init(&traverse_list,
-					 &search_node->node_list);
-			/* Add the previous search list to a route list */
-			list_add_tail(&search_node->link, &route_list);
-			/* Advancing the list depth */
-			depth_index++;
-			list_splice_init(&edge_list, &traverse_list);
 		}
+		/* Keep tabs of the previous search list */
+		search_node = kzalloc(sizeof(struct bus_search_type),
+				 GFP_KERNEL);
+		if (!search_node)
+			goto exit_getpath;
+
+		INIT_LIST_HEAD(&search_node->node_list);
+		list_splice_init(&traverse_list,
+				 &search_node->node_list);
+		/* Add the previous search list to a route list */
+		list_add_tail(&search_node->link, &route_list);
+		/* Advancing the list depth */
+		depth_index++;
+		list_splice_init(&edge_list, &traverse_list);
 	}
 reset_traversed:
 	copy_remaining_nodes(&edge_list, &traverse_list, &route_list);
@@ -570,8 +569,8 @@ static void bcm_update_bus_req(struct device *dev, int ctx)
 		max_ib = msm_bus_div64(max_ib, bcm_dev->bcmdev->unit_size);
 
 		if (bcm_dev->node_info->id == MSM_BUS_BCM_ACV) {
-			cur_rsc = to_msm_bus_node(bcm_dev->node_info->
-						rsc_devs[0]);
+			cur_rsc =
+			to_msm_bus_node(bcm_dev->node_info->rsc_devs[0]);
 			bcm_update_acv_req(cur_rsc, max_ab, max_ib,
 					&bcm_dev->node_vec[ctx].vec_a,
 					&bcm_dev->node_vec[ctx].vec_b,
@@ -612,12 +611,12 @@ static void bcm_query_bus_req(struct device *dev, int ctx)
 			goto exit_bcm_query_bus_req;
 
 		lnode_idx = cur_dev->node_info->bcm_req_idx[i];
-		bcm_dev->lnode_list[lnode_idx].lnode_query_ib[ctx] =
+		bcm_dev->lnode_list[lnode_idx].query_ib[ctx] =
 			msm_bus_div64(cur_dev->node_bw[ctx].max_query_ib *
 					(uint64_t)bcm_dev->bcmdev->width,
 				cur_dev->node_info->agg_params.buswidth);
 
-		bcm_dev->lnode_list[lnode_idx].lnode_query_ab[ctx] =
+		bcm_dev->lnode_list[lnode_idx].query_ab[ctx] =
 			msm_bus_div64(cur_dev->node_bw[ctx].sum_query_ab *
 					(uint64_t)bcm_dev->bcmdev->width,
 				cur_dev->node_info->agg_params.num_aggports *
@@ -626,23 +625,17 @@ static void bcm_query_bus_req(struct device *dev, int ctx)
 		for (j = 0; j < bcm_dev->num_lnodes; j++) {
 			if (ctx == ACTIVE_CTX) {
 				max_query_ib = max(max_query_ib,
-				max(bcm_dev->lnode_list[j].
-					lnode_query_ib[ACTIVE_CTX],
-				bcm_dev->lnode_list[j].
-					lnode_query_ib[DUAL_CTX]));
+				max(bcm_dev->lnode_list[j].query_ib[ACTIVE_CTX],
+				bcm_dev->lnode_list[j].query_ib[DUAL_CTX]));
 
 				max_query_ab = max(max_query_ab,
-				bcm_dev->lnode_list[j].
-						lnode_query_ab[ACTIVE_CTX] +
-				bcm_dev->lnode_list[j].
-						lnode_query_ab[DUAL_CTX]);
+				bcm_dev->lnode_list[j].query_ab[ACTIVE_CTX] +
+				bcm_dev->lnode_list[j].query_ab[DUAL_CTX]);
 			} else {
 				max_query_ib = max(max_query_ib,
-					bcm_dev->lnode_list[j].
-						lnode_query_ib[ctx]);
+					bcm_dev->lnode_list[j].query_ib[ctx]);
 				max_query_ab = max(max_query_ab,
-					bcm_dev->lnode_list[j].
-						lnode_query_ab[ctx]);
+					bcm_dev->lnode_list[j].query_ab[ctx]);
 			}
 		}
 
@@ -652,8 +645,8 @@ static void bcm_query_bus_req(struct device *dev, int ctx)
 						bcm_dev->bcmdev->unit_size);
 
 		if (bcm_dev->node_info->id == MSM_BUS_BCM_ACV) {
-			cur_rsc = to_msm_bus_node(bcm_dev->node_info->
-						rsc_devs[0]);
+			cur_rsc =
+			to_msm_bus_node(bcm_dev->node_info->rsc_devs[0]);
 			bcm_update_acv_req(cur_rsc, max_query_ab, max_query_ib,
 					&bcm_dev->node_vec[ctx].query_vec_a,
 					&bcm_dev->node_vec[ctx].query_vec_b,
@@ -774,8 +767,8 @@ static void aggregate_bus_query_req(struct msm_bus_node_device_type *bus_dev,
 
 	for (i = 0; i < bus_dev->num_lnodes; i++) {
 		max_ib = max(max_ib,
-				bus_dev->lnode_list[i].lnode_query_ib[ctx]);
-		sum_ab += bus_dev->lnode_list[i].lnode_query_ab[ctx];
+				bus_dev->lnode_list[i].query_ib[ctx]);
+		sum_ab += bus_dev->lnode_list[i].query_ab[ctx];
 	}
 
 	bus_dev->node_bw[ctx].sum_query_ab = sum_ab;
@@ -1003,10 +996,10 @@ static int query_path(struct device *src_dev, int dest, uint64_t act_req_ib,
 			ret = -ENXIO;
 			goto exit_query_path;
 		}
-		lnode->lnode_query_ib[ACTIVE_CTX] = act_req_ib;
-		lnode->lnode_query_ab[ACTIVE_CTX] = act_req_bw;
-		lnode->lnode_query_ib[DUAL_CTX] = slp_req_ib;
-		lnode->lnode_query_ab[DUAL_CTX] = slp_req_bw;
+		lnode->query_ib[ACTIVE_CTX] = act_req_ib;
+		lnode->query_ab[ACTIVE_CTX] = act_req_bw;
+		lnode->query_ib[DUAL_CTX] = slp_req_ib;
+		lnode->query_ab[DUAL_CTX] = slp_req_bw;
 
 		for (i = 0; i < NUM_CTX; i++) {
 			aggregate_bus_query_req(dev_info, i);
@@ -1140,7 +1133,7 @@ static void unregister_client_adhoc(uint32_t cl)
 	}
 
 	curr = client->curr;
-	if (curr >= pdata->num_usecases || curr < 0) {
+	if (curr >= pdata->num_usecases) {
 		MSM_BUS_ERR("Invalid index Defaulting curr to 0");
 		curr = 0;
 	}

@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2018,2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -122,34 +122,14 @@ static void a530_efuse_speed_bin(struct adreno_device *adreno_dev)
 	adreno_dev->speed_bin = (val & speed_bin[1]) >> speed_bin[2];
 }
 
-static void a5xx_efuse_speed_bin(struct adreno_device *adreno_dev)
-{
-	unsigned int val;
-	unsigned int speed_bin[3];
-	struct kgsl_device *device = &adreno_dev->dev;
-
-	if (of_get_property(device->pdev->dev.of_node,
-			"qcom,gpu-speed-bin-vectors", NULL)) {
-		adreno_efuse_speed_bin_array(adreno_dev);
-		return;
-	}
-
-	if (!of_property_read_u32_array(device->pdev->dev.of_node,
-			"qcom,gpu-speed-bin", speed_bin, 3)) {
-		adreno_efuse_read_u32(adreno_dev, speed_bin[0], &val);
-		adreno_dev->speed_bin = (val & speed_bin[1]) >> speed_bin[2];
-		return;
-	}
-}
-
 static const struct {
 	int (*check)(struct adreno_device *adreno_dev);
 	void (*func)(struct adreno_device *adreno_dev);
 } a5xx_efuse_funcs[] = {
 	{ adreno_is_a530, a530_efuse_leakage },
 	{ adreno_is_a530, a530_efuse_speed_bin },
-	{ adreno_is_a504, a5xx_efuse_speed_bin },
-	{ adreno_is_a505, a5xx_efuse_speed_bin },
+	{ adreno_is_a504, a530_efuse_speed_bin },
+	{ adreno_is_a505, a530_efuse_speed_bin },
 	{ adreno_is_a512, a530_efuse_speed_bin },
 	{ adreno_is_a508, a530_efuse_speed_bin },
 };
@@ -203,6 +183,9 @@ static void a5xx_platform_setup(struct adreno_device *adreno_dev)
 	/* Setup defaults that might get changed by the fuse bits */
 	adreno_dev->lm_leakage = A530_DEFAULT_LEAKAGE;
 	adreno_dev->speed_bin = 0;
+
+	if (ADRENO_FEATURE(adreno_dev, ADRENO_SPTP_PC))
+		set_bit(ADRENO_SPTP_PC_CTRL, &adreno_dev->pwrctrl_flag);
 
 	/* Check efuse bits for various capabilties */
 	a5xx_check_features(adreno_dev);
@@ -1418,8 +1401,10 @@ static uint32_t _write_voltage_table(struct adreno_device *adreno_dev,
 		opp = dev_pm_opp_find_freq_exact(&device->pdev->dev,
 				pwr->pwrlevels[i].gpu_freq, true);
 		/* _opp_get returns uV, convert to mV */
-		if (!IS_ERR(opp))
+		if (!IS_ERR(opp)) {
 			mvolt = dev_pm_opp_get_voltage(opp) / 1000;
+			dev_pm_opp_put(opp);
+		}
 		kgsl_regwrite(device, addr++, mvolt);
 		kgsl_regwrite(device, addr++,
 				pwr->pwrlevels[i].gpu_freq / 1000000);
@@ -1709,9 +1694,10 @@ static int a5xx_enable_pwr_counters(struct adreno_device *adreno_dev,
 /* number of cycles when clock is throttle by less than 50% (CRC) */
 #define CRC_LESS50PCT 3
 
-static uint64_t a5xx_read_throttling_counters(struct adreno_device *adreno_dev)
+static int64_t a5xx_read_throttling_counters(struct adreno_device *adreno_dev)
 {
-	int i, adj;
+	int i;
+	int64_t adj;
 	uint32_t th[ADRENO_GPMU_THROTTLE_COUNTERS];
 	struct adreno_busy_data *busy = &adreno_dev->busy_data;
 
@@ -1900,21 +1886,17 @@ static void a5xx_start(struct adreno_device *adreno_dev)
 	}
 
 	/*
-	 * Turn on hang detection for a530 v2 and beyond. This spews a
-	 * lot of useful information into the RBBM registers on a hang.
+	 * Turn on hang detection. This spews a lot of useful information
+	 * into the RBBM registers on a hang.
 	 */
-	if (!adreno_is_a530v1(adreno_dev)) {
-
-		set_bit(ADRENO_DEVICE_HANG_INTR, &adreno_dev->priv);
-		gpudev->irq->mask |= (1 << A5XX_INT_MISC_HANG_DETECT);
-		/*
-		 * Set hang detection threshold to 4 million cycles
-		 * (0x3FFFF*16)
-		 */
-		kgsl_regwrite(device, A5XX_RBBM_INTERFACE_HANG_INT_CNTL,
-					  (1 << 30) | 0x3FFFF);
-	}
-
+	set_bit(ADRENO_DEVICE_HANG_INTR, &adreno_dev->priv);
+	gpudev->irq->mask |= (1 << A5XX_INT_MISC_HANG_DETECT);
+	/*
+	 * Set hang detection threshold to 4 million cycles
+	 * (0x3FFFF*16)
+	 */
+	kgsl_regwrite(device, A5XX_RBBM_INTERFACE_HANG_INT_CNTL,
+				  (1 << 30) | 0x3FFFF);
 
 	/* Turn on performance counters */
 	kgsl_regwrite(device, A5XX_RBBM_PERFCTR_CNTL, 0x01);
@@ -1982,19 +1964,6 @@ static void a5xx_start(struct adreno_device *adreno_dev)
 	else
 		kgsl_regwrite(device, A5XX_PC_DBG_ECO_CNTL,
 						(0x400 << 11 | 0x300 << 22));
-
-	/*
-	 * A5x USP LDST non valid pixel wrongly update read combine offset
-	 * In A5xx we added optimization for read combine. There could be cases
-	 * on a530 v1 there is no valid pixel but the active masks is not
-	 * cleared and the offset can be wrongly updated if the invalid address
-	 * can be combined. The wrongly latched value will make the returning
-	 * data got shifted at wrong offset. workaround this issue by disabling
-	 * LD combine, bit[25] of SP_DBG_ECO_CNTL (sp chicken bit[17]) need to
-	 * be set to 1, default is 0(enable)
-	 */
-	if (adreno_is_a530v1(adreno_dev))
-		kgsl_regrmw(device, A5XX_SP_DBG_ECO_CNTL, 0, (1 << 25));
 
 	if (ADRENO_QUIRK(adreno_dev, ADRENO_QUIRK_TWO_PASS_USE_WFI)) {
 		/*
@@ -2209,12 +2178,11 @@ static int a5xx_gpmu_init(struct adreno_device *adreno_dev)
  */
 static int a5xx_microcode_load(struct adreno_device *adreno_dev)
 {
-	void *ptr;
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct adreno_firmware *pm4_fw = ADRENO_FW(adreno_dev, ADRENO_FW_PM4);
 	struct adreno_firmware *pfp_fw = ADRENO_FW(adreno_dev, ADRENO_FW_PFP);
 	uint64_t gpuaddr;
-	int ret = 0, zap_retry = 0;
+	int ret = 0;
 
 	gpuaddr = pm4_fw->memdesc.gpuaddr;
 	kgsl_regwrite(device, A5XX_CP_PM4_INSTR_BASE_LO,
@@ -2240,7 +2208,7 @@ static int a5xx_microcode_load(struct adreno_device *adreno_dev)
 	 * appropriate register,
 	 * skip if retention is supported for the CPZ register
 	 */
-	if (adreno_dev->zap_loaded && !(ADRENO_FEATURE(adreno_dev,
+	if (adreno_dev->zap_handle_ptr && !(ADRENO_FEATURE(adreno_dev,
 		ADRENO_CPZ_RETENTION))) {
 		struct scm_desc desc = {0};
 
@@ -2257,26 +2225,27 @@ static int a5xx_microcode_load(struct adreno_device *adreno_dev)
 	}
 
 	/* Load the zap shader firmware through PIL if its available */
-	if (adreno_dev->gpucore->zap_name && !adreno_dev->zap_loaded) {
-		/*
-		 * subsystem_get() may return -EAGAIN in case system is busy
-		 * and unable to load the firmware. So keep trying since this
-		 * is not a fatal error.
-		 */
-		do {
-			ret = 0;
-			ptr = subsystem_get(adreno_dev->gpucore->zap_name);
+	if (adreno_dev->gpucore->zap_name && !adreno_dev->zap_handle_ptr) {
+		adreno_dev->zap_handle_ptr =
+				subsystem_get(adreno_dev->gpucore->zap_name);
 
-			/* Return error if the zap shader cannot be loaded */
-			if (IS_ERR_OR_NULL(ptr)) {
-				ret = (ptr == NULL) ? -ENODEV : PTR_ERR(ptr);
-				ptr = NULL;
-			} else
-				adreno_dev->zap_loaded = 1;
-		} while ((ret == -EAGAIN) && (zap_retry++ < ZAP_RETRY_MAX));
+		/* Return error if the zap shader cannot be loaded */
+		if (IS_ERR_OR_NULL(adreno_dev->zap_handle_ptr)) {
+			ret = (adreno_dev->zap_handle_ptr == NULL) ?
+				-ENODEV : PTR_ERR(adreno_dev->zap_handle_ptr);
+			adreno_dev->zap_handle_ptr = NULL;
+		}
 	}
 
 	return ret;
+}
+
+static void a5xx_zap_shader_unload(struct adreno_device *adreno_dev)
+{
+	if (!IS_ERR_OR_NULL(adreno_dev->zap_handle_ptr)) {
+		subsystem_put(adreno_dev->zap_handle_ptr);
+		adreno_dev->zap_handle_ptr = NULL;
+	}
 }
 
 static int _me_init_ucode_workarounds(struct adreno_device *adreno_dev)
@@ -2294,14 +2263,6 @@ static int _me_init_ucode_workarounds(struct adreno_device *adreno_dev)
 		 * WFI after every 2D Mode 3 draw.
 		 */
 		return 0x0000000B;
-	case ADRENO_REV_A540:
-		/*
-		 * WFI after every direct-render 3D mode draw and
-		 * WFI after every 2D Mode 3 draw. This is needed
-		 * only on a540v1.
-		 */
-		if (adreno_is_a540v1(adreno_dev))
-			return 0x0000000A;
 	default:
 		return 0x00000000; /* No ucode workarounds enabled */
 	}
@@ -2342,18 +2303,8 @@ static void _set_ordinals(struct adreno_device *adreno_dev,
 	/* Enabled ordinal mask */
 	*cmds++ = CP_INIT_MASK;
 
-	if (CP_INIT_MASK & CP_INIT_MAX_CONTEXT) {
-		/*
-		 * Multiple HW ctxs are unreliable on a530v1,
-		 * use single hw context.
-		 * Use multiple contexts if bit set, otherwise serialize:
-		 *      3D (bit 0) 2D (bit 1)
-		 */
-		if (adreno_is_a530v1(adreno_dev))
-			*cmds++ = 0x00000000;
-		else
-			*cmds++ = 0x00000003;
-	}
+	if (CP_INIT_MASK & CP_INIT_MAX_CONTEXT)
+		*cmds++ = 0x00000003;
 
 	if (CP_INIT_MASK & CP_INIT_ERROR_DETECTION_CONTROL)
 		*cmds++ = 0x20000000;
@@ -3630,6 +3581,8 @@ static struct adreno_coresight a5xx_coresight = {
 	.registers = a5xx_coresight_registers,
 	.count = ARRAY_SIZE(a5xx_coresight_registers),
 	.groups = a5xx_coresight_groups,
+	.read = kgsl_regread,
+	.write = kgsl_regwrite,
 };
 
 struct adreno_gpudev adreno_a5xx_gpudev = {
@@ -3664,7 +3617,10 @@ struct adreno_gpudev adreno_a5xx_gpudev = {
 	.preemption_post_ibsubmit =
 			a5xx_preemption_post_ibsubmit,
 	.preemption_init = a5xx_preemption_init,
+	.preemption_close = a5xx_preemption_close,
 	.preemption_schedule = a5xx_preemption_schedule,
 	.enable_64bit = a5xx_enable_64bit,
 	.clk_set_options = a5xx_clk_set_options,
+	.snapshot_preemption = a5xx_snapshot_preemption,
+	.zap_shader_unload = a5xx_zap_shader_unload,
 };

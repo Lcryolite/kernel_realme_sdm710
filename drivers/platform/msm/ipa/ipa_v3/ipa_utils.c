@@ -27,7 +27,7 @@
 /*
  * The following for adding code (ie. for EMULATION) not found on x86.
  */
-#if IPA_EMULATION_COMPILE == 1
+#if defined(CONFIG_IPA_EMULATION)
 # include "ipa_emulation_stubs.h"
 #endif
 
@@ -45,6 +45,11 @@
 #define IPA_V4_0_CLK_RATE_SVS (125 * 1000 * 1000UL)
 #define IPA_V4_0_CLK_RATE_NOMINAL (220 * 1000 * 1000UL)
 #define IPA_V4_0_CLK_RATE_TURBO (250 * 1000 * 1000UL)
+
+#define IPA_V4_2_CLK_RATE_SVS2 (50 * 1000 * 1000UL)
+#define IPA_V4_2_CLK_RATE_SVS (100 * 1000 * 1000UL)
+#define IPA_V4_2_CLK_RATE_NOMINAL (201 * 1000 * 1000UL)
+#define IPA_V4_2_CLK_RATE_TURBO (240 * 1000 * 1000UL)
 
 #define IPA_MAX_HOLB_TMR_VAL (4294967296 - 1)
 
@@ -64,11 +69,13 @@
 #define IPA_BCR_REG_VAL_v3_0 (0x00000001)
 #define IPA_BCR_REG_VAL_v3_5 (0x0000003B)
 #define IPA_BCR_REG_VAL_v4_0 (0x00000039)
+#define IPA_BCR_REG_VAL_v4_2 (0x00000000)
 #define IPA_AGGR_GRAN_MIN (1)
 #define IPA_AGGR_GRAN_MAX (32)
 #define IPA_EOT_COAL_GRAN_MIN (1)
 #define IPA_EOT_COAL_GRAN_MAX (16)
 
+#define IPA_FILT_ROUT_HASH_REG_VAL_v4_2 (0x00000000)
 #define IPA_DMA_TASK_FOR_GSI_TIMEOUT_MSEC (15)
 
 #define IPA_AGGR_BYTE_LIMIT (\
@@ -81,30 +88,51 @@
 /* In IPAv3 only endpoints 0-3 can be configured to deaggregation */
 #define IPA_EP_SUPPORTS_DEAGGR(idx) ((idx) >= 0 && (idx) <= 3)
 
-/* configure IPA spare register 1 in order to have correct IPA version
- * set bits 0,2,3 and 4. see SpareBits documentation.xlsx
+#define IPA_TAG_TIMER_TIMESTAMP_SHFT (14) /* ~0.8msec */
+#define IPA_NAT_TIMER_TIMESTAMP_SHFT (24) /* ~0.8sec */
+
+/*
+ * Units of time per a specific granularity
+ * The limitation based on H/W HOLB/AGGR time limit field width
  */
+#define IPA_TIMER_SCALED_TIME_LIMIT 31
 
 /* HPS, DPS sequencers Types*/
+
+/* DMA Only */
 #define IPA_DPS_HPS_SEQ_TYPE_DMA_ONLY  0x00000000
-/* DMA + DECIPHER/CIPHER */
+/* DMA + decipher */
 #define IPA_DPS_HPS_SEQ_TYPE_DMA_DEC 0x00000011
 /* Packet Processing + no decipher + uCP (for Ethernet Bridging) */
 #define IPA_DPS_HPS_SEQ_TYPE_PKT_PROCESS_NO_DEC_UCP 0x00000002
 /* Packet Processing + decipher + uCP */
 #define IPA_DPS_HPS_SEQ_TYPE_PKT_PROCESS_DEC_UCP 0x00000013
-/* 2 Packet Processing pass + no decipher + uCP */
-#define IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP 0x00000004
-/* 2 Packet Processing pass + no decipher + uCP + HPS REP DMA Parser. */
-#define IPA_DPS_HPS_REP_SEQ_TYPE_2PKT_PROC_PASS_NO_DEC_UCP_DMAP 0x00000804
-/* 2 Packet Processing pass + decipher + uCP */
-#define IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_DEC_UCP 0x00000015
 /* Packet Processing + no decipher + no uCP */
 #define IPA_DPS_HPS_SEQ_TYPE_PKT_PROCESS_NO_DEC_NO_UCP 0x00000006
-/* Packet Processing + no decipher + no uCP */
+/* Packet Processing + decipher + no uCP */
 #define IPA_DPS_HPS_SEQ_TYPE_PKT_PROCESS_DEC_NO_UCP 0x00000017
+/* 2 Packet Processing pass + no decipher + uCP */
+#define IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP 0x00000004
+/* 2 Packet Processing pass + decipher + uCP */
+#define IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_DEC_UCP 0x00000015
+/* 2 Packet Processing pass + no decipher + uCP + HPS REP DMA Parser. */
+#define IPA_DPS_HPS_REP_SEQ_TYPE_2PKT_PROC_PASS_NO_DEC_UCP_DMAP 0x00000804
+/* Packet Processing + no decipher + no uCP + HPS REP DMA Parser.*/
+#define IPA_DPS_HPS_REP_SEQ_TYPE_PKT_PROCESS_NO_DEC_NO_UCP_DMAP 0x00000806
 /* COMP/DECOMP */
 #define IPA_DPS_HPS_SEQ_TYPE_DMA_COMP_DECOMP 0x00000020
+/* 2 Packet Processing + no decipher + 2 uCP */
+#define IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_2ND_UCP 0x0000000a
+/* 2 Packet Processing + decipher + 2 uCP */
+#define IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_DEC_2ND_UCP 0x0000001b
+/* 3 Packet Processing + no decipher + 2 uCP */
+#define IPA_DPS_HPS_SEQ_TYPE_3RD_PKT_PROCESS_PASS_NO_DEC_2ND_UCP 0x0000000c
+/* 3 Packet Processing + decipher + 2 uCP */
+#define IPA_DPS_HPS_SEQ_TYPE_3RD_PKT_PROCESS_PASS_DEC_2ND_UCP 0x0000001d
+/* 2 Packet Processing + no decipher + 2 uCP + HPS REP DMA Parser */
+#define IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_2ND_UCP_DMAP 0x0000080a
+/* 3 Packet Processing + no decipher + 2 uCP + HPS REP DMA Parser */
+#define IPA_DPS_HPS_SEQ_TYPE_3RD_PKT_PROCESS_PASS_NO_DEC_2ND_UCP_DMAP 0x0000080c
 /* Invalid sequencer type */
 #define IPA_DPS_HPS_SEQ_TYPE_INVALID 0xFFFFFFFF
 
@@ -113,8 +141,6 @@
 	seq_type == IPA_DPS_HPS_SEQ_TYPE_DMA_DEC || \
 	seq_type == IPA_DPS_HPS_SEQ_TYPE_DMA_COMP_DECOMP)
 
-#define QMB_MASTER_SELECT_DDR  (0)
-#define QMB_MASTER_SELECT_PCIE (1)
 
 /* Resource Group index*/
 #define IPA_v3_0_GROUP_UL		(0)
@@ -144,10 +170,23 @@
 #define IPA_v4_0_GROUP_UL_DL		(1)
 #define IPA_v4_0_MHI_GROUP_DDR		(1)
 #define IPA_v4_0_MHI_GROUP_DMA		(2)
-#define IPA_v4_0_GROUP_CV2X			(2)
 #define IPA_v4_0_GROUP_UC_RX_Q		(3)
 #define IPA_v4_0_SRC_GROUP_MAX		(4)
 #define IPA_v4_0_DST_GROUP_MAX		(4)
+
+#define IPA_v4_2_GROUP_UL_DL		(0)
+#define IPA_v4_2_SRC_GROUP_MAX		(1)
+#define IPA_v4_2_DST_GROUP_MAX		(1)
+
+#define IPA_v4_5_MHI_GROUP_PCIE		(0)
+#define IPA_v4_5_GROUP_UL_DL		(1)
+#define IPA_v4_5_MHI_GROUP_DDR		(1)
+#define IPA_v4_5_MHI_GROUP_DMA		(2)
+#define IPA_v4_5_GROUP_CV2X			(2)
+#define IPA_v4_5_MHI_GROUP_QDSS		(3)
+#define IPA_v4_5_GROUP_UC_RX_Q		(4)
+#define IPA_v4_5_SRC_GROUP_MAX		(5)
+#define IPA_v4_5_DST_GROUP_MAX		(5)
 
 #define IPA_GROUP_MAX IPA_v3_0_GROUP_MAX
 
@@ -217,15 +256,22 @@ enum ipa_ver {
 	IPA_3_5_1,
 	IPA_4_0,
 	IPA_4_0_MHI,
-	IPA_4_0_AUTO,
-	IPA_4_0_AUTO_MHI,
+	IPA_4_1,
+	IPA_4_1_APQ,
+	IPA_4_2,
+	IPA_4_5,
+	IPA_4_5_MHI,
+	IPA_4_5_APQ,
+	IPA_4_5_AUTO,
+	IPA_4_5_AUTO_MHI,
 	IPA_VER_MAX,
 };
+
 
 static const struct rsrc_min_max ipa3_rsrc_src_grp_config
 	[IPA_VER_MAX][IPA_RSRC_GRP_TYPE_SRC_MAX][IPA_GROUP_MAX] = {
 	[IPA_3_0] = {
-		/*UL	DL	DIAG	DMA	Not Used	uC Rx*/
+		/* UL	DL	DIAG	DMA	Not Used	uC Rx */
 		[IPA_v3_0_RSRC_GRP_TYPE_SRC_PKT_CONTEXTS] = {
 		{3, 255}, {3, 255}, {1, 255}, {1, 255}, {1, 255}, {2, 255} },
 		[IPA_v3_0_RSRC_GRP_TYPE_SRC_HDR_SECTORS] = {
@@ -244,7 +290,7 @@ static const struct rsrc_min_max ipa3_rsrc_src_grp_config
 		{14, 14}, {16, 16}, {5, 5}, {5, 5}, {0, 0}, {8, 8} },
 	},
 	[IPA_3_5] = {
-		/* LWA_DL  UL_DL    not used  UC_RX_Q, other are invalid */
+		/* LWA_DL  UL_DL    unused  UC_RX_Q, other are invalid */
 		[IPA_v3_5_RSRC_GRP_TYPE_SRC_PKT_CONTEXTS] = {
 		{0, 0}, {1, 255}, {0, 0}, {1, 255}, {0, 0}, {0, 0} },
 		[IPA_v3_5_RSRC_GRP_TYPE_SRS_DESCRIPTOR_LISTS] = {
@@ -257,7 +303,7 @@ static const struct rsrc_min_max ipa3_rsrc_src_grp_config
 		{0, 0}, {20, 20}, {0, 0}, {14, 14}, {0, 0}, {0, 0} },
 	},
 	[IPA_3_5_MHI] = {
-		/* PCIE  DDR     DMA  not used, other are invalid */
+		/* PCIE  DDR     DMA  unused, other are invalid */
 		[IPA_v3_5_RSRC_GRP_TYPE_SRC_PKT_CONTEXTS] = {
 		{4, 4}, {5, 5}, {1, 1}, {0, 0}, {0, 0}, {0, 0} },
 		[IPA_v3_5_RSRC_GRP_TYPE_SRS_DESCRIPTOR_LISTS] = {
@@ -270,7 +316,7 @@ static const struct rsrc_min_max ipa3_rsrc_src_grp_config
 		{14, 14}, {14, 14}, {14, 14}, {0, 0}, {0, 0}, {0, 0} },
 	},
 	[IPA_3_5_1] = {
-		/* LWA_DL  UL_DL    not used  UC_RX_Q, other are invalid */
+		/* LWA_DL  UL_DL    unused  UC_RX_Q, other are invalid */
 		[IPA_v3_5_RSRC_GRP_TYPE_SRC_PKT_CONTEXTS] = {
 		{1, 255}, {1, 255}, {0, 0}, {1, 255}, {0, 0}, {0, 0} },
 		[IPA_v3_5_RSRC_GRP_TYPE_SRS_DESCRIPTOR_LISTS] = {
@@ -283,7 +329,7 @@ static const struct rsrc_min_max ipa3_rsrc_src_grp_config
 		{14, 14}, {20, 20}, {0, 0}, {14, 14}, {0, 0}, {0, 0} },
 	},
 	[IPA_4_0] = {
-		/* LWA_DL  UL_DL    not used  UC_RX_Q, other are invalid */
+		/* LWA_DL  UL_DL    unused  UC_RX_Q, other are invalid */
 		[IPA_v4_0_RSRC_GRP_TYPE_SRC_PKT_CONTEXTS] = {
 		{1, 255}, {1, 255}, {0, 0}, {1, 255}, {0, 0}, {0, 0} },
 		[IPA_v4_0_RSRC_GRP_TYPE_SRS_DESCRIPTOR_LISTS] = {
@@ -296,7 +342,7 @@ static const struct rsrc_min_max ipa3_rsrc_src_grp_config
 		{14, 14}, {20, 20}, {0, 0}, {14, 14}, {0, 0}, {0, 0} },
 	},
 	[IPA_4_0_MHI] = {
-		/* PCIE  DDR     DMA  not used, other are invalid */
+		/* PCIE  DDR     DMA  unused, other are invalid */
 		[IPA_v4_0_RSRC_GRP_TYPE_SRC_PKT_CONTEXTS] = {
 		{4, 4}, {5, 5}, {1, 1}, {0, 0}, {0, 0}, {0, 0} },
 		[IPA_v4_0_RSRC_GRP_TYPE_SRS_DESCRIPTOR_LISTS] = {
@@ -308,31 +354,96 @@ static const struct rsrc_min_max ipa3_rsrc_src_grp_config
 		[IPA_v4_0_RSRC_GRP_TYPE_SRC_ACK_ENTRIES] = {
 		{14, 14}, {14, 14}, {14, 14}, {0, 0}, {0, 0}, {0, 0} },
 	},
-	[IPA_4_0_AUTO] = {
-		/*not-used  UL_DL    CV2X  not-used, other are invalid */
+	[IPA_4_1] = {
+		/* LWA_DL  UL_DL    unused  UC_RX_Q, other are invalid */
 		[IPA_v4_0_RSRC_GRP_TYPE_SRC_PKT_CONTEXTS] = {
-		{1, 63}, {1, 63}, {2, 2}, {0, 0}, {0, 0}, {0, 0} },
+		{1, 63}, {1, 63}, {0, 0}, {1, 63}, {0, 0}, {0, 0} },
 		[IPA_v4_0_RSRC_GRP_TYPE_SRS_DESCRIPTOR_LISTS] = {
-		{10, 10}, {10, 10}, {8, 8}, {0, 0}, {0, 0}, {0, 0} },
+		{10, 10}, {10, 10}, {0, 0}, {8, 8}, {0, 0}, {0, 0} },
 		[IPA_v4_0_RSRC_GRP_TYPE_SRC_DESCRIPTOR_BUFF] = {
-		{12, 12}, {14, 14}, {8, 8}, {0, 0}, {0, 0}, {0, 0} },
+		{12, 12}, {14, 14}, {0, 0}, {8, 8}, {0, 0}, {0, 0} },
 		[IPA_v4_0_RSRC_GRP_TYPE_SRC_HPS_DMARS] = {
 		{0, 63}, {0, 63}, {0, 63}, {0, 63},  {0, 0}, {0, 0} },
 		[IPA_v4_0_RSRC_GRP_TYPE_SRC_ACK_ENTRIES] = {
-		{14, 14}, {20, 20}, {14, 14}, {0, 0}, {0, 0}, {0, 0} },
+		{14, 14}, {20, 20}, {0, 0}, {14, 14}, {0, 0}, {0, 0} },
 	},
-	[IPA_4_0_AUTO_MHI] = {
-		/* PCIE  DDR   DMA/CV2X not used, other are invalid */
+	[IPA_4_1_APQ] = {
+		/* LWA_DL  UL_DL    unused  UC_RX_Q, other are invalid */
 		[IPA_v4_0_RSRC_GRP_TYPE_SRC_PKT_CONTEXTS] = {
-		{3, 3}, {5, 5}, {2, 2}, {0, 0}, {0, 0}, {0, 0} },
+		{1, 63}, {1, 63}, {0, 0}, {1, 63}, {0, 0}, {0, 0} },
 		[IPA_v4_0_RSRC_GRP_TYPE_SRS_DESCRIPTOR_LISTS] = {
-		{10, 10}, {10, 10}, {8, 8}, {0, 0}, {0, 0}, {0, 0} },
+		{10, 10}, {10, 10}, {0, 0}, {8, 8}, {0, 0}, {0, 0} },
 		[IPA_v4_0_RSRC_GRP_TYPE_SRC_DESCRIPTOR_BUFF] = {
-		{12, 12}, {12, 12}, {8, 8}, {0, 0}, {0, 0}, {0, 0} },
+		{12, 12}, {14, 14}, {0, 0}, {8, 8}, {0, 0}, {0, 0} },
 		[IPA_v4_0_RSRC_GRP_TYPE_SRC_HPS_DMARS] = {
 		{0, 63}, {0, 63}, {0, 63}, {0, 63},  {0, 0}, {0, 0} },
 		[IPA_v4_0_RSRC_GRP_TYPE_SRC_ACK_ENTRIES] = {
-		{14, 14}, {14, 14}, {14, 14}, {0, 0}, {0, 0}, {0, 0} },
+		{14, 14}, {20, 20}, {0, 0}, {14, 14}, {0, 0}, {0, 0} },
+	},
+	[IPA_4_2] = {
+		/* UL_DL   other are invalid */
+		[IPA_v4_0_RSRC_GRP_TYPE_SRC_PKT_CONTEXTS] = {
+		{3, 63}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0} },
+		[IPA_v4_0_RSRC_GRP_TYPE_SRS_DESCRIPTOR_LISTS] = {
+		{3, 3}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0} },
+		[IPA_v4_0_RSRC_GRP_TYPE_SRC_DESCRIPTOR_BUFF] = {
+		{10, 10}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0} },
+		[IPA_v4_0_RSRC_GRP_TYPE_SRC_HPS_DMARS] = {
+		{1, 1}, {0, 0}, {0, 0},  {0, 0}, {0, 0}, {0, 0} },
+		[IPA_v4_0_RSRC_GRP_TYPE_SRC_ACK_ENTRIES] = {
+		{5, 5}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0} },
+	},
+	[IPA_4_5] = {
+		/* unused  UL_DL  unused  unused  UC_RX_Q N/A */
+		[IPA_v4_0_RSRC_GRP_TYPE_SRC_PKT_CONTEXTS] = {
+		{0, 0}, {1, 11}, {0, 0}, {0, 0}, {1, 63}, {0, 0} },
+		[IPA_v4_0_RSRC_GRP_TYPE_SRS_DESCRIPTOR_LISTS] = {
+		{0, 0}, {14, 14}, {0, 0}, {0, 0}, {3, 3}, {0, 0} },
+		[IPA_v4_0_RSRC_GRP_TYPE_SRC_DESCRIPTOR_BUFF] = {
+		{0, 0}, {18, 18}, {0, 0}, {0, 0}, {8, 8}, {0, 0} },
+		[IPA_v4_0_RSRC_GRP_TYPE_SRC_HPS_DMARS] = {
+		{0, 63}, {0, 63}, {0, 63}, {0, 63},  {0, 63}, {0, 0} },
+		[IPA_v4_0_RSRC_GRP_TYPE_SRC_ACK_ENTRIES] = {
+		{0, 0}, {24, 24}, {0, 0}, {0, 0}, {8, 8}, {0, 0} },
+	},
+	[IPA_4_5_MHI] = {
+		/* PCIE  DDR  DMA  QDSS  unused  N/A */
+		[IPA_v4_0_RSRC_GRP_TYPE_SRC_PKT_CONTEXTS] = {
+		{3, 8}, {4, 11}, {1, 6}, {1, 1}, {0, 0}, {0, 0} },
+		[IPA_v4_0_RSRC_GRP_TYPE_SRS_DESCRIPTOR_LISTS] = {
+		{9, 9}, {12, 12}, {2, 2}, {2, 2}, {0, 0}, {0, 0} },
+		[IPA_v4_0_RSRC_GRP_TYPE_SRC_DESCRIPTOR_BUFF] = {
+		{9, 9}, {14, 14}, {4, 4}, {4, 4}, {0, 0}, {0, 0} },
+		[IPA_v4_0_RSRC_GRP_TYPE_SRC_HPS_DMARS] = {
+		{0, 63}, {0, 63}, {0, 63}, {0, 63},  {0, 63}, {0, 0} },
+		[IPA_v4_0_RSRC_GRP_TYPE_SRC_ACK_ENTRIES] = {
+		{22, 22}, {16, 16}, {6, 6}, {2, 2}, {0, 0}, {0, 0} },
+	},
+	[IPA_4_5_AUTO] = {
+		/* unused  UL_DL  DMA/CV2X  unused  UC_RX_Q N/A */
+		[IPA_v4_0_RSRC_GRP_TYPE_SRC_PKT_CONTEXTS] = {
+		{0, 0}, {1, 11}, {1, 1}, {0, 0}, {1, 63}, {0, 0} },
+		[IPA_v4_0_RSRC_GRP_TYPE_SRS_DESCRIPTOR_LISTS] = {
+		{0, 0}, {14, 14}, {2, 2}, {0, 0}, {3, 3}, {0, 0} },
+		[IPA_v4_0_RSRC_GRP_TYPE_SRC_DESCRIPTOR_BUFF] = {
+		{0, 0}, {18, 18}, {4, 4}, {0, 0}, {8, 8}, {0, 0} },
+		[IPA_v4_0_RSRC_GRP_TYPE_SRC_HPS_DMARS] = {
+		{0, 63}, {0, 63}, {0, 63}, {0, 63},  {0, 63}, {0, 0} },
+		[IPA_v4_0_RSRC_GRP_TYPE_SRC_ACK_ENTRIES] = {
+		{0, 0}, {24, 24}, {6, 6}, {0, 0}, {8, 8}, {0, 0} },
+	},
+	[IPA_4_5_AUTO_MHI] = {
+		/* PCIE  DDR  DMA/CV2X  QDSS  unused  N/A */
+		[IPA_v4_0_RSRC_GRP_TYPE_SRC_PKT_CONTEXTS] = {
+		{3, 8}, {4, 11}, {1, 6}, {1, 1}, {0, 0}, {0, 0} },
+		[IPA_v4_0_RSRC_GRP_TYPE_SRS_DESCRIPTOR_LISTS] = {
+		{9, 9}, {12, 12}, {2, 2}, {2, 2}, {0, 0}, {0, 0} },
+		[IPA_v4_0_RSRC_GRP_TYPE_SRC_DESCRIPTOR_BUFF] = {
+		{9, 9}, {14, 14}, {4, 4}, {4, 4}, {0, 0}, {0, 0} },
+		[IPA_v4_0_RSRC_GRP_TYPE_SRC_HPS_DMARS] = {
+		{0, 63}, {0, 63}, {0, 63}, {0, 63},  {0, 63}, {0, 0} },
+		[IPA_v4_0_RSRC_GRP_TYPE_SRC_ACK_ENTRIES] = {
+		{22, 22}, {16, 16}, {6, 6}, {2, 2}, {0, 0}, {0, 0} },
 	},
 };
 
@@ -369,39 +480,74 @@ static const struct rsrc_min_max ipa3_rsrc_dst_grp_config
 		{2, 255}, {1, 255}, {1, 2}, {0, 0}, {0, 0}, {0, 0} },
 	},
 	[IPA_4_0] = {
-		/*LWA_DL UL/DL/DPL uC, other are invalid */
+		/* LWA_DL UL/DL/DPL uC, other are invalid */
 		[IPA_v4_0_RSRC_GRP_TYPE_DST_DATA_SECTORS] = {
 		{4, 4}, {4, 4}, {3, 3}, {2, 2}, {0, 0}, {0, 0} },
 		[IPA_v4_0_RSRC_GRP_TYPE_DST_DPS_DMARS] = {
 		{2, 255}, {1, 255}, {1, 2}, {0, 2}, {0, 0}, {0, 0} },
 	},
 	[IPA_4_0_MHI] = {
-		/*LWA_DL UL/DL/DPL uC, other are invalid */
+		/* LWA_DL UL/DL/DPL uC, other are invalid */
 		[IPA_v4_0_RSRC_GRP_TYPE_DST_DATA_SECTORS] = {
 		{4, 4}, {4, 4}, {3, 3}, {2, 2}, {0, 0}, {0, 0} },
 		[IPA_v4_0_RSRC_GRP_TYPE_DST_DPS_DMARS] = {
 		{2, 255}, {1, 255}, {1, 2}, {0, 2}, {0, 0}, {0, 0} },
 	},
-	[IPA_4_0_AUTO] = {
-		/*PCIE UL/DL/DPL DMA/CV2X, other are invalid */
+	[IPA_4_1] = {
+		/* LWA_DL UL/DL/DPL uC, other are invalid */
 		[IPA_v4_0_RSRC_GRP_TYPE_DST_DATA_SECTORS] = {
 		{4, 4}, {4, 4}, {3, 3}, {2, 2}, {0, 0}, {0, 0} },
 		[IPA_v4_0_RSRC_GRP_TYPE_DST_DPS_DMARS] = {
 		{2, 63}, {1, 63}, {1, 2}, {0, 2}, {0, 0}, {0, 0} },
 	},
-	[IPA_4_0_AUTO_MHI] = {
-		/*PCIE    DDR  DMA/CV2X, other are invalid */
+	[IPA_4_1_APQ] = {
+		/* LWA_DL UL/DL/DPL uC, other are invalid */
 		[IPA_v4_0_RSRC_GRP_TYPE_DST_DATA_SECTORS] = {
 		{4, 4}, {4, 4}, {3, 3}, {2, 2}, {0, 0}, {0, 0} },
 		[IPA_v4_0_RSRC_GRP_TYPE_DST_DPS_DMARS] = {
 		{2, 63}, {1, 63}, {1, 2}, {0, 2}, {0, 0}, {0, 0} },
+	},
+	[IPA_4_2] = {
+		/* UL/DL/DPL, other are invalid */
+		[IPA_v4_0_RSRC_GRP_TYPE_DST_DATA_SECTORS] = {
+		{3, 3}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0} },
+		[IPA_v4_0_RSRC_GRP_TYPE_DST_DPS_DMARS] = {
+		{1, 63}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0} },
+	},
+	[IPA_4_5] = {
+		/* unused  UL/DL/DPL unused  unused  uC  N/A */
+		[IPA_v4_0_RSRC_GRP_TYPE_DST_DATA_SECTORS] = {
+		{0, 0}, {16, 16}, {2, 2}, {2, 2}, {0, 0}, {0, 0} },
+		[IPA_v4_0_RSRC_GRP_TYPE_DST_DPS_DMARS] = {
+		{0, 0}, {2, 63}, {1, 2}, {1, 2}, {0, 2}, {0, 0} },
+	},
+	[IPA_4_5_MHI] = {
+		/* PCIE/DPL  DDR  DMA/CV2X  QDSS  uC  N/A */
+		[IPA_v4_0_RSRC_GRP_TYPE_DST_DATA_SECTORS] = {
+		{16, 16}, {5, 5}, {2, 2}, {2, 2}, {0, 0}, {0, 0} },
+		[IPA_v4_0_RSRC_GRP_TYPE_DST_DPS_DMARS] = {
+		{2, 63}, {1, 63}, {1, 2}, {1, 2}, {0, 2}, {0, 0} },
+	},
+	[IPA_4_5_AUTO] = {
+		/* unused  UL/DL/DPL DMA/CV2X  unused  uC  N/A */
+		[IPA_v4_0_RSRC_GRP_TYPE_DST_DATA_SECTORS] = {
+		{0, 0}, {16, 16}, {2, 2}, {2, 2}, {0, 0}, {0, 0} },
+		[IPA_v4_0_RSRC_GRP_TYPE_DST_DPS_DMARS] = {
+		{0, 0}, {2, 63}, {1, 2}, {1, 2}, {0, 2}, {0, 0} },
+	},
+	[IPA_4_5_AUTO_MHI] = {
+		/* PCIE/DPL  DDR  DMA/CV2X  QDSS  uC  N/A */
+		[IPA_v4_0_RSRC_GRP_TYPE_DST_DATA_SECTORS] = {
+		{16, 16}, {5, 5}, {2, 2}, {2, 2}, {0, 0}, {0, 0} },
+		[IPA_v4_0_RSRC_GRP_TYPE_DST_DPS_DMARS] = {
+		{2, 63}, {1, 63}, {1, 2}, {1, 2}, {0, 2}, {0, 0} },
 	},
 };
 
 static const struct rsrc_min_max ipa3_rsrc_rx_grp_config
 	[IPA_VER_MAX][IPA_RSRC_GRP_TYPE_RX_MAX][IPA_GROUP_MAX] = {
 	[IPA_3_0] = {
-		/* UL	DL	DIAG	DMA	Unused	uC Rx */
+		/* UL	DL	DIAG	DMA	unused	uC Rx */
 		[IPA_RSRC_GRP_TYPE_RX_HPS_CMDQ] = {
 		{16, 16}, {24, 24}, {8, 8}, {8, 8}, {0, 0}, {8, 8} },
 	},
@@ -421,7 +567,7 @@ static const struct rsrc_min_max ipa3_rsrc_rx_grp_config
 		{3, 3}, {7, 7}, {0, 0}, {2, 2}, {0, 0}, {0, 0} },
 	},
 	[IPA_4_0] = {
-		/* LWA_DL UL_DL	not used UC_RX_Q, other are invalid */
+		/* LWA_DL UL_DL	unused UC_RX_Q, other are invalid */
 		[IPA_RSRC_GRP_TYPE_RX_HPS_CMDQ] = {
 		{3, 3}, {7, 7}, {0, 0}, {2, 2}, {0, 0}, {0, 0} },
 	},
@@ -430,22 +576,48 @@ static const struct rsrc_min_max ipa3_rsrc_rx_grp_config
 		[IPA_RSRC_GRP_TYPE_RX_HPS_CMDQ] = {
 		{ 3, 3 }, { 7, 7 }, { 2, 2 }, { 0, 0 }, { 0, 0 }, { 0, 0 } },
 	},
-	[IPA_4_0_AUTO] = {
-		/*not-used  UL_DL CV2X  not-used, other are invalid */
+	[IPA_4_1] = {
+		/* LWA_DL UL_DL	unused UC_RX_Q, other are invalid */
 		[IPA_RSRC_GRP_TYPE_RX_HPS_CMDQ] = {
-		{3, 3}, {7, 7}, {2, 2}, {0, 0}, {0, 0}, {0, 0} },
+		{3, 3}, {7, 7}, {0, 0}, {2, 2}, {0, 0}, {0, 0} },
 	},
-	[IPA_4_0_AUTO_MHI] = {
-		/* PCIE  DDR   DMA/CV2X not used, other are invalid */
+	[IPA_4_1_APQ] = {
+		/* LWA_DL UL_DL	unused UC_RX_Q, other are invalid */
 		[IPA_RSRC_GRP_TYPE_RX_HPS_CMDQ] = {
-		{ 3, 3 }, { 7, 7 }, { 2, 2 }, { 0, 0 }, { 0, 0 }, { 0, 0 } },
+		{3, 3}, {7, 7}, {0, 0}, {2, 2}, {0, 0}, {0, 0} },
 	},
+	[IPA_4_2] = {
+		/* UL_DL, other are invalid */
+		[IPA_RSRC_GRP_TYPE_RX_HPS_CMDQ] = {
+		{4, 4}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0} },
+	},
+	[IPA_4_5] = {
+		/* unused  UL_DL  unused unused  UC_RX_Q  N/A */
+		[IPA_RSRC_GRP_TYPE_RX_HPS_CMDQ] = {
+		{0, 0}, {3, 3}, {0, 0}, {0, 0}, {0, 0}, {0, 0} },
+	},
+	[IPA_4_5_MHI] = {
+		/* PCIE  DDR  DMA  QDSS  unused  N/A */
+		[IPA_RSRC_GRP_TYPE_RX_HPS_CMDQ] = {
+		{ 3, 3 }, {3, 3}, {3, 3}, {3, 3}, {0, 0}, { 0, 0 } },
+	},
+	[IPA_4_5_AUTO] = {
+		/* unused  UL_DL DMA/CV2X  unused  UC_RX_Q  N/A */
+		[IPA_RSRC_GRP_TYPE_RX_HPS_CMDQ] = {
+		{0, 0}, {3, 3}, {3, 3}, {0, 0}, {0, 0}, {0, 0} },
+	},
+	[IPA_4_5_AUTO_MHI] = {
+		/* PCIE  DDR  DMA  QDSS  unused  N/A */
+		[IPA_RSRC_GRP_TYPE_RX_HPS_CMDQ] = {
+		{ 3, 3 }, {3, 3}, {3, 3}, {3, 3}, {0, 0}, { 0, 0 } },
+	},
+
 };
 
 static const u32 ipa3_rsrc_rx_grp_hps_weight_config
 	[IPA_VER_MAX][IPA_RSRC_GRP_TYPE_RX_HPS_WEIGHT_MAX][IPA_GROUP_MAX] = {
 	[IPA_3_0] = {
-		/* UL	DL	DIAG	DMA	Unused	uC Rx */
+		/* UL	DL	DIAG	DMA	unused	uC Rx */
 		[IPA_RSRC_GRP_TYPE_RX_HPS_WEIGHT_CONFIG] = { 0, 0, 0, 0, 0, 0 },
 	},
 	[IPA_3_5] = {
@@ -461,20 +633,20 @@ static const u32 ipa3_rsrc_rx_grp_hps_weight_config
 		[IPA_RSRC_GRP_TYPE_RX_HPS_WEIGHT_CONFIG] = { 1, 1, 1, 1, 0, 0 },
 	},
 	[IPA_4_0] = {
-		/* LWA_DL UL_DL	not used UC_RX_Q, other are invalid */
+		/* LWA_DL UL_DL	unused UC_RX_Q N/A */
 		[IPA_RSRC_GRP_TYPE_RX_HPS_WEIGHT_CONFIG] = { 1, 1, 1, 1, 0, 0 },
 	},
 	[IPA_4_0_MHI] = {
 		/* PCIE   DDR	     DMA       unused   N/A        N/A */
 		[IPA_RSRC_GRP_TYPE_RX_HPS_WEIGHT_CONFIG] = { 3, 5, 1, 1, 0, 0 },
 	},
-	[IPA_4_0_AUTO] = {
-		/*not-used  UL_DL CV2X  not-used, other are invalid */
-		[IPA_RSRC_GRP_TYPE_RX_HPS_WEIGHT_CONFIG] = { 0, 1, 1, 0, 0, 0 },
+	[IPA_4_1] = {
+		/* LWA_DL UL_DL	unused UC_RX_Q, other are invalid */
+		[IPA_RSRC_GRP_TYPE_RX_HPS_WEIGHT_CONFIG] = { 1, 1, 1, 1, 0, 0 },
 	},
-	[IPA_4_0_AUTO_MHI] = {
-		/* PCIE  DDR   DMA/CV2X not used, other are invalid */
-		[IPA_RSRC_GRP_TYPE_RX_HPS_WEIGHT_CONFIG] = { 3, 5, 1, 0, 0, 0 },
+	[IPA_4_1_APQ] = {
+		/* LWA_DL UL_DL	unused UC_RX_Q, other are invalid */
+		[IPA_RSRC_GRP_TYPE_RX_HPS_WEIGHT_CONFIG] = { 1, 1, 1, 1, 0, 0 },
 	},
 };
 
@@ -482,6 +654,49 @@ enum ipa_ees {
 	IPA_EE_AP = 0,
 	IPA_EE_Q6 = 1,
 	IPA_EE_UC = 2,
+};
+
+enum ipa_qmb_instance_type {
+	IPA_QMB_INSTANCE_DDR = 0,
+	IPA_QMB_INSTANCE_PCIE = 1,
+	IPA_QMB_INSTANCE_MAX
+};
+
+#define QMB_MASTER_SELECT_DDR IPA_QMB_INSTANCE_DDR
+#define QMB_MASTER_SELECT_PCIE IPA_QMB_INSTANCE_PCIE
+
+struct ipa_qmb_outstanding {
+	u16 ot_reads;
+	u16 ot_writes;
+};
+
+static const struct ipa_qmb_outstanding ipa3_qmb_outstanding
+		[IPA_VER_MAX][IPA_QMB_INSTANCE_MAX] = {
+	[IPA_3_0][IPA_QMB_INSTANCE_DDR]	= {8, 8},
+	[IPA_3_0][IPA_QMB_INSTANCE_PCIE]	= {8, 2},
+	[IPA_3_5][IPA_QMB_INSTANCE_DDR]	= {8, 8},
+	[IPA_3_5][IPA_QMB_INSTANCE_PCIE]	= {12, 4},
+	[IPA_3_5_MHI][IPA_QMB_INSTANCE_DDR]	= {8, 8},
+	[IPA_3_5_MHI][IPA_QMB_INSTANCE_PCIE]	= {12, 4},
+	[IPA_3_5_1][IPA_QMB_INSTANCE_DDR]	= {8, 8},
+	[IPA_3_5_1][IPA_QMB_INSTANCE_PCIE]	= {12, 4},
+	[IPA_4_0][IPA_QMB_INSTANCE_DDR]	= {12, 8},
+	[IPA_4_0][IPA_QMB_INSTANCE_PCIE]	= {12, 4},
+	[IPA_4_0_MHI][IPA_QMB_INSTANCE_DDR]	= {12, 8},
+	[IPA_4_0_MHI][IPA_QMB_INSTANCE_PCIE]	= {12, 4},
+	[IPA_4_1][IPA_QMB_INSTANCE_DDR]	= {12, 8},
+	[IPA_4_1][IPA_QMB_INSTANCE_PCIE]	= {12, 4},
+	[IPA_4_1_APQ][IPA_QMB_INSTANCE_DDR]	= {12, 8},
+	[IPA_4_1_APQ][IPA_QMB_INSTANCE_PCIE]	= {12, 4},
+	[IPA_4_2][IPA_QMB_INSTANCE_DDR]	= {12, 8},
+	[IPA_4_5][IPA_QMB_INSTANCE_DDR]	= {16, 8},
+	[IPA_4_5][IPA_QMB_INSTANCE_PCIE]	= {12, 8},
+	[IPA_4_5_MHI][IPA_QMB_INSTANCE_DDR]	= {16, 8},
+	[IPA_4_5_MHI][IPA_QMB_INSTANCE_PCIE]	= {12, 8},
+	[IPA_4_5_AUTO][IPA_QMB_INSTANCE_DDR]	= {16, 8},
+	[IPA_4_5_AUTO][IPA_QMB_INSTANCE_PCIE]	= {12, 8},
+	[IPA_4_5_AUTO_MHI][IPA_QMB_INSTANCE_DDR]	= {16, 8},
+	[IPA_4_5_AUTO_MHI][IPA_QMB_INSTANCE_PCIE]	= {12, 8},
 };
 
 struct ipa_ep_configuration {
@@ -1101,7 +1316,7 @@ static const struct ipa_ep_configuration ipa3_ep_mapping
 			true, IPA_v3_5_GROUP_UL_DL, false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 16, 3, 8, 8, IPA_EE_UC } },
+			{ 16, 11, 8, 8, IPA_EE_UC } },
 	[IPA_3_5_1][IPA_CLIENT_WLAN2_CONS]          =  {
 			true, IPA_v3_5_GROUP_UL_DL, false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
@@ -1187,86 +1402,86 @@ static const struct ipa_ep_configuration ipa3_ep_mapping
 			true,
 			IPA_DPS_HPS_REP_SEQ_TYPE_2PKT_PROC_PASS_NO_DEC_UCP_DMAP,
 			QMB_MASTER_SELECT_DDR,
-			{ 6, 2, 8, 16, IPA_EE_UC, GSI_USE_PREFETCH_BUFS } },
+			{ 6, 2, 8, 16, IPA_EE_UC } },
 	[IPA_4_0][IPA_CLIENT_USB_PROD]            = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_REP_SEQ_TYPE_2PKT_PROC_PASS_NO_DEC_UCP_DMAP,
 			QMB_MASTER_SELECT_DDR,
-			{ 0, 8, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 0, 8, 8, 16, IPA_EE_AP } },
 	[IPA_4_0][IPA_CLIENT_APPS_LAN_PROD]   = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{ 8, 10, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 8, 10, 8, 16, IPA_EE_AP } },
 	[IPA_4_0][IPA_CLIENT_APPS_WAN_PROD] = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_REP_SEQ_TYPE_2PKT_PROC_PASS_NO_DEC_UCP_DMAP,
 			QMB_MASTER_SELECT_DDR,
-			{ 2, 3, 16, 32, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 2, 3, 16, 32, IPA_EE_AP } },
 	[IPA_4_0][IPA_CLIENT_APPS_CMD_PROD]	  = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_DMA_ONLY,
 			QMB_MASTER_SELECT_DDR,
-			{ 5, 4, 20, 24, IPA_EE_AP, GSI_USE_PREFETCH_BUFS } },
+			{ 5, 4, 20, 24, IPA_EE_AP } },
 	[IPA_4_0][IPA_CLIENT_ODU_PROD]            = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_REP_SEQ_TYPE_2PKT_PROC_PASS_NO_DEC_UCP_DMAP,
 			QMB_MASTER_SELECT_DDR,
-			{ 1, 0, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 1, 0, 8, 16, IPA_EE_AP } },
 	[IPA_4_0][IPA_CLIENT_ETHERNET_PROD]	  = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_REP_SEQ_TYPE_2PKT_PROC_PASS_NO_DEC_UCP_DMAP,
 			QMB_MASTER_SELECT_DDR,
-			{ 9, 0, 8, 16, IPA_EE_UC, GSI_USE_PREFETCH_BUFS } },
+			{ 9, 0, 8, 16, IPA_EE_UC } },
 	[IPA_4_0][IPA_CLIENT_Q6_WAN_PROD]         = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{ 3, 0, 16, 32, IPA_EE_Q6, GSI_USE_PREFETCH_BUFS } },
+			{ 3, 0, 16, 32, IPA_EE_Q6 } },
 	[IPA_4_0][IPA_CLIENT_Q6_CMD_PROD]	  = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_PKT_PROCESS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{ 4, 1, 20, 24, IPA_EE_Q6, GSI_USE_PREFETCH_BUFS } },
+			{ 4, 1, 20, 24, IPA_EE_Q6 } },
 	/* Only for test purpose */
 	[IPA_4_0][IPA_CLIENT_TEST_PROD]           = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{0, 8, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{0, 8, 8, 16, IPA_EE_AP } },
 	[IPA_4_0][IPA_CLIENT_TEST1_PROD]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{0, 8, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{0, 8, 8, 16, IPA_EE_AP } },
 	[IPA_4_0][IPA_CLIENT_TEST2_PROD]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{ 1, 0, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 1, 0, 8, 16, IPA_EE_AP } },
 	[IPA_4_0][IPA_CLIENT_TEST3_PROD]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{ 7, 9, 8, 16, IPA_EE_AP, GSI_USE_PREFETCH_BUFS } },
+			{ 7, 9, 8, 16, IPA_EE_AP } },
 	[IPA_4_0][IPA_CLIENT_TEST4_PROD]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{8, 10, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{8, 10, 8, 16, IPA_EE_AP } },
 
 
 	[IPA_4_0][IPA_CLIENT_WLAN1_CONS]          = {
@@ -1274,73 +1489,73 @@ static const struct ipa_ep_configuration ipa3_ep_mapping
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 18, 3, 6, 9, IPA_EE_UC, GSI_USE_PREFETCH_BUFS } },
+			{ 18, 3, 6, 9, IPA_EE_UC } },
 	[IPA_4_0][IPA_CLIENT_WLAN2_CONS]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 20, 13, 9, 9, IPA_EE_AP, GSI_USE_PREFETCH_BUFS } },
+			{ 20, 13, 9, 9, IPA_EE_AP } },
 	[IPA_4_0][IPA_CLIENT_WLAN3_CONS]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 21, 14, 9, 9, IPA_EE_AP, GSI_USE_PREFETCH_BUFS } },
+			{ 21, 14, 9, 9, IPA_EE_AP } },
 	[IPA_4_0][IPA_CLIENT_USB_CONS]            = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 19, 12, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 19, 12, 9, 9, IPA_EE_AP } },
 	[IPA_4_0][IPA_CLIENT_USB_DPL_CONS]        = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 15, 7, 5, 5, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 15, 7, 5, 5, IPA_EE_AP } },
 	[IPA_4_0][IPA_CLIENT_APPS_LAN_CONS]       = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 10, 5, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 10, 5, 9, 9, IPA_EE_AP } },
 	[IPA_4_0][IPA_CLIENT_APPS_WAN_CONS]       = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 11, 6, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 11, 6, 9, 9, IPA_EE_AP } },
 	[IPA_4_0][IPA_CLIENT_ODU_EMB_CONS]        = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 17, 1, 17, 17, IPA_EE_AP, GSI_USE_PREFETCH_BUFS } },
+			{ 17, 1, 17, 17, IPA_EE_AP } },
 	[IPA_4_0][IPA_CLIENT_ETHERNET_CONS]	  = {
 			true, IPA_v4_0_GROUP_UL_DL,
-			true,
+			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 22, 1, 17, 17, IPA_EE_UC, GSI_USE_PREFETCH_BUFS } },
+			{ 22, 1, 17, 17, IPA_EE_UC } },
 	[IPA_4_0][IPA_CLIENT_Q6_LAN_CONS]         = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 14, 4, 9, 9, IPA_EE_Q6, GSI_USE_PREFETCH_BUFS } },
+			{ 14, 4, 9, 9, IPA_EE_Q6 } },
 	[IPA_4_0][IPA_CLIENT_Q6_WAN_CONS]         = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 13, 3, 9, 9, IPA_EE_Q6, GSI_USE_PREFETCH_BUFS } },
+			{ 13, 3, 9, 9, IPA_EE_Q6 } },
 	[IPA_4_0][IPA_CLIENT_Q6_LTE_WIFI_AGGR_CONS] = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 16, 5, 9, 9, IPA_EE_Q6, GSI_USE_PREFETCH_BUFS } },
+			{ 16, 5, 9, 9, IPA_EE_Q6 } },
 	/* Only for test purpose */
 	/* MBIM aggregation test pipes should have the same QMB as USB_CONS */
 	[IPA_4_0][IPA_CLIENT_TEST_CONS]           = {
@@ -1348,38 +1563,38 @@ static const struct ipa_ep_configuration ipa3_ep_mapping
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 11, 6, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 11, 6, 9, 9, IPA_EE_AP } },
 	[IPA_4_0][IPA_CLIENT_TEST1_CONS]           = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 11, 6, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 11, 6, 9, 9, IPA_EE_AP } },
 	[IPA_4_0][IPA_CLIENT_TEST2_CONS]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 12, 2, 5, 5, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 12, 2, 5, 5, IPA_EE_AP } },
 	[IPA_4_0][IPA_CLIENT_TEST3_CONS]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 19, 12, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 19, 12, 9, 9, IPA_EE_AP } },
 	[IPA_4_0][IPA_CLIENT_TEST4_CONS]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 21, 14, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 21, 14, 9, 9, IPA_EE_AP } },
 	/* Dummy consumer (pipe 31) is used in L2TP rt rule */
 	[IPA_4_0][IPA_CLIENT_DUMMY_CONS]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 31, 31, 8, 8, IPA_EE_AP, GSI_USE_PREFETCH_BUFS } },
+			{ 31, 31, 8, 8, IPA_EE_AP } },
 
 	/* IPA_4_0_MHI */
 	[IPA_4_0_MHI][IPA_CLIENT_APPS_WAN_PROD]   = {
@@ -1387,124 +1602,122 @@ static const struct ipa_ep_configuration ipa3_ep_mapping
 			true,
 			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{ 2, 3, 16, 32, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 2, 3, 16, 32, IPA_EE_AP } },
 	[IPA_4_0_MHI][IPA_CLIENT_APPS_CMD_PROD]	  = {
 			true, IPA_v4_0_MHI_GROUP_DDR,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_DMA_ONLY,
 			QMB_MASTER_SELECT_DDR,
-			{ 5, 4, 20, 24, IPA_EE_AP, GSI_USE_PREFETCH_BUFS } },
+			{ 5, 4, 20, 24, IPA_EE_AP } },
 	[IPA_4_0_MHI][IPA_CLIENT_MHI_PROD]            = {
 			true, IPA_v4_0_MHI_GROUP_PCIE,
 			true,
 			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_PCIE,
-			{ 1, 0, 8, 16, IPA_EE_AP, GSI_USE_PREFETCH_BUFS } },
+			{ 1, 0, 8, 16, IPA_EE_AP } },
 	[IPA_4_0_MHI][IPA_CLIENT_Q6_WAN_PROD]         = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_SEQ_TYPE_PKT_PROCESS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{ 3, 0, 16, 32, IPA_EE_Q6, GSI_USE_PREFETCH_BUFS } },
+			{ 3, 0, 16, 32, IPA_EE_Q6 } },
 	[IPA_4_0_MHI][IPA_CLIENT_Q6_CMD_PROD]	  = {
 			true, IPA_v4_0_MHI_GROUP_PCIE,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_PKT_PROCESS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{ 4, 1, 20, 24, IPA_EE_Q6, GSI_USE_PREFETCH_BUFS } },
+			{ 4, 1, 20, 24, IPA_EE_Q6 } },
 	[IPA_4_0_MHI][IPA_CLIENT_MEMCPY_DMA_SYNC_PROD] = {
 			true, IPA_v4_0_MHI_GROUP_DMA,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_DMA_ONLY,
 			QMB_MASTER_SELECT_DDR,
-			{ 7, 9, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 7, 9, 8, 16, IPA_EE_AP } },
 	[IPA_4_0_MHI][IPA_CLIENT_MEMCPY_DMA_ASYNC_PROD] = {
 			true, IPA_v4_0_MHI_GROUP_DMA,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_DMA_ONLY,
 			QMB_MASTER_SELECT_DDR,
-			{ 8, 10, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 8, 10, 8, 16, IPA_EE_AP } },
 	/* Only for test purpose */
 	[IPA_4_0_MHI][IPA_CLIENT_TEST_PROD]           = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{0, 8, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_MHI][IPA_CLIENT_TEST1_PROD]          = {
+			{0, 8, 8, 16, IPA_EE_AP } },
+	[IPA_4_0][IPA_CLIENT_TEST1_PROD]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{0, 8, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{0, 8, 8, 16, IPA_EE_AP } },
 	[IPA_4_0_MHI][IPA_CLIENT_TEST2_PROD]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{ 1, 0, 8, 16, IPA_EE_AP, GSI_USE_PREFETCH_BUFS } },
+			{ 1, 0, 8, 16, IPA_EE_AP } },
 	[IPA_4_0_MHI][IPA_CLIENT_TEST3_PROD]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{7, 9, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 7, 9, 8, 16, IPA_EE_AP } },
 	[IPA_4_0_MHI][IPA_CLIENT_TEST4_PROD]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{ 8, 10, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-
-
+			{ 8, 10, 8, 16, IPA_EE_AP } },
 	[IPA_4_0_MHI][IPA_CLIENT_APPS_LAN_CONS]       = {
 			true, IPA_v4_0_MHI_GROUP_DDR,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 10, 5, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 10, 5, 9, 9, IPA_EE_AP } },
 	[IPA_4_0_MHI][IPA_CLIENT_APPS_WAN_CONS]       = {
 			true, IPA_v4_0_MHI_GROUP_DDR,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 11, 6, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 11, 6, 9, 9, IPA_EE_AP } },
 	[IPA_4_0_MHI][IPA_CLIENT_MHI_CONS]            = {
 			true, IPA_v4_0_MHI_GROUP_PCIE,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_PCIE,
-			{ 17, 1, 17, 17, IPA_EE_AP, GSI_USE_PREFETCH_BUFS } },
+			{ 17, 1, 17, 17, IPA_EE_AP } },
 	[IPA_4_0_MHI][IPA_CLIENT_Q6_LAN_CONS]         = {
 			true, IPA_v4_0_MHI_GROUP_DDR,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 14, 4, 9, 9, IPA_EE_Q6, GSI_USE_PREFETCH_BUFS } },
+			{ 14, 4, 9, 9, IPA_EE_Q6 } },
 	[IPA_4_0_MHI][IPA_CLIENT_Q6_WAN_CONS]         = {
 			true, IPA_v4_0_MHI_GROUP_DDR,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 13, 3, 9, 9, IPA_EE_Q6, GSI_USE_PREFETCH_BUFS } },
+			{ 13, 3, 9, 9, IPA_EE_Q6 } },
 	[IPA_4_0_MHI][IPA_CLIENT_MEMCPY_DMA_SYNC_CONS] = {
 			true, IPA_v4_0_MHI_GROUP_DMA,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_PCIE,
-			{ 20, 13, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 20, 13, 9, 9, IPA_EE_AP } },
 	[IPA_4_0_MHI][IPA_CLIENT_MEMCPY_DMA_ASYNC_CONS] = {
 			true, IPA_v4_0_MHI_GROUP_DMA,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_PCIE,
-			{ 21, 14, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 21, 14, 9, 9, IPA_EE_AP } },
 	[IPA_4_0_MHI][IPA_CLIENT_Q6_LTE_WIFI_AGGR_CONS] = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 16, 5, 9, 9, IPA_EE_Q6, GSI_USE_PREFETCH_BUFS } },
+			{ 16, 5, 9, 9, IPA_EE_Q6 } },
 	[IPA_4_0_MHI][IPA_CLIENT_USB_DPL_CONS]        = {
 			true, IPA_v4_0_MHI_GROUP_DDR,
 			false,
@@ -1523,462 +1736,1733 @@ static const struct ipa_ep_configuration ipa3_ep_mapping
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_PCIE,
-			{ 11, 6, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 11, 6, 9, 9, IPA_EE_AP } },
 	[IPA_4_0_MHI][IPA_CLIENT_TEST1_CONS]           = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_PCIE,
-			{ 11, 6, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 11, 6, 9, 9, IPA_EE_AP } },
 	[IPA_4_0_MHI][IPA_CLIENT_TEST2_CONS]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 12, 2, 5, 5, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 12, 2, 5, 5, IPA_EE_AP } },
 	[IPA_4_0_MHI][IPA_CLIENT_TEST3_CONS]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_PCIE,
-			{ 19, 12, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 19, 12, 9, 9, IPA_EE_AP } },
 	[IPA_4_0_MHI][IPA_CLIENT_TEST4_CONS]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_PCIE,
-			{ 21, 14, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 21, 14, 9, 9, IPA_EE_AP } },
 	/* Dummy consumer (pipe 31) is used in L2TP rt rule */
 	[IPA_4_0_MHI][IPA_CLIENT_DUMMY_CONS]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 31, 31, 8, 8, IPA_EE_AP, GSI_USE_PREFETCH_BUFS } },
-
-	/* IPA_4_0_AUTO */
-	[IPA_4_0_AUTO][IPA_CLIENT_WLAN1_PROD]          = {
+			{ 31, 31, 8, 8, IPA_EE_AP } },
+	/* IPA_4_1 */
+	[IPA_4_1][IPA_CLIENT_WLAN1_PROD]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_REP_SEQ_TYPE_2PKT_PROC_PASS_NO_DEC_UCP_DMAP,
 			QMB_MASTER_SELECT_DDR,
-			{ 6, 2, 8, 16, IPA_EE_UC, GSI_USE_PREFETCH_BUFS } },
-	[IPA_4_0_AUTO][IPA_CLIENT_USB_PROD]            = {
+			{ 6, 2, 8, 16, IPA_EE_UC } },
+	[IPA_4_1][IPA_CLIENT_WLAN2_PROD]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_REP_SEQ_TYPE_2PKT_PROC_PASS_NO_DEC_UCP_DMAP,
 			QMB_MASTER_SELECT_DDR,
-			{ 0, 0, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO][IPA_CLIENT_USB2_PROD]            = {
-			true, IPA_v4_0_GROUP_CV2X,
+			{ 7, 9, 8, 16, IPA_EE_AP } },
+	[IPA_4_1][IPA_CLIENT_USB_PROD]            = {
+			true, IPA_v4_0_GROUP_UL_DL,
 			true,
-			IPA_DPS_HPS_SEQ_TYPE_DMA_ONLY,
+			IPA_DPS_HPS_REP_SEQ_TYPE_2PKT_PROC_PASS_NO_DEC_UCP_DMAP,
 			QMB_MASTER_SELECT_DDR,
-			{ 7, 3, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO][IPA_CLIENT_APPS_LAN_PROD]   = {
+			{ 0, 8, 8, 16, IPA_EE_AP } },
+	[IPA_4_1][IPA_CLIENT_APPS_LAN_PROD]   = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{ 8, 11, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO][IPA_CLIENT_APPS_WAN_PROD] = {
+			{ 8, 10, 8, 16, IPA_EE_AP } },
+	[IPA_4_1][IPA_CLIENT_APPS_WAN_PROD] = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_REP_SEQ_TYPE_2PKT_PROC_PASS_NO_DEC_UCP_DMAP,
 			QMB_MASTER_SELECT_DDR,
-			{ 2, 4, 16, 32, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO][IPA_CLIENT_APPS_CMD_PROD]	  = {
+			{ 2, 3, 16, 32, IPA_EE_AP } },
+	[IPA_4_1][IPA_CLIENT_APPS_CMD_PROD]	  = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_DMA_ONLY,
 			QMB_MASTER_SELECT_DDR,
-			{ 5, 7, 20, 24, IPA_EE_AP, GSI_USE_PREFETCH_BUFS } },
-	[IPA_4_0_AUTO][IPA_CLIENT_Q6_CV2X_PROD]            = {
-			true, IPA_v4_0_GROUP_CV2X,
-			true,
-			IPA_DPS_HPS_REP_SEQ_TYPE_2PKT_PROC_PASS_NO_DEC_UCP_DMAP,
-			QMB_MASTER_SELECT_DDR,
-			{ 1, 2, 8, 16, IPA_EE_Q6, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO][IPA_CLIENT_ETHERNET_PROD]	  = {
+			{ 5, 4, 20, 24, IPA_EE_AP } },
+	[IPA_4_1][IPA_CLIENT_ODU_PROD]            = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_REP_SEQ_TYPE_2PKT_PROC_PASS_NO_DEC_UCP_DMAP,
 			QMB_MASTER_SELECT_DDR,
-			{ 9, 0, 8, 16, IPA_EE_UC, GSI_USE_PREFETCH_BUFS } },
-	[IPA_4_0_AUTO][IPA_CLIENT_Q6_WAN_PROD]         = {
+			{ 1, 0, 8, 16, IPA_EE_AP } },
+	[IPA_4_1][IPA_CLIENT_ETHERNET_PROD] = {
+			true, IPA_v4_0_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_REP_SEQ_TYPE_2PKT_PROC_PASS_NO_DEC_UCP_DMAP,
+			QMB_MASTER_SELECT_DDR,
+			{ 9, 0, 8, 16, IPA_EE_UC } },
+	[IPA_4_1][IPA_CLIENT_Q6_WAN_PROD]         = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{ 3, 0, 16, 32, IPA_EE_Q6, GSI_USE_PREFETCH_BUFS } },
-	[IPA_4_0_AUTO][IPA_CLIENT_Q6_CMD_PROD]	  = {
+			{ 3, 0, 16, 32, IPA_EE_Q6 } },
+	[IPA_4_1][IPA_CLIENT_Q6_CMD_PROD]	  = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_PKT_PROCESS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{ 4, 1, 20, 24, IPA_EE_Q6, GSI_USE_PREFETCH_BUFS } },
+			{ 4, 1, 20, 24, IPA_EE_Q6 } },
 	/* Only for test purpose */
-	[IPA_4_0_AUTO][IPA_CLIENT_TEST_PROD]           = {
+	[IPA_4_1][IPA_CLIENT_TEST_PROD]           = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{0, 8, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO][IPA_CLIENT_TEST1_PROD]          = {
+			{0, 8, 8, 16, IPA_EE_AP } },
+	[IPA_4_1][IPA_CLIENT_TEST1_PROD]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{0, 8, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO][IPA_CLIENT_TEST2_PROD]          = {
+			{ 0, 8, 8, 16, IPA_EE_AP } },
+	[IPA_4_1][IPA_CLIENT_TEST2_PROD]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{ 1, 0, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO][IPA_CLIENT_TEST3_PROD]          = {
+			{ 1, 0, 8, 16, IPA_EE_AP } },
+	[IPA_4_1][IPA_CLIENT_TEST3_PROD]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{ 7, 9, 8, 16, IPA_EE_AP, GSI_USE_PREFETCH_BUFS } },
-	[IPA_4_0_AUTO][IPA_CLIENT_TEST4_PROD]          = {
+			{7, 9, 8, 16, IPA_EE_AP } },
+	[IPA_4_1][IPA_CLIENT_TEST4_PROD]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{8, 10, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 8, 10, 8, 16, IPA_EE_AP } },
 
 
-	[IPA_4_0_AUTO][IPA_CLIENT_WLAN1_CONS]          = {
+	[IPA_4_1][IPA_CLIENT_WLAN1_CONS]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 18, 3, 6, 9, IPA_EE_UC, GSI_USE_PREFETCH_BUFS } },
-	[IPA_4_0_AUTO][IPA_CLIENT_WLAN2_CONS]          = {
+			{ 18, 3, 9, 9, IPA_EE_UC } },
+	[IPA_4_1][IPA_CLIENT_WLAN2_CONS]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 20, 12, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO][IPA_CLIENT_WLAN3_CONS]          = {
+			{ 17, 1, 8, 13, IPA_EE_AP } },
+	[IPA_4_1][IPA_CLIENT_WLAN3_CONS]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 21, 13, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO][IPA_CLIENT_USB_CONS]            = {
+			{ 21, 14, 9, 9, IPA_EE_AP } },
+	[IPA_4_1][IPA_CLIENT_USB_CONS]            = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 19, 6, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO][IPA_CLIENT_USB_DPL_CONS]        = {
+			{ 19, 12, 9, 9, IPA_EE_AP } },
+	[IPA_4_1][IPA_CLIENT_USB_DPL_CONS]        = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 15, 10, 5, 5, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO][IPA_CLIENT_MHI_DPL_CONS]        = {
-			false, IPA_v4_0_MHI_GROUP_PCIE,
-			false,
-			IPA_DPS_HPS_SEQ_TYPE_INVALID,
-			QMB_MASTER_SELECT_PCIE,
-			{ 12, 2, 5, 5, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO][IPA_CLIENT_APPS_LAN_CONS]       = {
+			{ 15, 7, 5, 5, IPA_EE_AP } },
+	[IPA_4_1][IPA_CLIENT_APPS_LAN_CONS]       = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 10, 8, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO][IPA_CLIENT_APPS_WAN_CONS]       = {
+			{ 10, 5, 9, 9, IPA_EE_AP } },
+	[IPA_4_1][IPA_CLIENT_APPS_WAN_CONS]       = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 11, 9, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO][IPA_CLIENT_USB2_CONS]        = {
-			true, IPA_v4_0_GROUP_CV2X,
-			false,
-			IPA_DPS_HPS_SEQ_TYPE_INVALID,
-			QMB_MASTER_SELECT_DDR,
-			{ 17, 1, 9, 9, IPA_EE_AP, GSI_USE_PREFETCH_BUFS } },
-	[IPA_4_0_AUTO][IPA_CLIENT_ETHERNET_CONS]	  = {
+			{ 11, 6, 9, 9, IPA_EE_AP } },
+	[IPA_4_1][IPA_CLIENT_ODL_DPL_CONS]        = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 22, 1, 9, 9, IPA_EE_UC, GSI_USE_PREFETCH_BUFS } },
-	[IPA_4_0_AUTO][IPA_CLIENT_Q6_LAN_CONS]         = {
+			{ 12, 2, 9, 9, IPA_EE_AP } },
+	[IPA_4_1][IPA_CLIENT_ETHERNET_CONS]	  = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 14, 4, 9, 9, IPA_EE_Q6, GSI_USE_PREFETCH_BUFS } },
-	[IPA_4_0_AUTO][IPA_CLIENT_Q6_WAN_CONS]         = {
+			{ 22, 1, 9, 9, IPA_EE_UC } },
+	[IPA_4_1][IPA_CLIENT_Q6_LAN_CONS]         = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 13, 3, 9, 9, IPA_EE_Q6, GSI_USE_PREFETCH_BUFS } },
-	[IPA_4_0_AUTO][IPA_CLIENT_Q6_CV2X_CONS] = {
-			true, IPA_v4_0_GROUP_CV2X,
+			{ 14, 4, 9, 9, IPA_EE_Q6 } },
+	[IPA_4_1][IPA_CLIENT_Q6_WAN_CONS]         = {
+			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 16, 5, 9, 9, IPA_EE_Q6, GSI_ESCAPE_BUF_ONLY } },
+			{ 13, 3, 9, 9, IPA_EE_Q6 } },
+	[IPA_4_1][IPA_CLIENT_Q6_LTE_WIFI_AGGR_CONS] = {
+			true, IPA_v4_0_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 16, 5, 9, 9, IPA_EE_Q6 } },
 	/* Only for test purpose */
 	/* MBIM aggregation test pipes should have the same QMB as USB_CONS */
-	[IPA_4_0_AUTO][IPA_CLIENT_TEST_CONS]           = {
+	[IPA_4_1][IPA_CLIENT_TEST_CONS]           = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 11, 6, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO][IPA_CLIENT_TEST1_CONS]           = {
+			{ 11, 6, 9, 9, IPA_EE_AP } },
+	[IPA_4_1][IPA_CLIENT_TEST1_CONS]           = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 11, 6, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO][IPA_CLIENT_TEST2_CONS]          = {
+			{ 11, 6, 9, 9, IPA_EE_AP } },
+	[IPA_4_1][IPA_CLIENT_TEST2_CONS]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 12, 2, 5, 5, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO][IPA_CLIENT_TEST3_CONS]          = {
+			{ 12, 2, 9, 9, IPA_EE_AP } },
+	[IPA_4_1][IPA_CLIENT_TEST3_CONS]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 19, 12, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO][IPA_CLIENT_TEST4_CONS]          = {
+			{ 19, 12, 9, 9, IPA_EE_AP } },
+	[IPA_4_1][IPA_CLIENT_TEST4_CONS]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 21, 14, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 21, 14, 9, 9, IPA_EE_AP } },
 	/* Dummy consumer (pipe 31) is used in L2TP rt rule */
-	[IPA_4_0_AUTO][IPA_CLIENT_DUMMY_CONS]          = {
+	[IPA_4_1][IPA_CLIENT_DUMMY_CONS]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 31, 31, 8, 8, IPA_EE_AP, GSI_USE_PREFETCH_BUFS } },
+			{ 31, 31, 8, 8, IPA_EE_AP } },
 
-	/* IPA_4_0_AUTO_MHI */
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_APPS_WAN_PROD]   = {
-			true, IPA_v4_0_MHI_GROUP_DDR,
-			true,
-			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
-			QMB_MASTER_SELECT_DDR,
-			{ 2, 4, 16, 32, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_APPS_CMD_PROD]	  = {
-			true, IPA_v4_0_MHI_GROUP_DDR,
-			false,
-			IPA_DPS_HPS_SEQ_TYPE_DMA_ONLY,
-			QMB_MASTER_SELECT_DDR,
-			{ 5, 7, 20, 24, IPA_EE_AP, GSI_USE_PREFETCH_BUFS } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_MHI_PROD]            = {
-			true, IPA_v4_0_MHI_GROUP_PCIE,
-			true,
-			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
-			QMB_MASTER_SELECT_PCIE,
-			{ 0, 0, 8, 16, IPA_EE_AP, GSI_USE_PREFETCH_BUFS } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_MHI2_PROD]            = {
-			true, IPA_v4_0_GROUP_CV2X,
-			true,
-			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
-			QMB_MASTER_SELECT_PCIE,
-			{ 6, 5, 8, 16, IPA_EE_AP, GSI_USE_PREFETCH_BUFS } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_ETHERNET_PROD]	  = {
+	/* IPA_4_1 APQ */
+	[IPA_4_1_APQ][IPA_CLIENT_WLAN1_PROD]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_REP_SEQ_TYPE_2PKT_PROC_PASS_NO_DEC_UCP_DMAP,
 			QMB_MASTER_SELECT_DDR,
-			{ 9, 0, 8, 16, IPA_EE_UC, GSI_USE_PREFETCH_BUFS } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_Q6_CV2X_PROD]            = {
-			true, IPA_v4_0_GROUP_CV2X,
+			{ 6, 2, 8, 16, IPA_EE_UC } },
+	[IPA_4_1_APQ][IPA_CLIENT_WLAN2_PROD]          = {
+			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_REP_SEQ_TYPE_2PKT_PROC_PASS_NO_DEC_UCP_DMAP,
 			QMB_MASTER_SELECT_DDR,
-			{ 1, 2, 8, 16, IPA_EE_Q6, GSI_USE_PREFETCH_BUFS } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_Q6_WAN_PROD]         = {
+			{ 6, 11, 8, 16, IPA_EE_AP } },
+	[IPA_4_1_APQ][IPA_CLIENT_USB_PROD]            = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
-			IPA_DPS_HPS_SEQ_TYPE_PKT_PROCESS_NO_DEC_UCP,
+			IPA_DPS_HPS_REP_SEQ_TYPE_2PKT_PROC_PASS_NO_DEC_UCP_DMAP,
 			QMB_MASTER_SELECT_DDR,
-			{ 3, 0, 16, 32, IPA_EE_Q6, GSI_USE_PREFETCH_BUFS } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_Q6_CMD_PROD]	  = {
-			true, IPA_v4_0_MHI_GROUP_PCIE,
+			{ 0, 8, 8, 16, IPA_EE_AP } },
+	[IPA_4_1_APQ][IPA_CLIENT_APPS_LAN_PROD]   = {
+			true, IPA_v4_0_GROUP_UL_DL,
 			false,
-			IPA_DPS_HPS_SEQ_TYPE_PKT_PROCESS_NO_DEC_UCP,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{ 4, 1, 20, 24, IPA_EE_Q6, GSI_USE_PREFETCH_BUFS } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_MEMCPY_DMA_SYNC_PROD] = {
-			true, IPA_v4_0_MHI_GROUP_DMA,
+			{ 8, 10, 8, 16, IPA_EE_AP } },
+	[IPA_4_1_APQ][IPA_CLIENT_APPS_CMD_PROD]	  = {
+			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_DMA_ONLY,
 			QMB_MASTER_SELECT_DDR,
-			{ 7, 3, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_MEMCPY_DMA_ASYNC_PROD] = {
-			true, IPA_v4_0_MHI_GROUP_DMA,
-			false,
-			IPA_DPS_HPS_SEQ_TYPE_DMA_ONLY,
+			{ 5, 4, 20, 24, IPA_EE_AP } },
+	[IPA_4_1_APQ][IPA_CLIENT_ETHERNET_PROD] = {
+			true, IPA_v4_0_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_REP_SEQ_TYPE_2PKT_PROC_PASS_NO_DEC_UCP_DMAP,
 			QMB_MASTER_SELECT_DDR,
-			{ 8, 11, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 9, 0, 8, 16, IPA_EE_UC } },
 	/* Only for test purpose */
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_TEST_PROD]           = {
+	[IPA_4_1_APQ][IPA_CLIENT_TEST_PROD]           = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{0, 8, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_TEST1_PROD]          = {
+			{0, 8, 8, 16, IPA_EE_AP } },
+	[IPA_4_1_APQ][IPA_CLIENT_TEST1_PROD]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{0, 8, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_TEST2_PROD]          = {
+			{ 0, 8, 8, 16, IPA_EE_AP } },
+	[IPA_4_1_APQ][IPA_CLIENT_TEST2_PROD]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			true,
 			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR,
-			{ 1, 0, 8, 16, IPA_EE_AP, GSI_USE_PREFETCH_BUFS } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_TEST3_PROD]          = {
-			true, IPA_v4_0_GROUP_UL_DL,
-			true,
-			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
-			QMB_MASTER_SELECT_DDR,
-			{7, 9, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_TEST4_PROD]          = {
-			true, IPA_v4_0_GROUP_UL_DL,
-			true,
-			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
-			QMB_MASTER_SELECT_DDR,
-			{ 8, 10, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 6, 2, 8, 16, IPA_EE_AP } },
 
-
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_APPS_LAN_CONS]       = {
-			true, IPA_v4_0_MHI_GROUP_DDR,
+	[IPA_4_1_APQ][IPA_CLIENT_WLAN1_CONS]          = {
+			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 10, 8, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_APPS_WAN_CONS]       = {
-			true, IPA_v4_0_MHI_GROUP_DDR,
+			{ 18, 3, 9, 9, IPA_EE_UC } },
+	[IPA_4_1_APQ][IPA_CLIENT_WLAN2_CONS]          = {
+			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 11, 9, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_MHI_CONS]            = {
-			true, IPA_v4_0_MHI_GROUP_PCIE,
-			false,
-			IPA_DPS_HPS_SEQ_TYPE_INVALID,
-			QMB_MASTER_SELECT_PCIE,
-			{ 17, 1, 17, 17, IPA_EE_AP, GSI_USE_PREFETCH_BUFS } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_MHI2_CONS]            = {
-			true, IPA_v4_0_GROUP_CV2X,
-			false,
-			IPA_DPS_HPS_SEQ_TYPE_INVALID,
-			QMB_MASTER_SELECT_PCIE,
-			{ 19, 6, 9, 9, IPA_EE_AP, GSI_USE_PREFETCH_BUFS } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_ETHERNET_CONS]	  = {
-			true, IPA_v4_0_MHI_GROUP_DDR,
+			{ 18, 15, 8, 13, IPA_EE_AP } },
+	[IPA_4_1_APQ][IPA_CLIENT_USB_CONS]            = {
+			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 22, 1, 9, 9, IPA_EE_UC, GSI_USE_PREFETCH_BUFS } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_Q6_LAN_CONS]         = {
-			true, IPA_v4_0_MHI_GROUP_DDR,
+			{ 19, 12, 9, 9, IPA_EE_AP } },
+	[IPA_4_1_APQ][IPA_CLIENT_USB_DPL_CONS]        = {
+			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 14, 4, 9, 9, IPA_EE_Q6, GSI_USE_PREFETCH_BUFS } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_Q6_WAN_CONS]         = {
-			true, IPA_v4_0_MHI_GROUP_DDR,
+			{ 15, 7, 5, 5, IPA_EE_AP } },
+	[IPA_4_1_APQ][IPA_CLIENT_APPS_LAN_CONS]       = {
+			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 13, 3, 9, 9, IPA_EE_Q6, GSI_USE_PREFETCH_BUFS } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_Q6_CV2X_CONS] = {
-			true, IPA_v4_0_GROUP_CV2X,
+			{ 10, 5, 9, 9, IPA_EE_AP } },
+	[IPA_4_1_APQ][IPA_CLIENT_ODL_DPL_CONS]        = {
+			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 16, 5, 9, 9, IPA_EE_Q6, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_MEMCPY_DMA_SYNC_CONS] = {
-			true, IPA_v4_0_MHI_GROUP_DMA,
-			false,
-			IPA_DPS_HPS_SEQ_TYPE_INVALID,
-			QMB_MASTER_SELECT_PCIE,
-			{ 20, 12, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_MEMCPY_DMA_ASYNC_CONS] = {
-			true, IPA_v4_0_MHI_GROUP_DMA,
-			false,
-			IPA_DPS_HPS_SEQ_TYPE_INVALID,
-			QMB_MASTER_SELECT_PCIE,
-			{ 21, 13, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_Q6_LTE_WIFI_AGGR_CONS] = {
-			false, IPA_v4_0_GROUP_UL_DL,
+			{ 12, 2, 9, 9, IPA_EE_AP } },
+	[IPA_4_1_APQ][IPA_CLIENT_ETHERNET_CONS] = {
+			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 16, 5, 9, 9, IPA_EE_Q6, GSI_USE_PREFETCH_BUFS } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_USB_DPL_CONS]        = {
-			false, IPA_v4_0_MHI_GROUP_DDR,
-			false,
-			IPA_DPS_HPS_SEQ_TYPE_INVALID,
-			QMB_MASTER_SELECT_DDR,
-			{ 15, 10, 5, 5, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_MHI_DPL_CONS]        = {
-			true, IPA_v4_0_MHI_GROUP_PCIE,
-			false,
-			IPA_DPS_HPS_SEQ_TYPE_INVALID,
-			QMB_MASTER_SELECT_PCIE,
-			{ 12, 2, 5, 5, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			{ 22, 1, 9, 9, IPA_EE_UC } },
 	/* Only for test purpose */
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_TEST_CONS]           = {
-			true, IPA_v4_0_GROUP_UL_DL,
-			false,
-			IPA_DPS_HPS_SEQ_TYPE_INVALID,
-			QMB_MASTER_SELECT_PCIE,
-			{ 11, 6, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_TEST1_CONS]           = {
-			true, IPA_v4_0_GROUP_UL_DL,
-			false,
-			IPA_DPS_HPS_SEQ_TYPE_INVALID,
-			QMB_MASTER_SELECT_PCIE,
-			{ 11, 6, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_TEST2_CONS]          = {
+	/* MBIM aggregation test pipes should have the same QMB as USB_CONS */
+	[IPA_4_1_APQ][IPA_CLIENT_TEST_CONS]           = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 12, 2, 5, 5, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_TEST3_CONS]          = {
+			{ 19, 12, 9, 9, IPA_EE_AP } },
+	[IPA_4_1_APQ][IPA_CLIENT_TEST1_CONS]           = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
-			QMB_MASTER_SELECT_PCIE,
-			{ 19, 12, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_TEST4_CONS]          = {
+			QMB_MASTER_SELECT_DDR,
+			{ 19, 12, 9, 9, IPA_EE_AP } },
+	[IPA_4_1_APQ][IPA_CLIENT_TEST2_CONS]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
-			QMB_MASTER_SELECT_PCIE,
-			{ 21, 14, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY } },
+			QMB_MASTER_SELECT_DDR,
+			{ 18, 3, 9, 9, IPA_EE_AP } },
+	[IPA_4_1_APQ][IPA_CLIENT_TEST3_CONS]          = {
+			true, IPA_v4_0_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 15, 7, 5, 5, IPA_EE_AP } },
 	/* Dummy consumer (pipe 31) is used in L2TP rt rule */
-	[IPA_4_0_AUTO_MHI][IPA_CLIENT_DUMMY_CONS]          = {
+	[IPA_4_1_APQ][IPA_CLIENT_DUMMY_CONS]          = {
 			true, IPA_v4_0_GROUP_UL_DL,
 			false,
 			IPA_DPS_HPS_SEQ_TYPE_INVALID,
 			QMB_MASTER_SELECT_DDR,
-			{ 31, 31, 8, 8, IPA_EE_AP, GSI_USE_PREFETCH_BUFS } },
+			{ 31, 31, 8, 8, IPA_EE_AP } },
+	/* MHI PRIME PIPES - Client producer / IPA Consumer pipes */
+	[IPA_4_1_APQ][IPA_CLIENT_MHI_PRIME_DPL_PROD] = {
+			true, IPA_v4_0_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_DMA_ONLY,
+			QMB_MASTER_SELECT_DDR,
+			{7, 9, 8, 16, IPA_EE_AP } },
+	[IPA_4_1_APQ][IPA_CLIENT_MHI_PRIME_TETH_PROD] = {
+			true, IPA_v4_0_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 1, 0, 8, 16, IPA_EE_AP } },
+	[IPA_4_1_APQ][IPA_CLIENT_MHI_PRIME_RMNET_PROD] = {
+			true, IPA_v4_0_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_DMA_ONLY,
+			QMB_MASTER_SELECT_DDR,
+			{ 2, 3, 16, 32, IPA_EE_AP } },
+	/* MHI PRIME PIPES - Client Consumer / IPA Producer pipes */
+	[IPA_4_1_APQ][IPA_CLIENT_MHI_PRIME_TETH_CONS] = {
+			true, IPA_v4_0_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 20, 13, 9, 9, IPA_EE_AP } },
+	[IPA_4_1_APQ][IPA_CLIENT_MHI_PRIME_RMNET_CONS] = {
+			true, IPA_v4_0_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 21, 14, 9, 9, IPA_EE_AP } },
+
+
+	/* IPA_4_2 */
+	[IPA_4_2][IPA_CLIENT_WLAN1_PROD]          = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_REP_SEQ_TYPE_PKT_PROCESS_NO_DEC_NO_UCP_DMAP,
+			QMB_MASTER_SELECT_DDR,
+			{ 3, 7, 6, 7, IPA_EE_AP, GSI_USE_PREFETCH_BUFS} },
+	[IPA_4_2][IPA_CLIENT_USB_PROD]            = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_REP_SEQ_TYPE_PKT_PROCESS_NO_DEC_NO_UCP_DMAP,
+			QMB_MASTER_SELECT_DDR,
+			{ 0, 5, 8, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY} },
+	[IPA_4_2][IPA_CLIENT_APPS_LAN_PROD]   = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_PKT_PROCESS_NO_DEC_NO_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 2, 6, 8, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY} },
+	[IPA_4_2][IPA_CLIENT_APPS_WAN_PROD] = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_REP_SEQ_TYPE_PKT_PROCESS_NO_DEC_NO_UCP_DMAP,
+			QMB_MASTER_SELECT_DDR,
+			{ 1, 0, 8, 12, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY} },
+	[IPA_4_2][IPA_CLIENT_APPS_CMD_PROD]	  = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_DMA_ONLY,
+			QMB_MASTER_SELECT_DDR,
+			{ 6, 1, 20, 20, IPA_EE_AP, GSI_USE_PREFETCH_BUFS} },
+	[IPA_4_2][IPA_CLIENT_Q6_WAN_PROD]         = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_PKT_PROCESS_NO_DEC_NO_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 4, 0, 8, 12, IPA_EE_Q6, GSI_USE_PREFETCH_BUFS} },
+	[IPA_4_2][IPA_CLIENT_Q6_CMD_PROD]	  = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_PKT_PROCESS_NO_DEC_NO_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 5, 1, 20, 20, IPA_EE_Q6, GSI_USE_PREFETCH_BUFS} },
+	[IPA_4_2][IPA_CLIENT_ETHERNET_PROD] = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_PKT_PROCESS_NO_DEC_NO_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 7, 0, 8, 10, IPA_EE_UC, GSI_USE_PREFETCH_BUFS} },
+	/* Only for test purpose */
+	[IPA_4_2][IPA_CLIENT_TEST_PROD]           = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_PKT_PROCESS_NO_DEC_NO_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{0, 5, 8, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY} },
+	[IPA_4_2][IPA_CLIENT_TEST1_PROD]          = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_PKT_PROCESS_NO_DEC_NO_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 0, 5, 8, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY} },
+	[IPA_4_2][IPA_CLIENT_TEST2_PROD]          = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_PKT_PROCESS_NO_DEC_NO_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 3, 7, 6, 7, IPA_EE_AP, GSI_USE_PREFETCH_BUFS} },
+	[IPA_4_2][IPA_CLIENT_TEST3_PROD]          = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_PKT_PROCESS_NO_DEC_NO_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{1, 0, 8, 12, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY} },
+	[IPA_4_2][IPA_CLIENT_TEST4_PROD]          = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_PKT_PROCESS_NO_DEC_NO_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 7, 0, 8, 10, IPA_EE_AP, GSI_USE_PREFETCH_BUFS} },
+
+
+	[IPA_4_2][IPA_CLIENT_WLAN1_CONS]          = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 14, 8, 6, 9, IPA_EE_AP, GSI_USE_PREFETCH_BUFS} },
+	[IPA_4_2][IPA_CLIENT_USB_CONS]            = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 15, 9, 6, 6, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY} },
+	[IPA_4_2][IPA_CLIENT_USB_DPL_CONS]        = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 12, 4, 4, 4, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY} },
+	[IPA_4_2][IPA_CLIENT_APPS_LAN_CONS]       = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 8, 2, 6, 6, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY} },
+	[IPA_4_2][IPA_CLIENT_APPS_WAN_CONS]       = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 9, 3, 6, 6, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY} },
+	[IPA_4_2][IPA_CLIENT_Q6_LAN_CONS]         = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 11, 3, 6, 6, IPA_EE_Q6, GSI_ESCAPE_BUF_ONLY} },
+	[IPA_4_2][IPA_CLIENT_Q6_WAN_CONS]         = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 10, 2, 6, 6, IPA_EE_Q6,  GSI_ESCAPE_BUF_ONLY} },
+	[IPA_4_2][IPA_CLIENT_Q6_LTE_WIFI_AGGR_CONS] = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 13, 4, 6, 6, IPA_EE_Q6, GSI_ESCAPE_BUF_ONLY} },
+	[IPA_4_2][IPA_CLIENT_ETHERNET_CONS] = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 16, 1, 6, 6, IPA_EE_UC, GSI_USE_PREFETCH_BUFS} },
+	/* Only for test purpose */
+	/* MBIM aggregation test pipes should have the same QMB as USB_CONS */
+	[IPA_4_2][IPA_CLIENT_TEST_CONS]           = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 15, 9, 6, 6, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY} },
+	[IPA_4_2][IPA_CLIENT_TEST1_CONS]           = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 15, 9, 6, 6, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY} },
+	[IPA_4_2][IPA_CLIENT_TEST2_CONS]          = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 12, 4, 4, 4, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY} },
+	[IPA_4_2][IPA_CLIENT_TEST3_CONS]          = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 14, 8, 6, 9, IPA_EE_AP, GSI_USE_PREFETCH_BUFS} },
+	[IPA_4_2][IPA_CLIENT_TEST4_CONS]          = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 9, 3, 6, 6, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY} },
+	/* Dummy consumer (pipe 31) is used in L2TP rt rule */
+	[IPA_4_2][IPA_CLIENT_DUMMY_CONS]          = {
+			true, IPA_v4_2_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 31, 31, 8, 8, IPA_EE_AP, GSI_USE_PREFETCH_BUFS} },
+
+	/* IPA_4_5 */
+	[IPA_4_5][IPA_CLIENT_WLAN2_PROD]          = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 9, 12, 8, 16, IPA_EE_AP, GSI_FREE_PRE_FETCH, 2 } },
+	/* config wlan1_prod same as wlan2_prod */
+	[IPA_4_5][IPA_CLIENT_WLAN1_PROD]          = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 9, 12, 8, 16, IPA_EE_AP, GSI_FREE_PRE_FETCH, 2 } },
+	[IPA_4_5][IPA_CLIENT_USB_PROD]            = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 1, 0, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5][IPA_CLIENT_APPS_LAN_PROD]	  = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 11, 14, 10, 16, IPA_EE_AP, GSI_SMART_PRE_FETCH, 2 } },
+	[IPA_4_5][IPA_CLIENT_APPS_WAN_PROD]	  = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 2, 7, 16, 32, IPA_EE_AP, GSI_SMART_PRE_FETCH, 7 } },
+	[IPA_4_5][IPA_CLIENT_APPS_CMD_PROD]	  = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_DMA_ONLY,
+			QMB_MASTER_SELECT_DDR,
+			{ 7, 9, 20, 24, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5][IPA_CLIENT_ODU_PROD]            = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 3, 5, 8, 16, IPA_EE_AP, GSI_SMART_PRE_FETCH, 3 } },
+	[IPA_4_5][IPA_CLIENT_ETHERNET_PROD]	  = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 12, 0, 8, 16, IPA_EE_UC, GSI_SMART_PRE_FETCH, 3 } },
+	[IPA_4_5][IPA_CLIENT_Q6_WAN_PROD]         = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 5, 0, 16, 28, IPA_EE_Q6, GSI_SMART_PRE_FETCH, 2 } },
+	[IPA_4_5][IPA_CLIENT_Q6_CMD_PROD]	  = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_PKT_PROCESS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 6, 1, 20, 24, IPA_EE_Q6, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5][IPA_CLIENT_Q6_DL_NLO_DATA_PROD] = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 8, 2, 27, 32, IPA_EE_Q6, GSI_FREE_PRE_FETCH, 3 } },
+	[IPA_4_5][IPA_CLIENT_AQC_ETHERNET_PROD] = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 10, 13, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	/* Only for test purpose */
+	[IPA_4_5][IPA_CLIENT_TEST_PROD]           = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 1, 0, 8, 16, IPA_EE_AP } },
+	[IPA_4_5][IPA_CLIENT_TEST1_PROD]          = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 1, 0, 8, 16, IPA_EE_AP } },
+	[IPA_4_5][IPA_CLIENT_TEST2_PROD]          = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 3, 5, 8, 16, IPA_EE_AP } },
+	[IPA_4_5][IPA_CLIENT_TEST3_PROD]          = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 9, 12, 8, 16, IPA_EE_AP } },
+	[IPA_4_5][IPA_CLIENT_TEST4_PROD]          = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 11, 14, 8, 16, IPA_EE_AP } },
+
+	[IPA_4_5][IPA_CLIENT_WLAN2_CONS]          = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 24, 3, 8, 14, IPA_EE_AP, GSI_SMART_PRE_FETCH, 3 } },
+	/* config wlan1_cons same as wlan2_cons */
+	[IPA_4_5][IPA_CLIENT_WLAN1_CONS]          = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 24, 3, 8, 14, IPA_EE_AP, GSI_SMART_PRE_FETCH, 3 } },
+	[IPA_4_5][IPA_CLIENT_USB_CONS]            = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 26, 17, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5][IPA_CLIENT_USB_DPL_CONS]        = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 15, 15, 5, 5, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5][IPA_CLIENT_ODL_DPL_CONS]        = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 22, 2, 5, 5, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5][IPA_CLIENT_APPS_LAN_CONS]       = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 16, 10, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5][IPA_CLIENT_APPS_WAN_COAL_CONS]       = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 13, 4, 8, 11, IPA_EE_AP, GSI_SMART_PRE_FETCH, 3 } },
+	[IPA_4_5][IPA_CLIENT_APPS_WAN_CONS]       = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 14, 1, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5][IPA_CLIENT_ODU_EMB_CONS]        = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 30, 6, 9, 9, IPA_EE_AP, GSI_SMART_PRE_FETCH, 4 } },
+	[IPA_4_5][IPA_CLIENT_ETHERNET_CONS]	  = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 28, 1, 9, 9, IPA_EE_UC, GSI_SMART_PRE_FETCH, 4 } },
+	[IPA_4_5][IPA_CLIENT_Q6_LAN_CONS]         = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 17, 3, 9, 9, IPA_EE_Q6, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5][IPA_CLIENT_Q6_WAN_CONS]         = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 21, 7, 9, 9, IPA_EE_Q6, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5][IPA_CLIENT_Q6_UL_NLO_DATA_CONS] = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 19, 5, 5, 5, IPA_EE_Q6, GSI_SMART_PRE_FETCH, 2 } },
+	[IPA_4_5][IPA_CLIENT_Q6_UL_NLO_ACK_CONS]  = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 20, 6, 5, 5, IPA_EE_Q6, GSI_SMART_PRE_FETCH, 2 } },
+	[IPA_4_5][IPA_CLIENT_Q6_QBAP_STATUS_CONS] = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 18, 4, 9, 9, IPA_EE_Q6, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5][IPA_CLIENT_AQC_ETHERNET_CONS] = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 23, 8, 9, 9, IPA_EE_AP, GSI_SMART_PRE_FETCH, 4 } },
+	/* Only for test purpose */
+	/* MBIM aggregation test pipes should have the same QMB as USB_CONS */
+	[IPA_4_5][IPA_CLIENT_TEST_CONS]           = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 14, 1, 9, 9, IPA_EE_AP } },
+	[IPA_4_5][IPA_CLIENT_TEST1_CONS]          = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 14, 1, 9, 9, IPA_EE_AP } },
+	[IPA_4_5][IPA_CLIENT_TEST2_CONS]          = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 24, 3, 8, 14, IPA_EE_AP } },
+	[IPA_4_5][IPA_CLIENT_TEST3_CONS]          = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 26, 17, 9, 9, IPA_EE_AP } },
+	[IPA_4_5][IPA_CLIENT_TEST4_CONS]          = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 27, 18, 9, 9, IPA_EE_AP } },
+	/* Dummy consumer (pipe 31) is used in L2TP rt rule */
+	[IPA_4_5][IPA_CLIENT_DUMMY_CONS]          = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 31, 31, 8, 8, IPA_EE_AP } },
+
+	/* IPA_4_5_MHI */
+	[IPA_4_5_MHI][IPA_CLIENT_APPS_CMD_PROD]		= {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_DMA_ONLY,
+			QMB_MASTER_SELECT_DDR,
+			{ 7, 9, 20, 24, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_MHI][IPA_CLIENT_APPS_WAN_PROD]	  = {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 2, 7, 16, 32, IPA_EE_AP, GSI_SMART_PRE_FETCH, 7 } },
+	[IPA_4_5_MHI][IPA_CLIENT_Q6_WAN_PROD]		= {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 5, 0, 16, 28, IPA_EE_Q6, GSI_SMART_PRE_FETCH, 2 } },
+	[IPA_4_5_MHI][IPA_CLIENT_Q6_CMD_PROD]		= {
+			true, IPA_v4_5_MHI_GROUP_PCIE,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_PKT_PROCESS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 6, 1, 20, 24, IPA_EE_Q6, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_MHI][IPA_CLIENT_Q6_DL_NLO_DATA_PROD]	= {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 8, 2, 27, 32, IPA_EE_Q6, GSI_FREE_PRE_FETCH, 3 } },
+	[IPA_4_5_MHI][IPA_CLIENT_Q6_AUDIO_DMA_MHI_PROD]	= {
+			true, IPA_v4_5_MHI_GROUP_DMA,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_DMA_ONLY,
+			QMB_MASTER_SELECT_DDR,
+			{ 4, 8, 8, 16, IPA_EE_Q6, GSI_SMART_PRE_FETCH, 3 } },
+	[IPA_4_5_MHI][IPA_CLIENT_MHI_PROD]		= {
+			true, IPA_v4_5_MHI_GROUP_PCIE,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_PCIE,
+			{ 1, 0, 16, 20, IPA_EE_AP, GSI_SMART_PRE_FETCH, 7 } },
+	[IPA_4_5_MHI][IPA_CLIENT_MEMCPY_DMA_SYNC_PROD]	= {
+			true, IPA_v4_5_MHI_GROUP_DMA,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_DMA_ONLY,
+			QMB_MASTER_SELECT_DDR,
+			{ 9, 12, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_MHI][IPA_CLIENT_MEMCPY_DMA_ASYNC_PROD]	= {
+			true, IPA_v4_5_MHI_GROUP_DMA,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_DMA_ONLY,
+			QMB_MASTER_SELECT_DDR,
+			{ 10, 13, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_MHI][IPA_CLIENT_MHI_LOW_LAT_PROD] = {
+			true, IPA_v4_5_MHI_GROUP_PCIE,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_PCIE,
+			{ 3, 5, 8, 16, IPA_EE_AP, GSI_SMART_PRE_FETCH, 3 } },
+	[IPA_4_5_MHI][IPA_CLIENT_QDSS_PROD] = {
+			true, IPA_v4_5_MHI_GROUP_QDSS,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_DMA_ONLY,
+			QMB_MASTER_SELECT_DDR,
+			{ 11, 14, 10, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	/* Only for test purpose */
+	[IPA_4_5_MHI][IPA_CLIENT_TEST_PROD]           = {
+			true, QMB_MASTER_SELECT_DDR,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 1, 0, 8, 16, IPA_EE_AP } },
+
+	[IPA_4_5_MHI][IPA_CLIENT_APPS_LAN_CONS]		= {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 16, 10, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_MHI][IPA_CLIENT_APPS_WAN_CONS]       = {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 25, 16, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_MHI][IPA_CLIENT_USB_DPL_CONS]        = {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 15, 15, 5, 5, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_MHI][IPA_CLIENT_Q6_LAN_CONS]		= {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 17, 3, 9, 9, IPA_EE_Q6, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_MHI][IPA_CLIENT_Q6_WAN_CONS]		= {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 21, 7, 9, 9, IPA_EE_Q6, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_MHI][IPA_CLIENT_Q6_UL_NLO_DATA_CONS]	= {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 19, 5, 5, 5, IPA_EE_Q6, GSI_SMART_PRE_FETCH, 2 } },
+	[IPA_4_5_MHI][IPA_CLIENT_Q6_UL_NLO_ACK_CONS]	= {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 20, 6, 5, 5, IPA_EE_Q6, GSI_SMART_PRE_FETCH, 2 } },
+	[IPA_4_5_MHI][IPA_CLIENT_Q6_QBAP_STATUS_CONS]	= {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 18, 4, 9, 9, IPA_EE_Q6, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_MHI][IPA_CLIENT_Q6_AUDIO_DMA_MHI_CONS]	= {
+			true, IPA_v4_5_MHI_GROUP_DMA,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_PCIE,
+			{ 29, 9, 9, 9, IPA_EE_Q6, GSI_SMART_PRE_FETCH, 4 } },
+	[IPA_4_5_MHI][IPA_CLIENT_MEMCPY_DMA_SYNC_CONS]	= {
+			true, IPA_v4_5_MHI_GROUP_DMA,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_PCIE,
+			{ 26, 17, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_MHI][IPA_CLIENT_MEMCPY_DMA_ASYNC_CONS]	= {
+			true, IPA_v4_5_MHI_GROUP_DMA,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_PCIE,
+			{ 27, 18, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_MHI][IPA_CLIENT_MHI_CONS]		= {
+			true, IPA_v4_5_MHI_GROUP_PCIE,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_PCIE,
+			{ 14, 1, 9, 9, IPA_EE_AP, GSI_SMART_PRE_FETCH, 4 } },
+	[IPA_4_5_MHI][IPA_CLIENT_MHI_DPL_CONS]		= {
+			true, IPA_v4_5_MHI_GROUP_PCIE,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_PCIE,
+			{ 22, 2, 5, 5, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_MHI][IPA_CLIENT_MHI_LOW_LAT_CONS] = {
+			true, IPA_v4_5_MHI_GROUP_PCIE,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_PCIE,
+			{ 30, 6, 9, 9, IPA_EE_AP, GSI_SMART_PRE_FETCH, 4 } },
+	[IPA_4_5_MHI][IPA_CLIENT_MHI_QDSS_CONS] = {
+			true, IPA_v4_5_MHI_GROUP_QDSS,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_PCIE,
+			{ 24, 3, 8, 14, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	/* Dummy consumer (pipe 31) is used in L2TP rt rule */
+	[IPA_4_5_MHI][IPA_CLIENT_DUMMY_CONS]          = {
+			true, QMB_MASTER_SELECT_DDR,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 31, 31, 8, 8, IPA_EE_AP } },
+
+	/* IPA_4_5_AUTO */
+	[IPA_4_5_AUTO][IPA_CLIENT_WLAN2_PROD]          = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 9, 12, 8, 16, IPA_EE_AP, GSI_FREE_PRE_FETCH, 2 } },
+	/* config wlan1_prod same as wlan2_prod */
+	[IPA_4_5_AUTO][IPA_CLIENT_WLAN1_PROD]          = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 9, 12, 8, 16, IPA_EE_AP, GSI_FREE_PRE_FETCH, 2 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_USB_PROD]            = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 1, 0, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_APPS_LAN_PROD]	  = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 11, 14, 10, 16, IPA_EE_AP, GSI_SMART_PRE_FETCH, 2 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_APPS_WAN_PROD]	  = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 2, 7, 16, 32, IPA_EE_AP, GSI_SMART_PRE_FETCH, 7 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_APPS_CMD_PROD]	  = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_DMA_ONLY,
+			QMB_MASTER_SELECT_DDR,
+			{ 7, 9, 20, 24, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_USB2_PROD]            = {
+			true, IPA_v4_5_GROUP_CV2X,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 3, 5, 8, 16, IPA_EE_AP, GSI_SMART_PRE_FETCH, 3 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_ETHERNET_PROD]	  = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 12, 0, 8, 16, IPA_EE_UC, GSI_SMART_PRE_FETCH, 3 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_ETHERNET2_PROD]	  = {
+			true, IPA_v4_5_GROUP_CV2X,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 10, 13, 8, 16, IPA_EE_UC, GSI_SMART_PRE_FETCH, 3 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_Q6_WAN_PROD]         = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 5, 0, 16, 28, IPA_EE_Q6, GSI_SMART_PRE_FETCH, 2 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_Q6_CMD_PROD]	  = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_PKT_PROCESS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 6, 1, 20, 24, IPA_EE_Q6, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_Q6_DL_NLO_DATA_PROD] = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 8, 2, 27, 32, IPA_EE_Q6, GSI_FREE_PRE_FETCH, 3 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_Q6_CV2X_PROD] = {
+			true, IPA_v4_5_GROUP_CV2X,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 4, 8, 4, 8, IPA_EE_Q6, GSI_SMART_PRE_FETCH, 2 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_AQC_ETHERNET_PROD] = {
+			false, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 10, 13, 8, 16, IPA_EE_AP, GSI_SMART_PRE_FETCH, 3 } },
+	/* Only for test purpose */
+	[IPA_4_5_AUTO][IPA_CLIENT_TEST_PROD]           = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 1, 0, 8, 16, IPA_EE_AP } },
+	[IPA_4_5_AUTO][IPA_CLIENT_TEST1_PROD]          = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 1, 0, 8, 16, IPA_EE_AP } },
+	[IPA_4_5_AUTO][IPA_CLIENT_TEST2_PROD]          = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 3, 5, 8, 16, IPA_EE_AP } },
+	[IPA_4_5_AUTO][IPA_CLIENT_TEST3_PROD]          = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 9, 12, 8, 16, IPA_EE_AP } },
+	[IPA_4_5_AUTO][IPA_CLIENT_TEST4_PROD]          = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 11, 14, 8, 16, IPA_EE_AP } },
+
+	[IPA_4_5_AUTO][IPA_CLIENT_WLAN2_CONS]          = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 24, 18, 8, 14, IPA_EE_AP, GSI_SMART_PRE_FETCH, 3 } },
+	/* config wlan1_cons same as wlan2_cons */
+	[IPA_4_5_AUTO][IPA_CLIENT_WLAN1_CONS]          = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 24, 18, 8, 14, IPA_EE_AP, GSI_SMART_PRE_FETCH, 3 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_USB_CONS]            = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 26, 3, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_USB_DPL_CONS]        = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 15, 15, 5, 5, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_ODL_DPL_CONS]        = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 22, 2, 5, 5, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_APPS_LAN_CONS]       = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 16, 10, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_APPS_WAN_CONS]       = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 14, 1, 9, 9, IPA_EE_AP, GSI_SMART_PRE_FETCH, 4 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_USB2_CONS]        = {
+			true, IPA_v4_5_GROUP_CV2X,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 30, 6, 9, 9, IPA_EE_AP, GSI_SMART_PRE_FETCH, 4 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_ETHERNET_CONS]	  = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 28, 1, 9, 9, IPA_EE_UC, GSI_SMART_PRE_FETCH, 4 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_ETHERNET2_CONS]	  = {
+			true, IPA_v4_5_GROUP_CV2X,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 25, 16, 9, 9, IPA_EE_UC, GSI_SMART_PRE_FETCH, 4 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_Q6_LAN_CONS]         = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 17, 3, 9, 9, IPA_EE_Q6, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_Q6_CV2X_CONS]         = {
+			true, IPA_v4_5_GROUP_CV2X,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 29, 9, 9, 9, IPA_EE_Q6, GSI_SMART_PRE_FETCH, 4 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_Q6_WAN_CONS]         = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 21, 7, 9, 9, IPA_EE_Q6, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_Q6_UL_NLO_DATA_CONS] = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 19, 5, 5, 5, IPA_EE_Q6, GSI_SMART_PRE_FETCH, 2 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_Q6_UL_NLO_ACK_CONS]  = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 20, 6, 5, 5, IPA_EE_Q6, GSI_SMART_PRE_FETCH, 2 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_Q6_QBAP_STATUS_CONS] = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 18, 4, 9, 9, IPA_EE_Q6, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_AUTO][IPA_CLIENT_AQC_ETHERNET_CONS] = {
+			false, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 23, 17, 9, 9, IPA_EE_AP, GSI_SMART_PRE_FETCH, 4 } },
+	/* Only for test purpose */
+	/* MBIM aggregation test pipes should have the same QMB as USB_CONS */
+	[IPA_4_5_AUTO][IPA_CLIENT_TEST_CONS]           = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 14, 1, 9, 9, IPA_EE_AP } },
+	[IPA_4_5_AUTO][IPA_CLIENT_TEST1_CONS]          = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 14, 1, 9, 9, IPA_EE_AP } },
+	[IPA_4_5_AUTO][IPA_CLIENT_TEST2_CONS]          = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 24, 3, 8, 14, IPA_EE_AP } },
+	[IPA_4_5_AUTO][IPA_CLIENT_TEST3_CONS]          = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 26, 17, 9, 9, IPA_EE_AP } },
+	[IPA_4_5_AUTO][IPA_CLIENT_TEST4_CONS]          = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 27, 18, 9, 9, IPA_EE_AP } },
+	/* Dummy consumer (pipe 31) is used in L2TP rt rule */
+	[IPA_4_5_AUTO][IPA_CLIENT_DUMMY_CONS]          = {
+			true, IPA_v4_5_GROUP_UL_DL,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 31, 31, 8, 8, IPA_EE_AP } },
+
+	/* IPA_4_5_AUTO_MHI */
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_APPS_CMD_PROD]		= {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_DMA_ONLY,
+			QMB_MASTER_SELECT_DDR,
+			{ 7, 9, 20, 24, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_APPS_LAN_PROD]	  = {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 11, 14, 10, 16, IPA_EE_AP, GSI_SMART_PRE_FETCH, 2 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_APPS_WAN_PROD]	  = {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 2, 7, 16, 32, IPA_EE_AP, GSI_SMART_PRE_FETCH, 7 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_MHI2_PROD]            = {
+			true, IPA_v4_5_GROUP_CV2X,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_PCIE,
+			{ 3, 5, 8, 16, IPA_EE_AP, GSI_SMART_PRE_FETCH, 3 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_Q6_CV2X_PROD] = {
+			true, IPA_v4_5_GROUP_CV2X,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 4, 8, 10, 16, IPA_EE_Q6, GSI_SMART_PRE_FETCH, 2 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_ETHERNET_PROD]	  = {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 12, 0, 8, 16, IPA_EE_UC, GSI_SMART_PRE_FETCH, 3 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_Q6_WAN_PROD]		= {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 5, 0, 16, 28, IPA_EE_Q6, GSI_SMART_PRE_FETCH, 2 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_Q6_CMD_PROD]		= {
+			true, IPA_v4_5_MHI_GROUP_PCIE,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_PKT_PROCESS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 6, 1, 20, 24, IPA_EE_Q6, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_Q6_DL_NLO_DATA_PROD]	= {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 8, 2, 27, 32, IPA_EE_Q6, GSI_FREE_PRE_FETCH, 3 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_Q6_AUDIO_DMA_MHI_PROD]	= {
+			true, IPA_v4_5_MHI_GROUP_DMA,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_DMA_ONLY,
+			QMB_MASTER_SELECT_DDR,
+			{ 4, 8, 8, 16, IPA_EE_Q6, GSI_SMART_PRE_FETCH, 3 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_MHI_PROD]		= {
+			true, IPA_v4_5_MHI_GROUP_PCIE,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_PCIE,
+			{ 1, 0, 8, 16, IPA_EE_AP, GSI_SMART_PRE_FETCH, 7 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_MEMCPY_DMA_SYNC_PROD]	= {
+			true, IPA_v4_5_MHI_GROUP_DMA,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_DMA_ONLY,
+			QMB_MASTER_SELECT_DDR,
+			{ 9, 12, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_MEMCPY_DMA_ASYNC_PROD]	= {
+			true, IPA_v4_5_MHI_GROUP_DMA,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_DMA_ONLY,
+			QMB_MASTER_SELECT_DDR,
+			{ 10, 13, 8, 16, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	/* Only for test purpose */
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_TEST_PROD]           = {
+			true, QMB_MASTER_SELECT_DDR,
+			true,
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR,
+			{ 1, 0, 8, 16, IPA_EE_AP } },
+
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_APPS_LAN_CONS]		= {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 16, 10, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_APPS_WAN_CONS]		= {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 25, 16, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_ETHERNET_CONS]	  = {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 28, 1, 9, 9, IPA_EE_UC, GSI_SMART_PRE_FETCH, 4 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_USB_DPL_CONS]        = {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 15, 15, 5, 5, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_Q6_LAN_CONS]		= {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 17, 3, 9, 9, IPA_EE_Q6, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_Q6_CV2X_CONS]         = {
+			true, IPA_v4_5_GROUP_CV2X,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_PCIE,
+			{ 29, 9, 9, 9, IPA_EE_Q6, GSI_SMART_PRE_FETCH, 4 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_MHI2_CONS]        = {
+			true, IPA_v4_5_GROUP_CV2X,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_PCIE,
+			{ 30, 6, 9, 9, IPA_EE_AP, GSI_SMART_PRE_FETCH, 4 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_Q6_WAN_CONS]		= {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 21, 7, 9, 9, IPA_EE_Q6, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_Q6_UL_NLO_DATA_CONS]	= {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 19, 5, 5, 5, IPA_EE_Q6, GSI_SMART_PRE_FETCH, 2 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_Q6_UL_NLO_ACK_CONS]	= {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 20, 6, 5, 5, IPA_EE_Q6, GSI_SMART_PRE_FETCH, 2 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_Q6_QBAP_STATUS_CONS]	= {
+			true, IPA_v4_5_MHI_GROUP_DDR,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 18, 4, 9, 9, IPA_EE_Q6, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_Q6_AUDIO_DMA_MHI_CONS]	= {
+			true, IPA_v4_5_MHI_GROUP_DMA,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_PCIE,
+			{ 29, 9, 9, 9, IPA_EE_Q6, GSI_SMART_PRE_FETCH, 4 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_MEMCPY_DMA_SYNC_CONS]	= {
+			true, IPA_v4_5_MHI_GROUP_DMA,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_PCIE,
+			{ 23, 17, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_MEMCPY_DMA_ASYNC_CONS]	= {
+			true, IPA_v4_5_MHI_GROUP_DMA,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_PCIE,
+			{ 24, 18, 9, 9, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_MHI_CONS]		= {
+			true, IPA_v4_5_MHI_GROUP_PCIE,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_PCIE,
+			{ 14, 1, 9, 9, IPA_EE_AP, GSI_SMART_PRE_FETCH, 4 } },
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_MHI_DPL_CONS]		= {
+			true, IPA_v4_5_MHI_GROUP_PCIE,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_PCIE,
+			{ 22, 2, 5, 5, IPA_EE_AP, GSI_ESCAPE_BUF_ONLY, 0 } },
+
+	/* Dummy consumer (pipe 31) is used in L2TP rt rule */
+	[IPA_4_5_AUTO_MHI][IPA_CLIENT_DUMMY_CONS]          = {
+			true, QMB_MASTER_SELECT_DDR,
+			false,
+			IPA_DPS_HPS_SEQ_TYPE_INVALID,
+			QMB_MASTER_SELECT_DDR,
+			{ 31, 31, 8, 8, IPA_EE_AP } },
 };
+
+static struct ipa3_mem_partition ipa_4_1_mem_part = {
+	.ofst_start				= 0x280,
+	.v4_flt_hash_ofst		= 0x288,
+	.v4_flt_hash_size		=  0x78,
+	.v4_flt_hash_size_ddr		= 0x4000,
+	.v4_flt_nhash_ofst		= 0x308,
+	.v4_flt_nhash_size		= 0x78,
+	.v4_flt_nhash_size_ddr		= 0x4000,
+	.v6_flt_hash_ofst		= 0x388,
+	.v6_flt_hash_size		= 0x78,
+	.v6_flt_hash_size_ddr		= 0x4000,
+	.v6_flt_nhash_ofst		= 0x408,
+	.v6_flt_nhash_size		= 0x78,
+	.v6_flt_nhash_size_ddr		= 0x4000,
+	.v4_rt_num_index		= 0xf,
+	.v4_modem_rt_index_lo		= 0x0,
+	.v4_modem_rt_index_hi		= 0x7,
+	.v4_apps_rt_index_lo		= 0x8,
+	.v4_apps_rt_index_hi		= 0xe,
+	.v4_rt_hash_ofst		= 0x488,
+	.v4_rt_hash_size		= 0x78,
+	.v4_rt_hash_size_ddr		= 0x4000,
+	.v4_rt_nhash_ofst		= 0x508,
+	.v4_rt_nhash_size		= 0x78,
+	.v4_rt_nhash_size_ddr		= 0x4000,
+	.v6_rt_num_index		= 0xf,
+	.v6_modem_rt_index_lo		= 0x0,
+	.v6_modem_rt_index_hi		= 0x7,
+	.v6_apps_rt_index_lo		= 0x8,
+	.v6_apps_rt_index_hi		= 0xe,
+	.v6_rt_hash_ofst		= 0x588,
+	.v6_rt_hash_size		= 0x78,
+	.v6_rt_hash_size_ddr		= 0x4000,
+	.v6_rt_nhash_ofst		= 0x608,
+	.v6_rt_nhash_size		= 0x78,
+	.v6_rt_nhash_size_ddr		= 0x4000,
+	.modem_hdr_ofst			= 0x688,
+	.modem_hdr_size			= 0x140,
+	.apps_hdr_ofst			= 0x7c8,
+	.apps_hdr_size			= 0x0,
+	.apps_hdr_size_ddr		= 0x800,
+	.modem_hdr_proc_ctx_ofst	= 0x7d0,
+	.modem_hdr_proc_ctx_size	= 0x200,
+	.apps_hdr_proc_ctx_ofst		= 0x9d0,
+	.apps_hdr_proc_ctx_size		= 0x200,
+	.apps_hdr_proc_ctx_size_ddr	= 0x0,
+	.modem_comp_decomp_ofst		= 0x0,
+	.modem_comp_decomp_size		= 0x0,
+	.modem_ofst			= 0x13f0,
+	.modem_size			= 0x100c,
+	.apps_v4_flt_hash_ofst		= 0x23fc,
+	.apps_v4_flt_hash_size		= 0x0,
+	.apps_v4_flt_nhash_ofst		= 0x23fc,
+	.apps_v4_flt_nhash_size		= 0x0,
+	.apps_v6_flt_hash_ofst		= 0x23fc,
+	.apps_v6_flt_hash_size		= 0x0,
+	.apps_v6_flt_nhash_ofst		= 0x23fc,
+	.apps_v6_flt_nhash_size		= 0x0,
+	.uc_info_ofst			= 0x80,
+	.uc_info_size			= 0x200,
+	.end_ofst			= 0x2800,
+	.apps_v4_rt_hash_ofst		= 0x23fc,
+	.apps_v4_rt_hash_size		= 0x0,
+	.apps_v4_rt_nhash_ofst		= 0x23fc,
+	.apps_v4_rt_nhash_size		= 0x0,
+	.apps_v6_rt_hash_ofst		= 0x23fc,
+	.apps_v6_rt_hash_size		= 0x0,
+	.apps_v6_rt_nhash_ofst		= 0x23fc,
+	.apps_v6_rt_nhash_size		= 0x0,
+	.uc_descriptor_ram_ofst		= 0x2400,
+	.uc_descriptor_ram_size		= 0x400,
+	.pdn_config_ofst		= 0xbd8,
+	.pdn_config_size		= 0x50,
+	.stats_quota_q6_ofst		= 0xc30,
+	.stats_quota_q6_size		= 0x60,
+	.stats_quota_ap_ofst		= 0,
+	.stats_quota_ap_size		= 0,
+	.stats_tethering_ofst		= 0xc90,
+	.stats_tethering_size		= 0x140,
+	.stats_flt_v4_ofst		= 0xdd0,
+	.stats_flt_v4_size		= 0x180,
+	.stats_flt_v6_ofst		= 0xf50,
+	.stats_flt_v6_size		= 0x180,
+	.stats_rt_v4_ofst		= 0x10d0,
+	.stats_rt_v4_size		= 0x180,
+	.stats_rt_v6_ofst		= 0x1250,
+	.stats_rt_v6_size		= 0x180,
+	.stats_drop_ofst		= 0x13d0,
+	.stats_drop_size		= 0x20,
+};
+
+static struct ipa3_mem_partition ipa_4_2_mem_part = {
+	.ofst_start				= 0x280,
+	.v4_flt_hash_ofst		= 0x288,
+	.v4_flt_hash_size		= 0x0,
+	.v4_flt_hash_size_ddr		= 0x0,
+	.v4_flt_nhash_ofst		= 0x290,
+	.v4_flt_nhash_size		= 0x78,
+	.v4_flt_nhash_size_ddr		= 0x4000,
+	.v6_flt_hash_ofst		= 0x310,
+	.v6_flt_hash_size		= 0x0,
+	.v6_flt_hash_size_ddr		= 0x0,
+	.v6_flt_nhash_ofst		= 0x318,
+	.v6_flt_nhash_size		= 0x78,
+	.v6_flt_nhash_size_ddr		= 0x4000,
+	.v4_rt_num_index		= 0xf,
+	.v4_modem_rt_index_lo		= 0x0,
+	.v4_modem_rt_index_hi		= 0x7,
+	.v4_apps_rt_index_lo		= 0x8,
+	.v4_apps_rt_index_hi		= 0xe,
+	.v4_rt_hash_ofst		= 0x398,
+	.v4_rt_hash_size		= 0x0,
+	.v4_rt_hash_size_ddr		= 0x0,
+	.v4_rt_nhash_ofst		= 0x3A0,
+	.v4_rt_nhash_size		= 0x78,
+	.v4_rt_nhash_size_ddr		= 0x4000,
+	.v6_rt_num_index		= 0xf,
+	.v6_modem_rt_index_lo		= 0x0,
+	.v6_modem_rt_index_hi		= 0x7,
+	.v6_apps_rt_index_lo		= 0x8,
+	.v6_apps_rt_index_hi		= 0xe,
+	.v6_rt_hash_ofst		= 0x420,
+	.v6_rt_hash_size		= 0x0,
+	.v6_rt_hash_size_ddr		= 0x0,
+	.v6_rt_nhash_ofst		= 0x428,
+	.v6_rt_nhash_size		= 0x78,
+	.v6_rt_nhash_size_ddr		= 0x4000,
+	.modem_hdr_ofst			= 0x4A8,
+	.modem_hdr_size			= 0x140,
+	.apps_hdr_ofst			= 0x5E8,
+	.apps_hdr_size			= 0x0,
+	.apps_hdr_size_ddr		= 0x800,
+	.modem_hdr_proc_ctx_ofst	= 0x5F0,
+	.modem_hdr_proc_ctx_size	= 0x200,
+	.apps_hdr_proc_ctx_ofst		= 0x7F0,
+	.apps_hdr_proc_ctx_size		= 0x200,
+	.apps_hdr_proc_ctx_size_ddr	= 0x0,
+	.modem_comp_decomp_ofst		= 0x0,
+	.modem_comp_decomp_size		= 0x0,
+	.modem_ofst			= 0xbf0,
+	.modem_size			= 0x140c,
+	.apps_v4_flt_hash_ofst		= 0x1bfc,
+	.apps_v4_flt_hash_size		= 0x0,
+	.apps_v4_flt_nhash_ofst		= 0x1bfc,
+	.apps_v4_flt_nhash_size		= 0x0,
+	.apps_v6_flt_hash_ofst		= 0x1bfc,
+	.apps_v6_flt_hash_size		= 0x0,
+	.apps_v6_flt_nhash_ofst		= 0x1bfc,
+	.apps_v6_flt_nhash_size		= 0x0,
+	.uc_info_ofst			= 0x80,
+	.uc_info_size			= 0x200,
+	.end_ofst			= 0x2000,
+	.apps_v4_rt_hash_ofst		= 0x1bfc,
+	.apps_v4_rt_hash_size		= 0x0,
+	.apps_v4_rt_nhash_ofst		= 0x1bfc,
+	.apps_v4_rt_nhash_size		= 0x0,
+	.apps_v6_rt_hash_ofst		= 0x1bfc,
+	.apps_v6_rt_hash_size		= 0x0,
+	.apps_v6_rt_nhash_ofst		= 0x1bfc,
+	.apps_v6_rt_nhash_size		= 0x0,
+	.uc_descriptor_ram_ofst		= 0x2000,
+	.uc_descriptor_ram_size		= 0x0,
+	.pdn_config_ofst		= 0x9F8,
+	.pdn_config_size		= 0x50,
+	.stats_quota_q6_ofst		= 0xa50,
+	.stats_quota_q6_size		= 0x60,
+	.stats_quota_ap_ofst		= 0,
+	.stats_quota_ap_size		= 0,
+	.stats_tethering_ofst		= 0xab0,
+	.stats_tethering_size		= 0x140,
+	.stats_flt_v4_ofst		= 0xbf0,
+	.stats_flt_v4_size		= 0x0,
+	.stats_flt_v6_ofst		= 0xbf0,
+	.stats_flt_v6_size		= 0x0,
+	.stats_rt_v4_ofst		= 0xbf0,
+	.stats_rt_v4_size		= 0x0,
+	.stats_rt_v6_ofst		= 0xbf0,
+	.stats_rt_v6_size		= 0x0,
+	.stats_drop_ofst		= 0xbf0,
+	.stats_drop_size		= 0x0,
+};
+
+static struct ipa3_mem_partition ipa_4_5_mem_part = {
+	.uc_info_ofst			= 0x80,
+	.uc_info_size			= 0x200,
+	.ofst_start			= 0x280,
+	.v4_flt_hash_ofst		= 0x288,
+	.v4_flt_hash_size		= 0x78,
+	.v4_flt_hash_size_ddr		= 0x4000,
+	.v4_flt_nhash_ofst		= 0x308,
+	.v4_flt_nhash_size		= 0x78,
+	.v4_flt_nhash_size_ddr		= 0x4000,
+	.v6_flt_hash_ofst		= 0x388,
+	.v6_flt_hash_size		= 0x78,
+	.v6_flt_hash_size_ddr		= 0x4000,
+	.v6_flt_nhash_ofst		= 0x408,
+	.v6_flt_nhash_size		= 0x78,
+	.v6_flt_nhash_size_ddr		= 0x4000,
+	.v4_rt_num_index		= 0x15,
+	.v4_modem_rt_index_lo		= 0x0,
+	.v4_modem_rt_index_hi		= 0xb,
+	.v4_apps_rt_index_lo		= 0xc,
+	.v4_apps_rt_index_hi		= 0x14,
+	.v4_rt_hash_ofst		= 0x488,
+	.v4_rt_hash_size		= 0xa8,
+	.v4_rt_hash_size_ddr		= 0x4000,
+	.v4_rt_nhash_ofst		= 0x538,
+	.v4_rt_nhash_size		= 0xa8,
+	.v4_rt_nhash_size_ddr		= 0x4000,
+	.v6_rt_num_index		= 0x15,
+	.v6_modem_rt_index_lo		= 0x0,
+	.v6_modem_rt_index_hi		= 0xb,
+	.v6_apps_rt_index_lo		= 0xc,
+	.v6_apps_rt_index_hi		= 0x14,
+	.v6_rt_hash_ofst		= 0x5e8,
+	.v6_rt_hash_size		= 0xa8,
+	.v6_rt_hash_size_ddr		= 0x4000,
+	.v6_rt_nhash_ofst		= 0x698,
+	.v6_rt_nhash_size		= 0xa8,
+	.v6_rt_nhash_size_ddr		= 0x4000,
+	.modem_hdr_ofst			= 0x748,
+	.modem_hdr_size			= 0x240,
+	.apps_hdr_ofst			= 0x988,
+	.apps_hdr_size			= 0x140,
+	.apps_hdr_size_ddr		= 0x800,
+	.modem_hdr_proc_ctx_ofst	= 0xad0,
+	.modem_hdr_proc_ctx_size	= 0xb20,
+	.apps_hdr_proc_ctx_ofst		= 0x15f0,
+	.apps_hdr_proc_ctx_size		= 0x200,
+	.apps_hdr_proc_ctx_size_ddr	= 0x0,
+	.nat_tbl_ofst            = 0x00001800,
+	.nat_tbl_size            = 0x00000D00,
+	.stats_quota_q6_ofst		= 0x2510,
+	.stats_quota_q6_size		= 0x30,
+	.stats_quota_ap_ofst		= 0x2540,
+	.stats_quota_ap_size		= 0x48,
+	.stats_tethering_ofst		= 0x2588,
+	.stats_tethering_size		= 0x238,
+	.stats_flt_v4_ofst		= 0,
+	.stats_flt_v4_size		= 0,
+	.stats_flt_v6_ofst		= 0,
+	.stats_flt_v6_size		= 0,
+	.stats_rt_v4_ofst		= 0,
+	.stats_rt_v4_size		= 0,
+	.stats_rt_v6_ofst		= 0,
+	.stats_rt_v6_size		= 0,
+	.stats_fnr_ofst			= 0x27c0,
+	.stats_fnr_size			= 0x800,
+	.stats_drop_ofst		= 0x2fc0,
+	.stats_drop_size		= 0x20,
+	.modem_comp_decomp_ofst		= 0x0,
+	.modem_comp_decomp_size		= 0x0,
+	.modem_ofst			= 0x2fe8,
+	.modem_size			= 0x800,
+	.apps_v4_flt_hash_ofst	= 0x2718,
+	.apps_v4_flt_hash_size	= 0x0,
+	.apps_v4_flt_nhash_ofst	= 0x2718,
+	.apps_v4_flt_nhash_size	= 0x0,
+	.apps_v6_flt_hash_ofst	= 0x2718,
+	.apps_v6_flt_hash_size	= 0x0,
+	.apps_v6_flt_nhash_ofst	= 0x2718,
+	.apps_v6_flt_nhash_size	= 0x0,
+	.apps_v4_rt_hash_ofst	= 0x2718,
+	.apps_v4_rt_hash_size	= 0x0,
+	.apps_v4_rt_nhash_ofst	= 0x2718,
+	.apps_v4_rt_nhash_size	= 0x0,
+	.apps_v6_rt_hash_ofst	= 0x2718,
+	.apps_v6_rt_hash_size	= 0x0,
+	.apps_v6_rt_nhash_ofst	= 0x2718,
+	.apps_v6_rt_nhash_size	= 0x0,
+	.uc_descriptor_ram_ofst	= 0x3800,
+	.uc_descriptor_ram_size	= 0x1000,
+	.pdn_config_ofst	= 0x4800,
+	.pdn_config_size	= 0x70,
+	.end_ofst		= 0x4870,
+};
+
 
 /**
  * ipa3_get_clients_from_rm_resource() - get IPA clients which are related to an
@@ -2089,16 +3573,19 @@ bool ipa3_should_pipe_be_suspended(enum ipa_client_type client)
 
 	if (client == IPA_CLIENT_USB_CONS     ||
 		client == IPA_CLIENT_USB2_CONS    ||
-	    client == IPA_CLIENT_USB_DPL_CONS ||
-	    client == IPA_CLIENT_MHI_CONS     ||
-	    client == IPA_CLIENT_HSIC1_CONS   ||
-	    client == IPA_CLIENT_WLAN1_CONS   ||
-	    client == IPA_CLIENT_WLAN2_CONS   ||
-	    client == IPA_CLIENT_WLAN3_CONS   ||
-	    client == IPA_CLIENT_WLAN4_CONS   ||
-	    client == IPA_CLIENT_ODU_EMB_CONS ||
-	    client == IPA_CLIENT_ODU_TETH_CONS ||
-	    client == IPA_CLIENT_ETHERNET_CONS)
+		client == IPA_CLIENT_USB_DPL_CONS ||
+		client == IPA_CLIENT_MHI_QDSS_CONS ||
+		client == IPA_CLIENT_MHI_CONS     ||
+		client == IPA_CLIENT_MHI_DPL_CONS ||
+		client == IPA_CLIENT_HSIC1_CONS   ||
+		client == IPA_CLIENT_WLAN1_CONS   ||
+		client == IPA_CLIENT_WLAN2_CONS   ||
+		client == IPA_CLIENT_WLAN3_CONS   ||
+		client == IPA_CLIENT_WLAN4_CONS   ||
+		client == IPA_CLIENT_ODU_EMB_CONS ||
+		client == IPA_CLIENT_ODU_TETH_CONS ||
+		client == IPA_CLIENT_ETHERNET_CONS ||
+		client == IPA_CLIENT_ETHERNET2_CONS)
 		return true;
 
 	return false;
@@ -2340,6 +3827,63 @@ int ipa3_resume_resource(enum ipa_rm_resource_name resource)
 }
 
 /**
+ * ipa3_get_hw_type_index() - Get HW type index which is used as the entry index
+ *	for ep\resource groups related arrays .
+ *
+ * Return value: HW type index
+ */
+static u8 ipa3_get_hw_type_index(void)
+{
+	u8 hw_type_index;
+
+	switch (ipa3_ctx->ipa_hw_type) {
+	case IPA_HW_v3_0:
+	case IPA_HW_v3_1:
+		hw_type_index = IPA_3_0;
+		break;
+	case IPA_HW_v3_5:
+		hw_type_index = IPA_3_5;
+		if (ipa3_ctx->ipa_config_is_mhi)
+			hw_type_index = IPA_3_5_MHI;
+		break;
+	case IPA_HW_v3_5_1:
+		hw_type_index = IPA_3_5_1;
+		break;
+	case IPA_HW_v4_0:
+		hw_type_index = IPA_4_0;
+		if (ipa3_ctx->ipa_config_is_mhi)
+			hw_type_index = IPA_4_0_MHI;
+		break;
+	case IPA_HW_v4_1:
+		hw_type_index = IPA_4_1;
+		if (ipa3_ctx->platform_type == IPA_PLAT_TYPE_APQ)
+			hw_type_index = IPA_4_1_APQ;
+		break;
+	case IPA_HW_v4_2:
+		hw_type_index = IPA_4_2;
+		break;
+	case IPA_HW_v4_5:
+		hw_type_index = IPA_4_5;
+		if (ipa3_ctx->ipa_config_is_mhi)
+			hw_type_index = IPA_4_5_MHI;
+		if (ipa3_ctx->platform_type == IPA_PLAT_TYPE_APQ)
+			hw_type_index = IPA_4_5_APQ;
+		if (ipa3_ctx->ipa_config_is_auto)
+			hw_type_index = IPA_4_5_AUTO;
+		if (ipa3_ctx->ipa_config_is_auto &&
+			ipa3_ctx->ipa_config_is_mhi)
+			hw_type_index = IPA_4_5_AUTO_MHI;
+		break;
+	default:
+		IPAERR("Incorrect IPA version %d\n", ipa3_ctx->ipa_hw_type);
+		hw_type_index = IPA_3_0;
+		break;
+	}
+
+	return hw_type_index;
+}
+
+/**
  * _ipa_sram_settings_read_v3_0() - Read SRAM settings from HW
  *
  * Returns:	None
@@ -2429,6 +3973,21 @@ int ipa3_cfg_filter(u32 disable)
 }
 
 /**
+ * ipa_disable_hashing_rt_flt_v4_2() - Disable filer and route hashing.
+ *
+ * Return codes: 0 for success, negative value for failure
+ */
+static int ipa_disable_hashing_rt_flt_v4_2(void)
+{
+
+	IPADBG("Disable hashing for filter and route table in IPA 4.2 HW\n");
+	ipahal_write_reg(IPA_FILT_ROUT_HASH_EN,
+					IPA_FILT_ROUT_HASH_REG_VAL_v4_2);
+	return 0;
+}
+
+
+/**
  * ipa_comp_cfg() - Configure QMB/Master port selection
  *
  * Returns:	None
@@ -2492,6 +4051,24 @@ static void ipa_comp_cfg(void)
 		IPADBG("gsi_multi_inorder_wr_dis = %d\n",
 			comp_cfg.gsi_multi_inorder_wr_dis);
 	}
+
+	/* set GSI_MULTI_AXI_MASTERS_DIS = true after HW.4.1 */
+	if ((ipa3_ctx->ipa_hw_type == IPA_HW_v4_1) ||
+		(ipa3_ctx->ipa_hw_type == IPA_HW_v4_2)) {
+		ipahal_read_reg_fields(IPA_COMP_CFG, &comp_cfg);
+		IPADBG("Before comp config\n");
+		IPADBG("gsi_multi_axi_masters_dis = %d\n",
+			comp_cfg.gsi_multi_axi_masters_dis);
+
+		comp_cfg.gsi_multi_axi_masters_dis = true;
+
+		ipahal_write_reg_fields(IPA_COMP_CFG, &comp_cfg);
+
+		ipahal_read_reg_fields(IPA_COMP_CFG, &comp_cfg);
+		IPADBG("After comp config\n");
+		IPADBG("gsi_multi_axi_masters_dis = %d\n",
+			comp_cfg.gsi_multi_axi_masters_dis);
+	}
 }
 
 /**
@@ -2499,27 +4076,84 @@ static void ipa_comp_cfg(void)
  *
  * Returns:	None
  */
-void ipa3_cfg_qsb(void)
+static void ipa3_cfg_qsb(void)
 {
+	u8 hw_type_idx;
+	const struct ipa_qmb_outstanding *qmb_ot;
 	struct ipahal_reg_qsb_max_reads max_reads = { 0 };
 	struct ipahal_reg_qsb_max_writes max_writes = { 0 };
 
-	max_reads.qmb_0_max_reads = 8,
-	max_reads.qmb_1_max_reads = 8,
+	hw_type_idx = ipa3_get_hw_type_index();
 
-	max_writes.qmb_0_max_writes = 8;
-	max_writes.qmb_1_max_writes = 2;
+	qmb_ot = &(ipa3_qmb_outstanding[hw_type_idx][IPA_QMB_INSTANCE_DDR]);
+	max_reads.qmb_0_max_reads = qmb_ot->ot_reads;
+	max_writes.qmb_0_max_writes = qmb_ot->ot_writes;
 
-	if (ipa3_ctx->ipa_hw_type >= IPA_HW_v3_5) {
-		max_reads.qmb_1_max_reads = 12;
-		max_writes.qmb_1_max_writes = 4;
-	}
-
-	if (ipa3_ctx->ipa_hw_type >= IPA_HW_v4_0)
-		max_reads.qmb_0_max_reads = 12;
+	qmb_ot = &(ipa3_qmb_outstanding[hw_type_idx][IPA_QMB_INSTANCE_PCIE]);
+	max_reads.qmb_1_max_reads = qmb_ot->ot_reads;
+	max_writes.qmb_1_max_writes = qmb_ot->ot_writes;
 
 	ipahal_write_reg_fields(IPA_QSB_MAX_WRITES, &max_writes);
 	ipahal_write_reg_fields(IPA_QSB_MAX_READS, &max_reads);
+}
+
+/* relevant starting IPA4.5 */
+static void ipa_cfg_qtime(void)
+{
+	struct ipahal_reg_qtime_timestamp_cfg ts_cfg;
+	struct ipahal_reg_timers_pulse_gran_cfg gran_cfg;
+	struct ipahal_reg_timers_xo_clk_div_cfg div_cfg;
+	u32 val;
+
+	/* Configure timestamp resolution */
+	memset(&ts_cfg, 0, sizeof(ts_cfg));
+	ts_cfg.dpl_timestamp_lsb = IPA_TAG_TIMER_TIMESTAMP_SHFT;
+	ts_cfg.dpl_timestamp_sel = true;
+	ts_cfg.tag_timestamp_lsb = IPA_TAG_TIMER_TIMESTAMP_SHFT;
+	ts_cfg.nat_timestamp_lsb = IPA_NAT_TIMER_TIMESTAMP_SHFT;
+	val = ipahal_read_reg(IPA_QTIME_TIMESTAMP_CFG);
+	IPADBG("qtime timestamp before cfg: 0x%x\n", val);
+	ipahal_write_reg_fields(IPA_QTIME_TIMESTAMP_CFG, &ts_cfg);
+	val = ipahal_read_reg(IPA_QTIME_TIMESTAMP_CFG);
+	IPADBG("qtime timestamp after cfg: 0x%x\n", val);
+
+	/* Configure timers pulse generators granularity */
+	memset(&gran_cfg, 0, sizeof(gran_cfg));
+	gran_cfg.gran_0 = IPA_TIMERS_TIME_GRAN_100_USEC;
+	gran_cfg.gran_1 = IPA_TIMERS_TIME_GRAN_1_MSEC;
+	gran_cfg.gran_2 = IPA_TIMERS_TIME_GRAN_1_MSEC;
+	val = ipahal_read_reg(IPA_TIMERS_PULSE_GRAN_CFG);
+	IPADBG("timer pulse granularity before cfg: 0x%x\n", val);
+	ipahal_write_reg_fields(IPA_TIMERS_PULSE_GRAN_CFG, &gran_cfg);
+	val = ipahal_read_reg(IPA_TIMERS_PULSE_GRAN_CFG);
+	IPADBG("timer pulse granularity after cfg: 0x%x\n", val);
+
+	/* Configure timers XO Clock divider */
+	memset(&div_cfg, 0, sizeof(div_cfg));
+	ipahal_read_reg_fields(IPA_TIMERS_XO_CLK_DIV_CFG, &div_cfg);
+	IPADBG("timer XO clk divider before cfg: enabled=%d divider=%u\n",
+		div_cfg.enable, div_cfg.value);
+
+	/* Make sure divider is disabled */
+	if (div_cfg.enable) {
+		div_cfg.enable = false;
+		ipahal_write_reg_fields(IPA_TIMERS_XO_CLK_DIV_CFG, &div_cfg);
+	}
+
+	/* At emulation systems XO clock is lower than on real target.
+	 * (e.g. 19.2Mhz compared to 96Khz)
+	 * Use lowest possible divider.
+	 */
+	if (ipa3_ctx->ipa3_hw_mode == IPA_HW_MODE_VIRTUAL ||
+		ipa3_ctx->ipa3_hw_mode == IPA_HW_MODE_EMULATION) {
+		div_cfg.value = 0;
+	}
+
+	div_cfg.enable = true; /* Enable the divider */
+	ipahal_write_reg_fields(IPA_TIMERS_XO_CLK_DIV_CFG, &div_cfg);
+	ipahal_read_reg_fields(IPA_TIMERS_XO_CLK_DIV_CFG, &div_cfg);
+	IPADBG("timer XO clk divider after cfg: enabled=%d divider=%u\n",
+		div_cfg.enable, div_cfg.value);
 }
 
 /**
@@ -2531,33 +4165,38 @@ void ipa3_cfg_qsb(void)
 int ipa3_init_hw(void)
 {
 	u32 ipa_version = 0;
-	u32 val;
+	struct ipahal_reg_counter_cfg cnt_cfg;
 
 	/* Read IPA version and make sure we have access to the registers */
 	ipa_version = ipahal_read_reg(IPA_VERSION);
+	IPADBG("IPA_VERSION=%u\n", ipa_version);
 	if (ipa_version == 0)
 		return -EFAULT;
 
 	switch (ipa3_ctx->ipa_hw_type) {
 	case IPA_HW_v3_0:
 	case IPA_HW_v3_1:
-		val = IPA_BCR_REG_VAL_v3_0;
+		ipahal_write_reg(IPA_BCR, IPA_BCR_REG_VAL_v3_0);
 		break;
 	case IPA_HW_v3_5:
 	case IPA_HW_v3_5_1:
-		val = IPA_BCR_REG_VAL_v3_5;
+		ipahal_write_reg(IPA_BCR, IPA_BCR_REG_VAL_v3_5);
 		break;
 	case IPA_HW_v4_0:
-		val = IPA_BCR_REG_VAL_v4_0;
+	case IPA_HW_v4_1:
+		ipahal_write_reg(IPA_BCR, IPA_BCR_REG_VAL_v4_0);
+		break;
+	case IPA_HW_v4_2:
+		ipahal_write_reg(IPA_BCR, IPA_BCR_REG_VAL_v4_2);
 		break;
 	default:
-		IPAERR("unknown HW type in dts\n");
-		return -EFAULT;
+		IPADBG("Do not update BCR - hw_type=%d\n",
+			ipa3_ctx->ipa_hw_type);
+		break;
 	}
 
-	ipahal_write_reg(IPA_BCR, val);
-
-	if (ipa3_ctx->ipa_hw_type >= IPA_HW_v4_0) {
+	if (ipa3_ctx->ipa_hw_type >= IPA_HW_v4_0 &&
+		ipa3_ctx->ipa_hw_type < IPA_HW_v4_5) {
 		struct ipahal_reg_clkon_cfg clkon_cfg;
 		struct ipahal_reg_tx_cfg tx_cfg;
 
@@ -2576,62 +4215,24 @@ int ipa3_init_hw(void)
 
 	ipa3_cfg_qsb();
 
-	ipa_comp_cfg();
-
-	return 0;
-}
-
-/**
- * ipa3_get_hw_type_index() - Get HW type index which is used as the entry index
- *	for ep\resource groups related arrays .
- *
- * Return value: HW type index
- */
-u8 ipa3_get_hw_type_index(void)
-{
-	u8 hw_type_index;
-
-	switch (ipa3_ctx->ipa_hw_type) {
-	case IPA_HW_v3_0:
-	case IPA_HW_v3_1:
-		hw_type_index = IPA_3_0;
-		break;
-	case IPA_HW_v3_5:
-		hw_type_index = IPA_3_5;
-		/*
-		 *this flag is initialized only after fw load trigger from
-		 * user space (ipa3_write)
-		 */
-		if (ipa3_ctx->ipa_config_is_mhi)
-			hw_type_index = IPA_3_5_MHI;
-		break;
-	case IPA_HW_v3_5_1:
-		hw_type_index = IPA_3_5_1;
-		break;
-	case IPA_HW_v4_0:
-		hw_type_index = IPA_4_0;
-		/*
-		 *this flag is initialized only after fw load trigger from
-		 * user space (ipa3_write)
-		 */
-		if (ipa3_ctx->ipa_config_is_mhi)
-			hw_type_index = IPA_4_0_MHI;
-
-		if (ipa3_ctx->ipa_config_is_auto)
-			hw_type_index = IPA_4_0_AUTO;
-
-		if (ipa3_ctx->ipa_config_is_auto &&
-			ipa3_ctx->ipa_config_is_mhi)
-			hw_type_index = IPA_4_0_AUTO_MHI;
-
-		break;
-	default:
-		IPAERR("Incorrect IPA version %d\n", ipa3_ctx->ipa_hw_type);
-		hw_type_index = IPA_3_0;
-		break;
+	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5) {
+		/* set aggr granularity for 0.5 msec*/
+		cnt_cfg.aggr_granularity = GRAN_VALUE_500_USEC;
+		ipahal_write_reg_fields(IPA_COUNTER_CFG, &cnt_cfg);
+	} else {
+		ipa_cfg_qtime();
 	}
 
-	return hw_type_index;
+	ipa_comp_cfg();
+
+	/*
+	 * In IPA 4.2 filter and routing hashing not supported
+	 * disabling hash enable register.
+	 */
+	if (ipa3_ctx->ipa_fltrt_not_hashable)
+		ipa_disable_hashing_rt_flt_v4_2();
+
+	return 0;
 }
 
 /**
@@ -2643,44 +4244,23 @@ u8 ipa3_get_hw_type_index(void)
 int ipa3_get_ep_mapping(enum ipa_client_type client)
 {
 	int ipa_ep_idx;
+	u8 hw_idx = ipa3_get_hw_type_index();
 
 	if (client >= IPA_CLIENT_MAX || client < 0) {
 		IPAERR_RL("Bad client number! client =%d\n", client);
 		return IPA_EP_NOT_ALLOCATED;
 	}
 
-	if (!ipa3_ep_mapping[ipa3_get_hw_type_index()][client].valid)
+	if (!ipa3_ep_mapping[hw_idx][client].valid)
 		return IPA_EP_NOT_ALLOCATED;
 
-	ipa_ep_idx = ipa3_ep_mapping[ipa3_get_hw_type_index()][client].
-		ipa_gsi_ep_info.ipa_ep_num;
+	ipa_ep_idx =
+		ipa3_ep_mapping[hw_idx][client].ipa_gsi_ep_info.ipa_ep_num;
 	if (ipa_ep_idx < 0 || (ipa_ep_idx >= IPA3_MAX_NUM_PIPES
 		&& client != IPA_CLIENT_DUMMY_CONS))
 		return IPA_EP_NOT_ALLOCATED;
 
 	return ipa_ep_idx;
-}
-
-
-/**
- * ipa_get_ep_prefetch_mode() - provide prefetch_mode endpoint
- * @client: client type
- *
- * Return value: prefetch_mode
- */
-enum gsi_prefetch_mode ipa_get_ep_prefetch_mode(enum ipa_client_type client)
-{
-	enum gsi_prefetch_mode prefetch_mode;
-
-	if (client >= IPA_CLIENT_MAX || client < 0) {
-		IPAERR_RL("Bad client number: client =%d\n", client);
-		return -IPA_EP_NOT_ALLOCATED;
-	}
-
-	prefetch_mode = ipa3_ep_mapping[ipa3_get_hw_type_index()][client].
-		ipa_gsi_ep_info.prefetch_mode;
-
-	return prefetch_mode;
 }
 
 /**
@@ -2875,6 +4455,7 @@ enum ipa_client_type ipa3_get_client_mapping(int pipe_idx)
 {
 	if (pipe_idx >= ipa3_ctx->ipa_num_pipes || pipe_idx < 0) {
 		IPAERR("Bad pipe index!\n");
+		WARN_ON(1);
 		return -EINVAL;
 	}
 
@@ -2901,8 +4482,8 @@ enum ipa_client_type ipa3_get_client_by_pipe(int pipe_idx)
 	}
 
 	if (j == IPA_CLIENT_MAX)
-		IPADBG("ipa3_get_client_by_pipe(%d) can't find client\n",
-		       pipe_idx);
+		IPADBG("Got to IPA_CLIENT_MAX (%d) while searching for (%d)\n",
+		       j, pipe_idx);
 
 	return j;
 }
@@ -2914,18 +4495,23 @@ enum ipa_client_type ipa3_get_client_by_pipe(int pipe_idx)
 void ipa_init_ep_flt_bitmap(void)
 {
 	enum ipa_client_type cl;
-	u8 hw_type_idx = ipa3_get_hw_type_index();
+	u8 hw_idx = ipa3_get_hw_type_index();
 	u32 bitmap;
 	u32 pipe_num;
+	const struct ipa_gsi_ep_config *gsi_ep_ptr;
 
 	bitmap = 0;
-
-	BUG_ON(ipa3_ctx->ep_flt_bitmap);
+	if (ipa3_ctx->ep_flt_bitmap) {
+		WARN_ON(1);
+		return;
+	}
 
 	for (cl = 0; cl < IPA_CLIENT_MAX ; cl++) {
-		if (ipa3_ep_mapping[hw_type_idx][cl].support_flt) {
-			pipe_num = ipa3_ep_mapping[hw_type_idx][cl].
-				ipa_gsi_ep_info.ipa_ep_num;
+		if (ipa3_ep_mapping[hw_idx][cl].support_flt) {
+			gsi_ep_ptr =
+				&ipa3_ep_mapping[hw_idx][cl].ipa_gsi_ep_info;
+			pipe_num =
+				gsi_ep_ptr->ipa_ep_num;
 			bitmap |= (1U << pipe_num);
 			if (bitmap != ipa3_ctx->ep_flt_bitmap) {
 				ipa3_ctx->ep_flt_bitmap = bitmap;
@@ -2996,7 +4582,8 @@ int ipa3_cfg_ep_seq(u32 clnt_hdl, const struct ipa_ep_cfg_seq *seq_cfg)
 		if (ipa3_ctx->ep[clnt_hdl].cfg.mode.mode == IPA_DMA &&
 			!IPA_DPS_HPS_SEQ_TYPE_IS_DMA(type)) {
 			IPAERR("Configuring non-DMA SEQ type to DMA pipe\n");
-			BUG();
+			WARN_ON(1);
+			return -EINVAL;
 		}
 		IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 		/* Configure sequencers type*/
@@ -3411,6 +4998,7 @@ int ipa3_cfg_ep_hdr_ext(u32 clnt_hdl,
 
 	/* copy over EP cfg */
 	ep->cfg.hdr_ext = *ep_hdr_ext;
+	ep->cfg.hdr_ext.hdr = &ep->cfg.hdr;
 
 	IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 
@@ -3440,6 +5028,11 @@ int ipa3_cfg_ep_ctrl(u32 clnt_hdl, const struct ipa_ep_cfg_ctrl *ep_ctrl)
 		IPAERR("pipe suspend is not supported\n");
 		WARN_ON(1);
 		return -EPERM;
+	}
+
+	if (ipa3_ctx->ipa_endp_delay_wa) {
+		IPAERR("pipe setting delay is not supported\n");
+		return 0;
 	}
 
 	IPADBG("pipe=%d ep_suspend=%d, ep_delay=%d\n",
@@ -3489,7 +5082,7 @@ int ipa3_cfg_ep_mode(u32 clnt_hdl, const struct ipa_ep_cfg_mode *ep_mode)
 
 	if (clnt_hdl >= ipa3_ctx->ipa_num_pipes ||
 	    ipa3_ctx->ep[clnt_hdl].valid == 0 || ep_mode == NULL) {
-		IPAERR("bad params clnt_hdl=%d , ep_valid=%d ep_mode=%p\n",
+		IPAERR("bad params clnt_hdl=%d , ep_valid=%d ep_mode=%pK\n",
 				clnt_hdl, ipa3_ctx->ep[clnt_hdl].valid,
 				ep_mode);
 		return -EINVAL;
@@ -3532,8 +5125,13 @@ int ipa3_cfg_ep_mode(u32 clnt_hdl, const struct ipa_ep_cfg_mode *ep_mode)
 		if (ep_mode->mode == IPA_DMA)
 			type = IPA_DPS_HPS_SEQ_TYPE_DMA_ONLY;
 		else
-			type =
-			   IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP;
+			/* In IPA4.2 only single pass only supported*/
+			if (ipa3_ctx->ipa_hw_type == IPA_HW_v4_2)
+				type =
+				IPA_DPS_HPS_SEQ_TYPE_PKT_PROCESS_NO_DEC_NO_UCP;
+			else
+				type =
+			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP;
 
 		IPADBG(" set sequencers to sequance 0x%x, ep = %d\n", type,
 				clnt_hdl);
@@ -3573,8 +5171,93 @@ const char *ipa3_get_aggr_type_str(enum ipa_aggr_type aggr_type)
 			return "GENERIC";
 	case (IPA_QCMAP):
 			return "QCMAP";
+	case (IPA_COALESCE):
+			return "COALESCE";
 	}
 	return "undefined";
+}
+
+static u32 ipa3_time_gran_usec_step(enum ipa_timers_time_gran_type gran)
+{
+	switch (gran) {
+	case IPA_TIMERS_TIME_GRAN_10_USEC:		return 10;
+	case IPA_TIMERS_TIME_GRAN_20_USEC:		return 20;
+	case IPA_TIMERS_TIME_GRAN_50_USEC:		return 50;
+	case IPA_TIMERS_TIME_GRAN_100_USEC:		return 100;
+	case IPA_TIMERS_TIME_GRAN_1_MSEC:		return 1000;
+	case IPA_TIMERS_TIME_GRAN_10_MSEC:		return 10000;
+	case IPA_TIMERS_TIME_GRAN_100_MSEC:		return 100000;
+	case IPA_TIMERS_TIME_GRAN_NEAR_HALF_SEC:	return 655350;
+	default:
+		IPAERR("Invalid granularity time unit %d\n", gran);
+		ipa_assert();
+		break;
+	};
+
+	return 100;
+}
+
+/*
+ * ipa3_process_timer_cfg() - Check and produce timer config
+ *
+ * Relevant for IPA 4.5 and above
+ *
+ * Assumes clocks are voted
+ */
+static int ipa3_process_timer_cfg(u32 time_us,
+	u8 *pulse_gen, u8 *time_units)
+{
+	struct ipahal_reg_timers_pulse_gran_cfg gran_cfg;
+	u32 gran0_step, gran1_step;
+
+	IPADBG("time in usec=%u\n", time_us);
+
+	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5) {
+		IPAERR("Invalid IPA version %d\n", ipa3_ctx->ipa_hw_type);
+		return -EPERM;
+	}
+
+	if (!time_us) {
+		*pulse_gen = 0;
+		*time_units = 0;
+		return 0;
+	}
+
+	ipahal_read_reg_fields(IPA_TIMERS_PULSE_GRAN_CFG, &gran_cfg);
+
+	gran0_step = ipa3_time_gran_usec_step(gran_cfg.gran_0);
+	gran1_step = ipa3_time_gran_usec_step(gran_cfg.gran_1);
+	/* gran_2 is not used by AP */
+
+	IPADBG("gran0 usec step=%u  gran1 usec step=%u\n",
+		gran0_step, gran1_step);
+
+	/* Lets try pulse generator #0 granularity */
+	if (!(time_us % gran0_step)) {
+		if ((time_us / gran0_step) <= IPA_TIMER_SCALED_TIME_LIMIT) {
+			*pulse_gen = 0;
+			*time_units = time_us / gran0_step;
+			IPADBG("Matched: generator=0, units=%u\n",
+				*time_units);
+			return 0;
+		}
+		IPADBG("gran0 cannot be used due to range limit\n");
+	}
+
+	/* Lets try pulse generator #1 granularity */
+	if (!(time_us % gran1_step)) {
+		if ((time_us / gran1_step) <= IPA_TIMER_SCALED_TIME_LIMIT) {
+			*pulse_gen = 1;
+			*time_units = time_us / gran1_step;
+			IPADBG("Matched: generator=1, units=%u\n",
+				*time_units);
+			return 0;
+		}
+		IPADBG("gran1 cannot be used due to range limit\n");
+	}
+
+	IPAERR("Cannot match requested time to configured granularities\n");
+	return -EPERM;
 }
 
 /**
@@ -3588,6 +5271,8 @@ const char *ipa3_get_aggr_type_str(enum ipa_aggr_type aggr_type)
  */
 int ipa3_cfg_ep_aggr(u32 clnt_hdl, const struct ipa_ep_cfg_aggr *ep_aggr)
 {
+	int res = 0;
+
 	if (clnt_hdl >= ipa3_ctx->ipa_num_pipes ||
 	    ipa3_ctx->ep[clnt_hdl].valid == 0 || ep_aggr == NULL) {
 		IPAERR("bad parm, clnt_hdl = %d , ep_valid = %d\n",
@@ -3619,11 +5304,54 @@ int ipa3_cfg_ep_aggr(u32 clnt_hdl, const struct ipa_ep_cfg_aggr *ep_aggr)
 
 	IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 
-	ipahal_write_reg_n_fields(IPA_ENDP_INIT_AGGR_n, clnt_hdl, ep_aggr);
+	if (ipa3_ctx->ipa_hw_type >= IPA_HW_v4_5) {
+		res = ipa3_process_timer_cfg(ep_aggr->aggr_time_limit,
+			&ipa3_ctx->ep[clnt_hdl].cfg.aggr.pulse_generator,
+			&ipa3_ctx->ep[clnt_hdl].cfg.aggr.scaled_time);
+		if (res) {
+			IPAERR("failed to process AGGR timer tmr=%u\n",
+				ep_aggr->aggr_time_limit);
+			ipa_assert();
+			res = -EINVAL;
+			goto complete;
+		}
+		/*
+		 * HW bug on IPA4.5 where gran is used from pipe 0 instead of
+		 * coal pipe. Add this check to make sure that pipe 0 will
+		 * use gran 0 because that is what the coal pipe will use.
+		 */
+		if (ipa3_ctx->ipa_hw_type == IPA_HW_v4_5 &&
+		    ipa3_get_client_mapping(clnt_hdl) ==
+		    IPA_CLIENT_APPS_WAN_COAL_CONS &&
+		    ipa3_ctx->ep[clnt_hdl].cfg.aggr.pulse_generator != 0) {
+			IPAERR("coal pipe using GRAN_SEL = %d\n",
+			       ipa3_ctx->ep[clnt_hdl].cfg.aggr.pulse_generator);
+			ipa_assert();
+		}
+	} else {
+		/*
+		 * Global aggregation granularity is 0.5msec.
+		 * So if H/W programmed with 1msec, it will be
+		 *  0.5msec defacto.
+		 * So finest granularity is 0.5msec
+		 */
+		if (ep_aggr->aggr_time_limit % 500) {
+			IPAERR("given time limit %u is not in 0.5msec\n",
+				ep_aggr->aggr_time_limit);
+			WARN_ON(1);
+			res = -EINVAL;
+			goto complete;
+		}
 
+		/* Due to described above global granularity */
+		ipa3_ctx->ep[clnt_hdl].cfg.aggr.aggr_time_limit *= 2;
+	}
+
+	ipahal_write_reg_n_fields(IPA_ENDP_INIT_AGGR_n, clnt_hdl,
+			&ipa3_ctx->ep[clnt_hdl].cfg.aggr);
+complete:
 	IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
-
-	return 0;
+	return res;
 }
 
 /**
@@ -3686,6 +5414,34 @@ int ipa3_cfg_ep_route(u32 clnt_hdl, const struct ipa_ep_cfg_route *ep_route)
 	return 0;
 }
 
+#define MAX_ALLOWED_BASE_VAL 0x1f
+#define MAX_ALLOWED_SCALE_VAL 0x1f
+
+/**
+ * ipa3_cal_ep_holb_scale_base_val - calculate base and scale value from tmr_val
+ *
+ * In IPA4.2 HW version need configure base and scale value in HOL timer reg
+ * @tmr_val: [in] timer value for HOL timer
+ * @ipa_ep_cfg: [out] Fill IPA end-point configuration base and scale value
+ *			and return
+ */
+void ipa3_cal_ep_holb_scale_base_val(u32 tmr_val,
+				struct ipa_ep_cfg_holb *ep_holb)
+{
+	u32 base_val, scale, scale_val = 1, base = 2;
+
+	for (scale = 0; scale <= MAX_ALLOWED_SCALE_VAL; scale++) {
+		base_val = tmr_val/scale_val;
+		if (scale != 0)
+			scale_val *= base;
+		if (base_val <= MAX_ALLOWED_BASE_VAL)
+			break;
+	}
+	ep_holb->base_val = base_val;
+	ep_holb->scale = scale_val;
+
+}
+
 /**
  * ipa3_cfg_ep_holb() - IPA end-point holb configuration
  *
@@ -3719,17 +5475,126 @@ int ipa3_cfg_ep_holb(u32 clnt_hdl, const struct ipa_ep_cfg_holb *ep_holb)
 
 	IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 
-	ipahal_write_reg_n_fields(IPA_ENDP_INIT_HOL_BLOCK_EN_n, clnt_hdl,
-		ep_holb);
+	if (ep_holb->en == IPA_HOLB_TMR_DIS) {
+		ipahal_write_reg_n_fields(IPA_ENDP_INIT_HOL_BLOCK_EN_n,
+			clnt_hdl, ep_holb);
+		goto success;
+	}
 
-	ipahal_write_reg_n_fields(IPA_ENDP_INIT_HOL_BLOCK_TIMER_n, clnt_hdl,
-		ep_holb);
+	/* Follow HPG sequence to DIS_HOLB, Configure Timer, and HOLB_EN */
+	if (ipa3_ctx->ipa_hw_type >= IPA_HW_v4_5) {
+		ipa3_ctx->ep[clnt_hdl].holb.en = IPA_HOLB_TMR_DIS;
+		ipahal_write_reg_n_fields(IPA_ENDP_INIT_HOL_BLOCK_EN_n,
+			clnt_hdl, ep_holb);
+	}
 
-	IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
+	/* Configure timer */
+	if (ipa3_ctx->ipa_hw_type == IPA_HW_v4_2) {
+		ipa3_cal_ep_holb_scale_base_val(ep_holb->tmr_val,
+			&ipa3_ctx->ep[clnt_hdl].holb);
+	}
+	if (ipa3_ctx->ipa_hw_type >= IPA_HW_v4_5) {
+		int res;
 
-	IPADBG("cfg holb %u ep=%d tmr=%d\n", ep_holb->en, clnt_hdl,
+		res = ipa3_process_timer_cfg(ep_holb->tmr_val * 1000,
+			&ipa3_ctx->ep[clnt_hdl].holb.pulse_generator,
+			&ipa3_ctx->ep[clnt_hdl].holb.scaled_time);
+		if (res) {
+			IPAERR("failed to process HOLB timer tmr=%u\n",
 				ep_holb->tmr_val);
+			ipa_assert();
+			return res;
+		}
+	}
 
+	ipahal_write_reg_n_fields(IPA_ENDP_INIT_HOL_BLOCK_TIMER_n,
+		clnt_hdl, &ipa3_ctx->ep[clnt_hdl].holb);
+
+	/* Enable HOLB */
+	ipa3_ctx->ep[clnt_hdl].holb.en = IPA_HOLB_TMR_EN;
+	ipahal_write_reg_n_fields(IPA_ENDP_INIT_HOL_BLOCK_EN_n,
+		clnt_hdl, ep_holb);
+	/* IPA4.5 issue requires HOLB_EN to be written twice */
+	if (ipa3_ctx->ipa_hw_type >= IPA_HW_v4_5)
+		ipahal_write_reg_n_fields(IPA_ENDP_INIT_HOL_BLOCK_EN_n,
+			clnt_hdl, ep_holb);
+
+success:
+	IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
+	IPADBG("cfg holb %u ep=%d tmr=%d\n", ep_holb->en, clnt_hdl,
+		ep_holb->tmr_val);
+	return 0;
+}
+
+/**
+ * ipa3_force_cfg_ep_holb() - IPA end-point holb configuration
+ *			for QDSS_MHI_CONS pipe
+ *
+ * If an IPA producer pipe is full, IPA HW by default will block
+ * indefinitely till space opens up. During this time no packets
+ * including those from unrelated pipes will be processed. Enabling
+ * HOLB means IPA HW will be allowed to drop packets as/when needed
+ * and indefinite blocking is avoided.
+ *
+ * @clnt_hdl:	[in] opaque client handle assigned by IPA to client
+ * @ipa_ep_cfg:	[in] IPA end-point configuration params
+ *
+ * Returns:	0 on success, negative on failure
+ */
+int ipa3_force_cfg_ep_holb(u32 clnt_hdl,
+	struct ipa_ep_cfg_holb *ep_holb)
+{
+	if (clnt_hdl >= ipa3_ctx->ipa_num_pipes ||
+		ep_holb == NULL) {
+		IPAERR("bad parm.\n");
+		return -EINVAL;
+	}
+
+	IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
+
+	if (ep_holb->en == IPA_HOLB_TMR_DIS) {
+		ipahal_write_reg_n_fields(IPA_ENDP_INIT_HOL_BLOCK_EN_n,
+			clnt_hdl, ep_holb);
+		goto success;
+	}
+
+	/* Follow HPG sequence to DIS_HOLB, Configure Timer, and HOLB_EN */
+	if (ipa3_ctx->ipa_hw_type >= IPA_HW_v4_5) {
+		ep_holb->en = IPA_HOLB_TMR_DIS;
+		ipahal_write_reg_n_fields(IPA_ENDP_INIT_HOL_BLOCK_EN_n,
+			clnt_hdl, ep_holb);
+	}
+
+	if (ipa3_ctx->ipa_hw_type >= IPA_HW_v4_5) {
+		int res;
+
+		res = ipa3_process_timer_cfg(ep_holb->tmr_val * 1000,
+			&ep_holb->pulse_generator,
+			&ep_holb->scaled_time);
+		if (res) {
+			IPAERR("failed to process HOLB timer tmr=%u\n",
+				ep_holb->tmr_val);
+			ipa_assert();
+			return res;
+		}
+	}
+
+	ipahal_write_reg_n_fields(IPA_ENDP_INIT_HOL_BLOCK_TIMER_n,
+		clnt_hdl, ep_holb);
+
+	/* Enable HOLB */
+	ep_holb->en = IPA_HOLB_TMR_EN;
+	ipahal_write_reg_n_fields(IPA_ENDP_INIT_HOL_BLOCK_EN_n,
+		clnt_hdl, ep_holb);
+	/* IPA4.5 issue requires HOLB_EN to be written twice */
+	if (ipa3_ctx->ipa_hw_type >= IPA_HW_v4_5)
+		ipahal_write_reg_n_fields(IPA_ENDP_INIT_HOL_BLOCK_EN_n,
+			clnt_hdl, ep_holb);
+
+success:
+	IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
+	IPADBG("cfg holb %u ep=%d tmr=%d\n", ep_holb->en, clnt_hdl,
+		ep_holb->tmr_val);
 	return 0;
 }
 
@@ -3831,12 +5696,18 @@ int ipa3_cfg_ep_metadata(u32 clnt_hdl, const struct ipa_ep_cfg_metadata *ep_md)
 		IPA_ENDP_INIT_HDR_METADATA_n_MUX_ID_SHFT) &
 		IPA_ENDP_INIT_HDR_METADATA_n_MUX_ID_BMASK;
 
+	/* mark tethering bit for remote modem */
+	if (ipa3_ctx->ipa_hw_type == IPA_HW_v4_1)
+		qmap_id |= IPA_QMAP_TETH_BIT;
+
 	ep_md_reg_wrt.qmap_id = qmap_id;
 	ipahal_write_reg_n_fields(IPA_ENDP_INIT_HDR_METADATA_n, clnt_hdl,
 		&ep_md_reg_wrt);
-	ipa3_ctx->ep[clnt_hdl].cfg.hdr.hdr_metadata_reg_valid = 1;
-	ipahal_write_reg_n_fields(IPA_ENDP_INIT_HDR_n, clnt_hdl,
-		&ipa3_ctx->ep[clnt_hdl].cfg.hdr);
+	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5) {
+		ipa3_ctx->ep[clnt_hdl].cfg.hdr.hdr_metadata_reg_valid = 1;
+		ipahal_write_reg_n_fields(IPA_ENDP_INIT_HDR_n, clnt_hdl,
+			&ipa3_ctx->ep[clnt_hdl].cfg.hdr);
+	}
 
 	IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 
@@ -3872,11 +5743,20 @@ int ipa3_write_qmap_id(struct ipa_ioc_write_qmapid *param_in)
 		param_in->client == IPA_CLIENT_USB2_PROD ||
 	    param_in->client == IPA_CLIENT_HSIC1_PROD ||
 	    param_in->client == IPA_CLIENT_ODU_PROD ||
-	    param_in->client == IPA_CLIENT_ETHERNET_PROD) {
+	    param_in->client == IPA_CLIENT_ETHERNET_PROD ||
+	    param_in->client == IPA_CLIENT_ETHERNET2_PROD ||
+		param_in->client == IPA_CLIENT_WIGIG_PROD ||
+		param_in->client == IPA_CLIENT_AQC_ETHERNET_PROD) {
 		result = ipa3_cfg_ep_metadata(ipa_ep_idx, &meta);
-	} else if (param_in->client == IPA_CLIENT_WLAN1_PROD) {
+	} else if (param_in->client == IPA_CLIENT_WLAN1_PROD ||
+			   param_in->client == IPA_CLIENT_WLAN2_PROD) {
 		ipa3_ctx->ep[ipa_ep_idx].cfg.meta = meta;
-		result = ipa3_write_qmapid_wdi_pipe(ipa_ep_idx, meta.qmap_id);
+		if (param_in->client == IPA_CLIENT_WLAN2_PROD)
+			result = ipa3_write_qmapid_wdi3_gsi_pipe(
+				ipa_ep_idx, meta.qmap_id);
+		else
+			result = ipa3_write_qmapid_wdi_pipe(
+				ipa_ep_idx, meta.qmap_id);
 		if (result)
 			IPAERR_RL("qmap_id %d write failed on ep=%d\n",
 					meta.qmap_id, ipa_ep_idx);
@@ -3956,7 +5836,7 @@ int ipa3_set_qcncm_ndp_sig(char sig[3])
 	}
 
 	if (sig == NULL) {
-		IPAERR("bad argument for ipa3_set_qcncm_ndp_sig/n");
+		IPAERR("bad argument\n");
 		return -EINVAL;
 	}
 	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
@@ -4024,46 +5904,38 @@ int ipa3_straddle_boundary(u32 start, u32 end, u32 boundary)
 }
 
 /**
- * ipa3_init_mem_partition() - Reads IPA memory map from DTS, performs alignment
- * checks and logs the fetched values.
+ * ipa3_init_mem_partition() - Assigns the static memory partition
+ * based on the IPA version
  *
  * Returns:	0 on success
  */
-int ipa3_init_mem_partition(struct device_node *node)
+int ipa3_init_mem_partition(enum ipa_hw_type type)
 {
-	const size_t ram_mmap_current_version_size =
-		sizeof(ipa3_ctx->ctrl->mem_partition) / sizeof(u32);
-	int result;
-
-	memset(&ipa3_ctx->ctrl->mem_partition, 0,
-		sizeof(ipa3_ctx->ctrl->mem_partition));
-
-	IPADBG("Reading from DTS as u32 array\n");
-
-	/*
-	 * The size of ipa-ram-mmap array depends on the IPA version. The
-	 * actual size can't be assumed because of possible DTS versions
-	 * mismatch. The size of the array monotonically increasing because the
-	 * obsolete entries are set to zero rather than deleted, so the
-	 * possible sizes are in range
-	 *	[1, ram_mmap_current_version_size]
-	 */
-	result = of_property_read_variable_u32_array(node, "qcom,ipa-ram-mmap",
-		(u32 *)&ipa3_ctx->ctrl->mem_partition,
-		1, ram_mmap_current_version_size);
-
-	if (IPA_MEM_PART(uc_event_ring_ofst) & 1023) {
-		IPAERR("UC EVENT RING OFST 0x%x is unaligned\n",
-			IPA_MEM_PART(uc_event_ring_ofst));
-		return -ENODEV;
+	switch (type) {
+	case IPA_HW_v4_1:
+		ipa3_ctx->ctrl->mem_partition = &ipa_4_1_mem_part;
+		break;
+	case IPA_HW_v4_2:
+		ipa3_ctx->ctrl->mem_partition = &ipa_4_2_mem_part;
+		break;
+	case IPA_HW_v4_5:
+		ipa3_ctx->ctrl->mem_partition = &ipa_4_5_mem_part;
+		break;
+	case IPA_HW_None:
+	case IPA_HW_v1_0:
+	case IPA_HW_v1_1:
+	case IPA_HW_v2_0:
+	case IPA_HW_v2_1:
+	case IPA_HW_v2_5:
+	case IPA_HW_v2_6L:
+	case IPA_HW_v3_0:
+	case IPA_HW_v3_1:
+	case IPA_HW_v3_5:
+	case IPA_HW_v3_5_1:
+	case IPA_HW_v4_0:
+		IPAERR("unsupported version %d\n", type);
+		return -EPERM;
 	}
-
-	IPADBG("UC EVENT RING OFST 0x%x SIZE 0x%x\n",
-		IPA_MEM_PART(uc_event_ring_ofst),
-		IPA_MEM_PART(uc_event_ring_size));
-
-	IPADBG("NAT OFST 0x%x SIZE 0x%x\n", IPA_MEM_PART(nat_ofst),
-		IPA_MEM_PART(nat_size));
 
 	if (IPA_MEM_PART(uc_info_ofst) & 3) {
 		IPAERR("UC INFO OFST 0x%x is unaligned\n",
@@ -4235,18 +6107,102 @@ int ipa3_init_mem_partition(struct device_node *node)
 		return -ENODEV;
 	}
 
+	/*
+	 * Routing rules points to hdr_proc_ctx in 32byte offsets from base.
+	 * Base is modem hdr_proc_ctx first address.
+	 * AP driver install APPS hdr_proc_ctx starting at the beginning of
+	 * apps hdr_proc_ctx part.
+	 * So first apps hdr_proc_ctx offset at some routing
+	 * rule will be modem_hdr_proc_ctx_size >> 5 (32B).
+	 */
+	if (IPA_MEM_PART(modem_hdr_proc_ctx_size) & 31) {
+		IPAERR("MODEM HDR PROC CTX SIZE 0x%x is not 32B aligned\n",
+			IPA_MEM_PART(modem_hdr_proc_ctx_size));
+		return -ENODEV;
+	}
+
+	/*
+	 * AP driver when installing routing rule, it calcs the hdr_proc_ctx
+	 * offset by local offset (from base of apps part) +
+	 * modem_hdr_proc_ctx_size. This is to get offset from modem part base.
+	 * Thus apps part must be adjacent to modem part
+	 */
+	if (IPA_MEM_PART(apps_hdr_proc_ctx_ofst) !=
+		IPA_MEM_PART(modem_hdr_proc_ctx_ofst) +
+		IPA_MEM_PART(modem_hdr_proc_ctx_size)) {
+		IPAERR("APPS HDR PROC CTX SIZE not adjacent to MODEM one!\n");
+		return -ENODEV;
+	}
+
+	IPADBG("NAT TBL OFST 0x%x SIZE 0x%x\n",
+		   IPA_MEM_PART(nat_tbl_ofst),
+		   IPA_MEM_PART(nat_tbl_size));
+
+	if (IPA_MEM_PART(nat_tbl_ofst) & 31) {
+		IPAERR("NAT TBL OFST 0x%x is not aligned properly\n",
+			   IPA_MEM_PART(nat_tbl_ofst));
+		return -ENODEV;
+	}
+
 	IPADBG("PDN CONFIG OFST 0x%x SIZE 0x%x\n",
 		IPA_MEM_PART(pdn_config_ofst),
 		IPA_MEM_PART(pdn_config_size));
 
-	if (IPA_MEM_PART(modem_ofst) & 7) {
-		IPAERR("MODEM OFST 0x%x is unaligned\n",
-			IPA_MEM_PART(modem_ofst));
+	if (IPA_MEM_PART(pdn_config_ofst) & 7) {
+		IPAERR("PDN CONFIG OFST 0x%x is unaligned\n",
+			IPA_MEM_PART(pdn_config_ofst));
 		return -ENODEV;
 	}
 
-	IPADBG("MODEM OFST 0x%x SIZE 0x%x\n", IPA_MEM_PART(modem_ofst),
-		IPA_MEM_PART(modem_size));
+	IPADBG("Q6 QUOTA STATS OFST 0x%x SIZE 0x%x\n",
+		IPA_MEM_PART(stats_quota_q6_ofst),
+		IPA_MEM_PART(stats_quota_q6_size));
+
+	if (IPA_MEM_PART(stats_quota_q6_ofst) & 7) {
+		IPAERR("Q6 QUOTA STATS OFST 0x%x is unaligned\n",
+			IPA_MEM_PART(stats_quota_q6_ofst));
+		return -ENODEV;
+	}
+
+	IPADBG("AP QUOTA STATS OFST 0x%x SIZE 0x%x\n",
+		IPA_MEM_PART(stats_quota_ap_ofst),
+		IPA_MEM_PART(stats_quota_ap_size));
+
+	if (IPA_MEM_PART(stats_quota_ap_ofst) & 7) {
+		IPAERR("AP QUOTA STATS OFST 0x%x is unaligned\n",
+			IPA_MEM_PART(stats_quota_ap_ofst));
+		return -ENODEV;
+	}
+
+	IPADBG("TETHERING STATS OFST 0x%x SIZE 0x%x\n",
+		IPA_MEM_PART(stats_tethering_ofst),
+		IPA_MEM_PART(stats_tethering_size));
+
+	if (IPA_MEM_PART(stats_tethering_ofst) & 7) {
+		IPAERR("TETHERING STATS OFST 0x%x is unaligned\n",
+			IPA_MEM_PART(stats_tethering_ofst));
+		return -ENODEV;
+	}
+
+	IPADBG("FILTER AND ROUTING STATS OFST 0x%x SIZE 0x%x\n",
+		IPA_MEM_PART(stats_fnr_ofst),
+		IPA_MEM_PART(stats_fnr_size));
+
+	if (IPA_MEM_PART(stats_fnr_ofst) & 7) {
+		IPAERR("FILTER AND ROUTING STATS OFST 0x%x is unaligned\n",
+			IPA_MEM_PART(stats_fnr_ofst));
+		return -ENODEV;
+	}
+
+	IPADBG("DROP STATS OFST 0x%x SIZE 0x%x\n",
+	IPA_MEM_PART(stats_drop_ofst),
+		IPA_MEM_PART(stats_drop_size));
+
+	if (IPA_MEM_PART(stats_drop_ofst) & 7) {
+		IPAERR("DROP STATS OFST 0x%x is unaligned\n",
+			IPA_MEM_PART(stats_drop_ofst));
+		return -ENODEV;
+	}
 
 	IPADBG("V4 APPS HASHABLE FLT OFST 0x%x SIZE 0x%x\n",
 		IPA_MEM_PART(apps_v4_flt_hash_ofst),
@@ -4283,6 +6239,25 @@ int ipa3_init_mem_partition(struct device_node *node)
 		IPA_MEM_PART(apps_v6_rt_nhash_ofst),
 		IPA_MEM_PART(apps_v6_rt_nhash_size));
 
+	if (IPA_MEM_PART(modem_ofst) & 7) {
+		IPAERR("MODEM OFST 0x%x is unaligned\n",
+			IPA_MEM_PART(modem_ofst));
+		return -ENODEV;
+	}
+
+	IPADBG("MODEM OFST 0x%x SIZE 0x%x\n", IPA_MEM_PART(modem_ofst),
+		IPA_MEM_PART(modem_size));
+
+	if (IPA_MEM_PART(uc_descriptor_ram_ofst) & 1023) {
+		IPAERR("UC DESCRIPTOR RAM OFST 0x%x is unaligned\n",
+			IPA_MEM_PART(uc_descriptor_ram_ofst));
+		return -ENODEV;
+	}
+
+	IPADBG("UC DESCRIPTOR RAM OFST 0x%x SIZE 0x%x\n",
+		IPA_MEM_PART(uc_descriptor_ram_ofst),
+		IPA_MEM_PART(uc_descriptor_ram_size));
+
 	return 0;
 }
 
@@ -4300,10 +6275,17 @@ int ipa3_controller_static_bind(struct ipa3_controller *ctrl,
 		enum ipa_hw_type hw_type)
 {
 	if (hw_type >= IPA_HW_v4_0) {
-		ctrl->ipa_clk_rate_turbo = IPA_V4_0_CLK_RATE_TURBO;
-		ctrl->ipa_clk_rate_nominal = IPA_V4_0_CLK_RATE_NOMINAL;
-		ctrl->ipa_clk_rate_svs = IPA_V4_0_CLK_RATE_SVS;
-		ctrl->ipa_clk_rate_svs2 = IPA_V4_0_CLK_RATE_SVS2;
+		if (hw_type == IPA_HW_v4_2) {
+			ctrl->ipa_clk_rate_turbo = IPA_V4_2_CLK_RATE_TURBO;
+			ctrl->ipa_clk_rate_nominal = IPA_V4_2_CLK_RATE_NOMINAL;
+			ctrl->ipa_clk_rate_svs = IPA_V4_2_CLK_RATE_SVS;
+			ctrl->ipa_clk_rate_svs2 = IPA_V4_2_CLK_RATE_SVS2;
+		} else {
+			ctrl->ipa_clk_rate_turbo = IPA_V4_0_CLK_RATE_TURBO;
+			ctrl->ipa_clk_rate_nominal = IPA_V4_0_CLK_RATE_NOMINAL;
+			ctrl->ipa_clk_rate_svs = IPA_V4_0_CLK_RATE_SVS;
+			ctrl->ipa_clk_rate_svs2 = IPA_V4_0_CLK_RATE_SVS2;
+		}
 	} else if (hw_type >= IPA_HW_v3_5) {
 		ctrl->ipa_clk_rate_turbo = IPA_V3_5_CLK_RATE_TURBO;
 		ctrl->ipa_clk_rate_nominal = IPA_V3_5_CLK_RATE_NOMINAL;
@@ -4363,8 +6345,230 @@ int ipa3_alloc_rule_id(struct idr *rule_ids)
 	 * Distinction by high bit: Modem Ids are high bit asserted.
 	 */
 	return idr_alloc(rule_ids, NULL,
-		ipahal_get_low_rule_id(), ipahal_get_rule_id_hi_bit(),
+		ipahal_get_low_rule_id(),
+		ipahal_get_rule_id_hi_bit(),
 		GFP_KERNEL);
+}
+
+static int __ipa3_alloc_counter_hdl
+	(struct ipa_ioc_flt_rt_counter_alloc *counter)
+{
+	int id;
+
+	/* assign a handle using idr to this counter block */
+	id = idr_alloc(&ipa3_ctx->flt_rt_counters.hdl, counter,
+		ipahal_get_low_hdl_id(), ipahal_get_high_hdl_id(),
+		GFP_ATOMIC);
+
+	return id;
+}
+
+int ipa3_alloc_counter_id(struct ipa_ioc_flt_rt_counter_alloc *header)
+{
+	int i, unused_cnt, unused_max, unused_start_id;
+	struct ipa_ioc_flt_rt_counter_alloc *counter;
+
+	idr_preload(GFP_KERNEL);
+	spin_lock(&ipa3_ctx->flt_rt_counters.hdl_lock);
+
+	counter = kmem_cache_zalloc(ipa3_ctx->fnr_stats_cache, GFP_KERNEL);
+	if (!counter) {
+		IPAERR_RL("failed to alloc fnr stats counter object\n");
+		spin_unlock(&ipa3_ctx->flt_rt_counters.hdl_lock);
+		return -ENOMEM;
+	}
+	memcpy(counter, header, sizeof(struct ipa_ioc_flt_rt_counter_alloc));
+	/* allocate hw counters */
+	counter->hw_counter.start_id = 0;
+	counter->hw_counter.end_id = 0;
+	unused_cnt = 0;
+	unused_max = 0;
+	unused_start_id = 0;
+	if (counter->hw_counter.num_counters == 0)
+		goto sw_counter_alloc;
+	/* find the start id which can be used for the block */
+	for (i = 0; i < IPA_FLT_RT_HW_COUNTER; i++) {
+		if (!ipa3_ctx->flt_rt_counters.used_hw[i])
+			unused_cnt++;
+		else {
+			/* tracking max unused block in case allow less */
+			if (unused_cnt > unused_max) {
+				unused_start_id = i - unused_cnt + 2;
+				unused_max = unused_cnt;
+			}
+			unused_cnt = 0;
+		}
+		/* find it, break and use this 1st possible block */
+		if (unused_cnt == counter->hw_counter.num_counters) {
+			counter->hw_counter.start_id = i - unused_cnt + 2;
+			counter->hw_counter.end_id = i + 1;
+			break;
+		}
+	}
+	if (counter->hw_counter.start_id == 0) {
+		/* if not able to find such a block but allow less */
+		if (counter->hw_counter.allow_less && unused_max) {
+			/* give the max possible unused blocks */
+			counter->hw_counter.num_counters = unused_max;
+			counter->hw_counter.start_id = unused_start_id;
+			counter->hw_counter.end_id =
+				unused_start_id + unused_max - 1;
+		} else {
+			/* not able to find such a block */
+			counter->hw_counter.num_counters = 0;
+			counter->hw_counter.start_id = 0;
+			counter->hw_counter.end_id = 0;
+			goto err;
+		}
+	}
+
+sw_counter_alloc:
+	/* allocate sw counters */
+	counter->sw_counter.start_id = 0;
+	counter->sw_counter.end_id = 0;
+	unused_cnt = 0;
+	unused_max = 0;
+	unused_start_id = 0;
+	if (counter->sw_counter.num_counters == 0)
+		goto mark_hw_cnt;
+	/* find the start id which can be used for the block */
+	for (i = 0; i < IPA_FLT_RT_SW_COUNTER; i++) {
+		if (!ipa3_ctx->flt_rt_counters.used_sw[i])
+			unused_cnt++;
+		else {
+			/* tracking max unused block in case allow less */
+			if (unused_cnt > unused_max) {
+				unused_start_id = i - unused_cnt +
+					2 + IPA_FLT_RT_HW_COUNTER;
+				unused_max = unused_cnt;
+			}
+			unused_cnt = 0;
+		}
+		/* find it, break and use this 1st possible block */
+		if (unused_cnt == counter->sw_counter.num_counters) {
+			counter->sw_counter.start_id = i - unused_cnt +
+				2 + IPA_FLT_RT_HW_COUNTER;
+			counter->sw_counter.end_id =
+				i + 1 + IPA_FLT_RT_HW_COUNTER;
+			break;
+		}
+	}
+	if (counter->sw_counter.start_id == 0) {
+		/* if not able to find such a block but allow less */
+		if (counter->sw_counter.allow_less && unused_max) {
+			/* give the max possible unused blocks */
+			counter->sw_counter.num_counters = unused_max;
+			counter->sw_counter.start_id = unused_start_id;
+			counter->sw_counter.end_id =
+				unused_start_id + unused_max - 1;
+		} else {
+			/* not able to find such a block */
+			counter->sw_counter.num_counters = 0;
+			counter->sw_counter.start_id = 0;
+			counter->sw_counter.end_id = 0;
+			goto err;
+		}
+	}
+
+mark_hw_cnt:
+	/* add hw counters, set used to 1 */
+	if (counter->hw_counter.num_counters == 0)
+		goto mark_sw_cnt;
+	unused_start_id = counter->hw_counter.start_id;
+	if (unused_start_id < 1 ||
+		unused_start_id > IPA_FLT_RT_HW_COUNTER) {
+		IPAERR_RL("unexpected hw_counter start id %d\n",
+			   unused_start_id);
+		goto err;
+	}
+	for (i = 0; i < counter->hw_counter.num_counters; i++)
+		ipa3_ctx->flt_rt_counters.used_hw[unused_start_id + i - 1]
+			= 1;
+mark_sw_cnt:
+	/* add sw counters, set used to 1 */
+	if (counter->sw_counter.num_counters == 0)
+		goto done;
+	unused_start_id = counter->sw_counter.start_id
+		- IPA_FLT_RT_HW_COUNTER;
+	if (unused_start_id < 1 ||
+		unused_start_id > IPA_FLT_RT_SW_COUNTER) {
+		IPAERR_RL("unexpected sw_counter start id %d\n",
+			   unused_start_id);
+		goto err;
+	}
+	for (i = 0; i < counter->sw_counter.num_counters; i++)
+		ipa3_ctx->flt_rt_counters.used_sw[unused_start_id + i - 1]
+			= 1;
+done:
+	/* get a handle from idr for dealloc */
+	counter->hdl = __ipa3_alloc_counter_hdl(counter);
+	memcpy(header, counter, sizeof(struct ipa_ioc_flt_rt_counter_alloc));
+	spin_unlock(&ipa3_ctx->flt_rt_counters.hdl_lock);
+	idr_preload_end();
+	return 0;
+
+err:
+	counter->hdl = -1;
+	kmem_cache_free(ipa3_ctx->fnr_stats_cache, counter);
+	spin_unlock(&ipa3_ctx->flt_rt_counters.hdl_lock);
+	idr_preload_end();
+	return -ENOMEM;
+}
+
+void ipa3_counter_remove_hdl(int hdl)
+{
+	struct ipa_ioc_flt_rt_counter_alloc *counter;
+	int offset = 0;
+
+	spin_lock(&ipa3_ctx->flt_rt_counters.hdl_lock);
+	counter = idr_find(&ipa3_ctx->flt_rt_counters.hdl, hdl);
+	if (counter == NULL) {
+		IPAERR_RL("unexpected hdl %d\n", hdl);
+		goto err;
+	}
+	/* remove counters belong to this hdl, set used back to 0 */
+	offset = counter->hw_counter.start_id - 1;
+	if (offset >= 0 && offset + counter->hw_counter.num_counters
+		< IPA_FLT_RT_HW_COUNTER) {
+		memset(&ipa3_ctx->flt_rt_counters.used_hw + offset,
+			   0, counter->hw_counter.num_counters * sizeof(bool));
+	} else {
+		IPAERR_RL("unexpected hdl %d\n", hdl);
+		goto err;
+	}
+	offset = counter->sw_counter.start_id - 1 - IPA_FLT_RT_HW_COUNTER;
+	if (offset >= 0 && offset + counter->sw_counter.num_counters
+		< IPA_FLT_RT_SW_COUNTER) {
+		memset(&ipa3_ctx->flt_rt_counters.used_sw + offset,
+		   0, counter->sw_counter.num_counters * sizeof(bool));
+	} else {
+		IPAERR_RL("unexpected hdl %d\n", hdl);
+		goto err;
+	}
+	/* remove the handle */
+	idr_remove(&ipa3_ctx->flt_rt_counters.hdl, hdl);
+	kmem_cache_free(ipa3_ctx->fnr_stats_cache, counter);
+err:
+	spin_unlock(&ipa3_ctx->flt_rt_counters.hdl_lock);
+}
+
+void ipa3_counter_id_remove_all(void)
+{
+	struct ipa_ioc_flt_rt_counter_alloc *counter;
+	int hdl;
+
+	spin_lock(&ipa3_ctx->flt_rt_counters.hdl_lock);
+	/* remove all counters, set used back to 0 */
+	memset(&ipa3_ctx->flt_rt_counters.used_hw, 0,
+		   sizeof(ipa3_ctx->flt_rt_counters.used_hw));
+	memset(&ipa3_ctx->flt_rt_counters.used_sw, 0,
+		   sizeof(ipa3_ctx->flt_rt_counters.used_sw));
+	/* remove all handles */
+	idr_for_each_entry(&ipa3_ctx->flt_rt_counters.hdl, counter, hdl) {
+		idr_remove(&ipa3_ctx->flt_rt_counters.hdl, hdl);
+		kmem_cache_free(ipa3_ctx->fnr_stats_cache, counter);
+	}
+	spin_unlock(&ipa3_ctx->flt_rt_counters.hdl_lock);
 }
 
 int ipa3_id_alloc(void *ptr)
@@ -4436,15 +6640,26 @@ int ipa3_tag_process(struct ipa3_desc desc[],
 	struct ipahal_imm_cmd_ip_packet_tag_status status;
 	int i;
 	struct sk_buff *dummy_skb;
-	int res;
+	int res = 0;
 	struct ipa3_tag_completion *comp;
 	int ep_idx;
 	u32 retry_cnt = 0;
+	struct ipahal_reg_valmask valmask;
+	struct ipahal_imm_cmd_register_write reg_write_coal_close;
+	int req_num_tag_desc = REQUIRED_TAG_PROCESS_DESCRIPTORS;
+
+	/**
+	 * We use a descriptor for closing coalsceing endpoint
+	 * by immediate command. So, REQUIRED_TAG_PROCESS_DESCRIPTORS
+	 * should be incremented by 1 to overcome buffer overflow.
+	 */
+	if (ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS) != -1)
+		req_num_tag_desc += 1;
 
 	/* Not enough room for the required descriptors for the tag process */
-	if (IPA_TAG_MAX_DESC - descs_num < REQUIRED_TAG_PROCESS_DESCRIPTORS) {
+	if (IPA_TAG_MAX_DESC - descs_num < req_num_tag_desc) {
 		IPAERR("up to %d descriptors are allowed (received %d)\n",
-		       IPA_TAG_MAX_DESC - REQUIRED_TAG_PROCESS_DESCRIPTORS,
+		       IPA_TAG_MAX_DESC - req_num_tag_desc,
 		       descs_num);
 		return -ENOMEM;
 	}
@@ -4468,6 +6683,34 @@ int ipa3_tag_process(struct ipa3_desc desc[],
 		memcpy(&(tag_desc[0]), desc, descs_num *
 			sizeof(tag_desc[0]));
 		desc_idx += descs_num;
+	} else {
+		res = -EFAULT;
+		IPAERR("desc is NULL\n");
+		goto fail_free_tag_desc;
+	}
+
+	/* IC to close the coal frame before HPS Clear if coal is enabled */
+	if (ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS) != -1) {
+		ep_idx = ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS);
+		reg_write_coal_close.skip_pipeline_clear = false;
+		reg_write_coal_close.pipeline_clear_options = IPAHAL_HPS_CLEAR;
+		reg_write_coal_close.offset = ipahal_get_reg_ofst(
+			IPA_AGGR_FORCE_CLOSE);
+		ipahal_get_aggr_force_close_valmask(ep_idx, &valmask);
+		reg_write_coal_close.value = valmask.val;
+		reg_write_coal_close.value_mask = valmask.mask;
+		cmd_pyld = ipahal_construct_imm_cmd(
+			IPA_IMM_CMD_REGISTER_WRITE,
+			&reg_write_coal_close, false);
+		if (!cmd_pyld) {
+			IPAERR("failed to construct coal close IC\n");
+			res = -ENOMEM;
+			goto fail_free_tag_desc;
+		}
+		ipa3_init_imm_cmd_desc(&tag_desc[desc_idx], cmd_pyld);
+		tag_desc[desc_idx].callback = ipa3_tag_destroy_imm;
+		tag_desc[desc_idx].user1 = cmd_pyld;
+		++desc_idx;
 	}
 
 	/* NO-OP IC for ensuring that IPA pipeline is empty */
@@ -4476,7 +6719,7 @@ int ipa3_tag_process(struct ipa3_desc desc[],
 	if (!cmd_pyld) {
 		IPAERR("failed to construct NOP imm cmd\n");
 		res = -ENOMEM;
-		goto fail_free_tag_desc;
+		goto fail_free_desc;
 	}
 	ipa3_init_imm_cmd_desc(&tag_desc[desc_idx], cmd_pyld);
 	tag_desc[desc_idx].callback = ipa3_tag_destroy_imm;
@@ -4606,7 +6849,7 @@ fail_free_desc:
 	 * of the initial allocations above
 	 */
 	for (i = descs_num;
-		i < min(REQUIRED_TAG_PROCESS_DESCRIPTORS, desc_idx); i++)
+		i < min(req_num_tag_desc, desc_idx); i++)
 		if (tag_desc[i].callback)
 			tag_desc[i].callback(tag_desc[i].user1,
 				tag_desc[i].user2);
@@ -4849,34 +7092,43 @@ u32 ipa3_get_num_pipes(void)
 
 /**
  * ipa3_disable_apps_wan_cons_deaggr()-
- * set ipa_ctx->ipa_client_apps_wan_cons_agg_gro
+ * set ipa3_ctx->ipa_client_apps_wan_cons_agg_gro
  *
  * Return value: 0 or negative in case of failure
  */
 int ipa3_disable_apps_wan_cons_deaggr(uint32_t agg_size, uint32_t agg_count)
 {
 	int res = -1;
-	u32 limit;
 
-	/* checking if IPA-HW can support */
-	limit = ipahal_aggr_get_max_byte_limit();
-	if ((agg_size >> 10) > limit) {
-		IPAERR("IPA-AGG byte limit %d\n", limit);
-		IPAERR("exceed aggr_byte_limit\n");
-		return res;
-	}
-	limit = ipahal_aggr_get_max_pkt_limit();
-	if (agg_count > limit) {
-		IPAERR("IPA-AGG pkt limit %d\n", limit);
-		IPAERR("exceed aggr_pkt_limit\n");
-		return res;
-	}
+	/* ipahal will adjust limits based on HW capabilities */
 
 	if (ipa3_ctx) {
 		ipa3_ctx->ipa_client_apps_wan_cons_agg_gro = true;
 		return 0;
 	}
 	return res;
+}
+
+/**
+ * ipa3_check_idr_if_freed()-
+ * To iterate through the list and check if ptr exists
+ *
+ * Return value: true/false depending upon found/not
+ */
+bool ipa3_check_idr_if_freed(void *ptr)
+{
+	int id;
+	void *iter_ptr;
+
+	spin_lock(&ipa3_ctx->idr_lock);
+	idr_for_each_entry(&ipa3_ctx->ipa_idr, iter_ptr, id) {
+		if ((uintptr_t)ptr == (uintptr_t)iter_ptr) {
+			spin_unlock(&ipa3_ctx->idr_lock);
+			return false;
+		}
+	}
+	spin_unlock(&ipa3_ctx->idr_lock);
+	return true;
 }
 
 static void *ipa3_get_ipc_logbuf(void)
@@ -4951,8 +7203,6 @@ int ipa3_bind_api_controller(enum ipa_hw_type ipa_hw_type,
 		return -EPERM;
 	}
 
-	api_ctrl->ipa_connect = NULL;
-	api_ctrl->ipa_disconnect = NULL;
 	api_ctrl->ipa_reset_endpoint = NULL;
 	api_ctrl->ipa_clear_endpoint_delay = ipa3_clear_endpoint_delay;
 	api_ctrl->ipa_disable_endpoint = NULL;
@@ -4984,7 +7234,9 @@ int ipa3_bind_api_controller(enum ipa_hw_type ipa_hw_type,
 	api_ctrl->ipa_add_hdr_proc_ctx = ipa3_add_hdr_proc_ctx;
 	api_ctrl->ipa_del_hdr_proc_ctx = ipa3_del_hdr_proc_ctx;
 	api_ctrl->ipa_add_rt_rule = ipa3_add_rt_rule;
+	api_ctrl->ipa_add_rt_rule_v2 = ipa3_add_rt_rule_v2;
 	api_ctrl->ipa_add_rt_rule_usr = ipa3_add_rt_rule_usr;
+	api_ctrl->ipa_add_rt_rule_usr_v2 = ipa3_add_rt_rule_usr_v2;
 	api_ctrl->ipa_del_rt_rule = ipa3_del_rt_rule;
 	api_ctrl->ipa_commit_rt = ipa3_commit_rt;
 	api_ctrl->ipa_reset_rt = ipa3_reset_rt;
@@ -4992,10 +7244,14 @@ int ipa3_bind_api_controller(enum ipa_hw_type ipa_hw_type,
 	api_ctrl->ipa_put_rt_tbl = ipa3_put_rt_tbl;
 	api_ctrl->ipa_query_rt_index = ipa3_query_rt_index;
 	api_ctrl->ipa_mdfy_rt_rule = ipa3_mdfy_rt_rule;
+	api_ctrl->ipa_mdfy_rt_rule_v2 = ipa3_mdfy_rt_rule_v2;
 	api_ctrl->ipa_add_flt_rule = ipa3_add_flt_rule;
+	api_ctrl->ipa_add_flt_rule_v2 = ipa3_add_flt_rule_v2;
 	api_ctrl->ipa_add_flt_rule_usr = ipa3_add_flt_rule_usr;
+	api_ctrl->ipa_add_flt_rule_usr_v2 = ipa3_add_flt_rule_usr_v2;
 	api_ctrl->ipa_del_flt_rule = ipa3_del_flt_rule;
 	api_ctrl->ipa_mdfy_flt_rule = ipa3_mdfy_flt_rule;
+	api_ctrl->ipa_mdfy_flt_rule_v2 = ipa3_mdfy_flt_rule_v2;
 	api_ctrl->ipa_commit_flt = ipa3_commit_flt;
 	api_ctrl->ipa_reset_flt = ipa3_reset_flt;
 	api_ctrl->ipa_allocate_nat_device = ipa3_allocate_nat_device;
@@ -5118,7 +7374,6 @@ int ipa3_bind_api_controller(enum ipa_hw_type ipa_hw_type,
 	api_ctrl->ipa_get_ipc_logbuf = ipa3_get_ipc_logbuf;
 	api_ctrl->ipa_get_ipc_logbuf_low = ipa3_get_ipc_logbuf_low;
 	api_ctrl->ipa_rx_poll = ipa3_rx_poll;
-	api_ctrl->ipa_recycle_wan_skb = ipa3_recycle_wan_skb;
 	api_ctrl->ipa_setup_uc_ntn_pipes = ipa3_setup_uc_ntn_pipes;
 	api_ctrl->ipa_tear_down_uc_offload_pipes =
 		ipa3_tear_down_uc_offload_pipes;
@@ -5134,10 +7389,29 @@ int ipa3_bind_api_controller(enum ipa_hw_type ipa_hw_type,
 	api_ctrl->ipa_is_vlan_mode = ipa3_is_vlan_mode;
 	api_ctrl->ipa_pm_is_used = ipa3_pm_is_used;
 	api_ctrl->ipa_get_lan_rx_napi = ipa3_get_lan_rx_napi;
+	api_ctrl->ipa_wigig_uc_init = ipa3_wigig_uc_init;
+	api_ctrl->ipa_conn_wigig_rx_pipe_i = ipa3_conn_wigig_rx_pipe_i;
+	api_ctrl->ipa_conn_wigig_client_i = ipa3_conn_wigig_client_i;
+	api_ctrl->ipa_disconn_wigig_pipe_i = ipa3_disconn_wigig_pipe_i;
+	api_ctrl->ipa_wigig_uc_msi_init = ipa3_wigig_uc_msi_init;
+	api_ctrl->ipa_enable_wigig_pipe_i = ipa3_enable_wigig_pipe_i;
+	api_ctrl->ipa_disable_wigig_pipe_i = ipa3_disable_wigig_pipe_i;
 	api_ctrl->ipa_register_client_callback =
 		ipa3_register_client_callback;
 	api_ctrl->ipa_deregister_client_callback =
 		ipa3_deregister_client_callback;
+	api_ctrl->ipa_uc_debug_stats_alloc =
+		ipa3_uc_debug_stats_alloc;
+	api_ctrl->ipa_uc_debug_stats_dealloc =
+		ipa3_uc_debug_stats_dealloc;
+	api_ctrl->ipa_get_gsi_stats =
+		ipa3_get_gsi_stats;
+	api_ctrl->ipa_get_prot_id =
+		ipa3_get_prot_id;
+	api_ctrl->ipa_add_socksv5_conn = ipa3_add_socksv5_conn;
+	api_ctrl->ipa_del_socksv5_conn = ipa3_del_socksv5_conn;
+	api_ctrl->ipa_conn_qdss_pipes = ipa3_conn_qdss_pipes;
+	api_ctrl->ipa_disconn_qdss_pipes = ipa3_disconn_qdss_pipes;
 	return 0;
 }
 
@@ -5169,7 +7443,8 @@ bool ipa_is_modem_pipe(int pipe_idx)
 
 static void ipa3_write_rsrc_grp_type_reg(int group_index,
 			enum ipa_rsrc_grp_type_src n, bool src,
-			struct ipahal_reg_rsrc_grp_cfg *val) {
+			struct ipahal_reg_rsrc_grp_cfg *val)
+{
 	u8 hw_type_idx;
 
 	hw_type_idx = ipa3_get_hw_type_index();
@@ -5276,8 +7551,8 @@ static void ipa3_write_rsrc_grp_type_reg(int group_index,
 		break;
 	case IPA_4_0:
 	case IPA_4_0_MHI:
-	case IPA_4_0_AUTO:
-	case IPA_4_0_AUTO_MHI:
+	case IPA_4_1:
+	case IPA_4_1_APQ:
 		if (src) {
 			switch (group_index) {
 			case IPA_v4_0_GROUP_LWA_DL:
@@ -5319,6 +7594,92 @@ static void ipa3_write_rsrc_grp_type_reg(int group_index,
 			}
 		}
 		break;
+	case IPA_4_2:
+		if (src) {
+			switch (group_index) {
+			case IPA_v4_2_GROUP_UL_DL:
+				ipahal_write_reg_n_fields(
+					IPA_SRC_RSRC_GRP_01_RSRC_TYPE_n,
+					n, val);
+				break;
+			default:
+				IPAERR(
+				" Invalid source resource group,index #%d\n",
+				group_index);
+				break;
+			}
+		} else {
+			switch (group_index) {
+			case IPA_v4_2_GROUP_UL_DL:
+				ipahal_write_reg_n_fields(
+					IPA_DST_RSRC_GRP_01_RSRC_TYPE_n,
+					n, val);
+				break;
+			default:
+				IPAERR(
+				" Invalid destination resource group,index #%d\n",
+				group_index);
+				break;
+			}
+		}
+		break;
+	case IPA_4_5:
+	case IPA_4_5_MHI:
+	case IPA_4_5_AUTO:
+	case IPA_4_5_AUTO_MHI:
+		if (src) {
+			switch (group_index) {
+			case IPA_v4_5_MHI_GROUP_PCIE:
+			case IPA_v4_5_GROUP_UL_DL:
+				ipahal_write_reg_n_fields(
+					IPA_SRC_RSRC_GRP_01_RSRC_TYPE_n,
+					n, val);
+				break;
+			case IPA_v4_5_MHI_GROUP_DMA:
+			case IPA_v4_5_MHI_GROUP_QDSS:
+				ipahal_write_reg_n_fields(
+					IPA_SRC_RSRC_GRP_23_RSRC_TYPE_n,
+					n, val);
+				break;
+			case IPA_v4_5_GROUP_UC_RX_Q:
+				ipahal_write_reg_n_fields(
+					IPA_SRC_RSRC_GRP_45_RSRC_TYPE_n,
+					n, val);
+				break;
+			default:
+				IPAERR(
+				" Invalid source resource group,index #%d\n",
+				group_index);
+				break;
+			}
+		} else {
+			switch (group_index) {
+			case IPA_v4_5_MHI_GROUP_PCIE:
+			case IPA_v4_5_GROUP_UL_DL:
+				ipahal_write_reg_n_fields(
+					IPA_DST_RSRC_GRP_01_RSRC_TYPE_n,
+					n, val);
+				break;
+			case IPA_v4_5_MHI_GROUP_DMA:
+			case IPA_v4_5_MHI_GROUP_QDSS:
+				ipahal_write_reg_n_fields(
+					IPA_DST_RSRC_GRP_23_RSRC_TYPE_n,
+					n, val);
+				break;
+			case IPA_v4_5_GROUP_UC_RX_Q:
+				ipahal_write_reg_n_fields(
+					IPA_DST_RSRC_GRP_45_RSRC_TYPE_n,
+					n, val);
+				break;
+			default:
+				IPAERR(
+				" Invalid destination resource group,index #%d\n",
+				group_index);
+				break;
+			}
+		}
+		break;
+
 	default:
 		IPAERR("invalid hw type\n");
 		WARN_ON(1);
@@ -5326,7 +7687,8 @@ static void ipa3_write_rsrc_grp_type_reg(int group_index,
 	}
 }
 
-static void ipa3_configure_rx_hps_clients(int depth, bool min)
+static void ipa3_configure_rx_hps_clients(int depth,
+	int max_clnt_in_depth, int base_index, bool min)
 {
 	int i;
 	struct ipahal_reg_rx_hps_clients val;
@@ -5334,23 +7696,19 @@ static void ipa3_configure_rx_hps_clients(int depth, bool min)
 
 	hw_type_idx = ipa3_get_hw_type_index();
 
-	/*
-	 * depth 0 contains 4 first clients out of 6
-	 * depth 1 contains 2 last clients out of 6
-	 */
-	for (i = 0 ; i < (depth ? 2 : 4) ; i++) {
+	for (i = 0 ; i < max_clnt_in_depth ; i++) {
 		if (min)
 			val.client_minmax[i] =
 				ipa3_rsrc_rx_grp_config
 				[hw_type_idx]
 				[IPA_RSRC_GRP_TYPE_RX_HPS_CMDQ]
-				[!depth ? i : 4 + i].min;
+				[i + base_index].min;
 		else
 			val.client_minmax[i] =
 				ipa3_rsrc_rx_grp_config
 				[hw_type_idx]
 				[IPA_RSRC_GRP_TYPE_RX_HPS_CMDQ]
-				[!depth ? i : 4 + i].max;
+				[i + base_index].max;
 	}
 	if (depth) {
 		ipahal_write_reg_fields(min ? IPA_RX_HPS_CLIENTS_MIN_DEPTH_1 :
@@ -5390,6 +7748,38 @@ static void ipa3_configure_rx_hps_weight(void)
 	ipahal_write_reg_fields(IPA_HPS_FTCH_ARB_QUEUE_WEIGHT, &val);
 }
 
+static void ipa3_configure_rx_hps(void)
+{
+	int rx_hps_max_clnt_in_depth0;
+
+	IPADBG("Assign RX_HPS CMDQ rsrc groups min-max limits\n");
+
+	/* Starting IPA4.5 we have 5 RX_HPS_CMDQ */
+	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5)
+		rx_hps_max_clnt_in_depth0 = 4;
+	else
+		rx_hps_max_clnt_in_depth0 = 5;
+
+	ipa3_configure_rx_hps_clients(0, rx_hps_max_clnt_in_depth0, 0, true);
+	ipa3_configure_rx_hps_clients(0, rx_hps_max_clnt_in_depth0, 0, false);
+
+	/*
+	 * IPA 3.0/3.1 uses 6 RX_HPS_CMDQ and needs depths1 for that
+	 * which has two clients
+	 */
+	if (ipa3_ctx->ipa_hw_type <= IPA_HW_v3_1) {
+		ipa3_configure_rx_hps_clients(1, 2, rx_hps_max_clnt_in_depth0,
+			true);
+		ipa3_configure_rx_hps_clients(1, 2, rx_hps_max_clnt_in_depth0,
+			false);
+	}
+
+	/* Starting IPA4.2 no support to HPS weight config */
+	if (ipa3_ctx->ipa_hw_type >= IPA_HW_v3_5 &&
+		(ipa3_ctx->ipa_hw_type < IPA_HW_v4_2))
+		ipa3_configure_rx_hps_weight();
+}
+
 void ipa3_set_resorce_groups_min_max_limits(void)
 {
 	int i;
@@ -5402,7 +7792,6 @@ void ipa3_set_resorce_groups_min_max_limits(void)
 	u8 hw_type_idx;
 
 	IPADBG("ENTER\n");
-	IPADBG("Assign source rsrc groups min-max limits\n");
 
 	hw_type_idx = ipa3_get_hw_type_index();
 	switch (hw_type_idx) {
@@ -5422,17 +7811,32 @@ void ipa3_set_resorce_groups_min_max_limits(void)
 		break;
 	case IPA_4_0:
 	case IPA_4_0_MHI:
+	case IPA_4_1:
+	case IPA_4_1_APQ:
 		src_rsrc_type_max = IPA_v4_0_RSRC_GRP_TYPE_SRC_MAX;
 		dst_rsrc_type_max = IPA_v4_0_RSRC_GRP_TYPE_DST_MAX;
 		src_grp_idx_max = IPA_v4_0_SRC_GROUP_MAX;
 		dst_grp_idx_max = IPA_v4_0_DST_GROUP_MAX;
 		break;
-	case IPA_4_0_AUTO:
-	case IPA_4_0_AUTO_MHI:
+	case IPA_4_2:
 		src_rsrc_type_max = IPA_v4_0_RSRC_GRP_TYPE_SRC_MAX;
 		dst_rsrc_type_max = IPA_v4_0_RSRC_GRP_TYPE_DST_MAX;
-		src_grp_idx_max = IPA_v4_0_SRC_GROUP_MAX;
-		dst_grp_idx_max = IPA_v4_0_DST_GROUP_MAX;
+		src_grp_idx_max = IPA_v4_2_SRC_GROUP_MAX;
+		dst_grp_idx_max = IPA_v4_2_DST_GROUP_MAX;
+		break;
+	case IPA_4_5:
+	case IPA_4_5_MHI:
+		src_rsrc_type_max = IPA_v4_0_RSRC_GRP_TYPE_SRC_MAX;
+		dst_rsrc_type_max = IPA_v4_0_RSRC_GRP_TYPE_DST_MAX;
+		src_grp_idx_max = IPA_v4_5_SRC_GROUP_MAX;
+		dst_grp_idx_max = IPA_v4_5_DST_GROUP_MAX;
+		break;
+	case IPA_4_5_AUTO:
+	case IPA_4_5_AUTO_MHI:
+		src_rsrc_type_max = IPA_v4_0_RSRC_GRP_TYPE_SRC_MAX;
+		dst_rsrc_type_max = IPA_v4_0_RSRC_GRP_TYPE_DST_MAX;
+		src_grp_idx_max = IPA_v4_5_SRC_GROUP_MAX;
+		dst_grp_idx_max = IPA_v4_5_DST_GROUP_MAX;
 		break;
 	default:
 		IPAERR("invalid hw type index\n");
@@ -5440,6 +7844,7 @@ void ipa3_set_resorce_groups_min_max_limits(void)
 		return;
 	}
 
+	IPADBG("Assign source rsrc groups min-max limits\n");
 	for (i = 0; i < src_rsrc_type_max; i++) {
 		for (j = 0; j < src_grp_idx_max; j = j + 2) {
 			val.x_min =
@@ -5455,7 +7860,6 @@ void ipa3_set_resorce_groups_min_max_limits(void)
 	}
 
 	IPADBG("Assign destination rsrc groups min-max limits\n");
-
 	for (i = 0; i < dst_rsrc_type_max; i++) {
 		for (j = 0; j < dst_grp_idx_max; j = j + 2) {
 			val.x_min =
@@ -5470,36 +7874,22 @@ void ipa3_set_resorce_groups_min_max_limits(void)
 		}
 	}
 
-	/* move resource group configuration from HLOS to TZ */
-	if (ipa3_ctx->ipa3_hw_mode != IPA_HW_MODE_EMULATION &&
-	    ipa3_ctx->ipa_hw_type >= IPA_HW_v3_1) {
-		IPAERR("skip configuring ipa_rx_hps_clients from HLOS\n");
-		return;
+	/* move rx_hps resource group configuration from HLOS to TZ
+	 * on real platform with IPA 3.1 or later
+	 */
+	if (ipa3_ctx->ipa_hw_type < IPA_HW_v3_1 ||
+		ipa3_ctx->ipa3_hw_mode == IPA_HW_MODE_VIRTUAL ||
+		ipa3_ctx->ipa3_hw_mode == IPA_HW_MODE_EMULATION) {
+		ipa3_configure_rx_hps();
 	}
-
-	IPADBG("Assign RX_HPS CMDQ rsrc groups min-max limits\n");
-
-	ipa3_configure_rx_hps_clients(0, true);
-	ipa3_configure_rx_hps_clients(0, false);
-
-	/* only hw_type v3_0\3_1 have 6 RX_HPS_CMDQ and needs depth 1*/
-	if (ipa3_ctx->ipa_hw_type <= IPA_HW_v3_1) {
-		ipa3_configure_rx_hps_clients(1, true);
-		ipa3_configure_rx_hps_clients(1, false);
-	}
-
-	if (ipa3_ctx->ipa_hw_type >= IPA_HW_v3_5)
-		ipa3_configure_rx_hps_weight();
 
 	IPADBG("EXIT\n");
 }
 
-static void ipa3_gsi_poll_after_suspend(struct ipa3_ep_context *ep)
+static bool ipa3_gsi_channel_is_quite(struct ipa3_ep_context *ep)
 {
 	bool empty;
 
-	IPADBG("switch ch %ld to poll\n", ep->gsi_chan_hdl);
-	gsi_config_channel_mode(ep->gsi_chan_hdl, GSI_CHAN_MODE_POLL);
 	gsi_is_channel_empty(ep->gsi_chan_hdl, &empty);
 	if (!empty) {
 		IPADBG("ch %ld not empty\n", ep->gsi_chan_hdl);
@@ -5508,6 +7898,7 @@ static void ipa3_gsi_poll_after_suspend(struct ipa3_ep_context *ep)
 		if (!atomic_read(&ep->sys->curr_polling_state))
 			__ipa_gsi_irq_rx_scedule_poll(ep->sys);
 	}
+	return empty;
 }
 
 static int __ipa3_stop_gsi_channel(u32 clnt_hdl)
@@ -5516,6 +7907,8 @@ static int __ipa3_stop_gsi_channel(u32 clnt_hdl)
 	int res = 0;
 	int i;
 	struct ipa3_ep_context *ep;
+	enum ipa_client_type client_type;
+	struct IpaHwOffloadStatsAllocCmdData_t *gsi_info;
 
 	if (clnt_hdl >= ipa3_ctx->ipa_num_pipes ||
 		ipa3_ctx->ep[clnt_hdl].valid == 0) {
@@ -5524,17 +7917,60 @@ static int __ipa3_stop_gsi_channel(u32 clnt_hdl)
 	}
 
 	ep = &ipa3_ctx->ep[clnt_hdl];
+	client_type = ipa3_get_client_mapping(clnt_hdl);
 	memset(&mem, 0, sizeof(mem));
 
-	if (IPA_CLIENT_IS_PROD(ep->client)) {
-		IPADBG("Calling gsi_stop_channel ch:%lu\n",
-			ep->gsi_chan_hdl);
-		res = gsi_stop_channel(ep->gsi_chan_hdl);
-		IPADBG("gsi_stop_channel ch: %lu returned %d\n",
-			ep->gsi_chan_hdl, res);
-		return res;
+	/* stop uC gsi dbg stats monitor */
+	if (ipa3_ctx->ipa_hw_type >= IPA_HW_v4_5 ||
+		(ipa3_ctx->ipa_hw_type == IPA_HW_v4_1 &&
+		ipa3_ctx->platform_type == IPA_PLAT_TYPE_APQ)) {
+		switch (client_type) {
+		case IPA_CLIENT_MHI_PRIME_TETH_PROD:
+			gsi_info = &ipa3_ctx->gsi_info[IPA_HW_PROTOCOL_MHIP];
+			gsi_info->ch_id_info[0].ch_id = 0xff;
+			gsi_info->ch_id_info[0].dir = DIR_PRODUCER;
+			ipa3_uc_debug_stats_alloc(*gsi_info);
+			break;
+		case IPA_CLIENT_MHI_PRIME_TETH_CONS:
+			gsi_info = &ipa3_ctx->gsi_info[IPA_HW_PROTOCOL_MHIP];
+			gsi_info->ch_id_info[1].ch_id = 0xff;
+			gsi_info->ch_id_info[1].dir = DIR_CONSUMER;
+			ipa3_uc_debug_stats_alloc(*gsi_info);
+			break;
+		case IPA_CLIENT_MHI_PRIME_RMNET_PROD:
+			gsi_info = &ipa3_ctx->gsi_info[IPA_HW_PROTOCOL_MHIP];
+			gsi_info->ch_id_info[2].ch_id = 0xff;
+			gsi_info->ch_id_info[2].dir = DIR_PRODUCER;
+			ipa3_uc_debug_stats_alloc(*gsi_info);
+			break;
+		case IPA_CLIENT_MHI_PRIME_RMNET_CONS:
+			gsi_info = &ipa3_ctx->gsi_info[IPA_HW_PROTOCOL_MHIP];
+			gsi_info->ch_id_info[3].ch_id = 0xff;
+			gsi_info->ch_id_info[3].dir = DIR_CONSUMER;
+			ipa3_uc_debug_stats_alloc(*gsi_info);
+			break;
+		case IPA_CLIENT_USB_PROD:
+			gsi_info = &ipa3_ctx->gsi_info[IPA_HW_PROTOCOL_USB];
+			gsi_info->ch_id_info[0].ch_id = 0xff;
+			gsi_info->ch_id_info[0].dir = DIR_PRODUCER;
+			ipa3_uc_debug_stats_alloc(*gsi_info);
+			break;
+		case IPA_CLIENT_USB_CONS:
+			gsi_info = &ipa3_ctx->gsi_info[IPA_HW_PROTOCOL_USB];
+			gsi_info->ch_id_info[1].ch_id = 0xff;
+			gsi_info->ch_id_info[1].dir = DIR_CONSUMER;
+			ipa3_uc_debug_stats_alloc(*gsi_info);
+			break;
+		default:
+			IPADBG("client_type %d not supported\n",
+				client_type);
+		}
 	}
 
+	/*
+	 * Apply the GSI stop retry logic if GSI returns err code to retry.
+	 * Apply the retry logic for ipa_client_prod as well as ipa_client_cons.
+	 */
 	for (i = 0; i < IPA_GSI_CHANNEL_STOP_MAX_RETRY; i++) {
 		IPADBG("Calling gsi_stop_channel ch:%lu\n",
 			ep->gsi_chan_hdl);
@@ -5543,15 +7979,19 @@ static int __ipa3_stop_gsi_channel(u32 clnt_hdl)
 			ep->gsi_chan_hdl, res);
 		if (res != -GSI_STATUS_AGAIN && res != -GSI_STATUS_TIMED_OUT)
 			return res;
-
-		IPADBG("Inject a DMA_TASK with 1B packet to IPA\n");
-		/* Send a 1B packet DMA_TASK to IPA and try again */
-		res = ipa3_inject_dma_task_for_gsi();
-		if (res) {
-			IPAERR("Failed to inject DMA TASk for GSI\n");
-			return res;
+		/*
+		 * From >=IPA4.0 version not required to send dma send command,
+		 * this issue was fixed in latest versions.
+		 */
+		if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_0) {
+			IPADBG("Inject a DMA_TASK with 1B packet to IPA\n");
+			/* Send a 1B packet DMA_TASK to IPA and try again */
+			res = ipa3_inject_dma_task_for_gsi();
+			if (res) {
+				IPAERR("Failed to inject DMA TASk for GSI\n");
+				return res;
+			}
 		}
-
 		/* sleep for short period to flush IPA */
 		usleep_range(IPA_GSI_CHANNEL_STOP_SLEEP_MIN_USEC,
 			IPA_GSI_CHANNEL_STOP_SLEEP_MAX_USEC);
@@ -5581,83 +8021,183 @@ int ipa3_stop_gsi_channel(u32 clnt_hdl)
 	return res;
 }
 
-void ipa3_suspend_apps_pipes(bool suspend)
+static int _ipa_suspend_resume_pipe(enum ipa_client_type client, bool suspend)
 {
-	struct ipa_ep_cfg_ctrl cfg;
-	int ipa_ep_idx;
+	int ipa_ep_idx, coal_ep_idx;
 	struct ipa3_ep_context *ep;
 	int res;
 
-	memset(&cfg, 0, sizeof(cfg));
-	cfg.ipa_ep_suspend = suspend;
+	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_0) {
+		IPAERR("not supported\n");
+		return -EPERM;
+	}
 
-	ipa_ep_idx = ipa3_get_ep_mapping(IPA_CLIENT_APPS_LAN_CONS);
+	ipa_ep_idx = ipa3_get_ep_mapping(client);
 	if (ipa_ep_idx < 0) {
-		IPAERR("IPA client mapping failed\n");
-		ipa_assert();
-		return;
-	}
-	ep = &ipa3_ctx->ep[ipa_ep_idx];
-	if (ep->valid) {
-		IPADBG("%s pipe %d\n", suspend ? "suspend" : "unsuspend",
-			ipa_ep_idx);
-		if (ipa3_ctx->ipa_hw_type >= IPA_HW_v4_0) {
-			if (suspend) {
-				res = __ipa3_stop_gsi_channel(ipa_ep_idx);
-				if (res) {
-					IPAERR("failed to stop LAN channel\n");
-					ipa_assert();
-				}
-			} else {
-				res = gsi_start_channel(ep->gsi_chan_hdl);
-				if (res) {
-					IPAERR("failed to start LAN channel\n");
-					ipa_assert();
-				}
-			}
-		} else {
-			ipa3_cfg_ep_ctrl(ipa_ep_idx, &cfg);
-		}
-		if (suspend)
-			ipa3_gsi_poll_after_suspend(ep);
-		else if (!atomic_read(&ep->sys->curr_polling_state))
-			gsi_config_channel_mode(ep->gsi_chan_hdl,
-				GSI_CHAN_MODE_CALLBACK);
+		IPADBG("client %d not configued\n", client);
+		return 0;
 	}
 
-	ipa_ep_idx = ipa_get_ep_mapping(IPA_CLIENT_APPS_WAN_CONS);
-	/* Considering the case for SSR. */
-	if (ipa_ep_idx == -1) {
-		IPADBG("Invalid client.\n");
-		return;
-	}
 	ep = &ipa3_ctx->ep[ipa_ep_idx];
-	if (ep->valid) {
-		IPADBG("%s pipe %d\n", suspend ? "suspend" : "unsuspend",
-			ipa_ep_idx);
-		if (ipa3_ctx->ipa_hw_type >= IPA_HW_v4_0) {
-			if (suspend) {
-				res = __ipa3_stop_gsi_channel(ipa_ep_idx);
-				if (res) {
-					IPAERR("failed to stop WAN channel\n");
-					ipa_assert();
-				}
-			} else {
-				res = gsi_start_channel(ep->gsi_chan_hdl);
-				if (res) {
-					IPAERR("failed to start WAN channel\n");
-					ipa_assert();
-				}
-			}
-		} else {
-			ipa3_cfg_ep_ctrl(ipa_ep_idx, &cfg);
+	if (!ep->valid)
+		return 0;
+
+	coal_ep_idx = ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS);
+
+	IPADBG("%s pipe %d\n", suspend ? "suspend" : "unsuspend", ipa_ep_idx);
+
+	/*
+	 * Configure the callback mode only one time after starting the channel
+	 * otherwise observing IEOB interrupt received before configure callmode
+	 * second time. It was leading race condition in updating current
+	 * polling state.
+	 */
+
+	if (suspend) {
+		res = __ipa3_stop_gsi_channel(ipa_ep_idx);
+		if (res) {
+			IPAERR("failed to stop LAN channel\n");
+			ipa_assert();
 		}
-		if (suspend)
-			ipa3_gsi_poll_after_suspend(ep);
-		else if (!atomic_read(&ep->sys->curr_polling_state))
+	} else {
+		if (IPA_CLIENT_IS_APPS_PROD(client) ||
+			(client == IPA_CLIENT_APPS_WAN_CONS &&
+			coal_ep_idx != IPA_EP_NOT_ALLOCATED))
+			goto chan_statrt;
+		if (!atomic_read(&ep->sys->curr_polling_state)) {
+			IPADBG("switch ch %ld to callback\n", ep->gsi_chan_hdl);
 			gsi_config_channel_mode(ep->gsi_chan_hdl,
-				GSI_CHAN_MODE_CALLBACK);
+					GSI_CHAN_MODE_CALLBACK);
+		}
+chan_statrt:
+		res = gsi_start_channel(ep->gsi_chan_hdl);
+		if (res) {
+			IPAERR("failed to start LAN channel\n");
+			ipa_assert();
+		}
 	}
+
+	/* Apps prod pipes use common event ring so cannot configure mode*/
+
+	/*
+	 * Skipping to configure mode for default wan pipe,
+	 * as both pipes using commong event ring. if both pipes
+	 * configure same event ring observing race condition in
+	 * updating current polling state.
+	 */
+
+	if (IPA_CLIENT_IS_APPS_PROD(client) ||
+		(client == IPA_CLIENT_APPS_WAN_CONS &&
+			coal_ep_idx != IPA_EP_NOT_ALLOCATED))
+		return 0;
+
+	if (suspend) {
+		IPADBG("switch ch %ld to poll\n", ep->gsi_chan_hdl);
+		gsi_config_channel_mode(ep->gsi_chan_hdl, GSI_CHAN_MODE_POLL);
+		if (!ipa3_gsi_channel_is_quite(ep))
+			return -EAGAIN;
+	}
+	return 0;
+}
+
+void ipa3_force_close_coal(void)
+{
+	struct ipa3_desc desc;
+	int ep_idx;
+
+	ep_idx = ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS);
+	if (ep_idx == IPA_EP_NOT_ALLOCATED || (!ipa3_ctx->ep[ep_idx].valid))
+		return;
+
+	ipa3_init_imm_cmd_desc(&desc, ipa3_ctx->coal_cmd_pyld);
+
+	IPADBG("Sending 1 descriptor for coal force close\n");
+	if (ipa3_send_cmd(1, &desc))
+		IPADBG("ipa3_send_cmd timedout\n");
+}
+
+int ipa3_suspend_apps_pipes(bool suspend)
+{
+	int res;
+
+	if (suspend)
+		ipa3_force_close_coal();
+
+	/* As per HPG first need start/stop coalescing channel
+	 * then default one. Coalescing client number was greater then
+	 * default one so starting the last client.
+	 */
+	res = _ipa_suspend_resume_pipe(IPA_CLIENT_APPS_WAN_COAL_CONS, suspend);
+	if (res == -EAGAIN)
+		goto undo_coal_cons;
+
+	res = _ipa_suspend_resume_pipe(IPA_CLIENT_APPS_WAN_CONS, suspend);
+	if (res == -EAGAIN)
+		goto undo_wan_cons;
+
+	res = _ipa_suspend_resume_pipe(IPA_CLIENT_APPS_LAN_CONS, suspend);
+	if (res == -EAGAIN)
+		goto undo_lan_cons;
+
+	res = _ipa_suspend_resume_pipe(IPA_CLIENT_ODL_DPL_CONS, suspend);
+	if (res == -EAGAIN)
+		goto undo_odl_cons;
+
+	if (suspend) {
+		struct ipahal_reg_tx_wrapper tx;
+		int ep_idx;
+
+		ep_idx = ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS);
+		if (ep_idx == IPA_EP_NOT_ALLOCATED ||
+				(!ipa3_ctx->ep[ep_idx].valid))
+			goto do_prod;
+
+		ipahal_read_reg_fields(IPA_STATE_TX_WRAPPER, &tx);
+		if (tx.coal_slave_open_frame != 0) {
+			IPADBG("COAL frame is open 0x%x\n",
+				tx.coal_slave_open_frame);
+			res = -EAGAIN;
+			goto undo_odl_cons;
+		}
+
+		usleep_range(IPA_TAG_SLEEP_MIN_USEC, IPA_TAG_SLEEP_MAX_USEC);
+
+		res = ipahal_read_reg_n(IPA_SUSPEND_IRQ_INFO_EE_n,
+			ipa3_ctx->ee);
+		if (res) {
+			IPADBG("suspend irq is pending 0x%x\n", res);
+			goto undo_odl_cons;
+		}
+	}
+do_prod:
+	res = _ipa_suspend_resume_pipe(IPA_CLIENT_APPS_LAN_PROD, suspend);
+	if (res == -EAGAIN)
+		goto undo_lan_prod;
+	res = _ipa_suspend_resume_pipe(IPA_CLIENT_APPS_WAN_PROD, suspend);
+	if (res == -EAGAIN)
+		goto undo_wan_prod;
+
+	return 0;
+
+undo_wan_prod:
+	_ipa_suspend_resume_pipe(IPA_CLIENT_APPS_WAN_PROD, !suspend);
+
+undo_lan_prod:
+	_ipa_suspend_resume_pipe(IPA_CLIENT_APPS_LAN_PROD, !suspend);
+
+undo_odl_cons:
+	_ipa_suspend_resume_pipe(IPA_CLIENT_ODL_DPL_CONS, !suspend);
+undo_lan_cons:
+	_ipa_suspend_resume_pipe(IPA_CLIENT_APPS_LAN_CONS, !suspend);
+undo_wan_cons:
+	_ipa_suspend_resume_pipe(IPA_CLIENT_APPS_WAN_COAL_CONS, !suspend);
+	_ipa_suspend_resume_pipe(IPA_CLIENT_APPS_WAN_CONS, !suspend);
+	return res;
+
+undo_coal_cons:
+	_ipa_suspend_resume_pipe(IPA_CLIENT_APPS_WAN_COAL_CONS, !suspend);
+
+	return res;
 }
 
 int ipa3_allocate_dma_task_for_gsi(void)
@@ -5705,6 +8245,39 @@ void ipa3_free_dma_task_for_gsi(void)
 	memset(&ipa3_ctx->dma_task_info, 0, sizeof(ipa3_ctx->dma_task_info));
 }
 
+int ipa3_allocate_coal_close_frame(void)
+{
+	struct ipahal_imm_cmd_register_write reg_write_cmd = { 0 };
+	struct ipahal_reg_valmask valmask;
+	int ep_idx;
+
+	ep_idx = ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_COAL_CONS);
+	if (ep_idx == IPA_EP_NOT_ALLOCATED)
+		return 0;
+	IPADBG("Allocate coal close frame cmd\n");
+	reg_write_cmd.skip_pipeline_clear = false;
+	reg_write_cmd.pipeline_clear_options = IPAHAL_HPS_CLEAR;
+	reg_write_cmd.offset = ipahal_get_reg_ofst(IPA_AGGR_FORCE_CLOSE);
+	ipahal_get_aggr_force_close_valmask(ep_idx, &valmask);
+	reg_write_cmd.value = valmask.val;
+	reg_write_cmd.value_mask = valmask.mask;
+	ipa3_ctx->coal_cmd_pyld =
+		ipahal_construct_imm_cmd(IPA_IMM_CMD_REGISTER_WRITE,
+			&reg_write_cmd, false);
+	if (!ipa3_ctx->coal_cmd_pyld) {
+		IPAERR("fail construct register_write imm cmd\n");
+		ipa_assert();
+		return 0;
+	}
+
+	return 0;
+}
+
+void ipa3_free_coal_close_frame(void)
+{
+	if (ipa3_ctx->coal_cmd_pyld)
+		ipahal_destroy_imm_cmd(ipa3_ctx->coal_cmd_pyld);
+}
 /**
  * ipa3_inject_dma_task_for_gsi()- Send DMA_TASK to IPA for GSI stop channel
  *
@@ -5780,28 +8353,75 @@ static int ipa3_load_single_fw(const struct firmware *firmware,
 	return 0;
 }
 
+struct ipa3_hps_dps_areas_info {
+	u32 dps_abs_addr;
+	u32 dps_sz;
+	u32 hps_abs_addr;
+	u32 hps_sz;
+};
+
+static void ipa3_get_hps_dps_areas_absolute_addr_and_sz(
+	struct ipa3_hps_dps_areas_info *info)
+{
+	u32 dps_area_start;
+	u32 dps_area_end;
+	u32 hps_area_start;
+	u32 hps_area_end;
+
+	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5) {
+		dps_area_start = ipahal_get_reg_ofst(IPA_DPS_SEQUENCER_FIRST);
+		dps_area_end = ipahal_get_reg_ofst(IPA_DPS_SEQUENCER_LAST);
+		hps_area_start = ipahal_get_reg_ofst(IPA_HPS_SEQUENCER_FIRST);
+		hps_area_end = ipahal_get_reg_ofst(IPA_HPS_SEQUENCER_LAST);
+
+		info->dps_abs_addr = ipa3_ctx->ipa_wrapper_base +
+			ipahal_get_reg_base() + dps_area_start;
+		info->hps_abs_addr = ipa3_ctx->ipa_wrapper_base +
+			ipahal_get_reg_base() + hps_area_start;
+	} else {
+		dps_area_start = ipahal_read_reg(IPA_DPS_SEQUENCER_FIRST);
+		dps_area_end = ipahal_read_reg(IPA_DPS_SEQUENCER_LAST);
+		hps_area_start = ipahal_read_reg(IPA_HPS_SEQUENCER_FIRST);
+		hps_area_end = ipahal_read_reg(IPA_HPS_SEQUENCER_LAST);
+
+		info->dps_abs_addr = ipa3_ctx->ipa_wrapper_base +
+			dps_area_start;
+		info->hps_abs_addr = ipa3_ctx->ipa_wrapper_base +
+			hps_area_start;
+	}
+
+	info->dps_sz = dps_area_end - dps_area_start + sizeof(u32);
+	info->hps_sz = hps_area_end - hps_area_start + sizeof(u32);
+
+	IPADBG("dps area: start offset=0x%x end offset=0x%x\n",
+		dps_area_start, dps_area_end);
+	IPADBG("hps area: start offset=0x%x end offset=0x%x\n",
+		hps_area_start, hps_area_end);
+}
+
 /**
  * emulator_load_single_fw() - load firmware into emulator's memory
  *
  * @firmware: Structure which contains the FW data from the user space.
  * @phdr: ELF program header
- * @fw_base: memory location to which firmware should get loaded
- * @offset_from_base: offset to start relative to fw_base
+ * @loc_to_map: physical location to map into virtual space
+ * @size_to_map: the size of memory to map into virtual space
  *
  * Return value: 0 on success, negative otherwise
  */
 static int emulator_load_single_fw(
 	const struct firmware   *firmware,
 	const struct elf32_phdr *phdr,
-	void __iomem            *fw_base,
-	uint32_t                offset_from_base)
+	u32                      loc_to_map,
+	u32                      size_to_map)
 {
 	int index;
 	uint32_t ofb;
 	const uint32_t *elf_data_ptr;
+	void __iomem *fw_base;
 
-	IPADBG("firmware(%pK) phdr(%pK) fw_base(%pK) offset_from_base(0x%x)\n",
-	       firmware, phdr, fw_base, offset_from_base);
+	IPADBG("firmware(%pK) phdr(%pK) loc_to_map(0x%X) size_to_map(%u)\n",
+	       firmware, phdr, loc_to_map, size_to_map);
 
 	if (phdr->p_offset > firmware->size) {
 		IPAERR("Invalid ELF: offset=%u is beyond elf_size=%zu\n",
@@ -5831,8 +8451,20 @@ static int emulator_load_single_fw(
 	       (uint32_t) phdr->p_filesz,
 	       (uint32_t) (phdr->p_filesz/sizeof(uint32_t)));
 
+	fw_base = ioremap(loc_to_map, size_to_map);
+	if (!fw_base) {
+		IPAERR("Failed to map 0x%X for the size of %u\n",
+		       loc_to_map, size_to_map);
+		return -ENOMEM;
+	}
+
+	IPADBG("Physical base(0x%X) mapped to virtual (%pK) with len (%u)\n",
+	       loc_to_map,
+	       fw_base,
+	       size_to_map);
+
 	/* Set the entire region to 0s */
-	ofb = offset_from_base;
+	ofb = 0;
 	for (index = 0; index < phdr->p_memsz/sizeof(uint32_t); index++) {
 		writel_relaxed(0, fw_base + ofb);
 		ofb += sizeof(uint32_t);
@@ -5841,12 +8473,14 @@ static int emulator_load_single_fw(
 	elf_data_ptr = (uint32_t *)(firmware->data + phdr->p_offset);
 
 	/* Write the FW */
-	ofb = offset_from_base;
+	ofb = 0;
 	for (index = 0; index < phdr->p_filesz/sizeof(uint32_t); index++) {
 		writel_relaxed(*elf_data_ptr, fw_base + ofb);
 		elf_data_ptr++;
 		ofb += sizeof(uint32_t);
 	}
+
+	iounmap(fw_base);
 
 	return 0;
 }
@@ -5856,19 +8490,25 @@ static int emulator_load_single_fw(
  *
  * @firmware: Structure which contains the FW data from the user space.
  * @gsi_mem_base: GSI base address
+ * @gsi_ver: GSI Version
  *
  * Return value: 0 on success, negative otherwise
  *
  */
-int ipa3_load_fws(const struct firmware *firmware, phys_addr_t gsi_mem_base)
+int ipa3_load_fws(const struct firmware *firmware, phys_addr_t gsi_mem_base,
+	enum gsi_ver gsi_ver)
 {
 	const struct elf32_hdr *ehdr;
 	const struct elf32_phdr *phdr;
 	unsigned long gsi_iram_ofst;
 	unsigned long gsi_iram_size;
-	phys_addr_t ipa_reg_mem_base;
-	u32 ipa_reg_ofst;
 	int rc;
+	struct ipa3_hps_dps_areas_info dps_hps_info;
+
+	if (gsi_ver == GSI_VER_ERR) {
+		IPAERR("Invalid GSI Version\n");
+		return -EINVAL;
+	}
 
 	if (!gsi_mem_base) {
 		IPAERR("Invalid GSI base address\n");
@@ -5900,7 +8540,8 @@ int ipa3_load_fws(const struct firmware *firmware, phys_addr_t gsi_mem_base)
 	 */
 
 	/* Load GSI FW image */
-	gsi_get_inst_ram_offset_and_size(&gsi_iram_ofst, &gsi_iram_size);
+	gsi_get_inst_ram_offset_and_size(&gsi_iram_ofst, &gsi_iram_size,
+		gsi_ver);
 	if (phdr->p_vaddr != (gsi_mem_base + gsi_iram_ofst)) {
 		IPAERR(
 			"Invalid GSI FW img load addr vaddr=0x%x gsi_mem_base=%pa gsi_iram_ofst=0x%lx\n"
@@ -5917,19 +8558,18 @@ int ipa3_load_fws(const struct firmware *firmware, phys_addr_t gsi_mem_base)
 		return rc;
 
 	phdr++;
-	ipa_reg_mem_base = ipa3_ctx->ipa_wrapper_base + ipahal_get_reg_base();
+	ipa3_get_hps_dps_areas_absolute_addr_and_sz(&dps_hps_info);
 
 	/* Load IPA DPS FW image */
-	ipa_reg_ofst = ipahal_get_reg_ofst(IPA_DPS_SEQUENCER_FIRST);
-	if (phdr->p_vaddr != (ipa_reg_mem_base + ipa_reg_ofst)) {
+	if (phdr->p_vaddr != dps_hps_info.dps_abs_addr) {
 		IPAERR(
-			"Invalid IPA DPS img load addr vaddr=0x%x ipa_reg_mem_base=%pa ipa_reg_ofst=%u\n"
-			, phdr->p_vaddr, &ipa_reg_mem_base, ipa_reg_ofst);
+			"Invalid IPA DPS img load addr vaddr=0x%x dps_abs_addr=0x%x\n"
+			, phdr->p_vaddr, dps_hps_info.dps_abs_addr);
 		return -EINVAL;
 	}
-	if (phdr->p_memsz > ipahal_get_dps_img_mem_size()) {
-		IPAERR("Invalid IPA DPS img size memsz=%d dps_mem_size=%u\n",
-			phdr->p_memsz, ipahal_get_dps_img_mem_size());
+	if (phdr->p_memsz > dps_hps_info.dps_sz) {
+		IPAERR("Invalid IPA DPS img size memsz=%d dps_area_size=%u\n",
+			phdr->p_memsz, dps_hps_info.dps_sz);
 		return -EINVAL;
 	}
 	rc = ipa3_load_single_fw(firmware, phdr);
@@ -5939,16 +8579,15 @@ int ipa3_load_fws(const struct firmware *firmware, phys_addr_t gsi_mem_base)
 	phdr++;
 
 	/* Load IPA HPS FW image */
-	ipa_reg_ofst = ipahal_get_reg_ofst(IPA_HPS_SEQUENCER_FIRST);
-	if (phdr->p_vaddr != (ipa_reg_mem_base + ipa_reg_ofst)) {
+	if (phdr->p_vaddr != dps_hps_info.hps_abs_addr) {
 		IPAERR(
-			"Invalid IPA HPS img load addr vaddr=0x%x ipa_reg_mem_base=%pa ipa_reg_ofst=%u\n"
-			, phdr->p_vaddr, &ipa_reg_mem_base, ipa_reg_ofst);
+			"Invalid IPA HPS img load addr vaddr=0x%x hps_abs_addr=0x%x\n"
+			, phdr->p_vaddr, dps_hps_info.hps_abs_addr);
 		return -EINVAL;
 	}
-	if (phdr->p_memsz > ipahal_get_hps_img_mem_size()) {
-		IPAERR("Invalid IPA HPS img size memsz=%d dps_mem_size=%u\n",
-			phdr->p_memsz, ipahal_get_hps_img_mem_size());
+	if (phdr->p_memsz > dps_hps_info.hps_sz) {
+		IPAERR("Invalid IPA HPS img size memsz=%d hps_area_size=%u\n",
+			phdr->p_memsz, dps_hps_info.hps_sz);
 		return -EINVAL;
 	}
 	rc = ipa3_load_single_fw(firmware, phdr);
@@ -5961,10 +8600,9 @@ int ipa3_load_fws(const struct firmware *firmware, phys_addr_t gsi_mem_base)
 
 /*
  * The following needed for the EMULATION system. On a non-emulation
- * system (ie. the real UE), this is functionality is done in the
+ * system (ie. the real UE), this functionality is done in the
  * TZ...
  */
-#define IPA_SPARE_REG_1_VAL (0xC0000805)
 
 static void ipa_gsi_setup_reg(void)
 {
@@ -5975,16 +8613,6 @@ static void ipa_gsi_setup_reg(void)
 
 	IPADBG("Setting up registers in preparation for firmware download\n");
 
-	/* enable GSI interface */
-	ipahal_write_reg(IPA_GSI_CONF, 1);
-
-	/*
-	 * Before configuring the FIFOs need to unset bit 30 in the
-	 * spare register
-	 */
-	ipahal_write_reg(IPA_SPARE_REG_1,
-			 (IPA_SPARE_REG_1_VAL & (~(1 << 30))));
-
 	/* setup IPA_ENDP_GSI_CFG_TLV_n reg */
 	start = 0;
 	ipa3_ctx->ipa_num_pipes = ipa3_get_num_pipes();
@@ -5993,25 +8621,39 @@ static void ipa_gsi_setup_reg(void)
 	for (i = 0; i < ipa3_ctx->ipa_num_pipes; i++) {
 		type = ipa3_get_client_by_pipe(i);
 		gsi_ep_info_cfg = ipa3_get_gsi_ep_info(type);
-		IPADBG("for ep %d client is %d\n", i, type);
+		IPAERR("for ep %d client is %d gsi_ep_info_cfg=%pK\n",
+			i, type, gsi_ep_info_cfg);
 		if (!gsi_ep_info_cfg)
 			continue;
-		IPADBG("Config is true");
-		reg_val = (gsi_ep_info_cfg->ipa_if_tlv << 16) + start;
+		reg_val = ((gsi_ep_info_cfg->ipa_if_tlv << 16) & 0x00FF0000);
+		reg_val += (start & 0xFFFF);
 		start += gsi_ep_info_cfg->ipa_if_tlv;
 		ipahal_write_reg_n(IPA_ENDP_GSI_CFG_TLV_n, i, reg_val);
 	}
 
 	/* setup IPA_ENDP_GSI_CFG_AOS_n reg */
-	start = 0;
 	for (i = 0; i < ipa3_ctx->ipa_num_pipes; i++) {
 		type = ipa3_get_client_by_pipe(i);
 		gsi_ep_info_cfg = ipa3_get_gsi_ep_info(type);
 		if (!gsi_ep_info_cfg)
 			continue;
-		reg_val = (gsi_ep_info_cfg->ipa_if_aos << 16) + start;
+		reg_val = ((gsi_ep_info_cfg->ipa_if_aos << 16) & 0x00FF0000);
+		reg_val += (start & 0xFFFF);
 		start += gsi_ep_info_cfg->ipa_if_aos;
 		ipahal_write_reg_n(IPA_ENDP_GSI_CFG_AOS_n, i, reg_val);
+	}
+
+	/* setup GSI_MAP_EE_n_CH_k_VP_TABLE reg */
+	for (i = 0; i < ipa3_ctx->ipa_num_pipes; i++) {
+		type = ipa3_get_client_by_pipe(i);
+		gsi_ep_info_cfg = ipa3_get_gsi_ep_info(type);
+		if (!gsi_ep_info_cfg)
+			continue;
+		reg_val = i & 0x1F;
+		gsi_map_virtual_ch_to_per_ep(
+			gsi_ep_info_cfg->ee,
+			gsi_ep_info_cfg->ipa_gsi_chan_num,
+			reg_val);
 	}
 
 	/* setup IPA_ENDP_GSI_CFG1_n reg */
@@ -6020,53 +8662,33 @@ static void ipa_gsi_setup_reg(void)
 		gsi_ep_info_cfg = ipa3_get_gsi_ep_info(type);
 		if (!gsi_ep_info_cfg)
 			continue;
-		reg_val = (1 << 16) +
-			((u32)gsi_ep_info_cfg->ipa_gsi_chan_num << 8) +
-			gsi_ep_info_cfg->ee;
+		reg_val = (1 << 31) + (1 << 16);
+		ipahal_write_reg_n(IPA_ENDP_GSI_CFG1_n, i, 1<<16);
 		ipahal_write_reg_n(IPA_ENDP_GSI_CFG1_n, i, reg_val);
+		ipahal_write_reg_n(IPA_ENDP_GSI_CFG1_n, i, 1<<16);
 	}
-
-	/*
-	 * Setup IPA_ENDP_GSI_CFG2_n reg: this register must be setup
-	 * as last one
-	 */
-	for (i = 0; i < ipa3_ctx->ipa_num_pipes; i++) {
-		type = ipa3_get_client_by_pipe(i);
-		gsi_ep_info_cfg = ipa3_get_gsi_ep_info(type);
-		if (!gsi_ep_info_cfg)
-			continue;
-		reg_val = 1 << 31;
-		ipahal_write_reg_n(IPA_ENDP_GSI_CFG2_n, i, reg_val);
-		reg_val = 0;
-		ipahal_write_reg_n(IPA_ENDP_GSI_CFG2_n, i, reg_val);
-	}
-
-	/*
-	 * After configuring the FIFOs need to set bit 30 in the spare
-	 * register
-	 */
-	ipahal_write_reg(IPA_SPARE_REG_1,
-			 (IPA_SPARE_REG_1_VAL | (1 << 30)));
 }
 
 /**
  * emulator_load_fws() - Load the IPAv3 FWs into IPA&GSI SRAM.
  *
  * @firmware: Structure which contains the FW data from the user space.
+ * @transport_mem_base: Where to load
+ * @transport_mem_size: Space available to load into
+ * @gsi_ver: Version of the gsi
  *
  * Return value: 0 on success, negative otherwise
- *
  */
 int emulator_load_fws(
 	const struct firmware *firmware,
 	u32 transport_mem_base,
-	u32 transport_mem_size)
+	u32 transport_mem_size,
+	enum gsi_ver gsi_ver)
 {
 	const struct elf32_hdr *ehdr;
 	const struct elf32_phdr *phdr;
-	void __iomem *gsi_base;
-	uint32_t hps_seq_offs, dps_seq_offs;
-	unsigned long gsi_offset;
+	unsigned long gsi_offset, gsi_ram_size;
+	struct ipa3_hps_dps_areas_info dps_hps_info;
 	int rc;
 
 	IPADBG("Loading firmware(%pK)\n", firmware);
@@ -6093,8 +8715,7 @@ int emulator_load_fws(
 		return -EINVAL;
 	}
 
-	hps_seq_offs = ipahal_get_reg_ofst(IPA_HPS_SEQUENCER_FIRST);
-	dps_seq_offs = ipahal_get_reg_ofst(IPA_DPS_SEQUENCER_FIRST);
+	ipa3_get_hps_dps_areas_absolute_addr_and_sz(&dps_hps_info);
 
 	/*
 	 * Each ELF program header represents a FW image and contains:
@@ -6118,14 +8739,15 @@ int emulator_load_fws(
 	/*
 	 * Attempt to load IPA HPS FW image
 	 */
-	if (phdr->p_memsz > ipahal_get_hps_img_mem_size()) {
-		IPAERR("Invalid IPA HPS img size memsz=%d dps_mem_size=%u\n",
-		       phdr->p_memsz, ipahal_get_hps_img_mem_size());
+	if (phdr->p_memsz > dps_hps_info.hps_sz) {
+		IPAERR("Invalid IPA HPS img size memsz=%d hps_size=%u\n",
+		       phdr->p_memsz, dps_hps_info.hps_sz);
 		return -EINVAL;
 	}
 	IPADBG("Loading HPS FW\n");
 	rc = emulator_load_single_fw(
-	    firmware, phdr, ipa3_ctx->mmio, hps_seq_offs);
+		firmware, phdr,
+		dps_hps_info.hps_abs_addr, dps_hps_info.hps_sz);
 	if (rc)
 		return rc;
 	IPADBG("Loading HPS FW complete\n");
@@ -6135,14 +8757,15 @@ int emulator_load_fws(
 	/*
 	 * Attempt to load IPA DPS FW image
 	 */
-	if (phdr->p_memsz > ipahal_get_dps_img_mem_size()) {
-		IPAERR("Invalid IPA DPS img size memsz=%d dps_mem_size=%u\n",
-		       phdr->p_memsz, ipahal_get_dps_img_mem_size());
+	if (phdr->p_memsz > dps_hps_info.dps_sz) {
+		IPAERR("Invalid IPA DPS img size memsz=%d dps_size=%u\n",
+		       phdr->p_memsz, dps_hps_info.dps_sz);
 		return -EINVAL;
 	}
 	IPADBG("Loading DPS FW\n");
 	rc = emulator_load_single_fw(
-	    firmware, phdr, ipa3_ctx->mmio, dps_seq_offs);
+		firmware, phdr,
+		dps_hps_info.dps_abs_addr, dps_hps_info.dps_sz);
 	if (rc)
 		return rc;
 	IPADBG("Loading DPS FW complete\n");
@@ -6153,37 +8776,23 @@ int emulator_load_fws(
 	 */
 	ipa_gsi_setup_reg();
 
-	/*
-	 * Map to the GSI base...
-	 */
-	gsi_base = ioremap_nocache(transport_mem_base, transport_mem_size);
-
-	IPADBG("GSI base(0x%x) mapped to (%pK) with len (0x%x)\n",
-	       transport_mem_base,
-	       gsi_base,
-	       transport_mem_size);
-
-	if (!gsi_base) {
-		IPAERR("ioremap_nocache failed\n");
-		return -EFAULT;
-	}
-
 	--phdr;
+
+	gsi_get_inst_ram_offset_and_size(&gsi_offset, &gsi_ram_size, gsi_ver);
 
 	/*
 	 * Attempt to load GSI FW image
 	 */
-	if (phdr->p_memsz > transport_mem_size) {
+	if (phdr->p_memsz > gsi_ram_size) {
 		IPAERR(
-		    "Invalid GSI FW img size memsz=%d transport_mem_size=%u\n",
-		    phdr->p_memsz, transport_mem_size);
+		    "Invalid GSI FW img size memsz=%d gsi_ram_size=%lu\n",
+		    phdr->p_memsz, gsi_ram_size);
 		return -EINVAL;
 	}
 	IPADBG("Loading GSI FW\n");
-	gsi_get_inst_ram_offset_and_size(&gsi_offset, NULL);
 	rc = emulator_load_single_fw(
-	    firmware, phdr, gsi_base, (uint32_t) gsi_offset);
-	iounmap(gsi_base);
+		firmware, phdr,
+		transport_mem_base + (u32) gsi_offset, gsi_ram_size);
 	if (rc)
 		return rc;
 	IPADBG("Loading GSI FW complete\n");
@@ -6206,9 +8815,12 @@ bool ipa3_is_msm_device(void)
 	case IPA_HW_v3_0:
 	case IPA_HW_v3_5:
 	case IPA_HW_v4_0:
+	case IPA_HW_v4_5:
 		return false;
 	case IPA_HW_v3_1:
 	case IPA_HW_v3_5_1:
+	case IPA_HW_v4_1:
+	case IPA_HW_v4_2:
 		return true;
 	default:
 		IPAERR("unknown HW type %d\n", ipa3_ctx->ipa_hw_type);
@@ -6216,6 +8828,68 @@ bool ipa3_is_msm_device(void)
 	}
 
 	return false;
+}
+
+void ipa3_read_mailbox_17(enum uc_state state)
+{
+	u32 val = 0;
+
+	ipa3_ctx->gsi_chk_intset_value = gsi_chk_intset_value();
+
+	val = ipahal_read_reg_mn(IPA_UC_MAILBOX_m_n,
+			0,
+			17);
+		IPADBG_LOW("GSI INTSET %d\n mailbox-17: 0x%x\n",
+			ipa3_ctx->gsi_chk_intset_value,
+			val);
+	switch (state)	{
+	case IPA_PC_SAVE_CONTEXT_SAVE_ENTERED:
+		if (val != PC_SAVE_CONTEXT_SAVE_ENTERED) {
+			IPADBG_LOW("expected 0x%x, value: 0x%x\n",
+				PC_SAVE_CONTEXT_SAVE_ENTERED,
+				val);
+		}
+		break;
+	case IPA_PC_SAVE_CONTEXT_STATUS_SUCCESS:
+		if (val != PC_SAVE_CONTEXT_STATUS_SUCCESS) {
+			IPADBG_LOW("expected 0x%x, value: 0x%x\n",
+				PC_SAVE_CONTEXT_STATUS_SUCCESS,
+				val);
+		}
+		break;
+	case IPA_PC_RESTORE_CONTEXT_ENTERED:
+		if (val != PC_RESTORE_CONTEXT_ENTERED) {
+			IPADBG_LOW("expected 0x%x, value: 0x%x\n",
+				PC_RESTORE_CONTEXT_ENTERED,
+				val);
+		}
+		break;
+	case IPA_PC_RESTORE_CONTEXT_STATUS_SUCCESS:
+			ipa3_ctx->uc_mailbox17_chk++;
+		if (val != PC_RESTORE_CONTEXT_STATUS_SUCCESS) {
+			ipa3_ctx->uc_mailbox17_mismatch++;
+			IPADBG_LOW("expected 0x%x, value: 0x%x\n",
+				PC_RESTORE_CONTEXT_STATUS_SUCCESS,
+				val);
+		}
+		break;
+	default:
+		break;
+	}
+}
+
+/**
+ * ipa3_is_apq() - indicate apq platform or not
+ *
+ * Return value: true if apq, false if not apq platform
+ *
+ */
+bool ipa3_is_apq(void)
+{
+	if (ipa3_ctx->platform_type == IPA_PLAT_TYPE_APQ)
+		return true;
+	else
+		return false;
 }
 
 /**
@@ -6277,22 +8951,6 @@ void ipa3_enable_dcd(void)
 			&idle_indication_cfg);
 }
 
-bool ipa3_check_idr_if_freed(void *ptr)
-{
-	int id;
-	void *iter_ptr;
-
-	spin_lock(&ipa3_ctx->idr_lock);
-	idr_for_each_entry(&ipa3_ctx->ipa_idr, iter_ptr, id) {
-		if ((uintptr_t)ptr == (uintptr_t)iter_ptr) {
-			spin_unlock(&ipa3_ctx->idr_lock);
-			return false;
-		}
-	}
-	spin_unlock(&ipa3_ctx->idr_lock);
-	return true;
-}
-
 void ipa3_init_imm_cmd_desc(struct ipa3_desc *desc,
 	struct ipahal_imm_cmd_pyld *cmd_pyld)
 {
@@ -6301,4 +8959,842 @@ void ipa3_init_imm_cmd_desc(struct ipa3_desc *desc,
 	desc->pyld = cmd_pyld->data;
 	desc->len = cmd_pyld->len;
 	desc->type = IPA_IMM_CMD_DESC;
+}
+
+u32 ipa3_get_r_rev_version(void)
+{
+	static u32 r_rev;
+
+	if (r_rev != 0)
+		return r_rev;
+
+	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
+	r_rev = ipahal_read_reg(IPA_VERSION);
+	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
+
+	return r_rev;
+}
+
+/**
+ * ipa3_get_gsi_stats() - Query gsi stats from uc
+ * @prot_id: IPA_HW_FEATURE_OFFLOAD protocol id
+ * @stats:	[inout] stats blob from client populated by driver
+ *
+ * @note Cannot be called from atomic context
+ *
+ */
+void ipa3_get_gsi_stats(int prot_id,
+	struct ipa_uc_dbg_ring_stats *stats)
+{
+	switch (prot_id) {
+	case IPA_HW_PROTOCOL_AQC:
+		stats->num_ch = MAX_AQC_CHANNELS;
+		ipa3_get_aqc_gsi_stats(stats);
+		break;
+	case IPA_HW_PROTOCOL_11ad:
+		break;
+	case IPA_HW_PROTOCOL_WDI:
+		stats->num_ch = MAX_WDI2_CHANNELS;
+		ipa3_get_wdi_gsi_stats(stats);
+		break;
+	case IPA_HW_PROTOCOL_WDI3:
+		stats->num_ch = MAX_WDI3_CHANNELS;
+		ipa3_get_wdi3_gsi_stats(stats);
+		break;
+	case IPA_HW_PROTOCOL_ETH:
+		break;
+	case IPA_HW_PROTOCOL_MHIP:
+		stats->num_ch = MAX_MHIP_CHANNELS;
+		ipa3_get_mhip_gsi_stats(stats);
+		break;
+	case IPA_HW_PROTOCOL_USB:
+		stats->num_ch = MAX_USB_CHANNELS;
+		ipa3_get_usb_gsi_stats(stats);
+		break;
+	default:
+		IPAERR("unsupported HW feature %d\n", prot_id);
+	}
+}
+
+/**
+ * ipa3_get_prot_id() - Query gsi protocol id
+ * @client: ipa_client_type
+ *
+ * return the prot_id based on the client type,
+ * return -EINVAL when no such mapping exists.
+ */
+int ipa3_get_prot_id(enum ipa_client_type client)
+{
+	int prot_id = -EINVAL;
+
+	switch (client) {
+	case IPA_CLIENT_AQC_ETHERNET_CONS:
+	case IPA_CLIENT_AQC_ETHERNET_PROD:
+		prot_id = IPA_HW_PROTOCOL_AQC;
+		break;
+	case IPA_CLIENT_MHI_PRIME_TETH_PROD:
+	case IPA_CLIENT_MHI_PRIME_TETH_CONS:
+	case IPA_CLIENT_MHI_PRIME_RMNET_PROD:
+	case IPA_CLIENT_MHI_PRIME_RMNET_CONS:
+		prot_id = IPA_HW_PROTOCOL_MHIP;
+		break;
+	case IPA_CLIENT_WLAN1_PROD:
+	case IPA_CLIENT_WLAN1_CONS:
+		prot_id = IPA_HW_PROTOCOL_WDI;
+		break;
+	case IPA_CLIENT_WLAN2_PROD:
+	case IPA_CLIENT_WLAN2_CONS:
+		prot_id = IPA_HW_PROTOCOL_WDI3;
+		break;
+	case IPA_CLIENT_USB_PROD:
+	case IPA_CLIENT_USB_CONS:
+		prot_id = IPA_HW_PROTOCOL_USB;
+		break;
+	case IPA_CLIENT_ETHERNET2_PROD:
+	case IPA_CLIENT_ETHERNET2_CONS:
+	case IPA_CLIENT_ETHERNET_PROD:
+	case IPA_CLIENT_ETHERNET_CONS:
+		prot_id = IPA_HW_PROTOCOL_ETH;
+		break;
+	case IPA_CLIENT_WIGIG_PROD:
+	case IPA_CLIENT_WIGIG1_CONS:
+	case IPA_CLIENT_WIGIG2_CONS:
+	case IPA_CLIENT_WIGIG3_CONS:
+	case IPA_CLIENT_WIGIG4_CONS:
+		prot_id = IPA_HW_PROTOCOL_11ad;
+		break;
+	default:
+		IPAERR("unknown prot_id for client %d\n",
+			client);
+	}
+
+	return prot_id;
+}
+
+int ipa3_app_clk_vote(
+	enum ipa_app_clock_vote_type vote_type)
+{
+	const char *str_ptr = "APP_VOTE";
+	int ret = 0;
+
+	IPADBG("In\n");
+
+	mutex_lock(&ipa3_ctx->app_clock_vote.mutex);
+
+	switch (vote_type) {
+	case IPA_APP_CLK_VOTE:
+		if ((ipa3_ctx->app_clock_vote.cnt + 1) <= IPA_APP_VOTE_MAX) {
+			ipa3_ctx->app_clock_vote.cnt++;
+			IPA_ACTIVE_CLIENTS_INC_SPECIAL(str_ptr);
+		} else {
+			IPAERR_RL("App vote count max hit\n");
+			ret = -EPERM;
+			break;
+		}
+		break;
+	case IPA_APP_CLK_DEVOTE:
+		if (ipa3_ctx->app_clock_vote.cnt) {
+			ipa3_ctx->app_clock_vote.cnt--;
+			IPA_ACTIVE_CLIENTS_DEC_SPECIAL(str_ptr);
+		}
+		break;
+	case IPA_APP_CLK_RESET_VOTE:
+		while (ipa3_ctx->app_clock_vote.cnt > 0) {
+			IPA_ACTIVE_CLIENTS_DEC_SPECIAL(str_ptr);
+			ipa3_ctx->app_clock_vote.cnt--;
+		}
+		break;
+	default:
+		IPAERR_RL("Unknown vote_type(%u)\n", vote_type);
+		ret = -EPERM;
+		break;
+	}
+
+	mutex_unlock(&ipa3_ctx->app_clock_vote.mutex);
+
+	IPADBG("Out\n");
+
+	return ret;
+}
+
+/**
+ * ipa3_setup_uc_act_tbl() - IPA setup uc_act_tbl
+ *
+ * Returns:	0 on success, negative on failure
+ *
+ * Note:	Should not be called from atomic context
+ */
+int ipa3_setup_uc_act_tbl(void)
+{
+	int res = 0;
+	struct ipa_mem_buffer *tbl;
+	struct ipahal_reg_nat_uc_external_cfg nat_ex_cfg;
+	struct ipahal_reg_nat_uc_shared_cfg nat_share_cfg;
+	struct ipahal_reg_conn_track_uc_external_cfg ct_ex_cfg;
+	struct ipahal_reg_conn_track_uc_shared_cfg ct_share_cfg;
+
+	/* IPA version check */
+	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5) {
+		IPAERR("Not support!\n");
+		return -EPERM;
+	}
+
+	if (ipa3_ctx->uc_act_tbl_valid) {
+		IPAERR(" already allocate uC act tbl\n");
+		return -EEXIST;
+	}
+
+	tbl = &ipa3_ctx->uc_act_tbl;
+	/* Allocate uc act tbl */
+	tbl->size = sizeof(struct ipa_socksv5_uc_tmpl) * IPA_UC_ACT_TBL_SIZE;
+	tbl->base = dma_zalloc_coherent(ipa3_ctx->pdev, tbl->size,
+		&tbl->phys_base, GFP_KERNEL);
+	if (tbl->base == NULL)
+		return -ENOMEM;
+
+	ipa3_ctx->uc_act_tbl_valid = true;
+	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
+
+	/* LSB 32 bits*/
+	nat_ex_cfg.nat_uc_external_table_addr_lsb =
+		(u32) (tbl->phys_base & 0xFFFFFFFF);
+	ipahal_write_reg_fields(IPA_NAT_UC_EXTERNAL_CFG, &nat_ex_cfg);
+	/* MSB 16 bits */
+	nat_share_cfg.nat_uc_external_table_addr_msb =
+		(u16) (((tbl->phys_base & 0xFFFFFFFF00000000) >> 32) & 0xFFFF);
+	ipahal_write_reg_fields(IPA_NAT_UC_SHARED_CFG, &nat_share_cfg);
+
+	/* LSB 32 bits*/
+	ct_ex_cfg.conn_track_uc_external_table_addr_lsb =
+		(u32) (tbl->phys_base & 0xFFFFFFFF);
+
+	ipahal_write_reg_fields(IPA_CONN_TRACK_UC_EXTERNAL_CFG, &ct_ex_cfg);
+	/* MSB 16 bits */
+	ct_share_cfg.conn_track_uc_external_table_addr_msb =
+		(u16) (((tbl->phys_base & 0xFFFFFFFF00000000) >> 32) & 0xFFFF);
+	ipahal_write_reg_fields(IPA_CONN_TRACK_UC_SHARED_CFG, &ct_share_cfg);
+
+
+	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
+	return res;
+}
+
+static inline bool is_free_socksv5(struct ipa_socksv5_uc_tmpl *socksv5_entry)
+{
+	if ((!socksv5_entry->cmd_id) ||
+		(socksv5_entry->cmd_id == IPA_SOCKsv5_ADD_COM_ID &&
+		!(socksv5_entry->ipa_sockv5_mask & IPA_SOCKSv5_ENTRY_VALID)))
+		return true;
+	return false;
+}
+
+static int ipa3_get_free_uc_act_entry(void)
+{
+	struct ipa_socksv5_uc_tmpl *entry;
+	int orig_index = ipa3_ctx->uc_act_tbl_next_index;
+	int free_index = -1;
+
+	IPADBG("\n");
+	/* find a free spot*/
+	do {
+		entry = ipa3_ctx->uc_act_tbl.base +
+			ipa3_ctx->uc_act_tbl_next_index
+			* sizeof(struct ipa_socksv5_uc_tmpl);
+
+		/* check if entry is free */
+		if (is_free_socksv5(entry)) {
+			free_index = ipa3_ctx->uc_act_tbl_next_index;
+			IPADBG("found free index at %d\n", free_index);
+			break;
+		}
+
+		ipa3_ctx->uc_act_tbl_next_index++;
+		ipa3_ctx->uc_act_tbl_next_index %=
+			IPA_UC_ACT_TBL_SIZE;
+	} while (orig_index != ipa3_ctx->uc_act_tbl_next_index);
+	IPADBG("exit free_index %d\n", free_index);
+	return free_index;
+}
+
+int ipa3_add_ipv6_nat_uc_activation_entry(
+	struct ipa_ioc_ipv6_nat_uc_act_entry *entry)
+{
+	int res = 0;
+	int index;
+	struct ipa_ipv6_nat_uc_tmpl *uc_entry;
+
+	/* IPA version check */
+	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5) {
+		IPAERR("Not support !\n");
+		return -EPERM;
+	}
+
+	if (!ipa3_ctx->uc_act_tbl_valid) {
+		IPAERR("uC act tbl wasn't allocated\n");
+		return -ENOENT;
+	}
+
+	if (!entry) {
+		IPAERR("Null entry\n");
+		return -EIO;
+	}
+	if (!entry->private_address_lsb || !entry->private_address_msb
+		|| !entry->public_address_lsb || !entry->public_address_msb
+		|| !entry->private_port || !entry->public_port) {
+		IPAERR("0 param 0x%llX 0x%llX 0x%llX 0x%llX %d %d\n",
+			entry->private_address_lsb, entry->private_address_msb,
+			entry->public_address_lsb, entry->public_address_msb,
+			entry->private_port, entry->public_port);
+		return -EFAULT;
+	}
+
+	mutex_lock(&ipa3_ctx->act_tbl_lock);
+	/* check the left # of entries */
+	if (ipa3_ctx->uc_act_tbl_total
+		>= IPA_UC_ACT_TBL_SIZE) {
+		IPAERR("uc act tbl is full!\n");
+		res = -EFAULT;
+		goto error;
+	}
+
+	index = ipa3_get_free_uc_act_entry();
+
+	uc_entry = (struct ipa_ipv6_nat_uc_tmpl *)(ipa3_ctx->uc_act_tbl.base +
+		index * sizeof(struct ipa_ipv6_nat_uc_tmpl));
+
+	uc_entry->private_address_lsb = entry->private_address_lsb;
+	uc_entry->private_address_msb = entry->private_address_msb;
+	uc_entry->public_address_lsb = entry->public_address_lsb;
+	uc_entry->public_address_msb = entry->public_address_msb;
+	uc_entry->private_port = entry->private_port;
+	uc_entry->public_port = entry->public_port;
+	uc_entry->cmd_id = IPA_IPv6_NAT_COM_ID;
+
+	/* set output index */
+	entry->index = (uint16_t)index;
+
+	ipa3_ctx->uc_act_tbl_total++;
+	ipa3_ctx->uc_act_tbl_ipv6_nat_total++;
+
+	if (ipa3_ctx->uc_act_tbl_total < IPA_UC_ACT_TBL_SIZE) {
+		/*
+		 * find next free spot, this function shall update
+		 * uc_act_tbl_next_index
+		 */
+		index = ipa3_get_free_uc_act_entry();
+
+		if (index < 0) {
+			/* set to max tbl size to debug */
+			IPAERR("can't find available spot!\n");
+			ipa3_ctx->uc_act_tbl_total = IPA_UC_ACT_TBL_SIZE;
+			res = -EFAULT;
+		}
+	}
+error:
+	mutex_unlock(&ipa3_ctx->act_tbl_lock);
+	return res;
+}
+
+int ipa3_del_uc_act_entry(uint16_t index)
+{
+	struct ipa_ipv6_nat_uc_tmpl *uc_entry;
+	uint16_t cmd_id;
+
+	/* IPA version check */
+	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5) {
+		IPAERR_RL("Not support !\n");
+		return -EPERM;
+	}
+
+	if (!ipa3_ctx->uc_act_tbl_valid) {
+		IPAERR_RL("uC act tbl haven't allocated\n");
+		return -ENOENT;
+	}
+
+	if (index > IPA_UC_ACT_TBL_SIZE || index < 0) {
+		IPAERR_RL("invalid index!\n");
+		return -EINVAL;
+	}
+
+	if (!ipa3_ctx->uc_act_tbl_total) {
+		IPAERR_RL(
+			"invalid handle, no uc activation entries in table (total %d)\n"
+			, ipa3_ctx->uc_act_tbl_total);
+		return -EINVAL;
+	}
+
+	uc_entry = (struct ipa_ipv6_nat_uc_tmpl *)(ipa3_ctx->uc_act_tbl.base +
+		index * sizeof(struct ipa_ipv6_nat_uc_tmpl));
+
+	mutex_lock(&ipa3_ctx->act_tbl_lock);
+	cmd_id = uc_entry->cmd_id;
+	mutex_unlock(&ipa3_ctx->act_tbl_lock);
+
+	if (cmd_id == IPA_IPv6_NAT_COM_ID)
+		return ipa3_del_ipv6_nat_uc_activation_entry(index);
+	else
+		return ipa3_del_socksv5_conn(index);
+}
+
+int ipa3_del_ipv6_nat_uc_activation_entry(uint16_t index)
+{
+	struct ipa_ipv6_nat_uc_tmpl *uc_entry;
+	int res = 0;
+
+	/* IPA version check */
+	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5) {
+		IPAERR_RL("Not support !\n");
+		return -EPERM;
+	}
+
+	if (!ipa3_ctx->uc_act_tbl_valid) {
+		IPAERR_RL("uC act tbl haven't allocated\n");
+		return -ENOENT;
+	}
+
+	if (index > IPA_UC_ACT_TBL_SIZE || index < 0) {
+		IPAERR_RL("invalid index!\n");
+		return -EINVAL;
+	}
+
+	if (!ipa3_ctx->uc_act_tbl_ipv6_nat_total) {
+		IPAERR_RL(
+			"invalid handle, no IPv6 NAT entries in table (total %d)\n"
+		, ipa3_ctx->uc_act_tbl_total);
+		return -EINVAL;
+	}
+
+	uc_entry = (struct ipa_ipv6_nat_uc_tmpl *)(ipa3_ctx->uc_act_tbl.base +
+		index * sizeof(struct ipa_ipv6_nat_uc_tmpl));
+
+	mutex_lock(&ipa3_ctx->act_tbl_lock);
+	if (uc_entry->cmd_id != IPA_IPv6_NAT_COM_ID) {
+		IPAERR_RL("entry %d wrong cmd id %d\n", uc_entry->cmd_id);
+		res = -EFAULT;
+		goto error;
+	}
+	uc_entry->cmd_id = 0;
+	ipa3_ctx->uc_act_tbl_total--;
+	ipa3_ctx->uc_act_tbl_ipv6_nat_total--;
+
+	IPADBG("free entry %d, nat total %d, left total %d\n",
+		index,
+		ipa3_ctx->uc_act_tbl_ipv6_nat_total,
+		ipa3_ctx->uc_act_tbl_total);
+error:
+	mutex_unlock(&ipa3_ctx->act_tbl_lock);
+	return res;
+}
+
+static void ipa3_socksv5_msg_free_cb(void *buff, u32 len, u32 type)
+{
+	if (!buff) {
+		IPAERR("Null buffer\n");
+		return;
+	}
+
+	if (type != IPA_SOCKV5_ADD &&
+	    type != IPA_SOCKV5_DEL) {
+		IPAERR("Wrong type given. buff %pK type %d\n", buff, type);
+		kfree(buff);
+		return;
+	}
+
+	kfree(buff);
+}
+
+static int ipa3_get_free_socksv5_entry(void)
+{
+	struct ipa_socksv5_uc_tmpl *first;
+	struct ipa_socksv5_uc_tmpl *next;
+	int orig_index = ipa3_ctx->uc_act_tbl_next_index;
+	int free_index = -1;
+
+	IPADBG("\n");
+	/* find a free spot with two contiguous entries*/
+	do {
+		first = ipa3_ctx->uc_act_tbl.base +
+			ipa3_ctx->uc_act_tbl_next_index
+			* sizeof(struct ipa_socksv5_uc_tmpl);
+		next = ipa3_ctx->uc_act_tbl.base +
+			(ipa3_ctx->uc_act_tbl_next_index + 1)
+			* sizeof(struct ipa_socksv5_uc_tmpl);
+
+		/* check if first entry and next entry are free */
+		if (is_free_socksv5(first) && is_free_socksv5(next)) {
+			free_index = ipa3_ctx->uc_act_tbl_next_index;
+			IPADBG("found free index at %d\n", free_index);
+			break;
+		}
+
+		ipa3_ctx->uc_act_tbl_next_index += 2;
+		ipa3_ctx->uc_act_tbl_next_index %=
+			IPA_UC_ACT_TBL_SIZE;
+	} while (orig_index != ipa3_ctx->uc_act_tbl_next_index);
+
+	IPADBG("exit free_index %d\n", free_index);
+	return free_index;
+}
+
+/**
+ * ipa3_add_socksv5_conn() - IPA add socksv5_conn
+ *
+ * Returns:	0 on success, negative on failure
+ *
+ * Note:	Should not be called from atomic context
+ */
+int ipa3_add_socksv5_conn(struct ipa_socksv5_info *info)
+{
+	int res = 0, index;
+	void *wp_va;
+	struct ipa_socksv5_msg *socksv5_msg;
+	struct ipa_msg_meta msg_meta;
+
+	/* IPA version check */
+	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5) {
+		IPAERR("Not support !\n");
+		return -EPERM;
+	}
+
+	if (!ipa3_ctx->uc_act_tbl_valid) {
+		IPAERR("uC act tbl haven't allocated\n");
+		return -ENOENT;
+	}
+
+	if (!info) {
+		IPAERR("Null info\n");
+		return -EIO;
+	}
+
+	mutex_lock(&ipa3_ctx->act_tbl_lock);
+	/* check the left # of entries (need at least 2)*/
+	if (ipa3_ctx->uc_act_tbl_total
+		>= IPA_UC_ACT_TBL_SIZE - 1)	{
+		IPAERR("uc act tbl is full!\n");
+		res = -EFAULT;
+		goto error;
+	}
+
+	index = ipa3_get_free_socksv5_entry();
+	if (index < 0) {
+		IPAERR("couldn't find free socksv5 entry\n");
+		res = -EFAULT;
+		goto error;
+	}
+
+	/* Copied the act-info to tbl */
+	wp_va = ipa3_ctx->uc_act_tbl.base +
+		index * sizeof(struct ipa_socksv5_uc_tmpl);
+
+	/* check entry valid */
+	if ((info->ul_out.cmd_id != IPA_SOCKsv5_ADD_COM_ID)
+		|| (info->dl_out.cmd_id != IPA_SOCKsv5_ADD_COM_ID)) {
+		IPAERR("cmd_id not set UL%d DL%d!\n",
+			info->ul_out.cmd_id,
+			info->dl_out.cmd_id);
+		res = -EINVAL;
+		goto error;
+	}
+
+	if ((info->ul_out.cmd_param < IPA_SOCKsv5_ADD_V6_V4_COM_PM)
+		|| (info->ul_out.cmd_param > IPA_SOCKsv5_ADD_V6_V6_COM_PM)) {
+		IPAERR("ul cmd_param is not support%d!\n",
+			info->ul_out.cmd_param);
+		res = -EINVAL;
+		goto error;
+	}
+
+	if ((info->dl_out.cmd_param < IPA_SOCKsv5_ADD_V6_V4_COM_PM)
+		|| (info->dl_out.cmd_param > IPA_SOCKsv5_ADD_V6_V6_COM_PM)) {
+		IPAERR("dl cmd_param is not support%d!\n",
+			info->dl_out.cmd_param);
+		res = -EINVAL;
+		goto error;
+	}
+
+	/* indicate entry valid */
+	info->ul_out.ipa_sockv5_mask |= IPA_SOCKSv5_ENTRY_VALID;
+	info->dl_out.ipa_sockv5_mask |= IPA_SOCKSv5_ENTRY_VALID;
+
+	memcpy(wp_va, &(info->ul_out), sizeof(info->ul_out));
+	memcpy(wp_va + sizeof(struct ipa_socksv5_uc_tmpl),
+		&(info->dl_out), sizeof(info->dl_out));
+
+	/* set output handle */
+	info->handle = (uint16_t) index;
+
+	ipa3_ctx->uc_act_tbl_total += 2;
+	ipa3_ctx->uc_act_tbl_socksv5_total += 2;
+
+	/* send msg to ipacm */
+	socksv5_msg = kzalloc(sizeof(*socksv5_msg), GFP_KERNEL);
+	if (!socksv5_msg) {
+		IPAERR("socksv5_msg memory allocation failed !\n");
+		res = -ENOMEM;
+		goto error;
+	}
+	memcpy(&(socksv5_msg->ul_in), &(info->ul_in), sizeof(info->ul_in));
+	memcpy(&(socksv5_msg->dl_in), &(info->dl_in), sizeof(info->dl_in));
+	socksv5_msg->handle = info->handle;
+	socksv5_msg->ul_in.index =
+		(uint16_t) index;
+	socksv5_msg->dl_in.index =
+		(uint16_t) index + 1;
+
+	memset(&msg_meta, 0, sizeof(struct ipa_msg_meta));
+	msg_meta.msg_type = IPA_SOCKV5_ADD;
+	msg_meta.msg_len = sizeof(struct ipa_socksv5_msg);
+	/* post event to ipacm*/
+	res = ipa3_send_msg(&msg_meta, socksv5_msg, ipa3_socksv5_msg_free_cb);
+	if (res) {
+		IPAERR_RL("ipa3_send_msg failed: %d\n", res);
+		kfree(socksv5_msg);
+		goto error;
+	}
+
+	if (ipa3_ctx->uc_act_tbl_total < IPA_UC_ACT_TBL_SIZE - 1) {
+		/*
+		 * find next free spot, this function shall update
+		 * uc_act_tbl_next_index
+		 */
+		index = ipa3_get_free_socksv5_entry();
+
+		if (index < 0) {
+			/* set to max tbl size to debug */
+			IPAERR("can't find available spot!\n");
+			ipa3_ctx->uc_act_tbl_total = IPA_UC_ACT_TBL_SIZE;
+			res = -EFAULT;
+		}
+	}
+
+error:
+	mutex_unlock(&ipa3_ctx->act_tbl_lock);
+	return res;
+}
+/*
+ * ipa3_add_socksv5_conn_usr() - IPA copy and add socksv5 conn
+ *
+ * Returns: 0 on success, negative on failure
+ *
+ * Note : Should not be called from atomic context
+ */
+int ipa3_add_socksv5_conn_usr(struct ipa_kernel_tests_socksv5_uc_tmpl *tmpl)
+{
+	struct ipa_socksv5_info info;
+	int retval = 0;
+
+	memset(&info, 0, sizeof(struct ipa_socksv5_info));
+
+	if (tmpl->direction == 0) { /* DL */
+		info.dl_out.cmd_id = tmpl->cmd_id;
+		info.dl_out.cmd_param = tmpl->cmd_param;
+		info.dl_out.ip_hdr.ipv6_temp.version = 6;
+		info.dl_out.ip_hdr.ipv6_temp.nexthdr = 6;
+		info.dl_out.ip_hdr.ipv6_temp.saddr.s6_addr32[0] =
+			tmpl->ipv6_src_addr[0];
+		info.dl_out.ip_hdr.ipv6_temp.saddr.s6_addr32[1] =
+			tmpl->ipv6_src_addr[1];
+		info.dl_out.ip_hdr.ipv6_temp.saddr.s6_addr32[2] =
+			tmpl->ipv6_src_addr[2];
+		info.dl_out.ip_hdr.ipv6_temp.saddr.s6_addr32[3] =
+			tmpl->ipv6_src_addr[3];
+		info.dl_out.ip_hdr.ipv6_temp.daddr.s6_addr32[0] =
+			tmpl->ipv6_dst_addr[0];
+		info.dl_out.ip_hdr.ipv6_temp.daddr.s6_addr32[1] =
+			tmpl->ipv6_dst_addr[1];
+		info.dl_out.ip_hdr.ipv6_temp.daddr.s6_addr32[2] =
+			tmpl->ipv6_dst_addr[2];
+		info.dl_out.ip_hdr.ipv6_temp.daddr.s6_addr32[3] =
+			tmpl->ipv6_dst_addr[3];
+		info.dl_out.src_port = tmpl->src_port;
+		info.dl_out.dst_port = tmpl->dst_port;
+		info.dl_out.ipa_sockv5_mask = tmpl->ipa_sockv5_mask;
+		info.dl_out.out_irs = tmpl->out_irs;
+		info.dl_out.out_iss = tmpl->out_iss;
+		info.dl_out.in_irs = tmpl->in_irs;
+		info.dl_out.in_iss = tmpl->in_iss;
+		info.dl_out.out_ircv_tsval = tmpl->out_ircv_tsval;
+		info.dl_out.in_ircv_tsecr = tmpl->in_ircv_tsecr;
+		info.dl_out.out_ircv_tsecr = tmpl->out_ircv_tsecr;
+		info.dl_out.in_ircv_tsval = tmpl->in_ircv_tsval;
+		info.dl_out.in_isnd_wscale = tmpl->in_isnd_wscale;
+		info.dl_out.out_isnd_wscale = tmpl->out_isnd_wscale;
+		info.dl_out.in_ircv_wscale = tmpl->in_ircv_wscale;
+		info.dl_out.out_ircv_wscale = tmpl->out_ircv_wscale;
+
+		/* for UL set default values to pass pair validity check */
+		info.ul_out.cmd_id = IPA_SOCKsv5_ADD_COM_ID;
+		info.ul_out.cmd_param = IPA_SOCKsv5_ADD_V6_V4_COM_PM;
+	} else if (tmpl->direction == 1) { /* UL */
+		info.ul_out.cmd_id = tmpl->cmd_id;
+		info.ul_out.cmd_param = tmpl->cmd_param;
+		if (info.ul_out.cmd_param == IPA_SOCKsv5_ADD_V6_V4_COM_PM) {
+			info.ul_out.ip_hdr.ipv4_rsv.ipv4_temp.version = 4;
+			info.ul_out.ip_hdr.ipv4_rsv.ipv4_temp.ihl = 5;
+			info.ul_out.ip_hdr.ipv4_rsv.ipv4_temp.saddr =
+				tmpl->ip_src_addr;
+			info.ul_out.ip_hdr.ipv4_rsv.ipv4_temp.daddr =
+				tmpl->ip_dst_addr;
+			info.ul_out.ip_hdr.ipv4_rsv.ipv4_temp.protocol = 6;
+		}
+		if (info.ul_out.cmd_param == IPA_SOCKsv5_ADD_V6_V6_COM_PM) {
+			info.ul_out.ip_hdr.ipv6_temp.version = 6;
+			info.ul_out.ip_hdr.ipv6_temp.nexthdr = 6;
+			info.ul_out.ip_hdr.ipv6_temp.saddr.s6_addr32[0] =
+				tmpl->ipv6_src_addr[0];
+			info.ul_out.ip_hdr.ipv6_temp.saddr.s6_addr32[1] =
+				tmpl->ipv6_src_addr[1];
+			info.ul_out.ip_hdr.ipv6_temp.saddr.s6_addr32[2] =
+				tmpl->ipv6_src_addr[2];
+			info.ul_out.ip_hdr.ipv6_temp.saddr.s6_addr32[3] =
+				tmpl->ipv6_src_addr[3];
+			info.ul_out.ip_hdr.ipv6_temp.daddr.s6_addr32[0] =
+				tmpl->ipv6_dst_addr[0];
+			info.ul_out.ip_hdr.ipv6_temp.daddr.s6_addr32[1] =
+				tmpl->ipv6_dst_addr[1];
+			info.ul_out.ip_hdr.ipv6_temp.daddr.s6_addr32[2] =
+				tmpl->ipv6_dst_addr[2];
+			info.ul_out.ip_hdr.ipv6_temp.daddr.s6_addr32[3] =
+				tmpl->ipv6_dst_addr[3];
+		}
+		info.ul_out.src_port = tmpl->src_port;
+		info.ul_out.dst_port = tmpl->dst_port;
+		info.ul_out.ipa_sockv5_mask = tmpl->ipa_sockv5_mask;
+		info.ul_out.out_irs = tmpl->out_irs;
+		info.ul_out.out_iss = tmpl->out_iss;
+		info.ul_out.in_irs = tmpl->in_irs;
+		info.ul_out.in_iss = tmpl->in_iss;
+		info.ul_out.out_ircv_tsval = tmpl->out_ircv_tsval;
+		info.ul_out.in_ircv_tsecr = tmpl->in_ircv_tsecr;
+		info.ul_out.out_ircv_tsecr = tmpl->out_ircv_tsecr;
+		info.ul_out.in_ircv_tsval = tmpl->in_ircv_tsval;
+		info.ul_out.in_isnd_wscale = tmpl->in_isnd_wscale;
+		info.ul_out.out_isnd_wscale = tmpl->out_isnd_wscale;
+		info.ul_out.in_ircv_wscale = tmpl->in_ircv_wscale;
+		info.ul_out.out_ircv_wscale = tmpl->out_ircv_wscale;
+
+		/* for DL set default values to pass pair validity check */
+		info.dl_out.cmd_param = IPA_SOCKsv5_ADD_V4_V6_COM_PM;
+		info.dl_out.cmd_id = IPA_SOCKsv5_ADD_COM_ID;
+	} else {
+		IPAERR("invalid socksv5 direction: %d\n", tmpl->direction);
+		return -EINVAL;
+	}
+
+	retval = ipa3_add_socksv5_conn(&info);
+	if (retval) {
+		IPAERR("ipa3_add_socksv5_conn failed retval: %d\n", retval);
+		return retval;
+	}
+
+	/* save uc handle */
+	tmpl->handle = info.handle;
+
+	return retval;
+}
+
+/**
+ * ipa3_del_socksv5_conn() - IPA add socksv5_conn
+ *
+ * Returns:	0 on success, negative on failure
+ *
+ * Note:	Should not be called from atomic context
+ */
+int ipa3_del_socksv5_conn(uint32_t handle)
+{
+	int res = 0;
+	uint32_t *socksv5_handle;
+	struct ipa_msg_meta msg_meta;
+	struct ipa_socksv5_uc_tmpl *entry, *next;
+
+	/* IPA version check */
+	if (ipa3_ctx->ipa_hw_type < IPA_HW_v4_5) {
+		IPAERR("Not support !\n");
+		return -EPERM;
+	}
+
+	if (!ipa3_ctx->uc_act_tbl_valid) {
+		IPAERR("uC act tbl haven't allocated\n");
+		return -ENOENT;
+	}
+
+	if (handle > IPA_UC_ACT_TBL_SIZE || handle < 0) {
+		IPAERR("invalid handle!\n");
+		return -EINVAL;
+	}
+
+	if (ipa3_ctx->uc_act_tbl_socksv5_total < 2) {
+		IPAERR("invalid handle, tbl doesn't have socksv5 entries!\n");
+		return -EINVAL;
+	}
+
+	entry = (struct ipa_socksv5_uc_tmpl *)(ipa3_ctx->uc_act_tbl.base +
+			handle * sizeof(struct ipa_socksv5_uc_tmpl));
+	next = (struct ipa_socksv5_uc_tmpl *)(ipa3_ctx->uc_act_tbl.base +
+		(handle + 1) * sizeof(struct ipa_socksv5_uc_tmpl));
+
+	/* check entry is valid or not */
+	mutex_lock(&ipa3_ctx->act_tbl_lock);
+	if (entry->cmd_id != IPA_SOCKsv5_ADD_COM_ID) {
+		IPAERR(" entry %d not socksv5\n", handle);
+		res = -EINVAL;
+		goto error;
+	}
+	if (next->cmd_id != IPA_SOCKsv5_ADD_COM_ID) {
+		IPAERR(" entry %d not socksv5\n", handle + 1);
+		res = -EINVAL;
+		goto error;
+	}
+	if (!(entry->ipa_sockv5_mask & IPA_SOCKSv5_ENTRY_VALID))
+		IPADBG(" entry %d already free\n", handle);
+
+	if (!(next->ipa_sockv5_mask & IPA_SOCKSv5_ENTRY_VALID))
+		IPADBG(" entry %d already free\n", handle);
+
+	entry->ipa_sockv5_mask &= ~IPA_SOCKSv5_ENTRY_VALID;
+	next->ipa_sockv5_mask &= ~IPA_SOCKSv5_ENTRY_VALID;
+	ipa3_ctx->uc_act_tbl_total -= 2;
+	ipa3_ctx->uc_act_tbl_socksv5_total -= 2;
+
+	IPADBG("free entry %d and %d, left total %d, socksv5 total %d\n",
+		handle,
+		handle + 1,
+		ipa3_ctx->uc_act_tbl_total,
+		ipa3_ctx->uc_act_tbl_socksv5_total);
+
+	/* send msg to ipacm */
+	socksv5_handle = kzalloc(sizeof(*socksv5_handle), GFP_KERNEL);
+	if (!socksv5_handle) {
+		IPAERR("socksv5_handle memory allocation failed!\n");
+		res = -ENOMEM;
+		goto error;
+	}
+	memcpy(socksv5_handle, &handle, sizeof(handle));
+	msg_meta.msg_type = IPA_SOCKV5_DEL;
+	msg_meta.msg_len = sizeof(uint32_t);
+	res = ipa3_send_msg(&msg_meta, socksv5_handle,
+		ipa3_socksv5_msg_free_cb);
+	if (res) {
+		IPAERR_RL("ipa3_send_msg failed: %d\n", res);
+		kfree(socksv5_handle);
+	}
+
+error:
+	mutex_unlock(&ipa3_ctx->act_tbl_lock);
+	return res;
+}
+
+/**
+ * ipa3_get_max_pdn() - get max PDN number based on hardware version
+ *
+ * Returns:     IPA_MAX_PDN_NUM of IPAv4_5 and IPA_MAX_PDN_NUM_v4_2 for others
+ *
+ */
+
+int ipa3_get_max_pdn(void)
+{
+	if (ipa3_get_hw_type_index() == IPA_4_5_AUTO)
+		return IPA_MAX_PDN_NUM;
+	else
+		return IPA_MAX_PDN_NUM_v4;
 }

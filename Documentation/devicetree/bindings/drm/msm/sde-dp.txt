@@ -17,7 +17,9 @@ DP Controller: Required properties:
 - clock-names:          Names of the clocks corresponding to handles. Following clocks are required:
 			"core_aux_clk", "core_usb_ref_clk_src","core_usb_ref_clk", "core_usb_cfg_ahb_clk",
 			"core_usb_pipe_clk", "ctrl_link_clk", "ctrl_link_iface_clk", "ctrl_crypto_clk",
-			"ctrl_pixel_clk", "pixel_clk_rcg", "pixel_parent".
+			"ctrl_pixel_clk", "pixel_clk_rcg", "pixel_parent", "bond_pixel_parent".
+			Only under multiple DPs pixel clock bonding mode, i.e. triple DPs bonding, bond_pixel_parent
+			is used, replacing the pixel_parent for single DP mode.
 - gdsc-supply:		phandle to gdsc regulator node.
 - vdda-1p2-supply:		phandle to vdda 1.2V regulator node.
 - vdda-0p9-supply:		phandle to vdda 0.9V regulator node.
@@ -67,8 +69,15 @@ DP Controller: Required properties:
 					within DP AUX, while the remaining entries indicate the
 					programmable values.
 - qcom,max-pclk-frequency-khz:	An integer specifying the max. pixel clock in KHz supported by Display Port.
-- qcom,yuv-support:		A boolean specifying if any YUV formats are supported by Display Port.
+- qcom,mst-enable:		MST feature enable control node.
+- qcom,dsc-feature-enable:	DSC feature enable control node.
+- qcom,fec-feature-enable:	FEC feature enable control node.
+- qcom,max-dp-dsc-blks:		An integer specifying the max. DSC blocks available for Display port.
+- qcom,max-dp-dsc-input-width-pixs: An integer specifying the max. input width of pixels for each DSC block.
 - qcom,dp-usbpd-detection:	Phandle for the PMI regulator node for USB PHY PD detection.
+- qcom,dp-aux-switch:		Phandle for the driver used to program the AUX switch for Display Port orientation.
+- qcom,dp-hpd-gpio:		HPD gpio for direct DP connector without USB PHY or AUX switch.
+- qcom,dp-gpio-aux-switch:»       Gpio DP AUX switch chipset support.
 - qcom,<type>-supply-entries:		A node that lists the elements of the supply used by the a particular "type" of DSI module. The module "types"
 					can be "core", "ctrl", and "phy". Within the same type,
 					there can be more than one instance of this binding,
@@ -84,18 +93,47 @@ DP Controller: Required properties:
 					-- qcom,supply-post-on-sleep: time to sleep (ms) after turning on
 					-- qcom,supply-pre-off-sleep: time to sleep (ms) before turning off
 					-- qcom,supply-post-off-sleep: time to sleep (ms) after turning off
-- pinctrl-names:	List of names to assign mdss pin states defined in pinctrl device node
-					Refer to pinctrl-bindings.txt
-- pinctrl-<0..n>:	Lists phandles each pointing to the pin configuration node within a pin
-					controller. These pin configurations are installed in the pinctrl
-					device node. Refer to pinctrl-bindings.txt
 
 msm_ext_disp is a device which manages the interaction between external
 display interfaces, e.g. Display Port, and the audio subsystem.
 
 Optional properties:
+- qcom,intf-index:		u32 integer array to specify the intf instances
+- qcom,phy-index:		u32 integer to specify the phy instance
 - qcom,ext-disp:		phandle for msm-ext-display module
 - compatible:			Must be "qcom,msm-ext-disp"
+- qcom,dp-low-power-hw-hpd:	Low power hardware HPD feature enable control node
+- qcom,phy-version:		Phy version
+- qcom,phy-mode:		Phy mode from the following list. If not specified, the default PHY mode is decided by the PHY driver,
+				which is "dp" for DP/USB combo PHY, "edp" for eDP/DP combo PHY
+				"dp" - DP PHY mode
+				"minidp" - MiniDP PHY mode
+				"edp" - eDP PHY mode
+				"edp-highswing" - eDP PHY mode, high swing/pre-emphasis
+- qcom,pn-swap-lane-map:	P/N swap configuration of each lane
+- pinctrl-names:		List of names to assign mdss pin states defined in pinctrl device node
+				Refer to pinctrl-bindings.txt
+- pinctrl-<0..n>:		Lists phandles each pointing to the pin configuration node within a pin
+				controller. These pin configurations are installed in the pinctrl
+				device node. Refer to pinctrl-bindings.txt
+- qcom,max-lclk-frequency-khz:	An integer specifying the max. link clock in KHz supported by Display Port.
+- qcom,mst-fixed-topology-ports: u32 values of which MST output port to reserve, start from one
+- qcom,dp-aux-bridge:		phandle for dp aux bridge module, for 3rd party dp bridge only.
+- qcom,dp-aux-bridge-sim:	phandle for dp aux bridge module, for internal mst debug simulation only.
+- qcom,dp-force-bond-mode:	Ignore tile information from EDID and force DP to work in bond mode.
+- qcom,dp-force-connect-mode:	Boolean to specify if dp is in always-connected mode, only set
+				when qcom,dp-aux-bridge is defined. Once set, dp will always
+				report connected state to user. When HPD is high, mode from sink
+				will be reported. When HPD is low, mode from dp-aux-bridge
+				simulator will be reported.
+- qcom,bond-dual-ctrl:		u32 array to specify the cell-index of the two DP controllers that support bond mode.
+				The first controller in the array is the bond master. Driver will switch to bond mode
+				if both DP controllers are connected to the same dual DP input monitor.
+				e.g. <1, 0> will bond DP0 and DP1, and DP1 is the master, and DP0 is the salve.
+- qcom,bond-tri-ctrl:		u32 array to specify the cell-index of the three DP controllers that support bond mode.
+				The first controller in the array is the bond master. Driver will switch to bond mode
+				if all three DP controllers are connected to the same triple DP input monitor.
+				e.g. <2, 0, 1> will bond DP0, DP1 and DP2 together, and DP2 is the master, DP0/DP1 are the slaves.
 
 [Optional child nodes]: These nodes are for devices which are
 dependent on msm_ext_disp. If msm_ext_disp is disabled then
@@ -153,8 +191,10 @@ Example:
 			"ctrl_link_iface_clk", "ctrl_crypto_clk",
 			"ctrl_pixel_clk", "pixel_clk_rcg", "pixel_parent";
 
-		qcom,dp-usbpd-detection = <&pmi8998_pdphy>;
+		qcom,dp-usbpd-detection = <&pm8150b_pdphy>;
 		qcom,ext-disp = <&ext_disp>;
+		qcom,phy-version = <0x420>;
+		qcom,dp-aux-switch = <&fsa4480>;
 
 		qcom,aux-cfg0-settings = [1c 00];
 		qcom,aux-cfg1-settings = [20 13 23 1d];
@@ -167,6 +207,11 @@ Example:
 		qcom,aux-cfg8-settings = [3c bb];
 		qcom,aux-cfg9-settings = [40 03];
 		qcom,max-pclk-frequency-khz = <593470>;
+		qcom,mst-enable;
+		qcom,dsc-feature-enable;
+		qcom,fec-feature-enable;
+		qcom,max-dp-dsc-blks = <2>;
+		qcom,max-dp-dsc-input-width-pixs = <2048>;
 		pinctrl-names = "mdss_dp_active", "mdss_dp_sleep";
 		pinctrl-0 = <&sde_dp_aux_active &sde_dp_usbplug_cc_active>;
 		pinctrl-1 = <&sde_dp_aux_suspend &sde_dp_usbplug_cc_suspend>;

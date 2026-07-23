@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -47,15 +47,21 @@ enum spss_firmware_type {
 	SPSS_FW_TYPE_DEV = 'd',
 	SPSS_FW_TYPE_TEST = 't',
 	SPSS_FW_TYPE_PROD = 'p',
+	SPSS_FW_TYPE_NONE = 'z',
 };
 
 static enum spss_firmware_type firmware_type = SPSS_FW_TYPE_TEST;
 static const char *dev_firmware_name;
 static const char *test_firmware_name;
 static const char *prod_firmware_name;
+static const char *none_firmware_name = "nospss";
 static const char *firmware_name = "NA";
 static struct device *spss_dev;
 static u32 spss_debug_reg_addr; /* SP_SCSR_MBn_SP2CL_GPm(n,m) */
+static u32 spss_emul_type_reg_addr; /* TCSR_SOC_EMULATION_TYPE */
+
+#define SPU_EMULATUION (BIT(0) | BIT(1))
+#define SPU_PRESENT_IN_EMULATION BIT(2)
 
 /*==========================================================================*/
 /*		Device Sysfs */
@@ -227,6 +233,8 @@ static int spss_parse_dt(struct device_node *node)
 	void __iomem *spss_fuse2_reg = NULL;
 	u32 val1 = 0;
 	u32 val2 = 0;
+	void __iomem *spss_emul_type_reg = NULL;
+	u32 spss_emul_type_val = 0;
 
 	ret = of_property_read_string(node, "qcom,spss-dev-firmware-name",
 		&dev_firmware_name);
@@ -333,6 +341,31 @@ static int spss_parse_dt(struct device_node *node)
 		return ret;
 	}
 
+	ret = of_property_read_u32(node, "qcom,spss-emul-type-reg-addr",
+			     &spss_emul_type_reg_addr);
+	if (ret < 0) {
+		pr_err("can't get spss-emulation-type-reg addr\n");
+		return -EFAULT;
+	}
+
+	spss_emul_type_reg = ioremap_nocache(spss_emul_type_reg_addr,
+					     sizeof(u32));
+	if (!spss_emul_type_reg) {
+		iounmap(spss_emul_type_reg);
+		pr_err("can't map soc-emulation-type reg addr.\n");
+		return -EFAULT;
+	}
+
+	spss_emul_type_val = readl_relaxed(spss_emul_type_reg);
+
+	pr_debug("spss_emul_type value [0x%08x].\n", (int)spss_emul_type_val);
+	if ((spss_emul_type_val & SPU_EMULATUION) &&
+	    !(spss_emul_type_val & SPU_PRESENT_IN_EMULATION)) {
+		/* for some emulation platforms SPSS is not present */
+		firmware_type = SPSS_FW_TYPE_NONE;
+	}
+	iounmap(spss_emul_type_reg);
+
 	return 0;
 }
 
@@ -382,6 +415,9 @@ static int spss_probe(struct platform_device *pdev)
 	case SPSS_FW_TYPE_PROD:
 		firmware_name = prod_firmware_name;
 		break;
+	case SPSS_FW_TYPE_NONE:
+		firmware_name = none_firmware_name;
+		break;
 	default:
 		return -EINVAL;
 	}
@@ -425,7 +461,7 @@ static int __init spss_init(void)
 {
 	int ret = 0;
 
-	pr_info("spss-utils driver Ver 2.0 30-Mar-2017.\n");
+	pr_info("spss-utils driver Ver 3.0 18-Feb-2018.\n");
 
 	ret = platform_driver_register(&spss_driver);
 	if (ret)

@@ -1,4 +1,5 @@
-/* Copyright (c) 2012-2019, 2021 The Linux Foundation. All rights reserved.
+/*
+ * Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -8,7 +9,6 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
  */
 
 #include <linux/jiffies.h>
@@ -52,8 +52,8 @@ const char *const mpeg_video_vidc_extradata[] = {
 	"Extradata none",
 	"Extradata MB Quantization",
 	"Extradata Interlace Video",
+	"Extradata enc DTS",
 	"Extradata VC1 Framedisp",
-	"Extradata VC1 Seqdisp",
 	"Extradata timestamp",
 	"Extradata S3D Frame Packing",
 	"Extradata Frame Rate",
@@ -72,6 +72,7 @@ const char *const mpeg_video_vidc_extradata[] = {
 	"Extradata LTR",
 	"Extradata macroblock metadata",
 	"Extradata VQZip SEI",
+	"Extradata HDR10+ Metadata",
 	"Extradata YUV Stats",
 	"Extradata ROI QP",
 	"Extradata output crop",
@@ -81,7 +82,9 @@ const char *const mpeg_video_vidc_extradata[] = {
 	"Extradata display VUI",
 	"Extradata vpx color space",
 	"Extradata UBWC CR stats info",
-	"Extradata enc frame QP"
+	"Extradata enc frame QP",
+	"Extradata VC1 Seqdisp",
+	"Extradata YUV Stats"
 };
 
 struct getprop_buf {
@@ -516,7 +519,7 @@ static int msm_comm_vote_bus(struct msm_vidc_core *core)
 		++vote_data_count;
 
 	vote_data = kcalloc(vote_data_count, sizeof(*vote_data),
-			GFP_TEMPORARY);
+			GFP_KERNEL);
 	if (!vote_data) {
 		dprintk(VIDC_ERR, "%s: failed to allocate memory\n", __func__);
 		rc = -ENOMEM;
@@ -672,7 +675,7 @@ static void handle_sys_init_done(enum hal_command_response cmd, void *data)
 	struct msm_vidc_cb_cmd_done *response = data;
 	struct msm_vidc_core *core;
 	struct vidc_hal_sys_init_done *sys_init_msg;
-	u32 index, i;
+	u32 index;
 
 	if (!IS_HAL_SYS_CMD(cmd)) {
 		dprintk(VIDC_ERR, "%s - invalid cmd\n", __func__);
@@ -718,20 +721,6 @@ static void handle_sys_init_done(enum hal_command_response cmd, void *data)
 	memcpy(core->capabilities, sys_init_msg->capabilities,
 		sys_init_msg->codec_count * sizeof(struct msm_vidc_capability));
 
-	 /* override capabilities for sdm450 */
-	if (core->resources.target_version == 1) {
-		for (i = 0; i < VIDC_MAX_SESSIONS; i++) {
-			if (core->capabilities[i].width.max > HD_WIDTH)
-				core->capabilities[i].width.max = HD_WIDTH;
-			if (core->capabilities[i].height.max > HD_WIDTH)
-				core->capabilities[i].height.max = HD_WIDTH;
-
-			core->capabilities[i].mbs_per_frame.max =
-					NUM_MBS_PER_FRAME(HD_WIDTH, HD_HEIGHT);
-			core->resources.max_inst_count =
-					MAX_SUPPORTED_INSTANCES;
-		}
-	}
 	dprintk(VIDC_DBG,
 		"%s: supported_codecs[%d]: enc = %#x, dec = %#x\n",
 		__func__, core->codec_count, core->enc_codec_supported,
@@ -740,14 +729,12 @@ static void handle_sys_init_done(enum hal_command_response cmd, void *data)
 	complete(&(core->completions[index]));
 
 }
-
 static void put_inst_helper(struct kref *kref)
 {
 	struct msm_vidc_inst *inst = container_of(kref,
-			struct msm_vidc_inst, kref);
+				struct msm_vidc_inst, kref);
 	msm_vidc_destroy(inst);
 }
-
 void put_inst(struct msm_vidc_inst *inst)
 {
 	if (!inst)
@@ -824,9 +811,9 @@ static void handle_session_release_buf_done(enum hal_command_response cmd,
 	mutex_lock(&inst->scratchbufs.lock);
 	list_for_each_safe(ptr, next, &inst->scratchbufs.list) {
 		buf = list_entry(ptr, struct internal_buf, list);
-		if (address == (u32)buf->handle->device_addr) {
-			dprintk(VIDC_DBG, "releasing scratch: %pa\n",
-					&buf->handle->device_addr);
+		if (address == buf->smem.device_addr) {
+			dprintk(VIDC_DBG, "releasing scratch: %x\n",
+					buf->smem.device_addr);
 			buf_found = true;
 		}
 	}
@@ -835,9 +822,9 @@ static void handle_session_release_buf_done(enum hal_command_response cmd,
 	mutex_lock(&inst->persistbufs.lock);
 	list_for_each_safe(ptr, next, &inst->persistbufs.list) {
 		buf = list_entry(ptr, struct internal_buf, list);
-		if (address == (u32)buf->handle->device_addr) {
-			dprintk(VIDC_DBG, "releasing persist: %pa\n",
-					&buf->handle->device_addr);
+		if (address == buf->smem.device_addr) {
+			dprintk(VIDC_DBG, "releasing persist: %x\n",
+					buf->smem.device_addr);
 			buf_found = true;
 		}
 	}
@@ -1455,8 +1442,8 @@ void validate_output_buffers(struct msm_vidc_inst *inst)
 	list_for_each_entry(binfo, &inst->outputbufs.list, list) {
 		if (binfo->buffer_ownership != DRIVER) {
 			dprintk(VIDC_DBG,
-				"This buffer is with FW %pa\n",
-				&binfo->handle->device_addr);
+				"This buffer is with FW %x\n",
+				binfo->smem.device_addr);
 			continue;
 		}
 		buffers_owned_by_driver++;
@@ -1475,7 +1462,6 @@ int msm_comm_queue_output_buffers(struct msm_vidc_inst *inst)
 {
 	struct internal_buf *binfo;
 	struct hfi_device *hdev;
-	struct msm_smem *handle;
 	struct vidc_frame_data frame_data = {0};
 	struct hal_buffer_requirements *output_buf, *extra_buf;
 	int rc = 0;
@@ -1505,13 +1491,12 @@ int msm_comm_queue_output_buffers(struct msm_vidc_inst *inst)
 	list_for_each_entry(binfo, &inst->outputbufs.list, list) {
 		if (binfo->buffer_ownership != DRIVER)
 			continue;
-		handle = binfo->handle;
 		frame_data.alloc_len = output_buf->buffer_size;
 		frame_data.filled_len = 0;
 		frame_data.offset = 0;
-		frame_data.device_addr = handle->device_addr;
+		frame_data.device_addr = binfo->smem.device_addr;
 		frame_data.flags = 0;
-		frame_data.extradata_addr = handle->device_addr +
+		frame_data.extradata_addr = binfo->smem.device_addr +
 		output_buf->buffer_size;
 		frame_data.buffer_type = HAL_BUFFER_OUTPUT;
 		frame_data.extradata_size = extra_buf ?
@@ -1854,7 +1839,7 @@ static void handle_ebd(enum hal_command_response cmd, void *data)
 				dprintk(VIDC_INFO,
 					"Failed : Corrupted input stream\n");
 				vbuf->flags |=
-					V4L2_QCOM_BUF_DATA_CORRUPT;
+					V4L2_BUF_FLAG_DATA_CORRUPT;
 			}
 			if (empty_buf_done->status ==
 				VIDC_ERR_START_CODE_NOT_FOUND) {
@@ -1951,7 +1936,7 @@ int buf_ref_put(struct msm_vidc_inst *inst, struct buffer_info *binfo)
 }
 
 static void handle_dynamic_buffer(struct msm_vidc_inst *inst,
-		ion_phys_addr_t device_addr, u32 flags)
+		phys_addr_t device_addr, u32 flags)
 {
 	struct buffer_info *binfo = NULL, *temp = NULL;
 
@@ -1990,20 +1975,20 @@ static void handle_dynamic_buffer(struct msm_vidc_inst *inst,
 }
 
 static int handle_multi_stream_buffers(struct msm_vidc_inst *inst,
-		ion_phys_addr_t dev_addr)
+		phys_addr_t dev_addr)
 {
 	struct internal_buf *binfo;
-	struct msm_smem *handle;
+	struct msm_smem *smem;
 	bool found = false;
 
 	mutex_lock(&inst->outputbufs.lock);
 	list_for_each_entry(binfo, &inst->outputbufs.list, list) {
-		handle = binfo->handle;
-		if (handle && dev_addr == handle->device_addr) {
+		smem = &binfo->smem;
+		if (smem && dev_addr == smem->device_addr) {
 			if (binfo->buffer_ownership == DRIVER) {
 				dprintk(VIDC_ERR,
-					"FW returned same buffer: %pa\n",
-					&dev_addr);
+					"FW returned same buffer: %x\n",
+					dev_addr);
 				break;
 			}
 			binfo->buffer_ownership = DRIVER;
@@ -2015,8 +2000,8 @@ static int handle_multi_stream_buffers(struct msm_vidc_inst *inst,
 
 	if (!found) {
 		dprintk(VIDC_ERR,
-			"Failed to find output buffer in queued list: %pa\n",
-			&dev_addr);
+			"Failed to find output buffer in queued list: %x\n",
+			dev_addr);
 	}
 
 	return 0;
@@ -2148,7 +2133,7 @@ static void handle_fbd(enum hal_command_response cmd, void *data)
 		if (fill_buf_done->flags1 & HAL_BUFFERFLAG_DECODEONLY)
 			vbuf->flags |= V4L2_QCOM_BUF_FLAG_DECODEONLY;
 		if (fill_buf_done->flags1 & HAL_BUFFERFLAG_DATACORRUPT)
-			vbuf->flags |= V4L2_QCOM_BUF_DATA_CORRUPT;
+			vbuf->flags |= V4L2_BUF_FLAG_DATA_CORRUPT;
 		if (fill_buf_done->flags1 & HAL_BUFFERFLAG_DROP_FRAME)
 			vbuf->flags |= V4L2_QCOM_BUF_DROP_FRAME;
 		if (fill_buf_done->flags1 & HAL_BUFFERFLAG_MBAFF)
@@ -2259,7 +2244,7 @@ err_seq_hdr_done:
 	put_inst(inst);
 }
 
-void handle_cmd_response(enum hal_command_response cmd, void *data)
+void handle_cmd_response(u32 cmd, void *data)
 {
 	dprintk(VIDC_DBG, "Command response = %d\n", cmd);
 	switch (cmd) {
@@ -2653,7 +2638,7 @@ static int msm_comm_init_core(struct msm_vidc_inst *inst)
 		goto core_already_inited;
 	}
 	if (!core->capabilities) {
-		core->capabilities = kzalloc(VIDC_MAX_SESSIONS *
+		core->capabilities = kcalloc(VIDC_MAX_SESSIONS,
 				sizeof(struct msm_vidc_capability), GFP_KERNEL);
 		if (!core->capabilities) {
 			dprintk(VIDC_ERR,
@@ -3082,9 +3067,8 @@ static int set_output_buffers(struct msm_vidc_inst *inst,
 	enum hal_buffer buffer_type)
 {
 	int rc = 0;
-	struct msm_smem *handle;
-	struct internal_buf *binfo;
-	u32 smem_flags = 0, buffer_size;
+	struct internal_buf *binfo = NULL;
+	u32 smem_flags = SMEM_UNCACHED, buffer_size;
 	struct hal_buffer_requirements *output_buf, *extradata_buf;
 	int i;
 	struct hfi_device *hdev;
@@ -3130,33 +3114,25 @@ static int set_output_buffers(struct msm_vidc_inst *inst,
 	if (output_buf->buffer_size) {
 		for (i = 0; i < output_buf->buffer_count_actual;
 				i++) {
-			handle = msm_comm_smem_alloc(inst,
-					buffer_size, 1, smem_flags,
-					buffer_type, 0);
-			if (!handle) {
-				dprintk(VIDC_ERR,
-					"Failed to allocate output memory\n");
-				rc = -ENOMEM;
-				goto err_no_mem;
-			}
-			rc = msm_comm_smem_cache_operations(inst,
-					handle, SMEM_CACHE_CLEAN);
-			if (rc) {
-				dprintk(VIDC_WARN,
-					"Failed to clean cache may cause undefined behavior\n");
-			}
+
 			binfo = kzalloc(sizeof(*binfo), GFP_KERNEL);
 			if (!binfo) {
 				dprintk(VIDC_ERR, "Out of memory\n");
 				rc = -ENOMEM;
 				goto fail_kzalloc;
 			}
-
-			binfo->handle = handle;
+			rc = msm_comm_smem_alloc(inst,
+					buffer_size, 1, smem_flags,
+					buffer_type, 0, &binfo->smem);
+			if (rc) {
+				dprintk(VIDC_ERR,
+					"Failed to allocate output memory\n");
+				goto err_no_mem;
+			}
 			binfo->buffer_type = buffer_type;
 			binfo->buffer_ownership = DRIVER;
-			dprintk(VIDC_DBG, "Output buffer address: %pa\n",
-					&handle->device_addr);
+			dprintk(VIDC_DBG, "Output buffer address: %#x\n",
+					binfo->smem.device_addr);
 
 			if (inst->buffer_mode_set[CAPTURE_PORT] ==
 				HAL_BUFFER_MODE_STATIC) {
@@ -3167,9 +3143,9 @@ static int set_output_buffers(struct msm_vidc_inst *inst,
 				buffer_info.buffer_type = buffer_type;
 				buffer_info.num_buffers = 1;
 				buffer_info.align_device_addr =
-					handle->device_addr;
+					binfo->smem.device_addr;
 				buffer_info.extradata_addr =
-					handle->device_addr +
+					binfo->smem.device_addr +
 					output_buf->buffer_size;
 				if (extradata_buf)
 					buffer_info.extradata_size =
@@ -3190,10 +3166,10 @@ static int set_output_buffers(struct msm_vidc_inst *inst,
 	}
 	return rc;
 fail_set_buffers:
+	msm_comm_smem_free(inst, &binfo->smem);
+err_no_mem:
 	kfree(binfo);
 fail_kzalloc:
-	msm_comm_smem_free(inst, handle);
-err_no_mem:
 	return rc;
 }
 
@@ -3271,10 +3247,6 @@ static bool reuse_internal_buffers(struct msm_vidc_inst *inst,
 
 	mutex_lock(&buf_list->lock);
 	list_for_each_entry(buf, &buf_list->list, list) {
-		if (!buf->handle) {
-			reused = false;
-			break;
-		}
 
 		if (buf->buffer_type != buffer_type)
 			continue;
@@ -3291,7 +3263,7 @@ static bool reuse_internal_buffers(struct msm_vidc_inst *inst,
 			&& buffer_type != HAL_BUFFER_INTERNAL_PERSIST_1) {
 
 			rc = set_internal_buf_on_fw(inst, buffer_type,
-					buf->handle, true);
+					&buf->smem, true);
 			if (rc) {
 				dprintk(VIDC_ERR,
 					"%s: session_set_buffers failed\n",
@@ -3312,9 +3284,8 @@ static int allocate_and_set_internal_bufs(struct msm_vidc_inst *inst,
 			struct hal_buffer_requirements *internal_bufreq,
 			struct msm_vidc_list *buf_list)
 {
-	struct msm_smem *handle;
 	struct internal_buf *binfo;
-	u32 smem_flags = 0;
+	u32 smem_flags = SMEM_UNCACHED;
 	int rc = 0;
 	int i = 0;
 
@@ -3328,27 +3299,25 @@ static int allocate_and_set_internal_bufs(struct msm_vidc_inst *inst,
 		smem_flags |= SMEM_SECURE;
 
 	for (i = 0; i < internal_bufreq->buffer_count_actual; i++) {
-		handle = msm_comm_smem_alloc(inst, internal_bufreq->buffer_size,
-				1, smem_flags, internal_bufreq->buffer_type, 0);
-		if (!handle) {
-			dprintk(VIDC_ERR,
-				"Failed to allocate scratch memory\n");
-			rc = -ENOMEM;
-			goto err_no_mem;
-		}
-
 		binfo = kzalloc(sizeof(*binfo), GFP_KERNEL);
 		if (!binfo) {
 			dprintk(VIDC_ERR, "Out of memory\n");
 			rc = -ENOMEM;
 			goto fail_kzalloc;
 		}
+		rc = msm_comm_smem_alloc(inst, internal_bufreq->buffer_size,
+				1, smem_flags, internal_bufreq->buffer_type,
+				0, &binfo->smem);
+		if (rc) {
+			dprintk(VIDC_ERR,
+				"Failed to allocate scratch memory\n");
+			goto err_no_mem;
+		}
 
-		binfo->handle = handle;
 		binfo->buffer_type = internal_bufreq->buffer_type;
 
 		rc = set_internal_buf_on_fw(inst, internal_bufreq->buffer_type,
-				handle, false);
+				&binfo->smem, false);
 		if (rc)
 			goto fail_set_buffers;
 
@@ -3359,10 +3328,10 @@ static int allocate_and_set_internal_bufs(struct msm_vidc_inst *inst,
 	return rc;
 
 fail_set_buffers:
+	msm_comm_smem_free(inst, &binfo->smem);
+err_no_mem:
 	kfree(binfo);
 fail_kzalloc:
-	msm_comm_smem_free(inst, handle);
-err_no_mem:
 	return rc;
 
 }
@@ -3591,7 +3560,7 @@ int msm_vidc_comm_cmd(void *instance, union msm_v4l2_cmd *cmd)
 		struct vidc_frame_data data = {0};
 		struct hfi_device *hdev = NULL;
 		struct eos_buf *binfo = NULL;
-		u32 smem_flags = 0;
+		u32 smem_flags = SMEM_UNCACHED;
 
 		if (inst->state != MSM_VIDC_START_DONE) {
 			dprintk(VIDC_DBG,
@@ -3616,8 +3585,16 @@ int msm_vidc_comm_cmd(void *instance, union msm_v4l2_cmd *cmd)
 		if (inst->flags & VIDC_SECURE)
 			smem_flags |= SMEM_SECURE;
 
-		msm_comm_smem_alloc(inst,
-			SZ_4K, 1, smem_flags, HAL_BUFFER_INPUT, 0);
+		rc = msm_comm_smem_alloc(inst,
+				SZ_4K, 1, smem_flags,
+				HAL_BUFFER_INPUT, 0, &binfo->smem);
+		if (rc) {
+			kfree(binfo);
+			dprintk(VIDC_ERR,
+				"Failed to allocate output memory\n");
+			rc = -ENOMEM;
+			break;
+		}
 
 		mutex_lock(&inst->eosbufs.lock);
 		list_add_tail(&binfo->list, &inst->eosbufs.list);
@@ -4190,7 +4167,7 @@ int msm_comm_release_output_buffers(struct msm_vidc_inst *inst)
 	}
 	mutex_lock(&inst->outputbufs.lock);
 	list_for_each_entry_safe(buf, dummy, &inst->outputbufs.list, list) {
-		handle = buf->handle;
+		handle = &buf->smem;
 		if (!handle) {
 			dprintk(VIDC_ERR, "%s - invalid handle\n", __func__);
 			goto exit;
@@ -4216,7 +4193,7 @@ int msm_comm_release_output_buffers(struct msm_vidc_inst *inst)
 		}
 
 		list_del(&buf->list);
-		msm_comm_smem_free(inst, buf->handle);
+		msm_comm_smem_free(inst, &buf->smem);
 		kfree(buf);
 	}
 
@@ -4245,13 +4222,8 @@ static enum hal_buffer scratch_buf_sufficient(struct msm_vidc_inst *inst,
 	mutex_lock(&inst->scratchbufs.lock);
 
 	list_for_each_entry(buf, &inst->scratchbufs.list, list) {
-		if (!buf->handle) {
-			dprintk(VIDC_ERR, "%s: invalid buf handle\n", __func__);
-			mutex_unlock(&inst->scratchbufs.lock);
-			goto not_sufficient;
-		}
 		if (buf->buffer_type == buffer_type &&
-			buf->handle->size >= bufreq->buffer_size)
+			buf->smem.size >= bufreq->buffer_size)
 			count++;
 	}
 	mutex_unlock(&inst->scratchbufs.lock);
@@ -4310,13 +4282,7 @@ int msm_comm_release_scratch_buffers(struct msm_vidc_inst *inst,
 
 	mutex_lock(&inst->scratchbufs.lock);
 	list_for_each_entry_safe(buf, dummy, &inst->scratchbufs.list, list) {
-		if (!buf->handle) {
-			dprintk(VIDC_ERR, "%s - buf->handle NULL\n", __func__);
-			rc = -EINVAL;
-			goto exit;
-		}
-
-		handle = buf->handle;
+		handle = &buf->smem;
 		buffer_info.buffer_size = handle->size;
 		buffer_info.buffer_type = buf->buffer_type;
 		buffer_info.num_buffers = 1;
@@ -4348,11 +4314,10 @@ int msm_comm_release_scratch_buffers(struct msm_vidc_inst *inst,
 			continue;
 
 		list_del(&buf->list);
-		msm_comm_smem_free(inst, buf->handle);
+		msm_comm_smem_free(inst, handle);
 		kfree(buf);
 	}
 
-exit:
 	mutex_unlock(&inst->scratchbufs.lock);
 	return rc;
 }
@@ -4370,9 +4335,9 @@ void msm_comm_release_eos_buffers(struct msm_vidc_inst *inst)
 	mutex_lock(&inst->eosbufs.lock);
 	list_for_each_entry_safe(buf, next, &inst->eosbufs.list, list) {
 		list_del(&buf->list);
+		msm_comm_smem_free(inst, &buf->smem);
 		kfree(buf);
 	}
-
 	INIT_LIST_HEAD(&inst->eosbufs.list);
 	mutex_unlock(&inst->eosbufs.lock);
 }
@@ -4407,7 +4372,7 @@ int msm_comm_release_persist_buffers(struct msm_vidc_inst *inst)
 	mutex_lock(&inst->persistbufs.lock);
 	list_for_each_safe(ptr, next, &inst->persistbufs.list) {
 		buf = list_entry(ptr, struct internal_buf, list);
-		handle = buf->handle;
+		handle = &buf->smem;
 		buffer_info.buffer_size = handle->size;
 		buffer_info.buffer_type = buf->buffer_type;
 		buffer_info.num_buffers = 1;
@@ -4433,7 +4398,7 @@ int msm_comm_release_persist_buffers(struct msm_vidc_inst *inst)
 			mutex_lock(&inst->persistbufs.lock);
 		}
 		list_del(&buf->list);
-		msm_comm_smem_free(inst, buf->handle);
+		msm_comm_smem_free(inst, handle);
 		kfree(buf);
 	}
 	mutex_unlock(&inst->persistbufs.lock);
@@ -4562,8 +4527,8 @@ static void msm_comm_flush_in_invalid_state(struct msm_vidc_inst *inst)
 		dprintk(VIDC_DBG, "Flushing buffers of type %d in bad state\n",
 				port);
 		mutex_lock(&inst->bufq[port].lock);
-		list_for_each_safe(ptr, next, &inst->bufq[port].
-				vb2_bufq.queued_list) {
+		list_for_each_safe(ptr, next,
+				&inst->bufq[port].vb2_bufq.queued_list) {
 			struct vb2_buffer *vb = container_of(ptr,
 					struct vb2_buffer, queued_entry);
 
@@ -5104,7 +5069,7 @@ static void msm_comm_generate_session_error(struct msm_vidc_inst *inst)
 	enum hal_command_response cmd = HAL_SESSION_ERROR;
 	struct msm_vidc_cb_cmd_done response = {0};
 
-	dprintk(VIDC_WARN, "msm_comm_generate_session_error\n");
+	dprintk(VIDC_WARN, "%s\n", __func__);
 	if (!inst || !inst->core) {
 		dprintk(VIDC_ERR, "%s: invalid input parameters\n", __func__);
 		return;
@@ -5171,19 +5136,20 @@ int msm_comm_kill_session(struct msm_vidc_inst *inst)
 	return rc;
 }
 
-struct msm_smem *msm_comm_smem_alloc(struct msm_vidc_inst *inst,
-			size_t size, u32 align, u32 flags,
-			enum hal_buffer buffer_type, int map_kernel)
+int msm_comm_smem_alloc(struct msm_vidc_inst *inst,
+		size_t size, u32 align, u32 flags, enum hal_buffer buffer_type,
+		int map_kernel, struct msm_smem *smem)
 {
-	struct msm_smem *m = NULL;
+	int rc = 0;
 
 	if (!inst || !inst->core) {
 		dprintk(VIDC_ERR, "%s: invalid inst: %pK\n", __func__, inst);
-		return NULL;
+		return -EINVAL;
 	}
-	m = msm_smem_alloc(inst->mem_client, size, align,
-				flags, buffer_type, map_kernel);
-	return m;
+	rc = msm_smem_alloc(size, align, flags, buffer_type, map_kernel,
+				&(inst->core->resources), inst->session_type,
+				smem);
+	return rc;
 }
 
 void msm_comm_smem_free(struct msm_vidc_inst *inst, struct msm_smem *mem)
@@ -5193,7 +5159,7 @@ void msm_comm_smem_free(struct msm_vidc_inst *inst, struct msm_smem *mem)
 			"%s: invalid params: %pK %pK\n", __func__, inst, mem);
 		return;
 	}
-	msm_smem_free(inst->mem_client, mem);
+	msm_smem_free(mem);
 }
 
 int msm_comm_smem_cache_operations(struct msm_vidc_inst *inst,
@@ -5204,28 +5170,8 @@ int msm_comm_smem_cache_operations(struct msm_vidc_inst *inst,
 			"%s: invalid params: %pK %pK\n", __func__, inst, mem);
 		return -EINVAL;
 	}
-	return msm_smem_cache_operations(inst->mem_client, mem, cache_ops);
-}
-
-struct msm_smem *msm_comm_smem_user_to_kernel(struct msm_vidc_inst *inst,
-			int fd, u32 offset, enum hal_buffer buffer_type)
-{
-	struct msm_smem *m = NULL;
-
-	if (!inst || !inst->core) {
-		dprintk(VIDC_ERR, "%s: invalid inst: %pK\n", __func__, inst);
-		return NULL;
-	}
-
-	if (inst->state == MSM_VIDC_CORE_INVALID) {
-		dprintk(VIDC_ERR, "Core in Invalid state, returning from %s\n",
-			__func__);
-		return NULL;
-	}
-
-	m = msm_smem_user_to_kernel(inst->mem_client,
-			fd, offset, buffer_type);
-	return m;
+	return msm_smem_cache_operations(mem->dma_buf, mem->offset,
+					mem->size, cache_ops);
 }
 
 void msm_vidc_fw_unload_handler(struct work_struct *work)
@@ -5327,8 +5273,8 @@ int msm_vidc_comm_s_parm(struct msm_vidc_inst *inst, struct v4l2_streamparm *a)
 		case V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE:
 			us_per_frame = a->parm.output.timeperframe.numerator *
 				(u64)USEC_PER_SEC;
-			do_div(us_per_frame, a->parm.output.
-				timeperframe.denominator);
+			do_div(us_per_frame,
+				a->parm.output.timeperframe.denominator);
 			break;
 		default:
 			dprintk(VIDC_ERR,

@@ -168,7 +168,7 @@ struct cipher_iov {
 	unsigned short  size;
 };
 
-struct qce_f8_varible_multi_pkt_req {
+struct qce_f8_variable_multi_pkt_req {
 	unsigned short    num_pkt;
 	struct cipher_iov cipher_iov[MAX_NUM_V_MULTI_PKT];
 	struct qce_f8_req qce_f8_req;
@@ -205,6 +205,6 @@ struct qce_f9_req {
 #define QCOTA_F8_MPKT_REQ _IOWR(QCOTA_IOC_MAGIC, 2, struct qce_f8_multi_pkt_req)
 #define QCOTA_F9_REQ _IOWR(QCOTA_IOC_MAGIC, 3, struct qce_f9_req)
 #define QCOTA_F8_V_MPKT_REQ _IOWR(QCOTA_IOC_MAGIC, 4,\
-				struct qce_f8_varible_multi_pkt_req)
+				struct qce_f8_variable_multi_pkt_req)
 
 #endif /* _UAPI_QCOTA_H */

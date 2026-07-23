@@ -1,5 +1,4 @@
-/* Copyright (c) 2011, 2013-2016, 2018, The Linux Foundation.
- * All rights reserved.
+/* Copyright (c) 2011, 2013-2016, 2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -45,7 +44,7 @@ static int32_t msm_camera_qup_i2c_rxdata(
 	};
 	rc = i2c_transfer(dev_client->client->adapter, msgs, 2);
 	if (rc < 0)
-		S_I2C_DBG("msm_camera_qup_i2c_rxdata failed 0x%x\n", saddr);
+		S_I2C_DBG("%s failed 0x%x\n", __func__, saddr);
 	return rc;
 }
 
@@ -65,7 +64,7 @@ static int32_t msm_camera_qup_i2c_txdata(
 	};
 	rc = i2c_transfer(dev_client->client->adapter, msg, 1);
 	if (rc < 0)
-		S_I2C_DBG("msm_camera_qup_i2c_txdata failed 0x%x\n", saddr);
+		S_I2C_DBG("%s failed 0x%x\n", __func__, saddr);
 	return rc;
 }
 
@@ -223,6 +222,8 @@ int32_t msm_camera_qup_i2c_write(struct msm_camera_i2c_client *client,
 	rc = msm_camera_qup_i2c_txdata(client, buf, len);
 	if (rc < 0)
 		S_I2C_DBG("%s fail\n", __func__);
+	kfree(buf);
+	buf = NULL;
 	return rc;
 }
 
@@ -272,6 +273,8 @@ int32_t msm_camera_qup_i2c_write_seq(struct msm_camera_i2c_client *client,
 	rc = msm_camera_qup_i2c_txdata(client, buf, len+num_byte);
 	if (rc < 0)
 		S_I2C_DBG("%s fail\n", __func__);
+	kfree(buf);
+	buf = NULL;
 	return rc;
 }
 
@@ -613,4 +616,3 @@ int32_t msm_camera_qup_i2c_write_conf_tbl(
 	}
 	return rc;
 }
-

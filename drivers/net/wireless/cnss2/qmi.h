@@ -13,7 +13,14 @@
 #ifndef _CNSS_QMI_H
 #define _CNSS_QMI_H
 
+#include <linux/soc/qcom/qmi.h>
+
 struct cnss_plat_data;
+
+struct cnss_qmi_event_server_arrive_data {
+	unsigned int node;
+	unsigned int port;
+};
 
 #define QDSS_TRACE_SEG_LEN_MAX 32
 #define QDSS_TRACE_FILE_NAME_MAX 16
@@ -30,13 +37,14 @@ struct cnss_qmi_event_qdss_trace_save_data {
 	char file_name[QDSS_TRACE_FILE_NAME_MAX + 1];
 };
 
+#define FW_ID_BASE 7
 #ifdef CONFIG_CNSS2_QMI
 #include "wlan_firmware_service_v01.h"
 
 int cnss_qmi_init(struct cnss_plat_data *plat_priv);
 void cnss_qmi_deinit(struct cnss_plat_data *plat_priv);
 unsigned int cnss_get_qmi_timeout(struct cnss_plat_data *plat_priv);
-int cnss_wlfw_server_arrive(struct cnss_plat_data *plat_priv);
+int cnss_wlfw_server_arrive(struct cnss_plat_data *plat_priv, void *data);
 int cnss_wlfw_server_exit(struct cnss_plat_data *plat_priv);
 int cnss_wlfw_respond_mem_send_sync(struct cnss_plat_data *plat_priv);
 int cnss_wlfw_tgt_cap_send_sync(struct cnss_plat_data *plat_priv);
@@ -57,6 +65,7 @@ int cnss_wlfw_athdiag_write_send_sync(struct cnss_plat_data *plat_priv,
 int cnss_wlfw_ini_send_sync(struct cnss_plat_data *plat_priv,
 			    u8 fw_log_mode);
 int cnss_wlfw_qdss_trace_mem_info_send_sync(struct cnss_plat_data *plat_priv);
+int cnss_wlfw_send_pcie_gen_speed_sync(struct cnss_plat_data *plat_priv);
 #else
 #define QMI_WLFW_TIMEOUT_MS		10000
 
@@ -151,6 +160,10 @@ int cnss_wlfw_qdss_trace_mem_info_send_sync(struct cnss_plat_data *plat_priv)
 {
 	return 0;
 }
+
+static inline
+int cnss_wlfw_send_pcie_gen_speed_sync(struct cnss_plat_data *plat_priv) {}
+
 #endif /* CONFIG_CNSS2_QMI */
 
 #endif /* _CNSS_QMI_H */

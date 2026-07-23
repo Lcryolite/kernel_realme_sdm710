@@ -13,6 +13,8 @@
  * GNU General Public License for more details.
  */
 #include <linux/mman.h>
+#include <linux/module.h>
+#include <linux/device.h>
 #include <linux/types.h>
 #include <linux/platform_device.h>
 #include <linux/dma-mapping.h>
@@ -23,7 +25,6 @@
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/fs.h>
-#include <linux/miscdevice.h>
 #include <linux/uaccess.h>
 #include <linux/debugfs.h>
 #include <linux/scatterlist.h>
@@ -59,6 +60,10 @@ static uint8_t _std_init_vector_sha256_uint8[] = {
 static DEFINE_MUTEX(send_cmd_lock);
 static DEFINE_MUTEX(qcedev_sent_bw_req);
 static DEFINE_MUTEX(hash_access_lock);
+
+static dev_t qcedev_device_no;
+static struct class *driver_class;
+static struct device *class_dev;
 
 static const struct of_device_id qcedev_match[] = {
 	{	.compatible = "qcom,qcedev"},
@@ -210,11 +215,6 @@ static const struct file_operations qcedev_fops = {
 
 static struct qcedev_control qce_dev[] = {
 	{
-		.miscdevice = {
-			.minor = MISC_DYNAMIC_MINOR,
-			.name = "qce",
-			.fops = &qcedev_fops,
-		},
 		.magic = QCEDEV_MAGIC,
 	},
 };
@@ -242,8 +242,8 @@ static struct qcedev_control *qcedev_minor_to_control(unsigned int n)
 	int i;
 
 	for (i = 0; i < MAX_QCE_DEVICE; i++) {
-		if (qce_dev[i].miscdevice.minor == n)
-			return &qce_dev[i];
+		if (qce_dev[i].minor == n)
+			return &qce_dev[n];
 	}
 	return NULL;
 }
@@ -736,9 +736,8 @@ static int qcedev_sha_update_max_xfer(struct qcedev_async_req *qcedev_areq,
 	trailing_buf_len =  CE_SHA_BLOCK_SIZE - sha_pad_len;
 
 	qcedev_areq->sha_req.sreq.src = sg_src;
-	sg_set_buf(qcedev_areq->sha_req.sreq.src, k_align_src,
+	sg_init_one(qcedev_areq->sha_req.sreq.src, k_align_src,
 						total-trailing_buf_len);
-	sg_mark_end(qcedev_areq->sha_req.sreq.src);
 
 	qcedev_areq->sha_req.sreq.nbytes = total - trailing_buf_len;
 
@@ -888,19 +887,18 @@ static int qcedev_sha_final(struct qcedev_async_req *qcedev_areq,
 
 	total = handle->sha_ctxt.trailing_buf_len;
 
-	if (total) {
-		k_buf_src = kmalloc(total + CACHE_LINE_SIZE * 2,
-					GFP_KERNEL);
-		if (k_buf_src == NULL)
-			return -ENOMEM;
+	k_buf_src = kmalloc(total + CACHE_LINE_SIZE * 2,
+				GFP_KERNEL);
+	if (k_buf_src == NULL)
+		return -ENOMEM;
 
-		k_align_src = (uint8_t *)ALIGN(((uintptr_t)k_buf_src),
-							CACHE_LINE_SIZE);
-		memcpy(k_align_src, &handle->sha_ctxt.trailing_buf[0], total);
-	}
+	k_align_src = (uint8_t *)ALIGN(((uintptr_t)k_buf_src),
+						CACHE_LINE_SIZE);
+	memcpy(k_align_src, &handle->sha_ctxt.trailing_buf[0], total);
+
 	qcedev_areq->sha_req.sreq.src = (struct scatterlist *) &sg_src;
-	sg_set_buf(qcedev_areq->sha_req.sreq.src, k_align_src, total);
-	sg_mark_end(qcedev_areq->sha_req.sreq.src);
+
+	sg_init_one(qcedev_areq->sha_req.sreq.src, k_align_src, total);
 
 	qcedev_areq->sha_req.sreq.nbytes = total;
 
@@ -939,7 +937,7 @@ static int qcedev_hash_cmac(struct qcedev_async_req *qcedev_areq,
 		return -EFAULT;
 
 
-	k_buf_src = kmalloc(total, GFP_KERNEL);
+	k_buf_src = kmalloc(total + CACHE_LINE_SIZE * 2, GFP_KERNEL);
 	if (k_buf_src == NULL)
 		return -ENOMEM;
 
@@ -959,8 +957,7 @@ static int qcedev_hash_cmac(struct qcedev_async_req *qcedev_areq,
 	}
 
 	qcedev_areq->sha_req.sreq.src = sg_src;
-	sg_set_buf(qcedev_areq->sha_req.sreq.src, k_buf_src, total);
-	sg_mark_end(qcedev_areq->sha_req.sreq.src);
+	sg_init_one(qcedev_areq->sha_req.sreq.src, k_buf_src, total);
 
 	qcedev_areq->sha_req.sreq.nbytes = total;
 	handle->sha_ctxt.diglen = qcedev_areq->sha_op_req.diglen;
@@ -1048,8 +1045,7 @@ static int qcedev_hmac_get_ohash(struct qcedev_async_req *qcedev_areq,
 			handle->sha_ctxt.trailing_buf_len);
 
 	qcedev_areq->sha_req.sreq.src = (struct scatterlist *) &sg_src;
-	sg_set_buf(qcedev_areq->sha_req.sreq.src, k_src, sha_block_size);
-	sg_mark_end(qcedev_areq->sha_req.sreq.src);
+	sg_init_one(qcedev_areq->sha_req.sreq.src, k_src, sha_block_size);
 
 	qcedev_areq->sha_req.sreq.nbytes = sha_block_size;
 	memset(&handle->sha_ctxt.trailing_buf[0], 0, sha_block_size);
@@ -1215,10 +1211,9 @@ static int qcedev_vbuf_ablk_cipher_max_xfer(struct qcedev_async_req *areq,
 	areq->cipher_req.creq.dst = (struct scatterlist *) &sg_src;
 
 	/* In place encryption/decryption */
-	sg_set_buf(areq->cipher_req.creq.src,
+	sg_init_one(areq->cipher_req.creq.src,
 					k_align_dst,
 					areq->cipher_op_req.data_len);
-	sg_mark_end(areq->cipher_req.creq.src);
 
 	areq->cipher_req.creq.nbytes = areq->cipher_op_req.data_len;
 	areq->cipher_req.creq.info = areq->cipher_op_req.iv;
@@ -1564,13 +1559,8 @@ static int qcedev_check_cipher_params(struct qcedev_cipher_op_req *req,
 			goto error;
 		}
 		if (req->vbuf.dst[i].len >= U32_MAX - total) {
-#ifdef OPLUS_BUG_STABILITY
-			printk_ratelimited(KERN_ERR "%s: Integer overflow on total req dst vbuf length\n",
-				__func__);
-#else
 			pr_err("%s: Integer overflow on total req dst vbuf length\n",
 				__func__);
-#endif
 			goto error;
 		}
 		total += req->vbuf.dst[i].len;
@@ -1588,13 +1578,8 @@ static int qcedev_check_cipher_params(struct qcedev_cipher_op_req *req,
 			goto error;
 		}
 		if (req->vbuf.src[i].len > U32_MAX - total) {
-#ifdef OPLUS_BUG_STABILITY
-			printk_ratelimited(KERN_ERR "%s: Integer overflow on total req src vbuf length\n",
-				__func__);
-#else
 			pr_err("%s: Integer overflow on total req src vbuf length\n",
 				__func__);
-#endif
 			goto error;
 		}
 		total += req->vbuf.src[i].len;
@@ -1655,13 +1640,8 @@ static int qcedev_check_sha_params(struct qcedev_sha_op_req *req,
 	/* Check for sum of all src length is equal to data_len  */
 	for (i = 0, total = 0; i < req->entries; i++) {
 		if (req->data[i].len > U32_MAX - total) {
-#ifdef OPLUS_BUG_STABILITY
-			printk_ratelimited(KERN_ERR "%s: Integer overflow on total req buf length\n",
-				__func__);
-#else
 			pr_err("%s: Integer overflow on total req buf length\n",
 				__func__);
-#endif
 			goto sha_error;
 		}
 		total += req->data[i].len;
@@ -1935,7 +1915,9 @@ static inline long qcedev_ioctl(struct file *file,
 				goto exit_free_qcedev_areq;
 			}
 
-			if (map_buf.num_fds > QCEDEV_MAX_BUFFERS) {
+			if (map_buf.num_fds > ARRAY_SIZE(map_buf.fd)) {
+				pr_err("%s: err: num_fds = %d exceeds max value\n",
+				__func__, map_buf.num_fds);
 				err = -EINVAL;
 				goto exit_free_qcedev_areq;
 			}
@@ -1975,6 +1957,12 @@ static inline long qcedev_ioctl(struct file *file,
 				err = -EFAULT;
 				goto exit_free_qcedev_areq;
 			}
+			if (unmap_buf.num_fds > ARRAY_SIZE(unmap_buf.fd)) {
+				pr_err("%s: err: num_fds = %d exceeds max value\n",
+				__func__, unmap_buf.num_fds);
+				err = -EINVAL;
+				goto exit_free_qcedev_areq;
+			}
 
 			for (i = 0; i < unmap_buf.num_fds; i++) {
 				err = qcedev_check_and_unmap_buffer(handle,
@@ -2009,6 +1997,37 @@ static int qcedev_probe_device(struct platform_device *pdev)
 
 	podev = &qce_dev[0];
 
+	rc = alloc_chrdev_region(&qcedev_device_no, 0, 1, QCEDEV_DEV);
+	if (rc < 0) {
+		pr_err("alloc_chrdev_region failed %d\n", rc);
+		return rc;
+	}
+
+	driver_class = class_create(THIS_MODULE, QCEDEV_DEV);
+	if (IS_ERR(driver_class)) {
+		rc = -ENOMEM;
+		pr_err("class_create failed %d\n", rc);
+		goto exit_unreg_chrdev_region;
+	}
+
+	class_dev = device_create(driver_class, NULL, qcedev_device_no, NULL,
+			QCEDEV_DEV);
+	if (IS_ERR(class_dev)) {
+		pr_err("class_device_create failed %d\n", rc);
+		rc = -ENOMEM;
+		goto exit_destroy_class;
+	}
+
+	cdev_init(&podev->cdev, &qcedev_fops);
+	podev->cdev.owner = THIS_MODULE;
+
+	rc = cdev_add(&podev->cdev, MKDEV(MAJOR(qcedev_device_no), 0), 1);
+	if (rc < 0) {
+		pr_err("cdev_add failed %d\n", rc);
+		goto exit_destroy_device;
+	}
+	podev->minor = 0;
+
 	podev->high_bw_req_count = 0;
 	INIT_LIST_HEAD(&podev->ready_commands);
 	podev->active_command = NULL;
@@ -2023,14 +2042,16 @@ static int qcedev_probe_device(struct platform_device *pdev)
 					msm_bus_cl_get_pdata(pdev);
 	if (!podev->platform_support.bus_scale_table) {
 		pr_err("bus_scale_table is NULL\n");
-		return -ENODATA;
+		rc = -ENODATA;
+		goto exit_del_cdev;
 	}
 	podev->bus_scale_handle = msm_bus_scale_register_client(
 				(struct msm_bus_scale_pdata *)
 				podev->platform_support.bus_scale_table);
 	if (!podev->bus_scale_handle) {
 		pr_err("%s not able to get bus scale\n", __func__);
-		return -ENOMEM;
+		rc = -ENOMEM;
+		goto exit_del_cdev;
 	}
 
 	rc = msm_bus_scale_client_update_request(podev->bus_scale_handle, 1);
@@ -2071,16 +2092,10 @@ static int qcedev_probe_device(struct platform_device *pdev)
 		podev->platform_support.sha_hmac = platform_support->sha_hmac;
 	}
 
-	rc = misc_register(&podev->miscdevice);
-	if (rc) {
-		pr_err("%s: err: register failed for misc: %d\n", __func__, rc);
-		goto exit_qce_close;
-	}
-
 	podev->mem_client = qcedev_mem_new_client(MEM_ION);
 	if (!podev->mem_client) {
 		pr_err("%s: err: qcedev_mem_new_client failed\n", __func__);
-		goto err;
+		goto exit_qce_req_bw;
 	}
 
 	rc = of_platform_populate(pdev->dev.of_node, qcedev_match,
@@ -2088,17 +2103,16 @@ static int qcedev_probe_device(struct platform_device *pdev)
 	if (rc) {
 		pr_err("%s: err: of_platform_populate failed: %d\n",
 			__func__, rc);
-		goto err;
+		goto exit_mem_new_client;
 	}
 
 	return 0;
 
-err:
+exit_mem_new_client:
 	if (podev->mem_client)
 		qcedev_mem_delete_client(podev->mem_client);
 	podev->mem_client = NULL;
-
-	misc_deregister(&podev->miscdevice);
+exit_qce_req_bw:
 	if (msm_bus_scale_client_update_request(podev->bus_scale_handle, 1))
 		pr_err("%s Unable to set high bandwidth\n", __func__);
 exit_qce_close:
@@ -2110,6 +2124,15 @@ exit_scale_busbandwidth:
 exit_unregister_bus_scale:
 	if (podev->platform_support.bus_scale_table != NULL)
 		msm_bus_scale_unregister_client(podev->bus_scale_handle);
+exit_del_cdev:
+	cdev_del(&podev->cdev);
+exit_destroy_device:
+	device_destroy(driver_class, qcedev_device_no);
+exit_destroy_class:
+	class_destroy(driver_class);
+exit_unreg_chrdev_region:
+	unregister_chrdev_region(qcedev_device_no, 1);
+
 	podev->bus_scale_handle = 0;
 	platform_set_drvdata(pdev, NULL);
 	podev->pdev = NULL;
@@ -2139,18 +2162,25 @@ static int qcedev_remove(struct platform_device *pdev)
 	if (msm_bus_scale_client_update_request(podev->bus_scale_handle, 1))
 		pr_err("%s Unable to set high bandwidth\n", __func__);
 
+	qcedev_ce_high_bw_req(podev, true);
 	if (podev->qce)
 		qce_close(podev->qce);
+	qcedev_ce_high_bw_req(podev, false);
 
 	if (msm_bus_scale_client_update_request(podev->bus_scale_handle, 0))
 		pr_err("%s Unable to set low bandwidth\n", __func__);
 
 	if (podev->platform_support.bus_scale_table != NULL)
 		msm_bus_scale_unregister_client(podev->bus_scale_handle);
-
-	if (podev->miscdevice.minor != MISC_DYNAMIC_MINOR)
-		misc_deregister(&podev->miscdevice);
 	tasklet_kill(&podev->done_tasklet);
+
+	cdev_del(&podev->cdev);
+
+	device_destroy(driver_class, qcedev_device_no);
+
+	class_destroy(driver_class);
+
+	unregister_chrdev_region(qcedev_device_no, 1);
 	return 0;
 };
 
@@ -2279,7 +2309,7 @@ static int _qcedev_debug_init(void)
 
 	_debug_dent = debugfs_create_dir("qcedev", NULL);
 	if (IS_ERR(_debug_dent)) {
-		pr_err("qcedev debugfs_create_dir fail, error %ld\n",
+		pr_debug("qcedev debugfs_create_dir fail, error %ld\n",
 				PTR_ERR(_debug_dent));
 		return PTR_ERR(_debug_dent);
 	}
@@ -2289,7 +2319,7 @@ static int _qcedev_debug_init(void)
 	dent = debugfs_create_file(name, 0644, _debug_dent,
 			&_debug_qcedev, &_debug_stats_ops);
 	if (dent == NULL) {
-		pr_err("qcedev debugfs_create_file fail, error %ld\n",
+		pr_debug("qcedev debugfs_create_file fail, error %ld\n",
 				PTR_ERR(dent));
 		rc = PTR_ERR(dent);
 		goto err;
@@ -2302,11 +2332,7 @@ err:
 
 static int qcedev_init(void)
 {
-	int rc;
-
-	rc = _qcedev_debug_init();
-	if (rc)
-		return rc;
+	_qcedev_debug_init();
 	return platform_driver_register(&qcedev_plat_driver);
 }
 

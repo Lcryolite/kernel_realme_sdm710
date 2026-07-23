@@ -92,7 +92,8 @@ void __init add_static_vm_early(struct static_vm *svm)
 	void *vaddr;
 
 	vm = &svm->vm;
-	vm_area_add_early(vm);
+	if (!vm_area_check_early(vm))
+		vm_area_add_early(vm);
 	vaddr = vm->addr;
 
 	list_for_each_entry(curr_svm, &static_vmlist, list) {
@@ -271,7 +272,6 @@ static void __iomem * __arm_ioremap_pfn_caller(unsigned long pfn,
 	unsigned long addr;
 	struct vm_struct *area;
 	phys_addr_t paddr = __pfn_to_phys(pfn);
-	pgprot_t prot;
 
 #ifndef CONFIG_ARM_LPAE
 	/*
@@ -317,12 +317,6 @@ static void __iomem * __arm_ioremap_pfn_caller(unsigned long pfn,
  	addr = (unsigned long)area->addr;
 	area->phys_addr = paddr;
 
-	prot = __pgprot(type->prot_pte);
-#ifdef CONFIG_ARCH_MSM8953_SOC_SETTINGS
-	if (paddr >= MSM8953_TLMM_START_ADDR &&
-	    paddr <= MSM8953_TLMM_END_ADDR)
-		prot = pgprot_stronglyordered(type->prot_pte);
-#endif
 #if !defined(CONFIG_SMP) && !defined(CONFIG_ARM_LPAE)
 	if (DOMAIN_IO == 0 &&
 	    (((cpu_architecture() >= CPU_ARCH_ARMv6) && (get_cr() & CR_XP)) ||
@@ -335,7 +329,8 @@ static void __iomem * __arm_ioremap_pfn_caller(unsigned long pfn,
 		err = remap_area_sections(addr, pfn, size, type);
 	} else
 #endif
-		err = ioremap_page_range(addr, addr + size, paddr, prot);
+		err = ioremap_page_range(addr, addr + size, paddr,
+					 __pgprot(type->prot_pte));
 
 	if (err) {
  		vunmap((void *)addr);
@@ -494,6 +489,13 @@ int pci_ioremap_io(unsigned int offset, phys_addr_t phys_addr)
 				  __pgprot(get_mem_type(pci_ioremap_mem_type)->prot_pte));
 }
 EXPORT_SYMBOL_GPL(pci_ioremap_io);
+
+void __iomem *pci_remap_cfgspace(resource_size_t res_cookie, size_t size)
+{
+	return arch_ioremap_caller(res_cookie, size, MT_UNCACHED,
+				   __builtin_return_address(0));
+}
+EXPORT_SYMBOL_GPL(pci_remap_cfgspace);
 #endif
 
 /*

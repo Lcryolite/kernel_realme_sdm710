@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -123,7 +123,7 @@
 
 #define	FLASH_LED_REG_MULTI_STROBE_CTRL(base)	(base + 0x71)
 #define	LED3_FLASH_ONCE_ONLY_BIT		BIT(1)
-#define LED1N2_FLASH_ONCE_ONLY_BIT		BIT(0)
+#define	LED1N2_FLASH_ONCE_ONLY_BIT		BIT(0)
 
 #define	FLASH_LED_REG_LPG_INPUT_CTRL(base)	(base + 0x72)
 #define	LPG_INPUT_SEL_BIT			BIT(0)
@@ -216,6 +216,10 @@ enum strobe_type {
 	SW_STROBE = 0,
 	HW_STROBE,
 	LPG_STROBE,
+};
+
+enum wa_flags {
+	PM8150L_IRES_WA = BIT(0),
 };
 
 /*
@@ -319,6 +323,7 @@ struct qpnp_flash_led {
 	int				num_snodes;
 	int				enable;
 	int				total_current_ma;
+	u32				wa_flags;
 	u16				base;
 	bool				trigger_lmh;
 	bool				trigger_chgr;
@@ -1259,7 +1264,12 @@ static void qpnp_flash_led_node_set(struct flash_node_data *fnode, int value)
 				break;
 			}
 		}
+	} else if (prgm_current_ma <= 20 &&
+			(led->wa_flags & PM8150L_IRES_WA)) {
+		fnode->ires_idx = FLASH_LED_IRES_BASE;
+		fnode->ires_ua = FLASH_LED_IRES_MIN_UA;
 	}
+
 	fnode->current_ma = prgm_current_ma;
 	fnode->cdev.brightness = prgm_current_ma;
 	fnode->current_reg_val = get_current_reg_code(prgm_current_ma,
@@ -1688,7 +1698,7 @@ static int qpnp_flash_led_regulator_control(struct led_classdev *led_cdev,
 		}
 	}
 
-	if (options & QUERY_MAX_CURRENT) {
+	if (options & QUERY_MAX_AVAIL_CURRENT) {
 		rc = qpnp_flash_led_get_max_avail_current(led, max_current);
 		if (rc < 0) {
 			pr_err("query max current failed, rc=%d\n", rc);
@@ -1699,7 +1709,7 @@ static int qpnp_flash_led_regulator_control(struct led_classdev *led_cdev,
 	return 0;
 }
 
-static int qpnp_flash_led_prepare_v2(struct led_trigger *trig, int options,
+int qpnp_flash_led_prepare(struct led_trigger *trig, int options,
 					int *max_current)
 {
 	struct led_classdev *led_cdev;
@@ -1930,7 +1940,7 @@ static int qpnp_flash_led_parse_each_led_dt(struct qpnp_flash_led *led,
 	if (!rc) {
 		fnode->id = (u8)val;
 
-		if (pmic_subtype == PMI632_SUBTYPE && fnode->id > 1) {
+		if (pmic_subtype == PMI632_SUBTYPE && fnode->id > LED2) {
 			pr_err("Flash node id = %d not supported\n", fnode->id);
 			return -EINVAL;
 		}
@@ -2265,6 +2275,10 @@ static int qpnp_flash_led_parse_common_dt(struct qpnp_flash_led *led,
 	pr_debug("PMIC subtype %d Digital major %d\n",
 		led->pdata->pmic_rev_id->pmic_subtype,
 		led->pdata->pmic_rev_id->rev4);
+
+	if (led->pdata->pmic_rev_id->pmic_subtype == PM8150L_SUBTYPE)
+		led->wa_flags |= PM8150L_IRES_WA;
+
 	led->pdata->hdrm_auto_mode_en = of_property_read_bool(node,
 							"qcom,hdrm-auto-mode");
 
@@ -2685,7 +2699,6 @@ static int qpnp_flash_led_probe(struct platform_device *pdev)
 	if (!led->pdata)
 		return -ENOMEM;
 
-	qpnp_flash_led_prepare = qpnp_flash_led_prepare_v2;
 	rc = qpnp_flash_led_parse_common_dt(led, node);
 	if (rc < 0) {
 		pr_err("Failed to parse common flash LED device tree\n");

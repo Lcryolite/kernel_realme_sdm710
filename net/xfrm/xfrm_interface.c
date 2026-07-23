@@ -116,6 +116,9 @@ static void xfrmi_unlink(struct xfrmi_net *xfrmn, struct xfrm_if *xi)
 
 static void xfrmi_dev_free(struct net_device *dev)
 {
+	struct xfrm_if *xi = netdev_priv(dev);
+
+	gro_cells_destroy(&xi->gro_cells);
 	free_percpu(dev->tstats);
 }
 
@@ -222,7 +225,7 @@ static void xfrmi_dev_uninit(struct net_device *dev)
 
 static void xfrmi_scrub_packet(struct sk_buff *skb, bool xnet)
 {
-	skb->tstamp.tv64 = 0;
+	skb->tstamp = 0;
 	skb->pkt_type = PACKET_HOST;
 	skb->skb_iif = 0;
 	skb->ignore_df = 0;
@@ -313,10 +316,8 @@ xfrmi_xmit2(struct sk_buff *skb, struct net_device *dev, struct flowi *fl)
 	if (!dst)
 		goto tx_err_link_failure;
 
-	fl->flowi_xfrm.if_id = xi->p.if_id;
-
 	dst_hold(dst);
-	dst = xfrm_lookup(xi->net, dst, fl, NULL, 0);
+	dst = xfrm_lookup_with_ifid(xi->net, dst, fl, NULL, 0, xi->p.if_id);
 	if (IS_ERR(dst)) {
 		err = PTR_ERR(dst);
 		dst = NULL;
@@ -341,8 +342,7 @@ xfrmi_xmit2(struct sk_buff *skb, struct net_device *dev, struct flowi *fl)
 
 	mtu = dst_mtu(dst);
 	if (!skb->ignore_df && skb->len > mtu) {
-		if (dst && dst->ops->update_pmtu)
-			dst->ops->update_pmtu(dst, NULL, skb, mtu);
+		skb_dst_update_pmtu(skb, mtu);
 
 		if (skb->protocol == htons(ETH_P_IPV6)) {
 			if (mtu < IPV6_MIN_MTU)
@@ -559,13 +559,13 @@ static int xfrmi_update(struct xfrm_if *xi, struct xfrm_if_parms *p)
 	return err;
 }
 
-static struct rtnl_link_stats64 *xfrmi_get_stats64(struct net_device *dev,
+static void xfrmi_get_stats64(struct net_device *dev,
 			       struct rtnl_link_stats64 *s)
 {
 	int cpu;
 
 	if (!dev->tstats)
-		return s;
+		return;
 
 	for_each_possible_cpu(cpu) {
 		struct pcpu_sw_netstats *stats;
@@ -589,8 +589,6 @@ static struct rtnl_link_stats64 *xfrmi_get_stats64(struct net_device *dev,
 
 	s->rx_dropped = dev->stats.rx_dropped;
 	s->tx_dropped = dev->stats.tx_dropped;
-
-	return s;
 }
 
 static int xfrmi_get_iflink(const struct net_device *dev)
@@ -616,9 +614,12 @@ static void xfrmi_dev_setup(struct net_device *dev)
 	dev->hard_header_len 	= ETH_HLEN;
 	dev->min_header_len	= ETH_HLEN;
 	dev->mtu		= ETH_DATA_LEN;
+	dev->min_mtu		= ETH_MIN_MTU;
+	dev->max_mtu		= ETH_DATA_LEN;
 	dev->addr_len		= ETH_ALEN;
 	dev->flags 		= IFF_NOARP;
-	dev->destructor	= xfrmi_dev_free;
+	dev->needs_free_netdev	= true;
+	dev->priv_destructor	= xfrmi_dev_free;
 	netif_keep_dst(dev);
 }
 
@@ -651,7 +652,8 @@ static int xfrmi_dev_init(struct net_device *dev)
 	return 0;
 }
 
-static int xfrmi_validate(struct nlattr *tb[], struct nlattr *data[])
+static int xfrmi_validate(struct nlattr *tb[], struct nlattr *data[],
+			 struct netlink_ext_ack *extack)
 {
 	return 0;
 }
@@ -672,7 +674,8 @@ static void xfrmi_netlink_parms(struct nlattr *data[],
 }
 
 static int xfrmi_newlink(struct net *src_net, struct net_device *dev,
-			struct nlattr *tb[], struct nlattr *data[])
+			struct nlattr *tb[], struct nlattr *data[],
+			struct netlink_ext_ack *extack)
 {
 	struct net *net = dev_net(dev);
 	struct xfrm_if_parms *p;
@@ -698,7 +701,8 @@ static void xfrmi_dellink(struct net_device *dev, struct list_head *head)
 }
 
 static int xfrmi_changelink(struct net_device *dev, struct nlattr *tb[],
-			   struct nlattr *data[])
+			   struct nlattr *data[],
+			   struct netlink_ext_ack *extack)
 {
 	struct xfrm_if *xi = netdev_priv(dev);
 	struct net *net = dev_net(dev);
@@ -741,7 +745,7 @@ nla_put_failure:
 	return -EMSGSIZE;
 }
 
-struct net *xfrmi_get_link_net(const struct net_device *dev)
+static struct net *xfrmi_get_link_net(const struct net_device *dev)
 {
 	struct xfrm_if *xi = netdev_priv(dev);
 

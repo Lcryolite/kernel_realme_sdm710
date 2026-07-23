@@ -285,16 +285,16 @@ gth_output_parm_get(struct gth_device *gth, int port, unsigned int parm)
  */
 static int intel_th_gth_reset(struct gth_device *gth)
 {
-	u32 scratchpad;
+	u32 reg;
 	int port, i;
 
-	scratchpad = ioread32(gth->base + REG_GTH_SCRPD0);
-	if (scratchpad & SCRPD_DEBUGGER_IN_USE)
+	reg = ioread32(gth->base + REG_GTH_SCRPD0);
+	if (reg & SCRPD_DEBUGGER_IN_USE)
 		return -EBUSY;
 
 	/* Always save/restore STH and TU registers in S0ix entry/exit */
-	scratchpad |= SCRPD_STH_IS_ENABLED | SCRPD_TRIGGER_IS_ENABLED;
-	iowrite32(scratchpad, gth->base + REG_GTH_SCRPD0);
+	reg |= SCRPD_STH_IS_ENABLED | SCRPD_TRIGGER_IS_ENABLED;
+	iowrite32(reg, gth->base + REG_GTH_SCRPD0);
 
 	/* output ports */
 	for (port = 0; port < 8; port++) {
@@ -512,6 +512,30 @@ static void intel_th_gth_disable(struct intel_th_device *thdev,
 	iowrite32(reg, gth->base + REG_GTH_SCRPD0);
 }
 
+static void gth_tscu_resync(struct gth_device *gth)
+{
+	u32 reg;
+
+	reg = ioread32(gth->base + REG_TSCU_TSUCTRL);
+	reg &= ~TSUCTRL_CTCRESYNC;
+	iowrite32(reg, gth->base + REG_TSCU_TSUCTRL);
+}
+
+static void intel_th_gth_prepare(struct intel_th_device *thdev,
+				 struct intel_th_output *output)
+{
+	struct gth_device *gth = dev_get_drvdata(&thdev->dev);
+	int count;
+
+	/*
+	 * Wait until the output port is in reset before we start
+	 * programming it.
+	 */
+	for (count = GTH_PLE_WAITLOOP_DEPTH;
+	     count && !(gth_output_get(gth, output->port) & BIT(5)); count--)
+		cpu_relax();
+}
+
 /**
  * intel_th_gth_enable() - enable tracing to an output device
  * @thdev:	GTH device
@@ -524,6 +548,7 @@ static void intel_th_gth_enable(struct intel_th_device *thdev,
 				struct intel_th_output *output)
 {
 	struct gth_device *gth = dev_get_drvdata(&thdev->dev);
+	struct intel_th *th = to_intel_th(thdev);
 	u32 scr = 0xfc0000, scrpd;
 	int master;
 
@@ -538,6 +563,9 @@ static void intel_th_gth_enable(struct intel_th_device *thdev,
 
 	output->active = true;
 	spin_unlock(&gth->gth_lock);
+
+	if (INTEL_TH_CAP(th, tscu_enable))
+		gth_tscu_resync(gth);
 
 	scrpd = ioread32(gth->base + REG_GTH_SCRPD0);
 	scrpd |= output->scratchpad;
@@ -563,6 +591,9 @@ static int intel_th_gth_assign(struct intel_th_device *thdev,
 {
 	struct gth_device *gth = dev_get_drvdata(&thdev->dev);
 	int i, id;
+
+	if (thdev->host_mode)
+		return -EBUSY;
 
 	if (othdev->type != INTEL_TH_OUTPUT)
 		return -EINVAL;
@@ -601,6 +632,9 @@ static void intel_th_gth_unassign(struct intel_th_device *thdev,
 	int port = othdev->output.port;
 	int master;
 
+	if (thdev->host_mode)
+		return;
+
 	spin_lock(&gth->gth_lock);
 	othdev->output.port = -1;
 	othdev->output.active = false;
@@ -637,6 +671,7 @@ intel_th_gth_set_output(struct intel_th_device *thdev, unsigned int master)
 static int intel_th_gth_probe(struct intel_th_device *thdev)
 {
 	struct device *dev = &thdev->dev;
+	struct intel_th *th = dev_get_drvdata(dev->parent);
 	struct gth_device *gth;
 	struct resource *res;
 	void __iomem *base;
@@ -658,9 +693,26 @@ static int intel_th_gth_probe(struct intel_th_device *thdev)
 	gth->base = base;
 	spin_lock_init(&gth->gth_lock);
 
+	dev_set_drvdata(dev, gth);
+
+	/*
+	 * Host mode can be signalled via SW means or via SCRPD_DEBUGGER_IN_USE
+	 * bit. Either way, don't reset HW in this case, and don't export any
+	 * capture configuration attributes. Also, refuse to assign output
+	 * drivers to ports, see intel_th_gth_assign().
+	 */
+	if (thdev->host_mode)
+		return 0;
+
 	ret = intel_th_gth_reset(gth);
-	if (ret)
-		return ret;
+	if (ret) {
+		if (ret != -EBUSY)
+			return ret;
+
+		thdev->host_mode = true;
+
+		return 0;
+	}
 
 	for (i = 0; i < TH_CONFIGURABLE_MASTERS + 1; i++)
 		gth->master[i] = -1;
@@ -670,6 +722,13 @@ static int intel_th_gth_probe(struct intel_th_device *thdev)
 		gth->output[i].index = i;
 		gth->output[i].port_type =
 			gth_output_parm_get(gth, i, TH_OUTPUT_PARM(port));
+		if (gth->output[i].port_type == GTH_NONE)
+			continue;
+
+		ret = intel_th_output_enable(th, gth->output[i].port_type);
+		/* -ENODEV is ok, we just won't have that device enumerated */
+		if (ret && ret != -ENODEV)
+			return ret;
 	}
 
 	if (intel_th_output_attributes(gth) ||
@@ -680,8 +739,6 @@ static int intel_th_gth_probe(struct intel_th_device *thdev)
 			sysfs_remove_group(&gth->dev->kobj, &gth->output_group);
 		return -ENOMEM;
 	}
-
-	dev_set_drvdata(dev, gth);
 
 	return 0;
 }
@@ -700,6 +757,7 @@ static struct intel_th_driver intel_th_gth_driver = {
 	.assign		= intel_th_gth_assign,
 	.unassign	= intel_th_gth_unassign,
 	.set_output	= intel_th_gth_set_output,
+	.prepare	= intel_th_gth_prepare,
 	.enable		= intel_th_gth_enable,
 	.disable	= intel_th_gth_disable,
 	.driver	= {

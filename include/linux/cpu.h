@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * include/linux/cpu.h - generic cpu definition
  *
@@ -30,6 +31,8 @@ struct cpu {
 
 extern void boot_cpu_init(void);
 extern void boot_cpu_hotplug_init(void);
+extern void cpu_init(void);
+extern void trap_init(void);
 
 extern int register_cpu(struct cpu *cpu, int num);
 extern struct device *get_cpu_device(unsigned cpu);
@@ -65,6 +68,8 @@ extern ssize_t cpu_show_srbds(struct device *dev, struct device_attribute *attr,
 extern ssize_t cpu_show_mmio_stale_data(struct device *dev,
 					struct device_attribute *attr,
 					char *buf);
+extern ssize_t cpu_show_retbleed(struct device *dev,
+				 struct device_attribute *attr, char *buf);
 
 extern __printf(4, 5)
 struct device *cpu_device_create(struct device *parent, void *drvdata,
@@ -79,9 +84,6 @@ struct notifier_block;
 
 #define CPU_ONLINE		0x0002 /* CPU (unsigned)v is up */
 #define CPU_UP_PREPARE		0x0003 /* CPU (unsigned)v coming up */
-#define CPU_UP_CANCELED		0x0004 /* CPU (unsigned)v NOT coming up */
-#define CPU_DOWN_PREPARE	0x0005 /* CPU (unsigned)v going down */
-#define CPU_DOWN_FAILED		0x0006 /* CPU (unsigned)v NOT going down */
 #define CPU_DEAD		0x0007 /* CPU (unsigned)v dead */
 #define CPU_POST_DEAD		0x0009 /* CPU (unsigned)v dead, cpu_hotplug
 					* lock is dropped */
@@ -102,79 +104,13 @@ struct notifier_block;
 
 #ifdef CONFIG_SMP
 extern bool cpuhp_tasks_frozen;
-/* Need to know about CPUs going up/down? */
-#if defined(CONFIG_HOTPLUG_CPU) || !defined(MODULE)
-#define cpu_notifier(fn, pri) {					\
-	static struct notifier_block fn##_nb =			\
-		{ .notifier_call = fn, .priority = pri };	\
-	register_cpu_notifier(&fn##_nb);			\
-}
-
-#define __cpu_notifier(fn, pri) {				\
-	static struct notifier_block fn##_nb =			\
-		{ .notifier_call = fn, .priority = pri };	\
-	__register_cpu_notifier(&fn##_nb);			\
-}
-
-extern int register_cpu_notifier(struct notifier_block *nb);
-extern int __register_cpu_notifier(struct notifier_block *nb);
-extern void unregister_cpu_notifier(struct notifier_block *nb);
-extern void __unregister_cpu_notifier(struct notifier_block *nb);
-
-#else /* #if defined(CONFIG_HOTPLUG_CPU) || !defined(MODULE) */
-#define cpu_notifier(fn, pri)	do { (void)(fn); } while (0)
-#define __cpu_notifier(fn, pri)	do { (void)(fn); } while (0)
-
-static inline int register_cpu_notifier(struct notifier_block *nb)
-{
-	return 0;
-}
-
-static inline int __register_cpu_notifier(struct notifier_block *nb)
-{
-	return 0;
-}
-
-static inline void unregister_cpu_notifier(struct notifier_block *nb)
-{
-}
-
-static inline void __unregister_cpu_notifier(struct notifier_block *nb)
-{
-}
-#endif
-
 int cpu_up(unsigned int cpu);
 void notify_cpu_starting(unsigned int cpu);
 extern void cpu_maps_update_begin(void);
 extern void cpu_maps_update_done(void);
 
-#define cpu_notifier_register_begin	cpu_maps_update_begin
-#define cpu_notifier_register_done	cpu_maps_update_done
-
 #else	/* CONFIG_SMP */
 #define cpuhp_tasks_frozen	0
-
-#define cpu_notifier(fn, pri)	do { (void)(fn); } while (0)
-#define __cpu_notifier(fn, pri)	do { (void)(fn); } while (0)
-
-static inline int register_cpu_notifier(struct notifier_block *nb)
-{
-	return 0;
-}
-
-static inline int __register_cpu_notifier(struct notifier_block *nb)
-{
-	return 0;
-}
-
-static inline void unregister_cpu_notifier(struct notifier_block *nb)
-{
-}
-
-static inline void __unregister_cpu_notifier(struct notifier_block *nb)
-{
-}
 
 static inline void cpu_maps_update_begin(void)
 {
@@ -184,53 +120,36 @@ static inline void cpu_maps_update_done(void)
 {
 }
 
-static inline void cpu_notifier_register_begin(void)
-{
-}
-
-static inline void cpu_notifier_register_done(void)
-{
-}
-
 #endif /* CONFIG_SMP */
 extern struct bus_type cpu_subsys;
 
 #ifdef CONFIG_HOTPLUG_CPU
-/* Stop CPUs going up and down. */
-
-extern void cpu_hotplug_begin(void);
-extern void cpu_hotplug_done(void);
-extern void get_online_cpus(void);
-extern void cpu_hotplug_mutex_held(void);
-extern void put_online_cpus(void);
+extern void cpus_write_lock(void);
+extern void cpus_write_unlock(void);
+extern void cpus_read_lock(void);
+extern void cpus_read_unlock(void);
+extern void lockdep_assert_cpus_held(void);
 extern void cpu_hotplug_disable(void);
 extern void cpu_hotplug_enable(void);
-#define hotcpu_notifier(fn, pri)	cpu_notifier(fn, pri)
-#define __hotcpu_notifier(fn, pri)	__cpu_notifier(fn, pri)
-#define register_hotcpu_notifier(nb)	register_cpu_notifier(nb)
-#define __register_hotcpu_notifier(nb)	__register_cpu_notifier(nb)
-#define unregister_hotcpu_notifier(nb)	unregister_cpu_notifier(nb)
-#define __unregister_hotcpu_notifier(nb)	__unregister_cpu_notifier(nb)
 void clear_tasks_mm_cpumask(int cpu);
 int cpu_down(unsigned int cpu);
 
-#else		/* CONFIG_HOTPLUG_CPU */
+#else /* CONFIG_HOTPLUG_CPU */
 
-static inline void cpu_hotplug_begin(void) {}
-static inline void cpu_hotplug_done(void) {}
-#define get_online_cpus()	do { } while (0)
-#define put_online_cpus()	do { } while (0)
-#define cpu_hotplug_disable()	do { } while (0)
-#define cpu_hotplug_enable()	do { } while (0)
-#define hotcpu_notifier(fn, pri)	do { (void)(fn); } while (0)
-#define __hotcpu_notifier(fn, pri)	do { (void)(fn); } while (0)
-#define cpu_hotplug_mutex_held()	do { } while (0)
-/* These aren't inline functions due to a GCC bug. */
-#define register_hotcpu_notifier(nb)	({ (void)(nb); 0; })
-#define __register_hotcpu_notifier(nb)	({ (void)(nb); 0; })
-#define unregister_hotcpu_notifier(nb)	({ (void)(nb); })
-#define __unregister_hotcpu_notifier(nb)	({ (void)(nb); })
-#endif		/* CONFIG_HOTPLUG_CPU */
+static inline void cpus_write_lock(void) { }
+static inline void cpus_write_unlock(void) { }
+static inline void cpus_read_lock(void) { }
+static inline void cpus_read_unlock(void) { }
+static inline void lockdep_assert_cpus_held(void) { }
+static inline void cpu_hotplug_disable(void) { }
+static inline void cpu_hotplug_enable(void) { }
+#endif	/* !CONFIG_HOTPLUG_CPU */
+
+/* Wrappers which go away once all code is converted */
+static inline void cpu_hotplug_begin(void) { cpus_write_lock(); }
+static inline void cpu_hotplug_done(void) { cpus_write_unlock(); }
+static inline void get_online_cpus(void) { cpus_read_lock(); }
+static inline void put_online_cpus(void) { cpus_read_unlock(); }
 
 #ifdef CONFIG_PM_SLEEP_SMP
 extern int freeze_secondary_cpus(int primary);
@@ -259,9 +178,17 @@ void arch_cpu_idle_enter(void);
 void arch_cpu_idle_exit(void);
 void arch_cpu_idle_dead(void);
 
+#ifdef CONFIG_ARCH_HAS_CPU_FINALIZE_INIT
+void arch_cpu_finalize_init(void);
+#else
+static inline void arch_cpu_finalize_init(void) { }
+#endif
+
 int cpu_report_state(int cpu);
 int cpu_check_up_prepare(int cpu);
 void cpu_set_state_online(int cpu);
+void play_idle(unsigned long duration_ms);
+
 #ifdef CONFIG_HOTPLUG_CPU
 bool cpu_wait_death(unsigned int cpu, int seconds);
 bool cpu_report_death(void);
@@ -269,6 +196,13 @@ void cpuhp_report_idle_dead(void);
 #else
 static inline void cpuhp_report_idle_dead(void) { }
 #endif /* #ifdef CONFIG_HOTPLUG_CPU */
+
+#define IDLE_START 1
+#define IDLE_END 2
+
+void idle_notifier_register(struct notifier_block *n);
+void idle_notifier_unregister(struct notifier_block *n);
+void idle_notifier_call_chain(unsigned long val);
 
 enum cpuhp_smt_control {
 	CPU_SMT_ENABLED,
@@ -280,14 +214,12 @@ enum cpuhp_smt_control {
 #if defined(CONFIG_SMP) && defined(CONFIG_HOTPLUG_SMT)
 extern enum cpuhp_smt_control cpu_smt_control;
 extern void cpu_smt_disable(bool force);
-extern void cpu_smt_check_topology_early(void);
 extern void cpu_smt_check_topology(void);
 extern int cpuhp_smt_enable(void);
 extern int cpuhp_smt_disable(enum cpuhp_smt_control ctrlval);
 #else
 # define cpu_smt_control		(CPU_SMT_ENABLED)
 static inline void cpu_smt_disable(bool force) { }
-static inline void cpu_smt_check_topology_early(void) { }
 static inline void cpu_smt_check_topology(void) { }
 static inline int cpuhp_smt_enable(void) { return 0; }
 static inline int cpuhp_smt_disable(enum cpuhp_smt_control ctrlval) { return 0; }
@@ -296,11 +228,6 @@ static inline int cpuhp_smt_disable(enum cpuhp_smt_control ctrlval) { return 0; 
 extern bool cpu_mitigations_off(void);
 extern bool cpu_mitigations_auto_nosmt(void);
 
-#define IDLE_START 1
-#define IDLE_END 2
-
-void idle_notifier_register(struct notifier_block *n);
-void idle_notifier_unregister(struct notifier_block *n);
-void idle_notifier_call_chain(unsigned long val);
+extern unsigned int logical_bootcpu_id;
 
 #endif /* _LINUX_CPU_H_ */

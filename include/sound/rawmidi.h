@@ -30,7 +30,7 @@
 #include <linux/workqueue.h>
 #include <linux/device.h>
 
-#if defined(CONFIG_SND_SEQUENCER) || defined(CONFIG_SND_SEQUENCER_MODULE)
+#if IS_ENABLED(CONFIG_SND_SEQUENCER)
 #include <sound/seq_device.h>
 #endif
 
@@ -105,7 +105,7 @@ struct snd_rawmidi_substream {
 	struct snd_rawmidi_runtime *runtime;
 	struct pid *pid;
 	/* hardware layer */
-	struct snd_rawmidi_ops *ops;
+	const struct snd_rawmidi_ops *ops;
 };
 
 struct snd_rawmidi_file {
@@ -146,7 +146,7 @@ struct snd_rawmidi {
 
 	struct snd_info_entry *proc_entry;
 
-#if defined(CONFIG_SND_SEQUENCER) || defined(CONFIG_SND_SEQUENCER_MODULE)
+#if IS_ENABLED(CONFIG_SND_SEQUENCER)
 	struct snd_seq_device *seq_dev;
 #endif
 };
@@ -157,7 +157,7 @@ int snd_rawmidi_new(struct snd_card *card, char *id, int device,
 		    int output_count, int input_count,
 		    struct snd_rawmidi **rmidi);
 void snd_rawmidi_set_ops(struct snd_rawmidi *rmidi, int stream,
-			 struct snd_rawmidi_ops *ops);
+			 const struct snd_rawmidi_ops *ops);
 
 /* callbacks */
 

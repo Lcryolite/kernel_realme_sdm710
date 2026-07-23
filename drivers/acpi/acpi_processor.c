@@ -165,7 +165,7 @@ static int acpi_processor_errata(void)
 
 #ifdef CONFIG_ACPI_HOTPLUG_CPU
 int __weak acpi_map_cpu(acpi_handle handle,
-		phys_cpuid_t physid, int *pcpu)
+		phys_cpuid_t physid, u32 acpi_id, int *pcpu)
 {
 	return -ENODEV;
 }
@@ -198,7 +198,7 @@ static int acpi_processor_hotadd_init(struct acpi_processor *pr)
 	cpu_maps_update_begin();
 	cpu_hotplug_begin();
 
-	ret = acpi_map_cpu(pr->handle, pr->phys_id, &pr->id);
+	ret = acpi_map_cpu(pr->handle, pr->phys_id, pr->acpi_id, &pr->id);
 	if (ret)
 		goto out;
 
@@ -278,6 +278,17 @@ static int acpi_processor_get_info(struct acpi_device *device)
 		}
 		device_declaration = 1;
 		pr->acpi_id = value;
+	}
+
+	if (acpi_duplicate_processor_id(pr->acpi_id)) {
+		if (pr->acpi_id == 0xff)
+			dev_info_once(&device->dev,
+				"Entry not well-defined, consider updating BIOS\n");
+		else
+			dev_err(&device->dev,
+				"Failed to get unique processor _UID (0x%x)\n",
+				pr->acpi_id);
+		return -ENODEV;
 	}
 
 	pr->phys_id = acpi_get_phys_id(pr->handle, device_declaration,
@@ -379,12 +390,7 @@ static int acpi_processor_add(struct acpi_device *device,
 
 	result = acpi_processor_get_info(device);
 	if (result) /* Processor is not physically present or unavailable */
-		return 0;
-
-#ifdef CONFIG_SMP
-	if (pr->id >= setup_max_cpus && pr->id != 0)
-		return 0;
-#endif
+		goto err_clear_driver_data;
 
 	BUG_ON(pr->id >= nr_cpu_ids);
 
@@ -399,7 +405,7 @@ static int acpi_processor_add(struct acpi_device *device,
 			"BIOS reported wrong ACPI id %d for the processor\n",
 			pr->id);
 		/* Give up, but do not abort the namespace scan. */
-		goto err;
+		goto err_clear_driver_data;
 	}
 	/*
 	 * processor_device_array is not cleared on errors to allow buggy BIOS
@@ -411,12 +417,12 @@ static int acpi_processor_add(struct acpi_device *device,
 	dev = get_cpu_device(pr->id);
 	if (!dev) {
 		result = -ENODEV;
-		goto err;
+		goto err_clear_per_cpu;
 	}
 
 	result = acpi_bind_one(dev, device);
 	if (result)
-		goto err;
+		goto err_clear_per_cpu;
 
 	pr->dev = dev;
 
@@ -427,10 +433,11 @@ static int acpi_processor_add(struct acpi_device *device,
 	dev_err(dev, "Processor driver could not be attached\n");
 	acpi_unbind_one(dev);
 
- err:
-	free_cpumask_var(pr->throttling.shared_cpu_map);
-	device->driver_data = NULL;
+ err_clear_per_cpu:
 	per_cpu(processors, pr->id) = NULL;
+ err_clear_driver_data:
+	device->driver_data = NULL;
+	free_cpumask_var(pr->throttling.shared_cpu_map);
  err_free_pr:
 	kfree(pr);
 	return result;
@@ -580,7 +587,7 @@ static struct acpi_scan_handler processor_container_handler = {
 static int nr_unique_ids __initdata;
 
 /* The number of the duplicate processor IDs */
-static int nr_duplicate_ids __initdata;
+static int nr_duplicate_ids;
 
 /* Used to store the unique processor IDs */
 static int unique_processor_ids[] __initdata = {
@@ -588,7 +595,7 @@ static int unique_processor_ids[] __initdata = {
 };
 
 /* Used to store the duplicate processor IDs */
-static int duplicate_processor_ids[] __initdata = {
+static int duplicate_processor_ids[] = {
 	[0 ... NR_CPUS - 1] = -1,
 };
 
@@ -633,28 +640,54 @@ static acpi_status __init acpi_processor_ids_walk(acpi_handle handle,
 						  void **rv)
 {
 	acpi_status status;
+	acpi_object_type acpi_type;
+	unsigned long long uid;
 	union acpi_object object = { 0 };
 	struct acpi_buffer buffer = { sizeof(union acpi_object), &object };
 
-	status = acpi_evaluate_object(handle, NULL, NULL, &buffer);
+	status = acpi_get_type(handle, &acpi_type);
 	if (ACPI_FAILURE(status))
-		acpi_handle_info(handle, "Not get the processor object\n");
-	else
-		processor_validated_ids_update(object.processor.proc_id);
+		return status;
 
+	switch (acpi_type) {
+	case ACPI_TYPE_PROCESSOR:
+		status = acpi_evaluate_object(handle, NULL, NULL, &buffer);
+		if (ACPI_FAILURE(status))
+			goto err;
+		uid = object.processor.proc_id;
+		break;
+
+	case ACPI_TYPE_DEVICE:
+		status = acpi_evaluate_integer(handle, "_UID", NULL, &uid);
+		if (ACPI_FAILURE(status))
+			goto err;
+		break;
+	default:
+		goto err;
+	}
+
+	processor_validated_ids_update(uid);
 	return AE_OK;
+
+err:
+	/* Exit on error, but don't abort the namespace walk */
+	acpi_handle_info(handle, "Invalid processor object\n");
+	return AE_OK;
+
 }
 
 static void __init acpi_processor_check_duplicates(void)
 {
-	/* Search all processor nodes in ACPI namespace */
+	/* check the correctness for all processors in ACPI namespace */
 	acpi_walk_namespace(ACPI_TYPE_PROCESSOR, ACPI_ROOT_OBJECT,
 						ACPI_UINT32_MAX,
 						acpi_processor_ids_walk,
 						NULL, NULL, NULL);
+	acpi_get_devices(ACPI_PROCESSOR_DEVICE_HID, acpi_processor_ids_walk,
+						NULL, NULL);
 }
 
-bool __init acpi_processor_validate_proc_id(int proc_id)
+bool acpi_duplicate_processor_id(int proc_id)
 {
 	int i;
 

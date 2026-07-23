@@ -122,7 +122,10 @@ extern const struct dentry_operations cifs_ci_dentry_ops;
 #ifdef CONFIG_CIFS_DFS_UPCALL
 extern struct vfsmount *cifs_dfs_d_automount(struct path *path);
 #else
-#define cifs_dfs_d_automount NULL
+static inline struct vfsmount *cifs_dfs_d_automount(struct path *path)
+{
+	return ERR_PTR(-EREMOTE);
+}
 #endif
 
 /* Functions related to symlinks */
@@ -139,10 +142,15 @@ extern ssize_t	cifs_listxattr(struct dentry *, char *, size_t);
 # define cifs_listxattr NULL
 #endif
 
+extern ssize_t cifs_file_copychunk_range(unsigned int xid,
+					struct file *src_file, loff_t off,
+					struct file *dst_file, loff_t destoff,
+					size_t len, unsigned int flags);
+
 extern long cifs_ioctl(struct file *filep, unsigned int cmd, unsigned long arg);
 #ifdef CONFIG_CIFS_NFSD_EXPORT
 extern const struct export_operations cifs_export_ops;
 #endif /* CONFIG_CIFS_NFSD_EXPORT */
 
-#define CIFS_VERSION   "2.09"
+#define CIFS_VERSION   "2.10"
 #endif				/* _CIFSFS_H */

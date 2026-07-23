@@ -1,4 +1,4 @@
-/* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -16,6 +16,7 @@
 #include "cam_mem_mgr.h"
 
 #define CAM_CDM170_VERSION 0x10000000
+#define CAM_CDM175_VERSION 0x10010000
 
 extern struct cam_cdm_utils_ops CDM170_ops;
 

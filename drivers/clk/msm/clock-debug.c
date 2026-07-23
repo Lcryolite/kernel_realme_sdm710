@@ -10,7 +10,6 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.	 See the
  * GNU General Public License for more details.
- *
  */
 
 #include <linux/kernel.h>
@@ -303,7 +302,7 @@ static void clock_debug_print_enabled_debug_suspend(struct seq_file *s)
 						c->count, c->rate,
 					find_vdd_level(c, c->rate));
 		else
-				 clock_debug_output(s, 0, " %s:%lu:%lu [%ld]",
+			clock_debug_output(s, 0, " %s:%lu:%lu [%ld]",
 					c->dbg_name, c->prepare_count,
 					c->count, c->rate);
 		cnt++;

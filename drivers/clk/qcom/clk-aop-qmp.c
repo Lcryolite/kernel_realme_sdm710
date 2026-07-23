@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -11,7 +11,7 @@
  * GNU General Public License for more details.
  */
 
-#define pr_fmt(fmt) "clk: %s: " fmt, __func__
+#define pr_fmt(fmt) "%s: " fmt, __func__
 
 #include <linux/clk-provider.h>
 #include <linux/clk.h>
@@ -118,16 +118,14 @@ static int clk_aop_qmp_set_rate(struct clk_hw *hw, unsigned long rate,
 		pr_err("Failed to send set rate request of %lu for %s, ret %d\n",
 					rate, clk_hw_get_name(hw), ret);
 		goto err;
-	} else
-		/* Success: update the return value */
-		ret = 0;
+	}
 
 	/* update the current clock level once the mailbox message is sent */
 	clk->level = rate;
 err:
 	mutex_unlock(&clk_aop_lock);
 
-	return ret;
+	return ret < 0 ? ret : 0;
 }
 
 static int clk_aop_qmp_prepare(struct clk_hw *hw)
@@ -159,11 +157,10 @@ static int clk_aop_qmp_prepare(struct clk_hw *hw)
 	ret = mbox_send_message(clk->mbox, &pkt);
 	if (ret < 0) {
 		pr_err("Failed to send clk prepare request for %s, ret %d\n",
-					clk_hw_get_name(hw), ret);
+				hw->core ? clk_hw_get_name(hw) : hw->init->name,
+					ret);
 		goto err;
-	} else
-		/* Success: update the return value */
-		ret = 0;
+	}
 
 	/* update the current clock level once the mailbox message is sent */
 	clk->level = rate;
@@ -172,7 +169,7 @@ static int clk_aop_qmp_prepare(struct clk_hw *hw)
 err:
 	mutex_unlock(&clk_aop_lock);
 
-	return ret;
+	return ret < 0 ? ret : 0;
 }
 
 static void clk_aop_qmp_unprepare(struct clk_hw *hw)
@@ -233,19 +230,11 @@ static struct clk_hw *aop_qmp_clk_hws[] = {
 	[QDSS_AO_CLK] = &qdss_ao_qmp_clk.hw,
 };
 
-/*
- * Due to HW limitations on v1, the qdss_ao clock was not supported by the clock
- * driver on AOP.
- */
-static void aop_qmp_fixup_v1(void)
-{
-	aop_qmp_clk_hws[QDSS_AO_CLK] = NULL;
-}
-
 static int qmp_update_client(struct clk_hw *hw, struct device *dev,
-		struct mbox_chan *mbox)
+		struct mbox_chan **mbox)
 {
 	struct clk_aop_qmp *clk_aop = to_aop_qmp_clk(hw);
+	int ret;
 
 	/* Use mailbox client with blocking mode */
 	clk_aop->cl.dev = dev;
@@ -253,17 +242,19 @@ static int qmp_update_client(struct clk_hw *hw, struct device *dev,
 	clk_aop->cl.tx_tout = MBOX_TOUT_MS;
 	clk_aop->cl.knows_txdone = false;
 
-	if (mbox) {
-		clk_aop->mbox = mbox;
+	if (*mbox) {
+		clk_aop->mbox = *mbox;
 		return 0;
 	}
 
 	/* Allocate mailbox channel */
-	mbox = clk_aop->mbox = mbox_request_channel(&clk_aop->cl, 0);
-	if (IS_ERR(clk_aop->mbox) && PTR_ERR(clk_aop->mbox) != -EPROBE_DEFER) {
-		dev_err(dev, "Failed to get mailbox channel %pK %ld\n",
-						mbox, PTR_ERR(mbox));
-		return PTR_ERR(clk_aop->mbox);
+	*mbox = clk_aop->mbox = mbox_request_channel(&clk_aop->cl, 0);
+	if (IS_ERR(clk_aop->mbox)) {
+		ret = PTR_ERR(clk_aop->mbox);
+		if (ret != -EPROBE_DEFER)
+			dev_err(dev, "Failed to get mailbox channel, ret %d\n",
+				ret);
+		return ret;
 	}
 
 	return 0;
@@ -274,6 +265,7 @@ static int aop_qmp_clk_probe(struct platform_device *pdev)
 	struct clk *clk = NULL;
 	struct device_node *np = pdev->dev.of_node;
 	struct mbox_chan *mbox = NULL;
+	struct clk_onecell_data *clk_data;
 	int num_clks = ARRAY_SIZE(aop_qmp_clk_hws);
 	int ret = 0, i = 0;
 
@@ -281,17 +273,25 @@ static int aop_qmp_clk_probe(struct platform_device *pdev)
 	 * Allocate mbox channel for the first clock client. The same channel
 	 * would be used for the rest of the clock clients.
 	 */
-	ret = qmp_update_client(aop_qmp_clk_hws[i], &pdev->dev, mbox);
+	ret = qmp_update_client(aop_qmp_clk_hws[i], &pdev->dev, &mbox);
 	if (ret < 0)
 		return ret;
 
-	if (of_device_is_compatible(pdev->dev.of_node, "qcom,aop-qmp-clk-v1"))
-		aop_qmp_fixup_v1();
+	clk_data = devm_kzalloc(&pdev->dev, sizeof(*clk_data), GFP_KERNEL);
+	if (!clk_data)
+		return -ENOMEM;
+
+	clk_data->clks = devm_kcalloc(&pdev->dev, num_clks,
+					sizeof(*clk_data->clks), GFP_KERNEL);
+	if (!clk_data->clks)
+		return -ENOMEM;
+
+	clk_data->clk_num = num_clks;
 
 	for (i = 1; i < num_clks; i++) {
 		if (!aop_qmp_clk_hws[i])
 			continue;
-		ret = qmp_update_client(aop_qmp_clk_hws[i], &pdev->dev, mbox);
+		ret = qmp_update_client(aop_qmp_clk_hws[i], &pdev->dev, &mbox);
 		if (ret < 0) {
 			dev_err(&pdev->dev, "Failed to update QMP client %d\n",
 							ret);
@@ -310,14 +310,16 @@ static int aop_qmp_clk_probe(struct platform_device *pdev)
 	for (i = 0; i < num_clks; i++) {
 		if (!aop_qmp_clk_hws[i])
 			continue;
+
 		clk = devm_clk_register(&pdev->dev, aop_qmp_clk_hws[i]);
 		if (IS_ERR(clk)) {
 			ret = PTR_ERR(clk);
 			goto fail;
 		}
+		clk_data->clks[i] = clk;
 	}
 
-	ret = of_clk_add_provider(np, of_clk_src_simple_get, clk);
+	ret = of_clk_add_provider(np, of_clk_src_onecell_get, clk_data);
 	if (ret) {
 		dev_err(&pdev->dev, "Failed to register clock provider\n");
 		goto fail;
@@ -333,8 +335,7 @@ fail:
 }
 
 static const struct of_device_id aop_qmp_clk_of_match[] = {
-	{ .compatible = "qcom,aop-qmp-clk-v1" },
-	{ .compatible = "qcom,aop-qmp-clk-v2" },
+	{ .compatible = "qcom,aop-qmp-clk", },
 	{}
 };
 

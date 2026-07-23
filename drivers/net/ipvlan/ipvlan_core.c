@@ -16,12 +16,9 @@ void ipvlan_init_secret(void)
 	net_get_random_once(&ipvlan_jhash_secret, sizeof(ipvlan_jhash_secret));
 }
 
-static void ipvlan_count_rx(const struct ipvl_dev *ipvlan,
+void ipvlan_count_rx(const struct ipvl_dev *ipvlan,
 			    unsigned int len, bool success, bool mcast)
 {
-	if (!ipvlan)
-		return;
-
 	if (likely(success)) {
 		struct ipvl_pcpu_stats *pcptr;
 
@@ -36,6 +33,7 @@ static void ipvlan_count_rx(const struct ipvl_dev *ipvlan,
 		this_cpu_inc(ipvlan->pcpu_stats->rx_errs);
 	}
 }
+EXPORT_SYMBOL_GPL(ipvlan_count_rx);
 
 static u8 ipvlan_get_v6_hash(const void *iaddr)
 {
@@ -198,7 +196,7 @@ void ipvlan_process_multicast(struct work_struct *work)
 	unsigned int mac_hash;
 	int ret;
 	u8 pkt_type;
-	bool hlocal, dlocal;
+	bool tx_pkt;
 
 	__skb_queue_head_init(&list);
 
@@ -207,8 +205,11 @@ void ipvlan_process_multicast(struct work_struct *work)
 	spin_unlock_bh(&port->backlog.lock);
 
 	while ((skb = __skb_dequeue(&list)) != NULL) {
+		struct net_device *dev = skb->dev;
+		bool consumed = false;
+
 		ethh = eth_hdr(skb);
-		hlocal = ether_addr_equal(ethh->h_source, port->dev->dev_addr);
+		tx_pkt = IPVL_SKB_CB(skb)->tx_pkt;
 		mac_hash = ipvlan_mac_hash(ethh->h_dest);
 
 		if (ether_addr_equal(ethh->h_dest, port->dev->broadcast))
@@ -216,41 +217,45 @@ void ipvlan_process_multicast(struct work_struct *work)
 		else
 			pkt_type = PACKET_MULTICAST;
 
-		dlocal = false;
 		rcu_read_lock();
 		list_for_each_entry_rcu(ipvlan, &port->ipvlans, pnode) {
-			if (hlocal && (ipvlan->dev == skb->dev)) {
-				dlocal = true;
+			if (tx_pkt && (ipvlan->dev == skb->dev))
 				continue;
-			}
 			if (!test_bit(mac_hash, ipvlan->mac_filters))
 				continue;
-
+			if (!(ipvlan->dev->flags & IFF_UP))
+				continue;
 			ret = NET_RX_DROP;
 			len = skb->len + ETH_HLEN;
 			nskb = skb_clone(skb, GFP_ATOMIC);
-			if (!nskb)
-				goto acct;
-
-			nskb->pkt_type = pkt_type;
-			nskb->dev = ipvlan->dev;
-			if (hlocal)
-				ret = dev_forward_skb(ipvlan->dev, nskb);
-			else
-				ret = netif_rx(nskb);
-acct:
+			local_bh_disable();
+			if (nskb) {
+				consumed = true;
+				nskb->pkt_type = pkt_type;
+				nskb->dev = ipvlan->dev;
+				if (tx_pkt)
+					ret = dev_forward_skb(ipvlan->dev, nskb);
+				else
+					ret = netif_rx(nskb);
+			}
 			ipvlan_count_rx(ipvlan, len, ret == NET_RX_SUCCESS, true);
+			local_bh_enable();
 		}
 		rcu_read_unlock();
 
-		if (dlocal) {
+		if (tx_pkt) {
 			/* If the packet originated here, send it out. */
 			skb->dev = port->dev;
 			skb->pkt_type = pkt_type;
 			dev_queue_xmit(skb);
 		} else {
-			kfree_skb(skb);
+			if (consumed)
+				consume_skb(skb);
+			else
+				kfree_skb(skb);
 		}
+		if (dev)
+			dev_put(dev);
 		cond_resched();
 	}
 }
@@ -364,7 +369,7 @@ static struct ipvl_addr *ipvlan_addr_lookup(struct ipvl_port *port,
 	return addr;
 }
 
-static int ipvlan_process_v4_outbound(struct sk_buff *skb)
+static noinline_for_stack int ipvlan_process_v4_outbound(struct sk_buff *skb)
 {
 	const struct iphdr *ip4h = ip_hdr(skb);
 	struct net_device *dev = skb->dev;
@@ -389,26 +394,26 @@ static int ipvlan_process_v4_outbound(struct sk_buff *skb)
 		goto err;
 	}
 	skb_dst_set(skb, &rt->dst);
-	err = ip_local_out(net, skb->sk, skb);
+
+	memset(IPCB(skb), 0, sizeof(*IPCB(skb)));
+
+	err = ip_local_out(net, NULL, skb);
 	if (unlikely(net_xmit_eval(err)))
-		dev->stats.tx_errors++;
+		DEV_STATS_INC(dev, tx_errors);
 	else
 		ret = NET_XMIT_SUCCESS;
 	goto out;
 err:
-	dev->stats.tx_errors++;
+	DEV_STATS_INC(dev, tx_errors);
 	kfree_skb(skb);
 out:
 	return ret;
 }
 
-static int ipvlan_process_v6_outbound(struct sk_buff *skb)
+static noinline_for_stack int
+ipvlan_route_v6_outbound(struct net_device *dev, struct sk_buff *skb)
 {
 	const struct ipv6hdr *ip6h = ipv6_hdr(skb);
-	struct net_device *dev = skb->dev;
-	struct net *net = dev_net(dev);
-	struct dst_entry *dst;
-	int err, ret = NET_XMIT_DROP;
 	struct flowi6 fl6 = {
 		.flowi6_oif = dev->ifindex,
 		.daddr = ip6h->daddr,
@@ -418,24 +423,38 @@ static int ipvlan_process_v6_outbound(struct sk_buff *skb)
 		.flowi6_mark = skb->mark,
 		.flowi6_proto = ip6h->nexthdr,
 	};
+	struct dst_entry *dst;
+	int err;
 
-	dst = ip6_route_output(net, NULL, &fl6);
-	if (dst->error) {
-		ret = dst->error;
+	dst = ip6_route_output(dev_net(dev), NULL, &fl6);
+	err = dst->error;
+	if (err) {
 		dst_release(dst);
-		goto err;
+		return err;
 	}
 	skb_dst_set(skb, dst);
-	err = ip6_local_out(net, skb->sk, skb);
+	return 0;
+}
+
+static int ipvlan_process_v6_outbound(struct sk_buff *skb)
+{
+	struct net_device *dev = skb->dev;
+	int err, ret = NET_XMIT_DROP;
+
+	err = ipvlan_route_v6_outbound(dev, skb);
+	if (unlikely(err)) {
+		DEV_STATS_INC(dev, tx_errors);
+		kfree_skb(skb);
+		return err;
+	}
+
+	memset(IP6CB(skb), 0, sizeof(*IP6CB(skb)));
+
+	err = ip6_local_out(dev_net(dev), NULL, skb);
 	if (unlikely(net_xmit_eval(err)))
-		dev->stats.tx_errors++;
+		DEV_STATS_INC(dev, tx_errors);
 	else
 		ret = NET_XMIT_SUCCESS;
-	goto out;
-err:
-	dev->stats.tx_errors++;
-	kfree_skb(skb);
-out:
 	return ret;
 }
 
@@ -479,15 +498,24 @@ out:
 }
 
 static void ipvlan_multicast_enqueue(struct ipvl_port *port,
-				     struct sk_buff *skb)
+				     struct sk_buff *skb, bool tx_pkt)
 {
 	if (skb->protocol == htons(ETH_P_PAUSE)) {
 		kfree_skb(skb);
 		return;
 	}
 
+	/* Record that the deferred packet is from TX or RX path. By
+	 * looking at mac-addresses on packet will lead to erronus decisions.
+	 * (This would be true for a loopback-mode on master device or a
+	 * hair-pin mode of the switch.)
+	 */
+	IPVL_SKB_CB(skb)->tx_pkt = tx_pkt;
+
 	spin_lock(&port->backlog.lock);
 	if (skb_queue_len(&port->backlog) < IPVLAN_QBACKLOG_LIMIT) {
+		if (skb->dev)
+			dev_hold(skb->dev);
 		__skb_queue_tail(&port->backlog, skb);
 		spin_unlock(&port->backlog.lock);
 		schedule_work(&port->wq);
@@ -547,7 +575,7 @@ static int ipvlan_xmit_mode_l2(struct sk_buff *skb, struct net_device *dev)
 	} else if (is_multicast_ether_addr(eth->h_dest)) {
 		skb_reset_mac_header(skb);
 		ipvlan_skb_crossing_ns(skb, NULL);
-		ipvlan_multicast_enqueue(ipvlan->port, skb);
+		ipvlan_multicast_enqueue(ipvlan->port, skb, true);
 		return NET_XMIT_SUCCESS;
 	}
 
@@ -644,7 +672,7 @@ static rx_handler_result_t ipvlan_handle_mode_l2(struct sk_buff **pskb,
 			 */
 			if (nskb) {
 				ipvlan_skb_crossing_ns(nskb, NULL);
-				ipvlan_multicast_enqueue(port, nskb);
+				ipvlan_multicast_enqueue(port, nskb, false);
 			}
 		}
 	} else {
@@ -748,7 +776,8 @@ struct sk_buff *ipvlan_l3_rcv(struct net_device *dev, struct sk_buff *skb,
 		};
 
 		skb_dst_drop(skb);
-		dst = ip6_route_input_lookup(dev_net(sdev), sdev, &fl6, flags);
+		dst = ip6_route_input_lookup(dev_net(sdev), sdev, &fl6,
+					     skb, flags);
 		skb_dst_set(skb, dst);
 		break;
 	}

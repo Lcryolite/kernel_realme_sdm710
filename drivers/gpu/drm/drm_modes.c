@@ -49,13 +49,7 @@
  */
 void drm_mode_debug_printmodeline(const struct drm_display_mode *mode)
 {
-	DRM_DEBUG_KMS("Modeline %d:\"%s\" %d %d %d %d %d %d %d %d %d %d "
-			"0x%x 0x%x\n",
-		mode->base.id, mode->name, mode->vrefresh, mode->clock,
-		mode->hdisplay, mode->hsync_start,
-		mode->hsync_end, mode->htotal,
-		mode->vdisplay, mode->vsync_start,
-		mode->vsync_end, mode->vtotal, mode->type, mode->flags);
+	DRM_DEBUG_KMS("Modeline " DRM_MODE_FMT "\n", DRM_MODE_ARG(mode));
 }
 EXPORT_SYMBOL(drm_mode_debug_printmodeline);
 
@@ -77,7 +71,7 @@ struct drm_display_mode *drm_mode_create(struct drm_device *dev)
 	if (!nmode)
 		return NULL;
 
-	if (drm_mode_object_get(dev, &nmode->base, DRM_MODE_OBJECT_MODE)) {
+	if (drm_mode_object_add(dev, &nmode->base, DRM_MODE_OBJECT_MODE)) {
 		kfree(nmode);
 		return NULL;
 	}
@@ -165,6 +159,7 @@ struct drm_display_mode *drm_cvt_mode(struct drm_device *dev, int hdisplay,
 	unsigned int vfieldrate, hperiod;
 	int hdisplay_rnd, hmargin, vdisplay_rnd, vmargin, vsync;
 	int interlace;
+	u64 tmp;
 
 	/* allocate the drm_display_mode structure. If failure, we will
 	 * return directly
@@ -322,8 +317,11 @@ struct drm_display_mode *drm_cvt_mode(struct drm_device *dev, int hdisplay,
 		drm_mode->vsync_end = drm_mode->vsync_start + vsync;
 	}
 	/* 15/13. Find pixel clock frequency (kHz for xf86) */
-	drm_mode->clock = drm_mode->htotal * HV_FACTOR * 1000 / hperiod;
-	drm_mode->clock -= drm_mode->clock % CVT_CLOCK_STEP;
+	tmp = drm_mode->htotal; /* perform intermediate calcs in u64 */
+	tmp *= HV_FACTOR * 1000;
+	do_div(tmp, hperiod);
+	tmp -= drm_mode->clock % CVT_CLOCK_STEP;
+	drm_mode->clock = tmp;
 	/* 18/16. Find actual vertical frame frequency */
 	/* ignore - just set the mode flag for interlaced */
 	if (interlaced) {
@@ -711,8 +709,8 @@ int of_get_drm_display_mode(struct device_node *np,
 	if (bus_flags)
 		drm_bus_flags_from_videomode(&vm, bus_flags);
 
-	pr_debug("%s: got %dx%d display mode from %s\n",
-		of_node_full_name(np), vm.hactive, vm.vactive, np->name);
+	pr_debug("%pOF: got %dx%d display mode from %s\n",
+		np, vm.hactive, vm.vactive, np->name);
 	drm_mode_debug_printmodeline(dmode);
 
 	return 0;
@@ -797,6 +795,26 @@ int drm_mode_vrefresh(const struct drm_display_mode *mode)
 	return refresh;
 }
 EXPORT_SYMBOL(drm_mode_vrefresh);
+
+/**
+ * drm_mode_get_hv_timing - Fetches hdisplay/vdisplay for given mode
+ * @mode: mode to query
+ * @hdisplay: hdisplay value to fill in
+ * @vdisplay: vdisplay value to fill in
+ *
+ * The vdisplay value will be doubled if the specified mode is a stereo mode of
+ * the appropriate layout.
+ */
+void drm_mode_get_hv_timing(const struct drm_display_mode *mode,
+			    int *hdisplay, int *vdisplay)
+{
+	struct drm_display_mode adjusted = *mode;
+
+	drm_mode_set_crtcinfo(&adjusted, CRTC_STEREO_DOUBLE_ONLY);
+	*hdisplay = adjusted.crtc_hdisplay;
+	*vdisplay = adjusted.crtc_vdisplay;
+}
+EXPORT_SYMBOL(drm_mode_get_hv_timing);
 
 /**
  * drm_mode_set_crtcinfo - set CRTC modesetting timing parameters
@@ -984,6 +1002,7 @@ static bool drm_mode_match_aspect_ratio(const struct drm_display_mode *mode1,
 bool drm_mode_match(const struct drm_display_mode *mode1,
 		    const struct drm_display_mode *mode2,
 		    unsigned int match_flags)
+
 {
 	if (!mode1 && !mode2)
 		return true;
@@ -992,7 +1011,7 @@ bool drm_mode_match(const struct drm_display_mode *mode1,
 		return false;
 
 	if (match_flags & DRM_MODE_MATCH_TIMINGS &&
-		!drm_mode_match_timings(mode1, mode2))
+	    !drm_mode_match_timings(mode1, mode2))
 		return false;
 
 	if (match_flags & DRM_MODE_MATCH_CLOCK &&
@@ -1137,6 +1156,34 @@ drm_mode_validate_size(const struct drm_display_mode *mode,
 }
 EXPORT_SYMBOL(drm_mode_validate_size);
 
+/**
+ * drm_mode_validate_ycbcr420 - add 'ycbcr420-only' modes only when allowed
+ * @mode: mode to check
+ * @connector: drm connector under action
+ *
+ * This function is a helper which can be used to filter out any YCBCR420
+ * only mode, when the source doesn't support it.
+ *
+ * Returns:
+ * The mode status
+ */
+enum drm_mode_status
+drm_mode_validate_ycbcr420(const struct drm_display_mode *mode,
+			   struct drm_connector *connector)
+{
+	u8 vic = drm_match_cea_mode(mode);
+	enum drm_mode_status status = MODE_OK;
+	struct drm_hdmi_info *hdmi = &connector->display_info.hdmi;
+
+	if (test_bit(vic, hdmi->y420_vdb_modes)) {
+		if (!connector->ycbcr_420_allowed)
+			status = MODE_NO_420;
+	}
+
+	return status;
+}
+EXPORT_SYMBOL(drm_mode_validate_ycbcr420);
+
 #define MODE_STATUS(status) [MODE_ ## status + 3] = #status
 
 static const char * const drm_mode_status_names[] = {
@@ -1176,6 +1223,7 @@ static const char * const drm_mode_status_names[] = {
 	MODE_STATUS(ONE_SIZE),
 	MODE_STATUS(NO_REDUCED),
 	MODE_STATUS(NO_STEREO),
+	MODE_STATUS(NO_420),
 	MODE_STATUS(STALE),
 	MODE_STATUS(BAD),
 	MODE_STATUS(ERROR),
@@ -1535,12 +1583,8 @@ drm_mode_create_from_cmdline_mode(struct drm_device *dev,
 
 	mode->type |= DRM_MODE_TYPE_USERDEF;
 	/* fix up 1368x768: GFT/CVT can't express 1366 width due to alignment */
-	if (cmd->xres == 1366 && mode->hdisplay == 1368) {
-		mode->hdisplay = 1366;
-		mode->hsync_start--;
-		mode->hsync_end--;
-		drm_mode_set_name(mode);
-	}
+	if (cmd->xres == 1366)
+		drm_mode_fixup_1366x768(mode);
 	drm_mode_set_crtcinfo(mode, CRTC_INTERLACE_HALVE_V);
 	return mode;
 }
@@ -1578,27 +1622,6 @@ void drm_mode_convert_to_umode(struct drm_mode_modeinfo *out,
 	out->vrefresh = in->vrefresh;
 	out->flags = in->flags;
 	out->type = in->type;
-	out->flags &= ~DRM_MODE_FLAG_PIC_AR_MASK;
-
-	switch (in->picture_aspect_ratio) {
-	case HDMI_PICTURE_ASPECT_4_3:
-		out->flags |= DRM_MODE_FLAG_PIC_AR_4_3;
-		break;
-	case HDMI_PICTURE_ASPECT_16_9:
-		out->flags |= DRM_MODE_FLAG_PIC_AR_16_9;
-		break;
-	case HDMI_PICTURE_ASPECT_64_27:
-		out->flags |= DRM_MODE_FLAG_PIC_AR_64_27;
-		break;
-	case DRM_MODE_PICTURE_ASPECT_256_135:
-		out->flags |= DRM_MODE_FLAG_PIC_AR_256_135;
-		break;
-	case HDMI_PICTURE_ASPECT_RESERVED:
-	default:
-		out->flags |= DRM_MODE_FLAG_PIC_AR_NONE;
-		break;
-	}
-
 	strncpy(out->name, in->name, DRM_DISPLAY_MODE_LEN);
 	out->name[DRM_DISPLAY_MODE_LEN-1] = 0;
 }
@@ -1644,27 +1667,6 @@ int drm_mode_convert_umode(struct drm_display_mode *out,
 	strncpy(out->name, in->name, DRM_DISPLAY_MODE_LEN);
 	out->name[DRM_DISPLAY_MODE_LEN-1] = 0;
 
-	/* Clearing picture aspect ratio bits from out flags */
-	out->flags &= ~DRM_MODE_FLAG_PIC_AR_MASK;
-
-	switch (in->flags & DRM_MODE_FLAG_PIC_AR_MASK) {
-	case DRM_MODE_FLAG_PIC_AR_4_3:
-		out->picture_aspect_ratio |= HDMI_PICTURE_ASPECT_4_3;
-		break;
-	case DRM_MODE_FLAG_PIC_AR_16_9:
-		out->picture_aspect_ratio |= HDMI_PICTURE_ASPECT_16_9;
-		break;
-	case DRM_MODE_FLAG_PIC_AR_64_27:
-		out->picture_aspect_ratio |= HDMI_PICTURE_ASPECT_64_27;
-		break;
-	case DRM_MODE_FLAG_PIC_AR_256_135:
-		out->picture_aspect_ratio |= HDMI_PICTURE_ASPECT_256_135;
-		break;
-	default:
-		out->picture_aspect_ratio = HDMI_PICTURE_ASPECT_NONE;
-		break;
-	}
-
 	out->status = drm_mode_validate_basic(out);
 	if (out->status != MODE_OK)
 		goto out;
@@ -1676,3 +1678,61 @@ int drm_mode_convert_umode(struct drm_display_mode *out,
 out:
 	return ret;
 }
+
+/**
+ * drm_mode_is_420_only - if a given videomode can be only supported in YCBCR420
+ * output format
+ *
+ * @display: display under action
+ * @mode: video mode to be tested.
+ *
+ * Returns:
+ * true if the mode can be supported in YCBCR420 format
+ * false if not.
+ */
+bool drm_mode_is_420_only(const struct drm_display_info *display,
+			  const struct drm_display_mode *mode)
+{
+	u8 vic = drm_match_cea_mode(mode);
+
+	return test_bit(vic, display->hdmi.y420_vdb_modes);
+}
+EXPORT_SYMBOL(drm_mode_is_420_only);
+
+/**
+ * drm_mode_is_420_also - if a given videomode can be supported in YCBCR420
+ * output format also (along with RGB/YCBCR444/422)
+ *
+ * @display: display under action.
+ * @mode: video mode to be tested.
+ *
+ * Returns:
+ * true if the mode can be support YCBCR420 format
+ * false if not.
+ */
+bool drm_mode_is_420_also(const struct drm_display_info *display,
+			  const struct drm_display_mode *mode)
+{
+	u8 vic = drm_match_cea_mode(mode);
+
+	return test_bit(vic, display->hdmi.y420_cmdb_modes);
+}
+EXPORT_SYMBOL(drm_mode_is_420_also);
+/**
+ * drm_mode_is_420 - if a given videomode can be supported in YCBCR420
+ * output format
+ *
+ * @display: display under action.
+ * @mode: video mode to be tested.
+ *
+ * Returns:
+ * true if the mode can be supported in YCBCR420 format
+ * false if not.
+ */
+bool drm_mode_is_420(const struct drm_display_info *display,
+		     const struct drm_display_mode *mode)
+{
+	return drm_mode_is_420_only(display, mode) ||
+		drm_mode_is_420_also(display, mode);
+}
+EXPORT_SYMBOL(drm_mode_is_420);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015, 2017-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -139,7 +139,8 @@ static char *scan_id(char *s)
 
 static void encode_seemp_section(char *section_start, char *section_eq,
 				char *section_end, bool param, bool numeric,
-				int id, __s32 numeric_value) {
+				int id, __s32 numeric_value)
+{
 	param = param && (section_eq + 1 < section_end);
 
 	if (!param) {

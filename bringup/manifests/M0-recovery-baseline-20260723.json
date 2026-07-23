@@ -1,0 +1,67 @@
+{
+  "schema": 1,
+  "milestone": "M0-recovery-safety",
+  "captured_at": "2026-07-23T02:00:00+08:00",
+  "device": {
+    "product": "RMX1901",
+    "mode": "recovery",
+    "adb_uid": 0,
+    "serial_redacted": true,
+    "recovery_kernel": "4.9.337-BloodMoon"
+  },
+  "storage": {
+    "primary_evidence_root": "/home/lknife/android/rmx1901-4.14-bringup-evidence/M0-20260723",
+    "primary_physical_device": "/dev/nvme0n1p1",
+    "off_disk_copy_root": "/home/lknife/rmx1901-4.14-bringup-evidence-offdisk/M0-20260723/backup-B",
+    "off_disk_physical_device": "/dev/nvme1n1p3",
+    "pairwise_cmp": "PASS",
+    "sha256_check": "PASS"
+  },
+  "partitions": {
+    "boot": {
+      "bytes": 67108864,
+      "sha256": "91ee702c42f0516a6b7f6baeb812fb2f0594984f8a332c7ce0512c8b69b3510c"
+    },
+    "recovery": {
+      "bytes": 67108864,
+      "sha256": "66ef2bd883ef8b5e2d471dbc5965686c726263dc35d0394f8e72c790affca0fc"
+    },
+    "dtbo": {
+      "bytes": 25165824,
+      "sha256": "73d9d36f775ef041e9d9db748eff5502bec7e5ee8efe0f352c9ac19015ff9b13"
+    },
+    "vbmeta": {
+      "bytes": 65536,
+      "sha256": "9a88f344fdb9a3851a42599fe3da96306dd2e978fdfac67c53c2445801435fff"
+    },
+    "rawdump": {
+      "bytes": 134217728,
+      "sha256": "ae46e57009f4b027563ca4b72e69b0f944875efddf273fd845f98aa67ef25378"
+    }
+  },
+  "rollback": {
+    "known_good_id": "r38",
+    "current_boot_matches_known_good": true,
+    "known_good_sha256": "91ee702c42f0516a6b7f6baeb812fb2f0594984f8a332c7ce0512c8b69b3510c",
+    "local_copy": "/home/lknife/android/diagnose-r40-rollback-r38/boot-flashed-r38-after-r40.img",
+    "recovery_write_path": "previously exercised by the r38 restore; not rewritten during this capture"
+  },
+  "device_tree": {
+    "androidboot_dtbo_idx": 46,
+    "androidboot_dtb_idx": 0,
+    "model": "Qualcomm Technologies, Inc. SDM710 PM660 + PM660A MTP",
+    "compatible": [
+      "qcom,sdm670-mtp",
+      "qcom,sdm670",
+      "qcom,mtp"
+    ],
+    "msm_id": [360, 0, 393, 0],
+    "board_id": [8, 0],
+    "oppo_project_decimal": 18041,
+    "overlay_dts": "/home/lknife/android/rmx1901-4.14-bringup-evidence/M0-20260723/snapshots/dtbo-entry-46.dts",
+    "active_fdt_dts": "/home/lknife/android/rmx1901-4.14-bringup-evidence/M0-20260723/snapshots/recovery-active-fdt.dts"
+  },
+  "write_actions_during_capture": [],
+  "status": "PASS_FOR_HOST_BUILD_ONLY",
+  "remaining_hard_gate": "arm64 and arm32 vendor UAPI oracle must pass before M3"
+}

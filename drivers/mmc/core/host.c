@@ -30,23 +30,22 @@
 #include <linux/mmc/slot-gpio.h>
 
 #include "core.h"
+#include "crypto.h"
 #include "host.h"
 #include "slot-gpio.h"
 #include "pwrseq.h"
+#include "sdio_ops.h"
 
 #define MMC_DEVFRQ_DEFAULT_UP_THRESHOLD 35
 #define MMC_DEVFRQ_DEFAULT_DOWN_THRESHOLD 5
 #define MMC_DEVFRQ_DEFAULT_POLLING_MSEC 100
 
 static DEFINE_IDA(mmc_host_ida);
-static DEFINE_SPINLOCK(mmc_host_lock);
 
 static void mmc_host_classdev_release(struct device *dev)
 {
 	struct mmc_host *host = cls_dev_to_mmc_host(dev);
-	spin_lock(&mmc_host_lock);
-	ida_remove(&mmc_host_ida, host->index);
-	spin_unlock(&mmc_host_lock);
+	ida_simple_remove(&mmc_host_ida, host->index);
 	kfree(host);
 }
 
@@ -89,6 +88,7 @@ static ssize_t clkgate_delay_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
 	struct mmc_host *host = cls_dev_to_mmc_host(dev);
+
 	return snprintf(buf, PAGE_SIZE, "%lu\n", host->clkgate_delay);
 }
 
@@ -121,8 +121,7 @@ static void mmc_host_clk_gate_delayed(struct mmc_host *host)
 	unsigned long flags;
 
 	if (!freq) {
-		pr_debug("%s: frequency set to 0 in disable function, "
-			 "this means the clock is already disabled.\n",
+		pr_debug("%s: frequency set to 0 in disable function, this means the clock is already disabled.\n",
 			 mmc_hostname(host));
 		return;
 	}
@@ -200,6 +199,7 @@ void mmc_host_clk_hold(struct mmc_host *host)
 	spin_unlock_irqrestore(&host->clk_lock, flags);
 	mutex_unlock(&host->clk_gate_mutex);
 }
+EXPORT_SYMBOL(mmc_host_clk_hold);
 
 /**
  *	mmc_host_may_gate_card - check if this card may be gated
@@ -216,7 +216,7 @@ bool mmc_host_may_gate_card(struct mmc_card *card)
 	 * that is the case or not.
 	 */
 	if (mmc_card_sdio(card) && card->cccr.async_intr_sup)
-			return true;
+		return true;
 
 	/*
 	 * Don't gate SDIO cards! These need to be clocked at all times
@@ -249,6 +249,7 @@ void mmc_host_clk_release(struct mmc_host *host)
 				      msecs_to_jiffies(host->clkgate_delay));
 	spin_unlock_irqrestore(&host->clk_lock, flags);
 }
+EXPORT_SYMBOL(mmc_host_clk_release);
 
 /**
  *	mmc_host_clk_rate - get current clock frequency setting
@@ -316,7 +317,7 @@ static inline void mmc_host_clk_sysfs_init(struct mmc_host *host)
 	host->clkgate_delay_attr.store = clkgate_delay_store;
 	sysfs_attr_init(&host->clkgate_delay_attr.attr);
 	host->clkgate_delay_attr.attr.name = "clkgate_delay";
-	host->clkgate_delay_attr.attr.mode = S_IRUGO | S_IWUSR;
+	host->clkgate_delay_attr.attr.mode = 0644;
 	if (device_create_file(&host->class_dev, &host->clkgate_delay_attr))
 		pr_err("%s: Failed to create clkgate_delay sysfs entry\n",
 				mmc_hostname(host));
@@ -436,6 +437,12 @@ void mmc_retune_hold(struct mmc_host *host)
 	host->hold_retune += 1;
 }
 
+void mmc_retune_hold_now(struct mmc_host *host)
+{
+	host->retune_now = 0;
+	host->hold_retune += 1;
+}
+
 void mmc_retune_release(struct mmc_host *host)
 {
 	if (host->hold_retune)
@@ -472,6 +479,16 @@ int mmc_retune(struct mmc_host *host)
 		if (host->ops->prepare_hs400_tuning)
 			host->ops->prepare_hs400_tuning(host, &host->ios);
 	}
+
+	/*
+	 * Timing should be adjusted to the HS400 target
+	 * operation frequency for tuning process.
+	 * Similar handling is also done in mmc_hs200_tuning()
+	 * This is handled properly in sdhci-msm.c from msm-5.4 onwards.
+	 */
+	if (host->card->mmc_avail_type & EXT_CSD_CARD_TYPE_HS400 &&
+		host->ios.bus_width == MMC_BUS_WIDTH_8)
+		mmc_set_timing(host, MMC_TIMING_MMC_HS400);
 
 	err = mmc_execute_tuning(host->card);
 	if (err)
@@ -623,6 +640,8 @@ int mmc_of_parse(struct mmc_host *host)
 	if (device_property_read_bool(dev, "wakeup-source") ||
 	    device_property_read_bool(dev, "enable-sdio-wakeup")) /* legacy */
 		host->pm_caps |= MMC_PM_WAKE_SDIO_IRQ;
+	if (device_property_read_bool(dev, "mmc-ddr-3_3v"))
+		host->caps |= MMC_CAP_3_3V_DDR;
 	if (device_property_read_bool(dev, "mmc-ddr-1_8v"))
 		host->caps |= MMC_CAP_1_8V_DDR;
 	if (device_property_read_bool(dev, "mmc-ddr-1_2v"))
@@ -676,22 +695,13 @@ struct mmc_host *mmc_alloc_host(int extra, struct device *dev)
 	/* scanning will be enabled when we're ready */
 	host->rescan_disable = 1;
 
-again:
-	if (!ida_pre_get(&mmc_host_ida, GFP_KERNEL)) {
+	err = ida_simple_get(&mmc_host_ida, 0, 0, GFP_KERNEL);
+	if (err < 0) {
 		kfree(host);
 		return NULL;
 	}
 
-	spin_lock(&mmc_host_lock);
-	err = ida_get_new(&mmc_host_ida, &host->index);
-	spin_unlock(&mmc_host_lock);
-
-	if (err == -EAGAIN) {
-		goto again;
-	} else if (err) {
-		kfree(host);
-		return NULL;
-	}
+	host->index = err;
 
 	dev_set_name(&host->class_dev, "mmc%d", host->index);
 
@@ -716,12 +726,10 @@ again:
 	spin_lock_init(&host->lock);
 	init_waitqueue_head(&host->wq);
 	INIT_DELAYED_WORK(&host->detect, mmc_rescan);
+	INIT_DELAYED_WORK(&host->sdio_irq_work, sdio_irq_work);
 	setup_timer(&host->retune_timer, mmc_retune_timer, (unsigned long)host);
 
 	mutex_init(&host->rpmb_req_mutex);
-#ifdef CONFIG_EMMC_SDCARD_OPTIMIZE
-	host->detect_change_retry = 5;
-#endif /* CONFIG_EMMC_SDCARD_OPTIMIZE */
 
 	/*
 	 * By default, hosts do not support SGIO or large requests.
@@ -733,6 +741,7 @@ again:
 	host->max_req_size = PAGE_SIZE;
 	host->max_blk_size = 512;
 	host->max_blk_count = PAGE_SIZE / 512;
+	host->ios.power_delay_ms = 10;
 
 	return host;
 }
@@ -770,7 +779,7 @@ static ssize_t store_enable(struct device *dev,
 		host->clk_scaling.state = MMC_LOAD_HIGH;
 		/* Set to max. frequency when disabling */
 		mmc_clk_update_freq(host, host->card->clk_scaling_highest,
-					host->clk_scaling.state, 0);
+					host->clk_scaling.state);
 	} else if (value) {
 		/* Unmask host capability and resume scaling */
 		host->caps2 |= MMC_CAP2_CLK_SCALE;
@@ -869,13 +878,13 @@ static ssize_t store_polling(struct device *dev,
 	return count;
 }
 
-DEVICE_ATTR(enable, S_IRUGO | S_IWUSR,
+DEVICE_ATTR(enable, 0644,
 		show_enable, store_enable);
-DEVICE_ATTR(polling_interval, S_IRUGO | S_IWUSR,
+DEVICE_ATTR(polling_interval, 0644,
 		show_polling, store_polling);
-DEVICE_ATTR(up_threshold, S_IRUGO | S_IWUSR,
+DEVICE_ATTR(up_threshold, 0644,
 		show_up_threshold, store_up_threshold);
-DEVICE_ATTR(down_threshold, S_IRUGO | S_IWUSR,
+DEVICE_ATTR(down_threshold, 0644,
 		show_down_threshold, store_down_threshold);
 
 static struct attribute *clk_scaling_attrs[] = {
@@ -938,7 +947,7 @@ set_perf(struct device *dev, struct device_attribute *attr,
 	return count;
 }
 
-static DEVICE_ATTR(perf, S_IRUGO | S_IWUSR,
+static DEVICE_ATTR(perf, 0644,
 		show_perf, set_perf);
 
 #endif
@@ -1062,6 +1071,7 @@ EXPORT_SYMBOL(mmc_remove_host);
 void mmc_free_host(struct mmc_host *host)
 {
 	cancel_delayed_work_sync(&host->detect);
+	mmc_crypto_free_host(host);
 	mmc_pwrseq_free(host);
 	put_device(&host->class_dev);
 }

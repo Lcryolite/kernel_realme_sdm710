@@ -312,7 +312,6 @@ static int ipa_rm_resource_producer_create(struct ipa_rm_resource **resource,
 
 	*producer = kzalloc(sizeof(**producer), GFP_ATOMIC);
 	if (*producer == NULL) {
-		IPA_RM_ERR("no mem\n");
 		result = -ENOMEM;
 		goto bail;
 	}
@@ -361,7 +360,6 @@ static int ipa_rm_resource_consumer_create(struct ipa_rm_resource **resource,
 
 	*consumer = kzalloc(sizeof(**consumer), GFP_ATOMIC);
 	if (*consumer == NULL) {
-		IPA_RM_ERR("no mem\n");
 		result = -ENOMEM;
 		goto bail;
 	}
@@ -417,7 +415,7 @@ int ipa_rm_resource_create(
 			goto bail;
 		}
 	} else {
-		IPA_RM_ERR("invalied resource\n");
+		IPA_RM_ERR("invalid resource\n");
 		result = -EPERM;
 		goto bail;
 	}
@@ -460,8 +458,7 @@ int ipa_rm_resource_delete(struct ipa_rm_resource *resource)
 		return -EINVAL;
 	}
 
-	IPA_RM_DBG("ipa_rm_resource_delete ENTER with resource %d\n",
-					resource->name);
+	IPA_RM_DBG("ENTER with resource %d\n", resource->name);
 	if (resource->type == IPA_RM_PRODUCER) {
 		if (resource->peers_list) {
 			list_size = ipa_rm_peers_list_get_size(
@@ -555,7 +552,6 @@ int ipa_rm_resource_producer_register(struct ipa_rm_resource_prod *producer,
 
 	reg_info = kzalloc(sizeof(*reg_info), GFP_ATOMIC);
 	if (reg_info == NULL) {
-		IPA_RM_ERR("no mem\n");
 		result = -ENOMEM;
 		goto bail;
 	}
@@ -1127,7 +1123,8 @@ int ipa_rm_resource_set_perf_profile(struct ipa_rm_resource *resource,
 int ipa_rm_resource_producer_print_stat(
 				struct ipa_rm_resource *resource,
 				char *buf,
-				int size){
+				int size)
+{
 
 	int i;
 	int nbytes;

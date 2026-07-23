@@ -1746,16 +1746,16 @@ static void store_gyro_boot_sample(struct smi_gyro_client_data *client_data,
 	mutex_lock(&client_data->gyro_sensor_buff);
 	if (ts.tv_sec <  client_data->max_buffer_time) {
 		if (client_data->gyro_bufsample_cnt < SMI_GYRO_MAXSAMPLE) {
-			client_data->smi130_gyro_samplist[client_data->
-				gyro_bufsample_cnt]->xyz[0] = x;
-			client_data->smi130_gyro_samplist[client_data->
-				gyro_bufsample_cnt]->xyz[1] = y;
-			client_data->smi130_gyro_samplist[client_data->
-				gyro_bufsample_cnt]->xyz[2] = z;
-			client_data->smi130_gyro_samplist[client_data->
-				gyro_bufsample_cnt]->tsec = ts.tv_sec;
-			client_data->smi130_gyro_samplist[client_data->
-				gyro_bufsample_cnt]->tnsec = ts.tv_nsec;
+			client_data->smi130_gyro_samplist[client_data
+				->gyro_bufsample_cnt]->xyz[0] = x;
+			client_data->smi130_gyro_samplist[client_data
+				->gyro_bufsample_cnt]->xyz[1] = y;
+			client_data->smi130_gyro_samplist[client_data
+				->gyro_bufsample_cnt]->xyz[2] = z;
+			client_data->smi130_gyro_samplist[client_data
+				->gyro_bufsample_cnt]->tsec = ts.tv_sec;
+			client_data->smi130_gyro_samplist[client_data
+				->gyro_bufsample_cnt]->tnsec = ts.tv_nsec;
 			client_data->gyro_bufsample_cnt++;
 		}
 	} else {

@@ -79,7 +79,7 @@ static struct usb_interface_descriptor gser_interface_desc = {
 	.bNumEndpoints =	3,
 	.bInterfaceClass =	USB_CLASS_VENDOR_SPEC,
 	.bInterfaceSubClass =	0,
-	.bInterfaceProtocol =	0,
+	.bInterfaceProtocol =	0x40,
 	/* .iInterface = DYNAMIC */
 };
 
@@ -638,7 +638,7 @@ static int gser_bind(struct usb_configuration *c, struct usb_function *f)
 	/* allocate notification */
 	gser->notify_req = gs_alloc_req(ep,
 			sizeof(struct usb_cdc_notification) + 2,
-			cdev->gadget->extra_buf_alloc, GFP_KERNEL);
+			GFP_KERNEL);
 	if (!gser->notify_req)
 		goto fail;
 
@@ -712,7 +712,8 @@ static struct configfs_item_operations serial_item_ops = {
 
 static ssize_t f_serial_port_num_show(struct config_item *item, char *page)
 {
-	return sprintf(page, "%u\n", to_f_serial_opts(item)->port_num);
+	return snprintf(page, PAGE_SIZE, "%u\n",
+			to_f_serial_opts(item)->port_num);
 }
 
 CONFIGFS_ATTR_RO(f_serial_, port_num);

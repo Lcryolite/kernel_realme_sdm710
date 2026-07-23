@@ -23,7 +23,7 @@
 #undef DEBUG
 
 #include <linux/errno.h>
-#include <linux/sched.h>
+#include <linux/sched/signal.h>
 #include <linux/sched/loadavg.h>
 #include <linux/sched/rt.h>
 #include <linux/kernel.h>
@@ -141,7 +141,7 @@ void __spu_update_sched_info(struct spu_context *ctx)
 	 * runqueue. The context will be rescheduled on the proper node
 	 * if it is timesliced or preempted.
 	 */
-	cpumask_copy(&ctx->cpus_allowed, tsk_cpus_allowed(current));
+	cpumask_copy(&ctx->cpus_allowed, &current->cpus_allowed);
 
 	/* Save the current cpu id for spu interrupt routing. */
 	ctx->last_ran = raw_smp_processor_id();
@@ -1090,7 +1090,7 @@ static int show_spu_loadavg(struct seq_file *s, void *private)
 		LOAD_INT(c), LOAD_FRAC(c),
 		count_active_contexts(),
 		atomic_read(&nr_spu_contexts),
-		task_active_pid_ns(current)->last_pid);
+		idr_get_cursor(&task_active_pid_ns(current)->idr));
 	return 0;
 }
 

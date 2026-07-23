@@ -38,6 +38,10 @@
 #define DSC_RANGE_MAX_QP                0x0B0
 #define DSC_RANGE_BPG_OFFSET            0x0EC
 
+#define DSC_CTL_BLOCK_SIZE              0x300
+#define DSC_CTL(m)     \
+	(((m == DSC_NONE) || (m >= DSC_MAX)) ? 0 : (0x1800 - 0x3FC * (m - 1)))
+
 static void sde_hw_dsc_disable(struct sde_hw_dsc *dsc)
 {
 	struct sde_hw_blk_reg_map *dsc_c = &dsc->hw;
@@ -171,6 +175,29 @@ static void sde_hw_dsc_config_thresh(struct sde_hw_dsc *hw_dsc,
 	}
 }
 
+static void sde_hw_dsc_bind_pingpong_blk(
+		struct sde_hw_dsc *hw_dsc,
+		bool enable,
+		const enum sde_pingpong pp)
+{
+	struct sde_hw_blk_reg_map *c;
+	int mux_cfg = 0xF;
+	u32 dsc_ctl_offset;
+
+	if (!hw_dsc)
+		return;
+
+	c = &hw_dsc->hw;
+	dsc_ctl_offset = DSC_CTL(hw_dsc->idx);
+
+	if (enable)
+		mux_cfg = (pp - PINGPONG_0) & 0x7;
+
+	if (dsc_ctl_offset)
+		SDE_REG_WRITE(c, dsc_ctl_offset, mux_cfg);
+}
+
+
 static struct sde_dsc_cfg *_dsc_offset(enum sde_dsc dsc,
 		struct sde_mdss_cfg *m,
 		void __iomem *addr,
@@ -193,11 +220,13 @@ static struct sde_dsc_cfg *_dsc_offset(enum sde_dsc dsc,
 }
 
 static void _setup_dsc_ops(struct sde_hw_dsc_ops *ops,
-		unsigned long cap)
+		unsigned long features)
 {
 	ops->dsc_disable = sde_hw_dsc_disable;
 	ops->dsc_config = sde_hw_dsc_config;
 	ops->dsc_config_thresh = sde_hw_dsc_config_thresh;
+	if (test_bit(SDE_DSC_OUTPUT_CTRL, &features))
+		ops->bind_pingpong_blk = sde_hw_dsc_bind_pingpong_blk;
 };
 
 static struct sde_hw_blk_ops sde_hw_ops = {
@@ -211,6 +240,7 @@ struct sde_hw_dsc *sde_hw_dsc_init(enum sde_dsc idx,
 {
 	struct sde_hw_dsc *c;
 	struct sde_dsc_cfg *cfg;
+	u32 dsc_ctl_offset;
 	int rc;
 
 	c = kzalloc(sizeof(*c), GFP_KERNEL);
@@ -235,6 +265,15 @@ struct sde_hw_dsc *sde_hw_dsc_init(enum sde_dsc idx,
 
 	sde_dbg_reg_register_dump_range(SDE_DBG_NAME, cfg->name, c->hw.blk_off,
 		c->hw.blk_off + c->hw.length, c->hw.xin_id);
+
+	if ((c->idx == DSC_0) &&
+			test_bit(SDE_DSC_OUTPUT_CTRL, &cfg->features)) {
+		dsc_ctl_offset = DSC_CTL(c->idx);
+		sde_dbg_reg_register_dump_range(SDE_DBG_NAME, "dsc_ctl",
+			c->hw.blk_off + dsc_ctl_offset,
+			c->hw.blk_off + dsc_ctl_offset + DSC_CTL_BLOCK_SIZE,
+			c->hw.xin_id);
+	}
 
 	return c;
 

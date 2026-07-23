@@ -1,8 +1,9 @@
-Qualcomm Technologies Dummy Clock controller
+Qualcomm Technologies, Inc. Dummy Clock controller
 
-Qualcomm Technologies Dummy Clock controller devices provide a dummy clock
-for driver development during pre-silicon stage. The driver will always
-return a dummy clock that has no effect on hardware.
+Qualcomm Technologies, Inc. dummy clock controller devices provide
+clock API support for driver development during pre-silicon stage.
+The clock driver always returns a dummy clock that has no effect on
+hardware.
 
 Required properties:
 - compatible:		Must be "qcom,dummycc"

@@ -127,6 +127,106 @@ static int msm_cdc_check_supply_param(struct device *dev,
 }
 
 /*
+ * msm_cdc_disable_ondemand_supply:
+ *	Disable codec ondemand supply
+ *
+ * @dev: pointer to codec device
+ * @supplies: pointer to regulator bulk data
+ * @cdc_vreg: pointer to platform regulator data
+ * @num_supplies: number of supplies
+ * @supply_name: Ondemand supply name to be enabled
+ *
+ * Return error code if supply disable is failed
+ */
+int msm_cdc_disable_ondemand_supply(struct device *dev,
+				    struct regulator_bulk_data *supplies,
+				    struct cdc_regulator *cdc_vreg,
+				    int num_supplies,
+				    char *supply_name)
+{
+	int rc, i;
+
+	if ((!supply_name) || (!supplies)) {
+		pr_err("%s: either dev or supplies or cdc_vreg is NULL\n",
+				__func__);
+		return -EINVAL;
+	}
+	/* input parameter validation */
+	rc = msm_cdc_check_supply_param(dev, cdc_vreg, num_supplies);
+	if (rc)
+		return rc;
+
+	for (i = 0; i < num_supplies; i++) {
+		if (cdc_vreg[i].ondemand &&
+			!strcmp(cdc_vreg[i].name, supply_name)) {
+			rc = regulator_disable(supplies[i].consumer);
+			if (rc)
+				dev_err(dev, "%s: failed to disable supply %s, err:%d\n",
+					__func__, supplies[i].supply, rc);
+			break;
+		}
+	}
+	if (i == num_supplies) {
+		dev_err(dev, "%s: not able to find supply %s\n",
+			__func__, supply_name);
+		rc = -EINVAL;
+	}
+
+	return rc;
+}
+EXPORT_SYMBOL(msm_cdc_disable_ondemand_supply);
+
+/*
+ * msm_cdc_enable_ondemand_supply:
+ *	Enable codec ondemand supply
+ *
+ * @dev: pointer to codec device
+ * @supplies: pointer to regulator bulk data
+ * @cdc_vreg: pointer to platform regulator data
+ * @num_supplies: number of supplies
+ * @supply_name: Ondemand supply name to be enabled
+ *
+ * Return error code if supply enable is failed
+ */
+int msm_cdc_enable_ondemand_supply(struct device *dev,
+				   struct regulator_bulk_data *supplies,
+				   struct cdc_regulator *cdc_vreg,
+				   int num_supplies,
+				   char *supply_name)
+{
+	int rc, i;
+
+	if ((!supply_name) || (!supplies)) {
+		pr_err("%s: either dev or supplies or cdc_vreg is NULL\n",
+				__func__);
+		return -EINVAL;
+	}
+	/* input parameter validation */
+	rc = msm_cdc_check_supply_param(dev, cdc_vreg, num_supplies);
+	if (rc)
+		return rc;
+
+	for (i = 0; i < num_supplies; i++) {
+		if (cdc_vreg[i].ondemand &&
+			!strcmp(cdc_vreg[i].name, supply_name)) {
+			rc = regulator_enable(supplies[i].consumer);
+			if (rc)
+				dev_err(dev, "%s: failed to enable supply %s, rc: %d\n",
+					__func__, supplies[i].supply, rc);
+			break;
+		}
+	}
+	if (i == num_supplies) {
+		dev_err(dev, "%s: not able to find supply %s\n",
+			__func__, supply_name);
+		rc = -EINVAL;
+	}
+
+	return rc;
+}
+EXPORT_SYMBOL(msm_cdc_enable_ondemand_supply);
+
+/*
  * msm_cdc_disable_static_supplies:
  *	Disable codec static supplies
  *
@@ -209,10 +309,7 @@ int msm_cdc_release_supplies(struct device *dev,
 		regulator_set_voltage(supplies[i].consumer, 0,
 				      cdc_vreg[i].max_uV);
 		regulator_set_load(supplies[i].consumer, 0);
-		devm_regulator_put(supplies[i].consumer);
-		supplies[i].consumer = NULL;
 	}
-	devm_kfree(dev, supplies);
 
 	return rc;
 }
@@ -330,14 +427,14 @@ int msm_cdc_init_supplies(struct device *dev,
 		if (rc) {
 			dev_err(dev, "%s: set regulator voltage failed for %s, err:%d\n",
 				__func__, vsup[i].supply, rc);
-			goto err_set_supply;
+			goto err_supply;
 		}
 		rc = regulator_set_load(vsup[i].consumer,
 					cdc_vreg[i].optimum_uA);
 		if (rc < 0) {
 			dev_err(dev, "%s: set regulator optimum mode failed for %s, err:%d\n",
 				__func__, vsup[i].supply, rc);
-			goto err_set_supply;
+			goto err_supply;
 		}
 	}
 
@@ -345,11 +442,7 @@ int msm_cdc_init_supplies(struct device *dev,
 
 	return 0;
 
-err_set_supply:
-	for (i = 0; i < num_supplies; i++)
-		devm_regulator_put(vsup[i].consumer);
 err_supply:
-	devm_kfree(dev, vsup);
 	return rc;
 }
 EXPORT_SYMBOL(msm_cdc_init_supplies);
@@ -387,7 +480,7 @@ int msm_cdc_get_power_supplies(struct device *dev,
 	static_sup_cnt = of_property_count_strings(dev->of_node,
 						   static_prop_name);
 	if (static_sup_cnt < 0) {
-		dev_info(dev, "%s: Failed to get static supplies(%d)\n",
+		dev_err(dev, "%s: Failed to get static supplies(%d)\n",
 			__func__, static_sup_cnt);
 		rc = static_sup_cnt;
 		goto err_supply_cnt;
@@ -448,7 +541,6 @@ int msm_cdc_get_power_supplies(struct device *dev,
 	return 0;
 
 err_sup:
-	devm_kfree(dev, cdc_reg);
 err_supply_cnt:
 err_mem_alloc:
 	return rc;

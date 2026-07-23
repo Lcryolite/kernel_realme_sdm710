@@ -76,20 +76,14 @@ struct sde_connector_ops {
 			void *display);
 
 	/**
-	 * put_modes - free up drm modes of the connector
-	 * @connector: Pointer to drm connector structure
-	 * @display: Pointer to private display handle
-	 */
-	void (*put_modes)(struct drm_connector *connector,
-			void *display);
-
-	/**
 	 * update_pps - update pps command for the display panel
+	 * @connector: Pointer to drm connector structure
 	 * @pps_cmd: Pointer to pps command
 	 * @display: Pointer to private display handle
 	 * Returns: Zero on success
 	 */
-	int (*update_pps)(char *pps_cmd, void *display);
+	int (*update_pps)(struct drm_connector *connector,
+			char *pps_cmd, void *display);
 
 	/**
 	 * mode_valid - determine if specified mode is valid
@@ -134,21 +128,25 @@ struct sde_connector_ops {
 
 	/**
 	 * get_info - get display information
+	 * @connector: Pointer to drm connector structure
 	 * @info: Pointer to msm display info structure
 	 * @display: Pointer to private display structure
 	 * Returns: Zero on success
 	 */
-	int (*get_info)(struct msm_display_info *info, void *display);
+	int (*get_info)(struct drm_connector *connector,
+			struct msm_display_info *info, void *display);
 
 	/**
 	 * get_mode_info - retrieve mode information
+	 * @connector: Pointer to drm connector structure
 	 * @drm_mode: Display mode set for the display
 	 * @mode_info: Out parameter. information of the display mode
 	 * @max_mixer_width: max width supported by HW layer mixer
 	 * @display: Pointer to private display structure
 	 * Returns: Zero on success
 	 */
-	int (*get_mode_info)(const struct drm_display_mode *drm_mode,
+	int (*get_mode_info)(struct drm_connector *connector,
+			const struct drm_display_mode *drm_mode,
 			struct msm_mode_info *mode_info,
 			u32 max_mixer_width, void *display);
 
@@ -162,7 +160,14 @@ struct sde_connector_ops {
 	void (*enable_event)(struct drm_connector *connector,
 			uint32_t event_idx, bool enable, void *display);
 
-	int (*set_backlight)(void *display, u32 bl_lvl);
+	/**
+	 * set_backlight - set backlight level
+	 * @connector: Pointer to drm connector structure
+	 * @display: Pointer to private display structure
+	 * @bl_lvel: Backlight level
+	 */
+	int (*set_backlight)(struct drm_connector *connector,
+			void *display, u32 bl_lvl);
 
 	/**
 	 * soft_reset - perform a soft reset on the connector
@@ -184,37 +189,12 @@ struct sde_connector_ops {
 			struct msm_display_kickoff_params *params);
 
 	/**
-	 * mode_needs_full_range - does the mode need full range
-	 * quantization
-	 * @display: Pointer to private display structure
-	 * Returns: true or false based on whether full range is needed
-	 */
-	bool (*mode_needs_full_range)(void *display);
-
-	/**
-	 * mode_is_cea_mode - is this mode a CE video format
-	 * or IT video format.
-	 * @display: Pointer to private display structure
-	 * Returns: true or false based on CE or IT video format
-	 */
-	bool (*mode_is_cea_mode)(void *display);
-
-	/**
 	 * clk_ctrl - perform clk enable/disable on the connector
 	 * @handle: Pointer to clk handle
 	 * @type: Type of clks
 	 * @enable: State of clks
 	 */
 	int (*clk_ctrl)(void *handle, u32 type, u32 state);
-	/**
-	 * get_csc_type - returns the CSC type to be used
-	 * by the CDM block based on HDR state
-	 * @connector: Pointer to drm connector structure
-	 * @display: Pointer to private display structure
-	 * Returns: type of CSC matrix to be used
-	 */
-	enum sde_csc_type (*get_csc_type)(struct drm_connector *connector,
-		void *display);
 
 	/**
 	 * set_power - update dpms setting
@@ -232,50 +212,91 @@ struct sde_connector_ops {
 
 	/**
 	 * get_dst_format - get dst_format from display
+	 * @connector: Pointer to drm connector structure
 	 * @display: Pointer to private display handle
 	 * Returns: dst_format of display
 	 */
-	enum dsi_pixel_format (*get_dst_format)(void *display);
+	enum dsi_pixel_format (*get_dst_format)(struct drm_connector *connector,
+			void *display);
 
 	/**
 	 * post_kickoff - display to program post kickoff-time features
 	 * @connector: Pointer to drm connector structure
+	 * @params: Parameter bundle of connector-stored information for
+	 *	post kickoff programming into the display
 	 * Returns: Zero on success
 	 */
-	int (*post_kickoff)(struct drm_connector *connector);
+	int (*post_kickoff)(struct drm_connector *connector,
+		struct msm_display_conn_params *params);
 
 	/**
 	 * post_open - calls connector to process post open functionalities
 	 * @display: Pointer to private display structure
 	 */
-	void (*post_open)(void *display);
+	void (*post_open)(struct drm_connector *connector, void *display);
 
 	/**
 	 * check_status - check status of connected display panel
+	 * @connector: Pointer to drm connector structure
 	 * @display: Pointer to private display handle
 	 * @te_check_override: Whether check TE from panel or default check
 	 * Returns: positive value for success, negetive or zero for failure
 	 */
-	int (*check_status)(void *display, bool te_check_override);
+	int (*check_status)(struct drm_connector *connector, void *display,
+					bool te_check_override);
 
 	/**
 	 * cmd_transfer - Transfer command to the connected display panel
+	 * @connector: Pointer to drm connector structure
 	 * @display: Pointer to private display handle
 	 * @cmd_buf: Command buffer
 	 * @cmd_buf_len: Command buffer length in bytes
 	 * Returns: Zero for success, negetive for failure
 	 */
-	int (*cmd_transfer)(void *display, const char *cmd_buf,
+	int (*cmd_transfer)(struct drm_connector *connector,
+			void *display, const char *cmd_buf,
 			u32 cmd_buf_len);
 
 	/**
 	 * config_hdr - configure HDR
+	 * @connector: Pointer to drm connector structure
 	 * @display: Pointer to private display handle
 	 * @c_state: Pointer to connector state
 	 * Returns: Zero on success, negative error code for failures
 	 */
-	int (*config_hdr)(void *display,
+	int (*config_hdr)(struct drm_connector *connector, void *display,
 		struct sde_connector_state *c_state);
+
+	/**
+	 * atomic_best_encoder - atomic best encoder selection for connector
+	 * @connector: Pointer to drm connector structure
+	 * @display: Pointer to private display handle
+	 * @c_state: Pointer to connector state
+	 * Returns: valid drm_encoder for success
+	 */
+	struct drm_encoder *(*atomic_best_encoder)(
+			struct drm_connector *connector,
+			void *display,
+			struct drm_connector_state *c_state);
+
+	/**
+	 * atomic_check - atomic check handling for connector
+	 * @connector: Pointer to drm connector structure
+	 * @display: Pointer to private display handle
+	 * @c_state: Pointer to connector state
+	 * Returns: valid drm_encoder for success
+	 */
+	int (*atomic_check)(struct drm_connector *connector,
+			void *display,
+			struct drm_connector_state *c_state);
+
+	/**
+	 * pre_destroy - handle pre destroy operations for the connector
+	 * @connector: Pointer to drm connector structure
+	 * @display: Pointer to private display handle
+	 * Returns: Zero on success, negative error code for failures
+	 */
+	void (*pre_destroy)(struct drm_connector *connector, void *display);
 
 	/**
 	 * cont_splash_config - initialize splash resources
@@ -292,6 +313,16 @@ struct sde_connector_ops {
 	 * Returns: v_front_porch on success error-code on failure
 	 */
 	int (*get_panel_vfp)(void *display, int h_active, int v_active);
+
+	/**
+	 * prepare_commit - trigger display to program pre-commit time features
+	 * @display: Pointer to private display structure
+	 * @params: Parameter bundle of connector-stored information for
+	 *	pre commit time programming into the display
+	 * Returns: Zero on success
+	 */
+	int (*prepare_commit)(void *display,
+			struct msm_display_conn_params *params);
 };
 
 /**
@@ -326,6 +357,8 @@ struct sde_connector_evt {
  * @encoder: Pointer to preferred drm encoder
  * @panel: Pointer to drm panel, if present
  * @display: Pointer to private display data structure
+ * @drv_panel: Pointer to interface driver's panel module, if present
+ * @mst_port: Pointer to mst port, if present
  * @mmu_secure: MMU id for secure buffers
  * @mmu_unsecure: MMU id for unsecure buffers
  * @name: ASCII name of connector
@@ -347,7 +380,6 @@ struct sde_connector_evt {
  * @event_lock: Lock object for event_table
  * @bl_device: backlight device node
  * @status_work: work object to perform status checks
- * @force_panel_dead: variable to trigger forced ESD recovery
  * @esd_status_interval: variable to change ESD check interval in millisec
  * @panel_dead: Flag to indicate if panel has gone bad
  * @esd_status_check: Flag to indicate if ESD thread is scheduled or not
@@ -356,7 +388,10 @@ struct sde_connector_evt {
  * @bl_scale_ad: BL scale value for AD feature
  * @unset_bl_level: BL level that needs to be set later
  * @allow_bl_update: Flag to indicate if BL update is allowed currently or not
- * @last_cmd_tx_sts: status of the last command transfer
+ * @qsync_mode: Cached Qsync mode, 0=disabled, 1=continuous mode
+ * @qsync_updated: Qsync settings were updated
+ * last_cmd_tx_sts: status of the last command transfer
+ * @hdr_capable: external hdr support present
  */
 struct sde_connector {
 	struct drm_connector base;
@@ -366,13 +401,15 @@ struct sde_connector {
 	struct drm_encoder *encoder;
 	struct drm_panel *panel;
 	void *display;
+	void *drv_panel;
+	void *mst_port;
 
 	struct msm_gem_address_space *aspace[SDE_IOMMU_DOMAIN_MAX];
 
 	char name[SDE_CONNECTOR_NAME_SIZE];
 
 	struct mutex lock;
-	struct sde_fence_context retire_fence;
+	struct sde_fence_context *retire_fence;
 	struct sde_connector_ops ops;
 	int dpms_mode;
 	int lp_mode;
@@ -392,7 +429,6 @@ struct sde_connector {
 
 	struct backlight_device *bl_device;
 	struct delayed_work status_work;
-	u32 force_panel_dead;
 	u32 esd_status_interval;
 	bool panel_dead;
 	bool esd_status_check;
@@ -403,7 +439,11 @@ struct sde_connector {
 	u32 unset_bl_level;
 	bool allow_bl_update;
 
+	u32 qsync_mode;
+	bool qsync_updated;
+
 	bool last_cmd_tx_sts;
+	bool hdr_capable;
 };
 
 /**
@@ -436,6 +476,23 @@ struct sde_connector {
  */
 #define sde_connector_get_encoder(C) \
 	((C) ? to_sde_connector((C))->encoder : NULL)
+
+/**
+ * sde_connector_is_qsync_updated - indicates if qsync mode changed on this
+ *                                  connector for the current frame update.
+ * @C: Pointer to drm connector structure
+ * Returns: True if qsync mode is updated; false otherwise
+ */
+#define sde_connector_is_qsync_updated(C) \
+	((C) ? to_sde_connector((C))->qsync_updated : 0)
+
+/**
+ * sde_connector_get_qsync_mode - get sde connector's qsync_mode
+ * @C: Pointer to drm connector structure
+ * Returns: Current cached qsync_mode for given connector
+ */
+#define sde_connector_get_qsync_mode(C) \
+	((C) ? to_sde_connector((C))->qsync_mode : 0)
 
 /**
  * sde_connector_get_propinfo - get sde connector's property info pointer
@@ -651,6 +708,17 @@ int sde_connector_clk_ctrl(struct drm_connector *connector, bool enable);
 int sde_connector_get_dpms(struct drm_connector *connector);
 
 /**
+ * sde_connector_set_qsync_params - set status of qsync_updated for current
+ *                                  frame and update the cached qsync_mode
+ * @connector: pointer to drm connector
+ *
+ * This must be called after the connector set_property values are applied,
+ * and before sde_connector's qsync_updated or qsync_mode fields are accessed.
+ * It must only be called once per frame update for the given connector.
+ */
+void sde_connector_set_qsync_params(struct drm_connector *connector);
+
+/**
  * sde_connector_trigger_event - indicate that an event has occurred
  *	Any callbacks that have been registered against this event will
  *	be called from the same thread context.
@@ -711,6 +779,13 @@ int sde_connector_register_custom_event(struct sde_kms *kms,
 int sde_connector_pre_kickoff(struct drm_connector *connector);
 
 /**
+ * sde_connector_prepare_commit - trigger commit time feature programming
+ * @connector: Pointer to drm connector object
+ * Returns: Zero on success
+ */
+int sde_connector_prepare_commit(struct drm_connector *connector);
+
+/**
  * sde_connector_needs_offset - adjust the output fence offset based on
  *                              display type
  * @connector: Pointer to drm connector object
@@ -728,39 +803,17 @@ static inline bool sde_connector_needs_offset(struct drm_connector *connector)
 }
 
 /**
- * sde_connector_mode_needs_full_range - query quantization type
- * for the connector mode
- * @connector: Pointer to drm connector object
- * Returns: true OR false based on connector mode
- */
-bool sde_connector_mode_needs_full_range(struct drm_connector *connector);
-
-/**
- * sde_connector_mode_is_cea_mode - query if this mode is
- * CE or IT video format
- * @connector: Pointer to drm connector object
- * Returns: true OR false based on CE or IT video format mode
- */
-bool sde_connector_mode_is_cea_mode(struct drm_connector *connector);
-
-/**
- * sde_connector_get_csc_type - query csc type
- * to be used for the connector
- * @connector: Pointer to drm connector object
- * Returns: csc type based on connector HDR state
- */
-enum sde_csc_type sde_connector_get_csc_type(struct drm_connector *conn);
-
-/**
  * sde_connector_get_dither_cfg - get dither property data
  * @conn: Pointer to drm_connector struct
  * @state: Pointer to drm_connector_state struct
  * @cfg: Pointer to pointer to dither cfg
  * @len: length of the dither data
+ * @idle_pc: flag to indicate idle_pc_restore happened
  * Returns: Zero on success
  */
 int sde_connector_get_dither_cfg(struct drm_connector *conn,
-		struct drm_connector_state *state, void **cfg, size_t *len);
+		struct drm_connector_state *state, void **cfg,
+		size_t *len, bool idle_pc);
 
 /**
  * sde_connector_set_blob_data - set connector blob property data
@@ -820,6 +873,21 @@ void sde_conn_timeline_status(struct drm_connector *conn);
 void sde_connector_helper_bridge_disable(struct drm_connector *connector);
 
 /**
+ * sde_connector_destroy - destroy drm connector object
+ * @connector: Pointer to DRM connector object
+ */
+void sde_connector_destroy(struct drm_connector *connector);
+
+/**
+ * sde_connector_event_notify - signal hw recovery event to client
+ * @connector: pointer to connector
+ * @type:     event type
+ * @len:     length of the value of the event
+ * @val:     value
+ */
+int sde_connector_event_notify(struct drm_connector *connector, uint32_t type,
+		uint32_t len, uint32_t val);
+/**
  * sde_connector_helper_bridge_enable - helper function for drm bridge enable
  * @connector: Pointer to DRM connector object
  */
@@ -834,7 +902,6 @@ void sde_connector_helper_bridge_enable(struct drm_connector *connector);
  */
 int sde_connector_get_panel_vfp(struct drm_connector *connector,
 	struct drm_display_mode *mode);
-
 /**
  * sde_connector_esd_status - helper function to check te status
  * @connector: Pointer to DRM connector object

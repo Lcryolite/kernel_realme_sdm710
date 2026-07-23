@@ -27,6 +27,9 @@ static int etm4_set_mode_exclude(struct etmv4_drvdata *drvdata, bool exclude)
 
 	idx = config->addr_idx;
 
+	if (idx >= ETM_MAX_SINGLE_ADDR_CMP)
+		return -EINVAL;
+
 	/*
 	 * TRCACATRn.TYPE bit[1:0]: type of comparison
 	 * the trace unit performs
@@ -964,6 +967,12 @@ static ssize_t addr_range_show(struct device *dev,
 
 	spin_lock(&drvdata->spinlock);
 	idx = config->addr_idx;
+
+	if (idx >= ETM_MAX_SINGLE_ADDR_CMP) {
+		spin_unlock(&drvdata->spinlock);
+		return -EINVAL;
+	}
+
 	if (idx % 2 != 0) {
 		spin_unlock(&drvdata->spinlock);
 		return -EPERM;
@@ -999,6 +1008,12 @@ static ssize_t addr_range_store(struct device *dev,
 
 	spin_lock(&drvdata->spinlock);
 	idx = config->addr_idx;
+
+	if (idx >= ETM_MAX_SINGLE_ADDR_CMP) {
+		spin_unlock(&drvdata->spinlock);
+		return -EINVAL;
+	}
+
 	if (idx % 2 != 0) {
 		spin_unlock(&drvdata->spinlock);
 		return -EPERM;
@@ -2075,8 +2090,8 @@ static u32 etmv4_cross_read(const struct device *dev, u32 offset)
 	return reg.data;
 }
 
-#define coresight_etm4x_simple_func(name, offset)			\
-	coresight_simple_func(struct etmv4_drvdata, NULL, name, offset)
+#define coresight_etm4x_reg(name, offset)			\
+	coresight_simple_reg32(struct etmv4_drvdata, name, offset)
 
 #define coresight_etm4x_cross_read(name, offset)			\
 	coresight_simple_func(struct etmv4_drvdata, etmv4_cross_read,	\

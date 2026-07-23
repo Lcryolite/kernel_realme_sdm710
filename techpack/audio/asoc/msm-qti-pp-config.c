@@ -21,13 +21,15 @@
 #include <dsp/q6asm-v2.h>
 #include <dsp/q6afe-v2.h>
 #include <dsp/q6audio-v2.h>
+#include <dsp/q6common.h>
 
 #include "msm-qti-pp-config.h"
 #include "msm-pcm-routing-v2.h"
 
 /* EQUALIZER */
 /* Equal to Frontend after last of the MULTIMEDIA SESSIONS */
-#define MAX_EQ_SESSIONS		(MSM_FRONTEND_DAI_MULTIMEDIA20 + 1)
+#define MAX_EQ_SESSIONS		(MSM_FRONTEND_DAI_MAX + 1)
+#define CHMIX_CFG_CONST_PARAM_SIZE 4
 
 enum {
 	EQ_BAND1 = 0,
@@ -79,6 +81,7 @@ static const DECLARE_TLV_DB_LINEAR(sec_auxpcm_lb_vol_gain, 0,
 				INT_RX_VOL_MAX_STEPS);
 
 static int msm_multichannel_ec_primary_mic_ch;
+static int msm_ffecns_effect;
 
 static void msm_qti_pp_send_eq_values_(int eq_idx)
 {
@@ -232,7 +235,7 @@ static int msm_qti_pp_put_eq_band_audio_mixer(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
-#if IS_ENABLED(CONFIG_QTI_PP)
+#ifdef CONFIG_QTI_PP
 void msm_qti_pp_send_eq_values(int fedai_id)
 {
 	if (eq_data[fedai_id].enable)
@@ -263,6 +266,11 @@ int msm_qti_pp_send_stereo_to_custom_stereo_cmd(int port_id, int copp_idx,
 	update_params_value32 = (int *)params_value;
 	if (avail_length < 2 * sizeof(uint32_t))
 		goto skip_send_cmd;
+
+	/*
+	 * This module is internal to ADSP and cannot be configured with
+	 * an instance id
+	 */
 	*update_params_value32++ = MTMX_MODULE_ID_DEFAULT_CHMIXER;
 	*update_params_value32++ = DEFAULT_CHMIXER_PARAM_ID_COEFF;
 	avail_length = avail_length - (2 * sizeof(uint32_t));
@@ -319,6 +327,161 @@ skip_send_cmd:
 		kfree(params_value);
 		return -ENOMEM;
 }
+
+static int msm_qti_pp_arrange_mch_map(int16_t *update_params_value16,
+			 int channel_count)
+{
+	int i;
+	int16_t ch_map[PCM_FORMAT_MAX_CHANNELS_9] = {
+			PCM_CHANNEL_FL, PCM_CHANNEL_FR, PCM_CHANNEL_FC,
+			PCM_CHANNEL_LS, PCM_CHANNEL_RS, PCM_CHANNEL_LFE,
+			PCM_CHANNEL_LB, PCM_CHANNEL_RB, PCM_CHANNEL_CS };
+
+	if (channel_count < 1 ||
+	    channel_count > PCM_FORMAT_MAX_CHANNELS_9) {
+		pr_err("%s: invalid ch_cnt %d\n",
+			__func__, channel_count);
+		return -EINVAL;
+	}
+
+	switch (channel_count) {
+	/* Add special cases here */
+	case 1:
+		*update_params_value16++ = PCM_CHANNEL_FC;
+		break;
+	case 4:
+		*update_params_value16++ = PCM_CHANNEL_FL;
+		*update_params_value16++ = PCM_CHANNEL_FR;
+		*update_params_value16++ = PCM_CHANNEL_LS;
+		*update_params_value16++ = PCM_CHANNEL_RS;
+		break;
+
+	/* Add standard cases here */
+	default:
+		for (i = 0; i < channel_count; i++)
+			*update_params_value16++ = ch_map[i];
+		break;
+	}
+
+	return 0;
+}
+
+static uint32_t msm_qti_pp_get_chmix_param_size(int ip_ch_cnt, int op_ch_cnt)
+{
+	uint32_t param_size;
+	/* Assign constant part of param length initially -
+	 * Index, Num out channels, Num in channels.
+	 */
+	param_size = CHMIX_CFG_CONST_PARAM_SIZE * sizeof(uint16_t);
+
+	/* Calculate variable part of param length using ip and op channels */
+
+	/* channel map for input and output channels */
+	param_size += op_ch_cnt * sizeof(uint16_t);
+	param_size += ip_ch_cnt * sizeof(uint16_t);
+
+	/* weightage coeff for each op ch corresponding to each ip ch */
+	param_size += (ip_ch_cnt * op_ch_cnt) * sizeof(uint16_t);
+
+	/* Params length should be multiple of 4 bytes i.e 32bit aligned*/
+	param_size = (param_size + 3) & 0xFFFFFFFC;
+
+	return param_size;
+}
+
+/*
+ * msm_qti_pp_send_chmix_cfg_cmd:
+ *	Send the custom channel mixer configuration command.
+ *
+ * @port_id: Backend port id
+ * @copp_idx: ADM copp index
+ * @session_id: id for the session requesting channel mixer
+ * @ip_channel_cnt: Input channel count
+ * @op_channel_cnt: Output channel count
+ * @ch_wght_coeff: Channel weight co-efficients for mixing
+ * @session_type: Indicates TX or RX session
+ * @stream_type: Indicates Audio or Listen stream type
+ */
+int msm_qti_pp_send_chmix_cfg_cmd(int port_id, int copp_idx,
+				unsigned int session_id, int ip_channel_cnt,
+				int op_channel_cnt, int *ch_wght_coeff,
+				int session_type, int stream_type)
+{
+	char *params_value;
+	int rc = 0, i, direction;
+	u8 *param_ptr;
+	int16_t *update_params_value16 = 0;
+	uint32_t param_size = msm_qti_pp_get_chmix_param_size(ip_channel_cnt,
+				op_channel_cnt);
+	struct param_hdr_v3 *param_hdr;
+
+	/* constant payload data size represents module_id, param_id,
+	 * param size, reserved field.
+	 */
+	uint32_t params_length = param_size + sizeof(*param_hdr);
+
+	pr_debug("%s: port_id - %d, session id - %d\n", __func__, port_id,
+		 session_id);
+
+	params_value = kzalloc(params_length, GFP_KERNEL);
+	if (!params_value)
+		return -ENOMEM;
+
+	param_ptr = params_value;
+
+	param_hdr = (struct param_hdr_v3 *) param_ptr;
+	param_hdr->module_id = MTMX_MODULE_ID_DEFAULT_CHMIXER;
+	param_hdr->instance_id = INSTANCE_ID_0;
+	param_hdr->param_id = DEFAULT_CHMIXER_PARAM_ID_COEFF;
+	param_hdr->param_size = param_size;
+
+	param_ptr += sizeof(*param_hdr);
+
+	update_params_value16 = (int16_t *) param_ptr;
+	/*for alignment only*/
+	*update_params_value16++ = 0;
+	/*index is 32-bit param in little endian*/
+	*update_params_value16++ = CUSTOM_STEREO_INDEX_PARAM;
+	*update_params_value16++ = 0;
+	/*number of out ch*/
+	*update_params_value16++ = op_channel_cnt;
+	/*number of in ch*/
+	*update_params_value16++ = ip_channel_cnt;
+
+	/* Out ch map FL/FR*/
+	msm_qti_pp_arrange_mch_map(update_params_value16, op_channel_cnt);
+	update_params_value16 += op_channel_cnt;
+
+	/* In ch map FL/FR*/
+	msm_qti_pp_arrange_mch_map(update_params_value16, ip_channel_cnt);
+	update_params_value16 += ip_channel_cnt;
+
+	/* weighting coefficients as name suggests,
+	 * mixing will be done according to these coefficients.
+	 */
+	for (i = 0; i < ip_channel_cnt * op_channel_cnt; i++)
+		*update_params_value16++ =
+					ch_wght_coeff[i] ? Q14_GAIN_UNITY : 0;
+	if (params_length) {
+		direction = (session_type == SESSION_TYPE_RX) ?
+			ADM_MATRIX_ID_AUDIO_RX : ADM_MATRIX_ID_AUDIO_TX;
+		rc = adm_set_custom_chmix_cfg(port_id,
+					      copp_idx,
+					      session_id,
+					      params_value,
+					      params_length,
+					      direction,
+					      stream_type);
+		if (rc) {
+			pr_err("%s: send params failed rc=%d\n", __func__, rc);
+			kfree(params_value);
+			return -EINVAL;
+		}
+	}
+	kfree(params_value);
+	return 0;
+}
+EXPORT_SYMBOL(msm_qti_pp_send_chmix_cfg_cmd);
 #endif /* CONFIG_QTI_PP */
 
 /* RMS */
@@ -329,14 +492,13 @@ static int msm_qti_pp_get_rms_value_control(struct snd_kcontrol *kcontrol,
 	int be_idx = 0, copp_idx;
 	char *param_value;
 	int *update_param_value;
-	uint32_t param_length = sizeof(uint32_t);
-	uint32_t param_payload_len = RMS_PAYLOAD_LEN * sizeof(uint32_t);
+	uint32_t param_size = (RMS_PAYLOAD_LEN + 1) * sizeof(uint32_t);
 	struct msm_pcm_routing_bdai_data msm_bedai;
+	struct param_hdr_v3 param_hdr;
 
-	param_value = kzalloc(param_length + param_payload_len, GFP_KERNEL);
+	param_value = kzalloc(param_size, GFP_KERNEL);
 	if (!param_value)
 		return -ENOMEM;
-
 	msm_pcm_routing_acquire_lock();
 	for (be_idx = 0; be_idx < MSM_BACKEND_DAI_MAX; be_idx++) {
 		msm_pcm_routing_get_bedai_info(be_idx, &msm_bedai);
@@ -356,11 +518,13 @@ static int msm_qti_pp_get_rms_value_control(struct snd_kcontrol *kcontrol,
 		rc = -EINVAL;
 		goto get_rms_value_err;
 	}
-	rc = adm_get_params(SLIMBUS_0_TX, copp_idx,
-			RMS_MODULEID_APPI_PASSTHRU,
-			RMS_PARAM_FIRST_SAMPLE,
-			param_length + param_payload_len,
-			param_value);
+	memset(&param_hdr, 0, sizeof(param_hdr));
+	param_hdr.module_id = RMS_MODULEID_APPI_PASSTHRU;
+	param_hdr.instance_id = INSTANCE_ID_0;
+	param_hdr.param_id = RMS_PARAM_FIRST_SAMPLE;
+	param_hdr.param_size = param_size;
+	rc = adm_get_pp_params(SLIMBUS_0_TX, copp_idx, ADM_CLIENT_ID_DEFAULT,
+			       NULL, &param_hdr, param_value);
 	if (rc) {
 		pr_err("%s: get parameters failed rc=%d\n", __func__, rc);
 		rc = -EINVAL;
@@ -692,68 +856,87 @@ static void msm_qti_pp_asphere_init_state(void)
 
 static int msm_qti_pp_asphere_send_params(int port_id, int copp_idx, bool force)
 {
-	char *params_value = NULL;
-	uint32_t *update_params_value = NULL;
-	uint32_t param_size = sizeof(uint32_t) +
-			sizeof(struct adm_param_data_v5);
-	int params_length = 0, param_count = 0, ret = 0;
+	u8 *packed_params = NULL;
+	u32 packed_params_size = 0;
+	u32 param_size = 0;
+	struct param_hdr_v3 param_hdr;
 	bool set_enable = force ||
 			(asphere_state.enabled != asphere_state.enabled_prev);
 	bool set_strength = asphere_state.enabled == 1 && (set_enable ||
 		(asphere_state.strength != asphere_state.strength_prev));
+	int param_count = 0;
+	int ret = 0;
 
 	if (set_enable)
 		param_count++;
 	if (set_strength)
 		param_count++;
-	params_length = param_count * param_size;
+
+	if (param_count == 0) {
+		pr_debug("%s: Nothing to send, exiting\n", __func__);
+		return 0;
+	}
 
 	pr_debug("%s: port_id %d, copp_id %d, forced %d, param_count %d\n",
-			__func__, port_id, copp_idx, force, param_count);
+		 __func__, port_id, copp_idx, force, param_count);
 	pr_debug("%s: enable prev:%u cur:%u, strength prev:%u cur:%u\n",
 		__func__, asphere_state.enabled_prev, asphere_state.enabled,
 		asphere_state.strength_prev, asphere_state.strength);
 
-	if (params_length > 0)
-		params_value = kzalloc(params_length, GFP_KERNEL);
-	if (!params_value) {
-		pr_err("%s, params memory alloc failed\n", __func__);
+	packed_params_size =
+		param_count * (sizeof(struct param_hdr_v3) + sizeof(uint32_t));
+	packed_params = kzalloc(packed_params_size, GFP_KERNEL);
+	if (!packed_params)
 		return -ENOMEM;
-	}
-	update_params_value = (uint32_t *)params_value;
-	params_length = 0;
+
+	memset(&param_hdr, 0, sizeof(param_hdr));
+	packed_params_size = 0;
+	param_hdr.module_id = AUDPROC_MODULE_ID_AUDIOSPHERE;
+	param_hdr.instance_id = INSTANCE_ID_0;
 	if (set_strength) {
 		/* add strength command */
-		*update_params_value++ = AUDPROC_MODULE_ID_AUDIOSPHERE;
-		*update_params_value++ = AUDPROC_PARAM_ID_AUDIOSPHERE_STRENGTH;
-		*update_params_value++ = sizeof(uint32_t);
-		*update_params_value++ = asphere_state.strength;
-		params_length += param_size;
+		param_hdr.param_id = AUDPROC_PARAM_ID_AUDIOSPHERE_STRENGTH;
+		param_hdr.param_size = sizeof(asphere_state.strength);
+		ret = q6common_pack_pp_params(packed_params +
+						      packed_params_size,
+					      &param_hdr,
+					      (u8 *) &asphere_state.strength,
+					      &param_size);
+		if (ret) {
+			pr_err("%s: Failed to pack params for audio sphere"
+				" strength, error %d\n", __func__, ret);
+			goto done;
+		}
+		packed_params_size += param_size;
 	}
 	if (set_enable) {
 		/* add enable command */
-		*update_params_value++ = AUDPROC_MODULE_ID_AUDIOSPHERE;
-		*update_params_value++ = AUDPROC_PARAM_ID_AUDIOSPHERE_ENABLE;
-		*update_params_value++ = sizeof(uint32_t);
-		*update_params_value++ = asphere_state.enabled;
-		params_length += param_size;
-	}
-	pr_debug("%s, param length: %d\n", __func__, params_length);
-	if (params_length) {
-		ret = adm_send_params_v5(port_id, copp_idx,
-					params_value, params_length);
+		param_hdr.param_id = AUDPROC_PARAM_ID_AUDIOSPHERE_ENABLE;
+		param_hdr.param_size = sizeof(asphere_state.enabled);
+		q6common_pack_pp_params(packed_params + packed_params_size,
+					&param_hdr,
+					(u8 *) &asphere_state.enabled,
+					&param_size);
 		if (ret) {
-			pr_err("%s: setting param failed with err=%d\n",
-				__func__, ret);
-			kfree(params_value);
-			return -EINVAL;
+			pr_err("%s: Failed to pack params for audio sphere"
+				" enable, error %d\n", __func__, ret);
+			goto done;
 		}
+		packed_params_size += param_size;
 	}
-	kfree(params_value);
+
+	pr_debug("%s: packed data size: %d\n", __func__, packed_params_size);
+	ret = adm_set_pp_params(port_id, copp_idx, NULL, packed_params,
+				packed_params_size);
+	if (ret)
+		pr_err("%s: set param failed with err=%d\n", __func__, ret);
+
+done:
+	kfree(packed_params);
 	return 0;
 }
 
-#if IS_ENABLED(CONFIG_QTI_PP) && IS_ENABLED(CONFIG_QTI_PP_AUDIOSPHERE)
+#if defined(CONFIG_QTI_PP) && defined(CONFIG_QTI_PP_AUDIOSPHERE)
 int msm_qti_pp_asphere_init(int port_id, int copp_idx)
 {
 	int index = adm_validate_and_get_port_index(port_id);
@@ -1084,7 +1267,7 @@ int msm_adsp_stream_callback_get(struct snd_kcontrol *kcontrol,
 	kctl_prtd = (struct dsp_stream_callback_prtd *)
 			kcontrol->private_data;
 	if (kctl_prtd == NULL) {
-		pr_err("%s: ASM Stream PP event queue is not initialized.\n",
+		pr_debug("%s: ASM Stream PP event queue is not initialized.\n",
 			__func__);
 		ret = -EINVAL;
 		goto done;
@@ -1162,6 +1345,50 @@ static const struct  snd_kcontrol_new msm_multichannel_ec_controls[] = {
 	SOC_SINGLE_EXT("Multichannel EC Primary Mic Ch", SND_SOC_NOPM, 0,
 		0xFFFFFFFF, 0, msm_multichannel_ec_primary_mic_ch_get,
 		msm_multichannel_ec_primary_mic_ch_put),
+};
+
+static char const *ffecns_effect_text[] = {"NO_EFFECT", "EC_ONLY", "NS_ONLY", "ECNS"};
+
+static int msm_ffecns_put(struct snd_kcontrol *kcontrol,
+			struct snd_ctl_elem_value *ucontrol)
+{
+	int ret = -EINVAL;
+
+	if (ucontrol->value.integer.value[0] < 0 ||
+		ucontrol->value.integer.value[0] >= ARRAY_SIZE(ffecns_effect_text)) {
+		pr_err("%s: invalid ffecns effect value %ld\n",
+			__func__, ucontrol->value.integer.value[0]);
+		return -EINVAL;
+	}
+
+	msm_ffecns_effect = ucontrol->value.integer.value[0];
+
+	pr_debug("%s: set %s for ffecns\n", __func__,
+		ffecns_effect_text[msm_ffecns_effect]);
+
+	ret = adm_set_ffecns_effect(msm_ffecns_effect);
+	if (ret)
+		pr_err("%s: failed to set %s for ffecns\n",
+			__func__, ffecns_effect_text[msm_ffecns_effect]);
+
+	return ret;
+}
+
+static int msm_ffecns_get(struct snd_kcontrol *kcontrol,
+			struct snd_ctl_elem_value *ucontrol)
+{
+	ucontrol->value.integer.value[0] = msm_ffecns_effect;
+	pr_debug("%s: ffecns effect = %ld\n",
+		__func__, ucontrol->value.integer.value[0]);
+
+	return 0;
+}
+
+static SOC_ENUM_SINGLE_EXT_DECL(ffecns_effect_enum, ffecns_effect_text);
+
+static const struct snd_kcontrol_new ec_ffecns_controls[] = {
+	SOC_ENUM_EXT("FFECNS Effect", ffecns_effect_enum,
+		msm_ffecns_get, msm_ffecns_put),
 };
 
 static const struct snd_kcontrol_new int_fm_vol_mixer_controls[] = {
@@ -1393,7 +1620,7 @@ static const struct snd_kcontrol_new asphere_mixer_controls[] = {
 	0xFFFFFFFF, 0, 2, msm_qti_pp_asphere_get, msm_qti_pp_asphere_set),
 };
 
-#if IS_ENABLED(CONFIG_QTI_PP)
+#ifdef CONFIG_QTI_PP
 void msm_qti_pp_add_controls(struct snd_soc_platform *platform)
 {
 	snd_soc_add_platform_controls(platform, int_fm_vol_mixer_controls,
@@ -1449,6 +1676,9 @@ void msm_qti_pp_add_controls(struct snd_soc_platform *platform)
 
 	snd_soc_add_platform_controls(platform, msm_multichannel_ec_controls,
 			ARRAY_SIZE(msm_multichannel_ec_controls));
+
+	snd_soc_add_platform_controls(platform, ec_ffecns_controls,
+			ARRAY_SIZE(ec_ffecns_controls));
 
 	snd_soc_add_platform_controls(platform, dsp_bit_width_controls,
 			ARRAY_SIZE(dsp_bit_width_controls));

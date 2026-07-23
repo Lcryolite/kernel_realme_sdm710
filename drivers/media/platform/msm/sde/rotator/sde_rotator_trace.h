@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, 2015-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014, 2015-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -21,6 +21,77 @@
 #define TRACE_INCLUDE_FILE sde_rotator_trace
 
 #include <linux/tracepoint.h>
+#include <sde_rotator_core.h>
+
+DECLARE_EVENT_CLASS(rot_entry_template,
+	TP_PROTO(u32 ss_id, u32 sq_id, struct sde_rot_trace_entry *rot),
+	TP_ARGS(ss_id, sq_id, rot),
+	TP_STRUCT__entry(
+			__field(u32, ss_id)
+			__field(u32, sq_id)
+			__field(u32, pr_id)
+			__field(u32, flags)
+			__field(u32, src_fmt)
+			__field(u16, src_bw)
+			__field(u16, src_bh)
+			__field(u16, src_x)
+			__field(u16, src_y)
+			__field(u16, src_w)
+			__field(u16, src_h)
+			__field(u32, dst_fmt)
+			__field(u16, dst_bw)
+			__field(u16, dst_bh)
+			__field(u16, dst_x)
+			__field(u16, dst_y)
+			__field(u16, dst_w)
+			__field(u16, dst_h)
+	),
+	TP_fast_assign(
+			__entry->ss_id = ss_id;
+			__entry->sq_id = sq_id;
+			__entry->pr_id = rot->wb_idx;
+			__entry->flags = rot->flags;
+			__entry->src_fmt = rot->input_format;
+			__entry->src_bw = rot->input_width;
+			__entry->src_bh = rot->input_height;
+			__entry->src_x = rot->src_x;
+			__entry->src_y = rot->src_y;
+			__entry->src_w = rot->src_w;
+			__entry->src_h = rot->src_h;
+			__entry->dst_fmt = rot->output_format;
+			__entry->dst_bw = rot->output_width;
+			__entry->dst_bh = rot->output_height;
+			__entry->dst_x = rot->dst_x;
+			__entry->dst_y = rot->dst_y;
+			__entry->dst_w = rot->dst_w;
+			__entry->dst_h = rot->dst_h;
+	),
+
+	TP_printk("%d.%d|%d|%x|%x|%u,%u|%u,%u,%u,%u|%x|%u,%u|%u,%u,%u,%u|",
+			__entry->ss_id, __entry->sq_id, __entry->pr_id,
+			__entry->flags,
+			__entry->src_fmt, __entry->src_bw, __entry->src_bh,
+			__entry->src_x, __entry->src_y,
+			__entry->src_w, __entry->src_h,
+			__entry->dst_fmt, __entry->dst_bw, __entry->dst_bh,
+			__entry->dst_x, __entry->dst_y,
+			__entry->dst_w, __entry->dst_h)
+);
+
+DEFINE_EVENT(rot_entry_template, rot_entry_fence,
+	TP_PROTO(u32 ss_id, u32 sq_id, struct sde_rot_trace_entry *rot),
+	TP_ARGS(ss_id, sq_id, rot)
+);
+
+DEFINE_EVENT(rot_entry_template, rot_entry_commit,
+	TP_PROTO(u32 ss_id, u32 sq_id, struct sde_rot_trace_entry *rot),
+	TP_ARGS(ss_id, sq_id, rot)
+);
+
+DEFINE_EVENT(rot_entry_template, rot_entry_done,
+	TP_PROTO(u32 ss_id, u32 sq_id, struct sde_rot_trace_entry *rot),
+	TP_ARGS(ss_id, sq_id, rot)
+);
 
 TRACE_EVENT(rot_perf_set_qos_luts,
 	TP_PROTO(u32 pnum, u32 fmt, u32 lut, bool linear),
@@ -203,8 +274,7 @@ TRACE_EVENT(rot_bw_ao_as_context,
 
 #define SDE_ROT_TRACE_EVTLOG_SIZE	15
 TRACE_EVENT(sde_rot_evtlog,
-	TP_PROTO(const char *tag, u32 tag_id, u32 cnt,
-			 const u32 *data),
+	TP_PROTO(const char *tag, u32 tag_id, u32 cnt, u32 *data),
 	TP_ARGS(tag, tag_id, cnt, data),
 	TP_STRUCT__entry(
 			__field(int, pid)

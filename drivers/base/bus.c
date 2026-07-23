@@ -471,35 +471,6 @@ int bus_for_each_drv(struct bus_type *bus, struct device_driver *start,
 }
 EXPORT_SYMBOL_GPL(bus_for_each_drv);
 
-static int device_add_attrs(struct bus_type *bus, struct device *dev)
-{
-	int error = 0;
-	int i;
-
-	if (!bus->dev_attrs)
-		return 0;
-
-	for (i = 0; bus->dev_attrs[i].attr.name; i++) {
-		error = device_create_file(dev, &bus->dev_attrs[i]);
-		if (error) {
-			while (--i >= 0)
-				device_remove_file(dev, &bus->dev_attrs[i]);
-			break;
-		}
-	}
-	return error;
-}
-
-static void device_remove_attrs(struct bus_type *bus, struct device *dev)
-{
-	int i;
-
-	if (bus->dev_attrs) {
-		for (i = 0; bus->dev_attrs[i].attr.name; i++)
-			device_remove_file(dev, &bus->dev_attrs[i]);
-	}
-}
-
 /**
  * bus_add_device - add device to bus
  * @dev: device being added
@@ -515,12 +486,9 @@ int bus_add_device(struct device *dev)
 
 	if (bus) {
 		pr_debug("bus: '%s': add device %s\n", bus->name, dev_name(dev));
-		error = device_add_attrs(bus, dev);
-		if (error)
-			goto out_put;
 		error = device_add_groups(dev, bus->dev_groups);
 		if (error)
-			goto out_id;
+			goto out_put;
 		error = sysfs_create_link(&bus->p->devices_kset->kobj,
 						&dev->kobj, dev_name(dev));
 		if (error)
@@ -537,8 +505,6 @@ out_subsys:
 	sysfs_remove_link(&bus->p->devices_kset->kobj, dev_name(dev));
 out_groups:
 	device_remove_groups(dev, bus->dev_groups);
-out_id:
-	device_remove_attrs(bus, dev);
 out_put:
 	bus_put(dev->bus);
 	return error;
@@ -595,7 +561,6 @@ void bus_remove_device(struct device *dev)
 	sysfs_remove_link(&dev->kobj, "subsystem");
 	sysfs_remove_link(&dev->bus->p->devices_kset->kobj,
 			  dev_name(dev));
-	device_remove_attrs(dev->bus, dev);
 	device_remove_groups(dev, dev->bus->dev_groups);
 	if (klist_node_attached(&dev->p->knode_bus))
 		klist_del(&dev->p->knode_bus);
@@ -653,11 +618,10 @@ static void remove_probe_files(struct bus_type *bus)
 static ssize_t uevent_store(struct device_driver *drv, const char *buf,
 			    size_t count)
 {
-	enum kobject_action action;
+	int rc;
 
-	if (kobject_action_type(buf, count, &action) == 0)
-		kobject_uevent(&drv->p->kobj, action);
-	return count;
+	rc = kobject_synth_uevent(&drv->p->kobj, buf, count);
+	return rc ? rc : count;
 }
 static DRIVER_ATTR_WO(uevent);
 
@@ -873,11 +837,10 @@ static void klist_devices_put(struct klist_node *n)
 static ssize_t bus_uevent_store(struct bus_type *bus,
 				const char *buf, size_t count)
 {
-	enum kobject_action action;
+	int rc;
 
-	if (kobject_action_type(buf, count, &action) == 0)
-		kobject_uevent(&bus->p->subsys.kobj, action);
-	return count;
+	rc = kobject_synth_uevent(&bus->p->subsys.kobj, buf, count);
+	return rc ? rc : count;
 }
 static BUS_ATTR(uevent, S_IWUSR, NULL, bus_uevent_store);
 
@@ -960,8 +923,6 @@ bus_devices_fail:
 	bus_remove_file(bus, &bus_attr_uevent);
 bus_uevent_fail:
 	kset_unregister(&bus->p->subsys);
-	/* Above kset_unregister() will kfree @bus->p */
-	bus->p = NULL;
 out:
 	kfree(bus->p);
 	bus->p = NULL;

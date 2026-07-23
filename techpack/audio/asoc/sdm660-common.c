@@ -43,42 +43,28 @@ enum {
 	EXT_DISP_RX_IDX_MAX,
 };
 
-enum {
-	PRIMARY_TDM_RX_0,
-	PRIMARY_TDM_RX_1,
-	PRIMARY_TDM_RX_2,
-	PRIMARY_TDM_RX_3,
-	PRIMARY_TDM_RX_4,
-	PRIMARY_TDM_RX_5,
-	PRIMARY_TDM_RX_6,
-	PRIMARY_TDM_RX_7,
-	TDM_MAX_RX,
-};
-enum {
-	PRIMARY_TDM_TX_0,
-	PRIMARY_TDM_TX_1,
-	PRIMARY_TDM_TX_2,
-	PRIMARY_TDM_TX_3,
-	PRIMARY_TDM_TX_4,
-	PRIMARY_TDM_TX_5,
-	PRIMARY_TDM_TX_6,
-	PRIMARY_TDM_TX_7,
-	TDM_MAX_TX,
-};
-
 bool codec_reg_done;
 
+enum {
+	STATUS_PORT_STARTED, /* track if AFE port has started */
+	/* track AFE Tx port status for bi-directional transfers */
+	STATUS_TX_PORT,
+	/* track AFE Rx port status for bi-directional transfers */
+	STATUS_RX_PORT,
+	STATUS_MAX
+};
+
 struct tdm_dai_data {
-	DECLARE_BITMAP(status_mask, 3);
+	DECLARE_BITMAP(status_mask, STATUS_MAX);
 	u32 rate;
 	u32 channels;
 	u32 bitwidth;
 	u32 num_group_ports;
+	u32 is_island_dai;
 	struct afe_clk_set clk_set; /* hold LPASS clock config. */
 	union afe_port_group_config group_cfg; /* hold tdm group config */
 	struct afe_tdm_port_config port_cfg; /* hold tdm config */
 };
-
 
 /* TDM default config */
 static struct dev_config tdm_rx_cfg[TDM_INTERFACE_MAX][TDM_PORT_MAX] = {
@@ -249,14 +235,7 @@ static bool msm_swap_gnd_mic(struct snd_soc_codec *codec, bool active);
 static struct wcd_mbhc_config mbhc_cfg = {
 	.read_fw_bin = false,
 	.calibration = NULL,
-	//#ifndef OPLUS_ARCH_EXTENDS
-	/* Jianfeng.Qiu@PSW.MM.AudioDriver.HeadsetDet, 2017/04/10,
-	 * Modify for headset detect.
-	 */
-	//.detect_extn_cable = true,
-	//#else /* OPLUS_ARCH_EXTENDS */
-	.detect_extn_cable = false,
-	//#endif /* OPLUS_ARCH_EXTENDS */
+	.detect_extn_cable = true,
 	.mono_stero_detection = false,
 	.swap_gnd_mic = NULL,
 	.hs_ext_micbias = true,
@@ -635,93 +614,18 @@ static unsigned int tdm_tx_slot_offset
 		{0xFFFF}, /* not used */
 	}
 };
-
-static unsigned int tdm_param_set_slot_mask(u16 port_id, int slot_width,
-		int slots, int tdm_interface)
+static unsigned int tdm_param_set_slot_mask(int slots)
 {
 	unsigned int slot_mask = 0;
-	int upper, lower, i, j, rx_path = 0;
-	unsigned int *slot_offset;
+	int i = 0;
 
-	switch (port_id) {
-	case AFE_PORT_ID_PRIMARY_TDM_RX:
-	case AFE_PORT_ID_PRIMARY_TDM_RX_1:
-	case AFE_PORT_ID_PRIMARY_TDM_RX_2:
-	case AFE_PORT_ID_PRIMARY_TDM_RX_3:
-	case AFE_PORT_ID_PRIMARY_TDM_RX_4:
-	case AFE_PORT_ID_PRIMARY_TDM_RX_5:
-	case AFE_PORT_ID_PRIMARY_TDM_RX_6:
-	case AFE_PORT_ID_PRIMARY_TDM_RX_7:
-	case AFE_PORT_ID_SECONDARY_TDM_RX:
-	case AFE_PORT_ID_SECONDARY_TDM_RX_1:
-	case AFE_PORT_ID_SECONDARY_TDM_RX_2:
-	case AFE_PORT_ID_SECONDARY_TDM_RX_3:
-	case AFE_PORT_ID_SECONDARY_TDM_RX_4:
-	case AFE_PORT_ID_SECONDARY_TDM_RX_5:
-	case AFE_PORT_ID_SECONDARY_TDM_RX_6:
-	case AFE_PORT_ID_SECONDARY_TDM_RX_7:
-	case AFE_PORT_ID_TERTIARY_TDM_RX:
-	case AFE_PORT_ID_TERTIARY_TDM_RX_1:
-	case AFE_PORT_ID_TERTIARY_TDM_RX_2:
-	case AFE_PORT_ID_TERTIARY_TDM_RX_3:
-	case AFE_PORT_ID_TERTIARY_TDM_RX_4:
-	case AFE_PORT_ID_TERTIARY_TDM_RX_5:
-	case AFE_PORT_ID_TERTIARY_TDM_RX_6:
-	case AFE_PORT_ID_TERTIARY_TDM_RX_7:
-		lower = PRIMARY_TDM_RX_0;
-		upper = PRIMARY_TDM_RX_7;
-		rx_path = 1;
-		break;
-	case AFE_PORT_ID_PRIMARY_TDM_TX:
-	case AFE_PORT_ID_PRIMARY_TDM_TX_1:
-	case AFE_PORT_ID_PRIMARY_TDM_TX_2:
-	case AFE_PORT_ID_PRIMARY_TDM_TX_3:
-	case AFE_PORT_ID_PRIMARY_TDM_TX_4:
-	case AFE_PORT_ID_PRIMARY_TDM_TX_5:
-	case AFE_PORT_ID_PRIMARY_TDM_TX_6:
-	case AFE_PORT_ID_PRIMARY_TDM_TX_7:
-	case AFE_PORT_ID_SECONDARY_TDM_TX:
-	case AFE_PORT_ID_SECONDARY_TDM_TX_1:
-	case AFE_PORT_ID_SECONDARY_TDM_TX_2:
-	case AFE_PORT_ID_SECONDARY_TDM_TX_3:
-	case AFE_PORT_ID_SECONDARY_TDM_TX_4:
-	case AFE_PORT_ID_SECONDARY_TDM_TX_5:
-	case AFE_PORT_ID_SECONDARY_TDM_TX_6:
-	case AFE_PORT_ID_SECONDARY_TDM_TX_7:
-	case AFE_PORT_ID_TERTIARY_TDM_TX:
-	case AFE_PORT_ID_TERTIARY_TDM_TX_1:
-	case AFE_PORT_ID_TERTIARY_TDM_TX_2:
-	case AFE_PORT_ID_TERTIARY_TDM_TX_3:
-	case AFE_PORT_ID_TERTIARY_TDM_TX_4:
-	case AFE_PORT_ID_TERTIARY_TDM_TX_5:
-	case AFE_PORT_ID_TERTIARY_TDM_TX_6:
-	case AFE_PORT_ID_TERTIARY_TDM_TX_7:
-		lower = PRIMARY_TDM_TX_0;
-		upper = PRIMARY_TDM_TX_7;
-		break;
-	default:
-		return slot_mask;
+	if ((slots <= 0) || (slots > 32)) {
+		pr_err("%s: invalid slot number %d\n", __func__, slots);
+		return -EINVAL;
 	}
 
-	for (i = lower; i <= upper; i++) {
-		if (rx_path)
-			slot_offset = tdm_rx_slot_offset[tdm_interface][i];
-		else
-			slot_offset = tdm_tx_slot_offset[tdm_interface][i];
-
-		for (j = 0; j < TDM_SLOT_OFFSET_MAX; j++) {
-			if (slot_offset[j] != AFE_SLOT_MAPPING_OFFSET_INVALID) {
-				/*
-				 * set the mask of active slot according to
-				 * the offset table for the group of devices
-				 */
-				slot_mask |=
-				(1 << ((slot_offset[j] * 8) / slot_width));
-			} else {
-				break;
-			}
-		}
-	}
+	for (i = 0; i < slots ; i++)
+		slot_mask |= 1 << i;
 
 	return slot_mask;
 }
@@ -732,7 +636,7 @@ int msm_tdm_snd_hw_params(struct snd_pcm_substream *substream,
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
 	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
 	int ret = 0;
-	int channels, slot_width, slots, rate, format, tdm_interface;
+	int channels, slot_width, slots, rate, format;
 	unsigned int slot_mask;
 	unsigned int *slot_offset;
 	int offset_channels = 0;
@@ -767,481 +671,401 @@ int msm_tdm_snd_hw_params(struct snd_pcm_substream *substream,
 		slots = tdm_slot[TDM_PRI].num;
 		slot_width = tdm_slot[TDM_PRI].width;
 		slot_offset = tdm_rx_slot_offset[TDM_PRI][TDM_0];
-		tdm_interface = TDM_PRI;
 		break;
 	case AFE_PORT_ID_PRIMARY_TDM_RX_1:
 		slots = tdm_slot[TDM_PRI].num;
 		slot_width = tdm_slot[TDM_PRI].width;
 		slot_offset = tdm_rx_slot_offset[TDM_PRI][TDM_1];
-		tdm_interface = TDM_PRI;
 		break;
 	case AFE_PORT_ID_PRIMARY_TDM_RX_2:
 		slots = tdm_slot[TDM_PRI].num;
 		slot_width = tdm_slot[TDM_PRI].width;
 		slot_offset = tdm_rx_slot_offset[TDM_PRI][TDM_2];
-		tdm_interface = TDM_PRI;
 		break;
 	case AFE_PORT_ID_PRIMARY_TDM_RX_3:
 		slots = tdm_slot[TDM_PRI].num;
 		slot_width = tdm_slot[TDM_PRI].width;
 		slot_offset = tdm_rx_slot_offset[TDM_PRI][TDM_3];
-		tdm_interface = TDM_PRI;
 		break;
 	case AFE_PORT_ID_PRIMARY_TDM_RX_4:
 		slots = tdm_slot[TDM_PRI].num;
 		slot_width = tdm_slot[TDM_PRI].width;
 		slot_offset = tdm_rx_slot_offset[TDM_PRI][TDM_4];
-		tdm_interface = TDM_PRI;
 		break;
 	case AFE_PORT_ID_PRIMARY_TDM_RX_5:
 		slots = tdm_slot[TDM_PRI].num;
 		slot_width = tdm_slot[TDM_PRI].width;
 		slot_offset = tdm_rx_slot_offset[TDM_PRI][TDM_5];
-		tdm_interface = TDM_PRI;
 		break;
 	case AFE_PORT_ID_PRIMARY_TDM_RX_6:
 		slots = tdm_slot[TDM_PRI].num;
 		slot_width = tdm_slot[TDM_PRI].width;
 		slot_offset = tdm_rx_slot_offset[TDM_PRI][TDM_6];
-		tdm_interface = TDM_PRI;
 		break;
 	case AFE_PORT_ID_PRIMARY_TDM_RX_7:
 		slots = tdm_slot[TDM_PRI].num;
 		slot_width = tdm_slot[TDM_PRI].width;
 		slot_offset = tdm_rx_slot_offset[TDM_PRI][TDM_7];
-		tdm_interface = TDM_PRI;
 		break;
 	case AFE_PORT_ID_PRIMARY_TDM_TX:
 		slots = tdm_slot[TDM_PRI].num;
 		slot_width = tdm_slot[TDM_PRI].width;
 		slot_offset = tdm_tx_slot_offset[TDM_PRI][TDM_0];
-		tdm_interface = TDM_PRI;
 		break;
 	case AFE_PORT_ID_PRIMARY_TDM_TX_1:
 		slots = tdm_slot[TDM_PRI].num;
 		slot_width = tdm_slot[TDM_PRI].width;
 		slot_offset = tdm_tx_slot_offset[TDM_PRI][TDM_1];
-		tdm_interface = TDM_PRI;
 		break;
 	case AFE_PORT_ID_PRIMARY_TDM_TX_2:
 		slots = tdm_slot[TDM_PRI].num;
 		slot_width = tdm_slot[TDM_PRI].width;
 		slot_offset = tdm_tx_slot_offset[TDM_PRI][TDM_2];
-		tdm_interface = TDM_PRI;
 		break;
 	case AFE_PORT_ID_PRIMARY_TDM_TX_3:
 		slots = tdm_slot[TDM_PRI].num;
 		slot_width = tdm_slot[TDM_PRI].width;
 		slot_offset = tdm_tx_slot_offset[TDM_PRI][TDM_3];
-		tdm_interface = TDM_PRI;
 		break;
 	case AFE_PORT_ID_PRIMARY_TDM_TX_4:
 		slots = tdm_slot[TDM_PRI].num;
 		slot_width = tdm_slot[TDM_PRI].width;
 		slot_offset = tdm_tx_slot_offset[TDM_PRI][TDM_4];
-		tdm_interface = TDM_PRI;
 		break;
 	case AFE_PORT_ID_PRIMARY_TDM_TX_5:
 		slots = tdm_slot[TDM_PRI].num;
 		slot_width = tdm_slot[TDM_PRI].width;
 		slot_offset = tdm_tx_slot_offset[TDM_PRI][TDM_5];
-		tdm_interface = TDM_PRI;
 		break;
 	case AFE_PORT_ID_PRIMARY_TDM_TX_6:
 		slots = tdm_slot[TDM_PRI].num;
 		slot_width = tdm_slot[TDM_PRI].width;
 		slot_offset = tdm_tx_slot_offset[TDM_PRI][TDM_6];
-		tdm_interface = TDM_PRI;
 		break;
 	case AFE_PORT_ID_PRIMARY_TDM_TX_7:
 		slots = tdm_slot[TDM_PRI].num;
 		slot_width = tdm_slot[TDM_PRI].width;
 		slot_offset = tdm_tx_slot_offset[TDM_PRI][TDM_7];
-		tdm_interface = TDM_PRI;
 		break;
 	case AFE_PORT_ID_SECONDARY_TDM_RX:
 		slots = tdm_slot[TDM_SEC].num;
 		slot_width = tdm_slot[TDM_SEC].width;
 		slot_offset = tdm_rx_slot_offset[TDM_SEC][TDM_0];
-		tdm_interface = TDM_SEC;
 		break;
 	case AFE_PORT_ID_SECONDARY_TDM_RX_1:
 		slots = tdm_slot[TDM_SEC].num;
 		slot_width = tdm_slot[TDM_SEC].width;
 		slot_offset = tdm_rx_slot_offset[TDM_SEC][TDM_1];
-		tdm_interface = TDM_SEC;
 		break;
 	case AFE_PORT_ID_SECONDARY_TDM_RX_2:
 		slots = tdm_slot[TDM_SEC].num;
 		slot_width = tdm_slot[TDM_SEC].width;
 		slot_offset = tdm_rx_slot_offset[TDM_SEC][TDM_2];
-		tdm_interface = TDM_SEC;
 		break;
 	case AFE_PORT_ID_SECONDARY_TDM_RX_3:
 		slots = tdm_slot[TDM_SEC].num;
 		slot_width = tdm_slot[TDM_SEC].width;
 		slot_offset = tdm_rx_slot_offset[TDM_SEC][TDM_3];
-		tdm_interface = TDM_SEC;
 		break;
 	case AFE_PORT_ID_SECONDARY_TDM_RX_4:
 		slots = tdm_slot[TDM_SEC].num;
 		slot_width = tdm_slot[TDM_SEC].width;
 		slot_offset = tdm_rx_slot_offset[TDM_SEC][TDM_4];
-		tdm_interface = TDM_SEC;
 		break;
 	case AFE_PORT_ID_SECONDARY_TDM_RX_5:
 		slots = tdm_slot[TDM_SEC].num;
 		slot_width = tdm_slot[TDM_SEC].width;
 		slot_offset = tdm_rx_slot_offset[TDM_SEC][TDM_5];
-		tdm_interface = TDM_SEC;
 		break;
 	case AFE_PORT_ID_SECONDARY_TDM_RX_6:
 		slots = tdm_slot[TDM_SEC].num;
 		slot_width = tdm_slot[TDM_SEC].width;
 		slot_offset = tdm_rx_slot_offset[TDM_SEC][TDM_6];
-		tdm_interface = TDM_SEC;
 		break;
 	case AFE_PORT_ID_SECONDARY_TDM_RX_7:
 		slots = tdm_slot[TDM_SEC].num;
 		slot_width = tdm_slot[TDM_SEC].width;
 		slot_offset = tdm_rx_slot_offset[TDM_SEC][TDM_7];
-		tdm_interface = TDM_SEC;
 		break;
 	case AFE_PORT_ID_SECONDARY_TDM_TX:
 		slots = tdm_slot[TDM_SEC].num;
 		slot_width = tdm_slot[TDM_SEC].width;
 		slot_offset = tdm_tx_slot_offset[TDM_SEC][TDM_0];
-		tdm_interface = TDM_SEC;
 		break;
 	case AFE_PORT_ID_SECONDARY_TDM_TX_1:
 		slots = tdm_slot[TDM_SEC].num;
 		slot_width = tdm_slot[TDM_SEC].width;
 		slot_offset = tdm_tx_slot_offset[TDM_SEC][TDM_1];
-		tdm_interface = TDM_SEC;
 		break;
 	case AFE_PORT_ID_SECONDARY_TDM_TX_2:
 		slots = tdm_slot[TDM_SEC].num;
 		slot_width = tdm_slot[TDM_SEC].width;
 		slot_offset = tdm_tx_slot_offset[TDM_SEC][TDM_2];
-		tdm_interface = TDM_SEC;
 		break;
 	case AFE_PORT_ID_SECONDARY_TDM_TX_3:
 		slots = tdm_slot[TDM_SEC].num;
 		slot_width = tdm_slot[TDM_SEC].width;
 		slot_offset = tdm_tx_slot_offset[TDM_SEC][TDM_3];
-		tdm_interface = TDM_SEC;
 		break;
 	case AFE_PORT_ID_SECONDARY_TDM_TX_4:
 		slots = tdm_slot[TDM_SEC].num;
 		slot_width = tdm_slot[TDM_SEC].width;
 		slot_offset = tdm_tx_slot_offset[TDM_SEC][TDM_4];
-		tdm_interface = TDM_SEC;
 		break;
 	case AFE_PORT_ID_SECONDARY_TDM_TX_5:
 		slots = tdm_slot[TDM_SEC].num;
 		slot_width = tdm_slot[TDM_SEC].width;
 		slot_offset = tdm_tx_slot_offset[TDM_SEC][TDM_5];
-		tdm_interface = TDM_SEC;
 		break;
 	case AFE_PORT_ID_SECONDARY_TDM_TX_6:
 		slots = tdm_slot[TDM_SEC].num;
 		slot_width = tdm_slot[TDM_SEC].width;
 		slot_offset = tdm_tx_slot_offset[TDM_SEC][TDM_6];
-		tdm_interface = TDM_SEC;
 		break;
 	case AFE_PORT_ID_SECONDARY_TDM_TX_7:
 		slots = tdm_slot[TDM_SEC].num;
 		slot_width = tdm_slot[TDM_SEC].width;
 		slot_offset = tdm_tx_slot_offset[TDM_SEC][TDM_7];
-		tdm_interface = TDM_SEC;
 		break;
 	case AFE_PORT_ID_TERTIARY_TDM_RX:
 		slots = tdm_slot[TDM_TERT].num;
 		slot_width = tdm_slot[TDM_TERT].width;
 		slot_offset = tdm_rx_slot_offset[TDM_TERT][TDM_0];
-		tdm_interface = TDM_TERT;
 		break;
 	case AFE_PORT_ID_TERTIARY_TDM_RX_1:
 		slots = tdm_slot[TDM_TERT].num;
 		slot_width = tdm_slot[TDM_TERT].width;
 		slot_offset = tdm_rx_slot_offset[TDM_TERT][TDM_1];
-		tdm_interface = TDM_TERT;
 		break;
 	case AFE_PORT_ID_TERTIARY_TDM_RX_2:
 		slots = tdm_slot[TDM_TERT].num;
 		slot_width = tdm_slot[TDM_TERT].width;
 		slot_offset = tdm_rx_slot_offset[TDM_TERT][TDM_2];
-		tdm_interface = TDM_TERT;
 		break;
 	case AFE_PORT_ID_TERTIARY_TDM_RX_3:
 		slots = tdm_slot[TDM_TERT].num;
 		slot_width = tdm_slot[TDM_TERT].width;
 		slot_offset = tdm_rx_slot_offset[TDM_TERT][TDM_3];
-		tdm_interface = TDM_TERT;
 		break;
 	case AFE_PORT_ID_TERTIARY_TDM_RX_4:
 		slots = tdm_slot[TDM_TERT].num;
 		slot_width = tdm_slot[TDM_TERT].width;
 		slot_offset = tdm_rx_slot_offset[TDM_TERT][TDM_4];
-		tdm_interface = TDM_TERT;
 		break;
 	case AFE_PORT_ID_TERTIARY_TDM_RX_5:
 		slots = tdm_slot[TDM_TERT].num;
 		slot_width = tdm_slot[TDM_TERT].width;
 		slot_offset = tdm_rx_slot_offset[TDM_TERT][TDM_5];
-		tdm_interface = TDM_TERT;
 		break;
 	case AFE_PORT_ID_TERTIARY_TDM_RX_6:
 		slots = tdm_slot[TDM_TERT].num;
 		slot_width = tdm_slot[TDM_TERT].width;
 		slot_offset = tdm_rx_slot_offset[TDM_TERT][TDM_6];
-		tdm_interface = TDM_TERT;
 		break;
 	case AFE_PORT_ID_TERTIARY_TDM_RX_7:
 		slots = tdm_slot[TDM_TERT].num;
 		slot_width = tdm_slot[TDM_TERT].width;
 		slot_offset = tdm_rx_slot_offset[TDM_TERT][TDM_7];
-		tdm_interface = TDM_TERT;
 		break;
 	case AFE_PORT_ID_TERTIARY_TDM_TX:
 		slots = tdm_slot[TDM_TERT].num;
 		slot_width = tdm_slot[TDM_TERT].width;
 		slot_offset = tdm_tx_slot_offset[TDM_TERT][TDM_0];
-		tdm_interface = TDM_TERT;
 		break;
 	case AFE_PORT_ID_TERTIARY_TDM_TX_1:
 		slots = tdm_slot[TDM_TERT].num;
 		slot_width = tdm_slot[TDM_TERT].width;
 		slot_offset = tdm_tx_slot_offset[TDM_TERT][TDM_1];
-		tdm_interface = TDM_TERT;
 		break;
 	case AFE_PORT_ID_TERTIARY_TDM_TX_2:
 		slots = tdm_slot[TDM_TERT].num;
 		slot_width = tdm_slot[TDM_TERT].width;
 		slot_offset = tdm_tx_slot_offset[TDM_TERT][TDM_2];
-		tdm_interface = TDM_TERT;
 		break;
 	case AFE_PORT_ID_TERTIARY_TDM_TX_3:
 		slots = tdm_slot[TDM_TERT].num;
 		slot_width = tdm_slot[TDM_TERT].width;
 		slot_offset = tdm_tx_slot_offset[TDM_TERT][TDM_3];
-		tdm_interface = TDM_TERT;
 		break;
 	case AFE_PORT_ID_TERTIARY_TDM_TX_4:
 		slots = tdm_slot[TDM_TERT].num;
 		slot_width = tdm_slot[TDM_TERT].width;
 		slot_offset = tdm_tx_slot_offset[TDM_TERT][TDM_4];
-		tdm_interface = TDM_TERT;
 		break;
 	case AFE_PORT_ID_TERTIARY_TDM_TX_5:
 		slots = tdm_slot[TDM_TERT].num;
 		slot_width = tdm_slot[TDM_TERT].width;
 		slot_offset = tdm_tx_slot_offset[TDM_TERT][TDM_5];
-		tdm_interface = TDM_TERT;
 		break;
 	case AFE_PORT_ID_TERTIARY_TDM_TX_6:
 		slots = tdm_slot[TDM_TERT].num;
 		slot_width = tdm_slot[TDM_TERT].width;
 		slot_offset = tdm_tx_slot_offset[TDM_TERT][TDM_6];
-		tdm_interface = TDM_TERT;
 		break;
 	case AFE_PORT_ID_TERTIARY_TDM_TX_7:
 		slots = tdm_slot[TDM_TERT].num;
 		slot_width = tdm_slot[TDM_TERT].width;
 		slot_offset = tdm_tx_slot_offset[TDM_TERT][TDM_7];
-		tdm_interface = TDM_TERT;
 		break;
 	case AFE_PORT_ID_QUATERNARY_TDM_RX:
 		slots = tdm_slot[TDM_QUAT].num;
 		slot_width = tdm_slot[TDM_QUAT].width;
 		slot_offset = tdm_rx_slot_offset[TDM_QUAT][TDM_0];
-		tdm_interface = TDM_QUAT;
 		break;
 	case AFE_PORT_ID_QUATERNARY_TDM_RX_1:
 		slots = tdm_slot[TDM_QUAT].num;
 		slot_width = tdm_slot[TDM_QUAT].width;
 		slot_offset = tdm_rx_slot_offset[TDM_QUAT][TDM_1];
-		tdm_interface = TDM_QUAT;
 		break;
 	case AFE_PORT_ID_QUATERNARY_TDM_RX_2:
 		slots = tdm_slot[TDM_QUAT].num;
 		slot_width = tdm_slot[TDM_QUAT].width;
 		slot_offset = tdm_rx_slot_offset[TDM_QUAT][TDM_2];
-		tdm_interface = TDM_QUAT;
 		break;
 	case AFE_PORT_ID_QUATERNARY_TDM_RX_3:
 		slots = tdm_slot[TDM_QUAT].num;
 		slot_width = tdm_slot[TDM_QUAT].width;
 		slot_offset = tdm_rx_slot_offset[TDM_QUAT][TDM_3];
-		tdm_interface = TDM_QUAT;
 		break;
 	case AFE_PORT_ID_QUATERNARY_TDM_RX_4:
 		slots = tdm_slot[TDM_QUAT].num;
 		slot_width = tdm_slot[TDM_QUAT].width;
 		slot_offset = tdm_rx_slot_offset[TDM_QUAT][TDM_4];
-		tdm_interface = TDM_QUAT;
 		break;
 	case AFE_PORT_ID_QUATERNARY_TDM_RX_5:
 		slots = tdm_slot[TDM_QUAT].num;
 		slot_width = tdm_slot[TDM_QUAT].width;
 		slot_offset = tdm_rx_slot_offset[TDM_QUAT][TDM_5];
-		tdm_interface = TDM_QUAT;
 		break;
 	case AFE_PORT_ID_QUATERNARY_TDM_RX_6:
 		slots = tdm_slot[TDM_QUAT].num;
 		slot_width = tdm_slot[TDM_QUAT].width;
 		slot_offset = tdm_rx_slot_offset[TDM_QUAT][TDM_6];
-		tdm_interface = TDM_QUAT;
 		break;
 	case AFE_PORT_ID_QUATERNARY_TDM_RX_7:
 		slots = tdm_slot[TDM_QUAT].num;
 		slot_width = tdm_slot[TDM_QUAT].width;
 		slot_offset = tdm_rx_slot_offset[TDM_QUAT][TDM_7];
-		tdm_interface = TDM_QUAT;
 		break;
 	case AFE_PORT_ID_QUATERNARY_TDM_TX:
 		slots = tdm_slot[TDM_QUAT].num;
 		slot_width = tdm_slot[TDM_QUAT].width;
 		slot_offset = tdm_tx_slot_offset[TDM_QUAT][TDM_0];
-		tdm_interface = TDM_QUAT;
 		break;
 	case AFE_PORT_ID_QUATERNARY_TDM_TX_1:
 		slots = tdm_slot[TDM_QUAT].num;
 		slot_width = tdm_slot[TDM_QUAT].width;
 		slot_offset = tdm_tx_slot_offset[TDM_QUAT][TDM_1];
-		tdm_interface = TDM_QUAT;
 		break;
 	case AFE_PORT_ID_QUATERNARY_TDM_TX_2:
 		slots = tdm_slot[TDM_QUAT].num;
 		slot_width = tdm_slot[TDM_QUAT].width;
 		slot_offset = tdm_tx_slot_offset[TDM_QUAT][TDM_2];
-		tdm_interface = TDM_QUAT;
 		break;
 	case AFE_PORT_ID_QUATERNARY_TDM_TX_3:
 		slots = tdm_slot[TDM_QUAT].num;
 		slot_width = tdm_slot[TDM_QUAT].width;
 		slot_offset = tdm_tx_slot_offset[TDM_QUAT][TDM_3];
-		tdm_interface = TDM_QUAT;
 		break;
 	case AFE_PORT_ID_QUATERNARY_TDM_TX_4:
 		slots = tdm_slot[TDM_QUAT].num;
 		slot_width = tdm_slot[TDM_QUAT].width;
 		slot_offset = tdm_tx_slot_offset[TDM_QUAT][TDM_4];
-		tdm_interface = TDM_QUAT;
 		break;
 	case AFE_PORT_ID_QUATERNARY_TDM_TX_5:
 		slots = tdm_slot[TDM_QUAT].num;
 		slot_width = tdm_slot[TDM_QUAT].width;
 		slot_offset = tdm_tx_slot_offset[TDM_QUAT][TDM_5];
-		tdm_interface = TDM_QUAT;
 		break;
 	case AFE_PORT_ID_QUATERNARY_TDM_TX_6:
 		slots = tdm_slot[TDM_QUAT].num;
 		slot_width = tdm_slot[TDM_QUAT].width;
 		slot_offset = tdm_tx_slot_offset[TDM_QUAT][TDM_6];
-		tdm_interface = TDM_QUAT;
 		break;
 	case AFE_PORT_ID_QUATERNARY_TDM_TX_7:
 		slots = tdm_slot[TDM_QUAT].num;
 		slot_width = tdm_slot[TDM_QUAT].width;
 		slot_offset = tdm_tx_slot_offset[TDM_QUAT][TDM_7];
-		tdm_interface = TDM_QUAT;
 		break;
 	case AFE_PORT_ID_QUINARY_TDM_RX:
 		slots = tdm_slot[TDM_QUIN].num;
 		slot_width = tdm_slot[TDM_QUIN].width;
 		slot_offset = tdm_rx_slot_offset[TDM_QUIN][TDM_0];
-		tdm_interface = TDM_QUIN;
 		break;
 	case AFE_PORT_ID_QUINARY_TDM_RX_1:
 		slots = tdm_slot[TDM_QUIN].num;
 		slot_width = tdm_slot[TDM_QUIN].width;
 		slot_offset = tdm_rx_slot_offset[TDM_QUIN][TDM_1];
-		tdm_interface = TDM_QUIN;
 		break;
 	case AFE_PORT_ID_QUINARY_TDM_RX_2:
 		slots = tdm_slot[TDM_QUIN].num;
 		slot_width = tdm_slot[TDM_QUIN].width;
 		slot_offset = tdm_rx_slot_offset[TDM_QUIN][TDM_2];
-		tdm_interface = TDM_QUIN;
 		break;
 	case AFE_PORT_ID_QUINARY_TDM_RX_3:
 		slots = tdm_slot[TDM_QUIN].num;
 		slot_width = tdm_slot[TDM_QUIN].width;
 		slot_offset = tdm_rx_slot_offset[TDM_QUIN][TDM_3];
-		tdm_interface = TDM_QUIN;
 		break;
 	case AFE_PORT_ID_QUINARY_TDM_RX_4:
 		slots = tdm_slot[TDM_QUIN].num;
 		slot_width = tdm_slot[TDM_QUIN].width;
 		slot_offset = tdm_rx_slot_offset[TDM_QUIN][TDM_4];
-		tdm_interface = TDM_QUIN;
 		break;
 	case AFE_PORT_ID_QUINARY_TDM_RX_5:
 		slots = tdm_slot[TDM_QUIN].num;
 		slot_width = tdm_slot[TDM_QUIN].width;
 		slot_offset = tdm_rx_slot_offset[TDM_QUIN][TDM_5];
-		tdm_interface = TDM_QUIN;
 		break;
 	case AFE_PORT_ID_QUINARY_TDM_RX_6:
 		slots = tdm_slot[TDM_QUIN].num;
 		slot_width = tdm_slot[TDM_QUIN].width;
 		slot_offset = tdm_rx_slot_offset[TDM_QUIN][TDM_6];
-		tdm_interface = TDM_QUIN;
 		break;
 	case AFE_PORT_ID_QUINARY_TDM_RX_7:
 		slots = tdm_slot[TDM_QUIN].num;
 		slot_width = tdm_slot[TDM_QUIN].width;
 		slot_offset = tdm_rx_slot_offset[TDM_QUIN][TDM_7];
-		tdm_interface = TDM_QUIN;
 		break;
 	case AFE_PORT_ID_QUINARY_TDM_TX:
 		slots = tdm_slot[TDM_QUIN].num;
 		slot_width = tdm_slot[TDM_QUIN].width;
 		slot_offset = tdm_tx_slot_offset[TDM_QUIN][TDM_0];
-		tdm_interface = TDM_QUIN;
 		break;
 	case AFE_PORT_ID_QUINARY_TDM_TX_1:
 		slots = tdm_slot[TDM_QUIN].num;
 		slot_width = tdm_slot[TDM_QUIN].width;
 		slot_offset = tdm_tx_slot_offset[TDM_QUIN][TDM_1];
-		tdm_interface = TDM_QUIN;
 		break;
 	case AFE_PORT_ID_QUINARY_TDM_TX_2:
 		slots = tdm_slot[TDM_QUIN].num;
 		slot_width = tdm_slot[TDM_QUIN].width;
 		slot_offset = tdm_tx_slot_offset[TDM_QUIN][TDM_2];
-		tdm_interface = TDM_QUIN;
 		break;
 	case AFE_PORT_ID_QUINARY_TDM_TX_3:
 		slots = tdm_slot[TDM_QUIN].num;
 		slot_width = tdm_slot[TDM_QUIN].width;
 		slot_offset = tdm_tx_slot_offset[TDM_QUIN][TDM_3];
-		tdm_interface = TDM_QUIN;
 		break;
 	case AFE_PORT_ID_QUINARY_TDM_TX_4:
 		slots = tdm_slot[TDM_QUIN].num;
 		slot_width = tdm_slot[TDM_QUIN].width;
 		slot_offset = tdm_tx_slot_offset[TDM_QUIN][TDM_4];
-		tdm_interface = TDM_QUIN;
 		break;
 	case AFE_PORT_ID_QUINARY_TDM_TX_5:
 		slots = tdm_slot[TDM_QUIN].num;
 		slot_width = tdm_slot[TDM_QUIN].width;
 		slot_offset = tdm_tx_slot_offset[TDM_QUIN][TDM_5];
-		tdm_interface = TDM_QUIN;
 		break;
 	case AFE_PORT_ID_QUINARY_TDM_TX_6:
 		slots = tdm_slot[TDM_QUIN].num;
 		slot_width = tdm_slot[TDM_QUIN].width;
 		slot_offset = tdm_tx_slot_offset[TDM_QUIN][TDM_6];
-		tdm_interface = TDM_QUIN;
 		break;
 	case AFE_PORT_ID_QUINARY_TDM_TX_7:
 		slots = tdm_slot[TDM_QUIN].num;
 		slot_width = tdm_slot[TDM_QUIN].width;
 		slot_offset = tdm_tx_slot_offset[TDM_QUIN][TDM_7];
-		tdm_interface = TDM_QUIN;
 		break;
 	default:
 		pr_err("%s: dai id 0x%x not supported\n",
@@ -1268,20 +1092,7 @@ int msm_tdm_snd_hw_params(struct snd_pcm_substream *substream,
 		return -EINVAL;
 	}
 
-	slot_mask = tdm_param_set_slot_mask(cpu_dai->id,
-				slot_width, slots, tdm_interface);
-	pr_debug("%s: slot_mask :%x\n", __func__, slot_mask);
-
-	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE) {
-		/* over write slot-mask if configured for full slots */
-		if ((slots == 32) && (slot_width == 16))
-			slot_mask = 0xffffffff;
-		else if ((slots == 16) && (slot_width == 32))
-			slot_mask = 0xffff;
-		pr_debug("%s:slot_mask :%x slots %d slot_width %d\n", __func__,
-			slot_mask, slots, slot_width);
-	}
-
+	slot_mask = tdm_param_set_slot_mask(slots);
 	if (!slot_mask) {
 		pr_err("%s: invalid slot_mask 0x%x\n",
 			__func__, slot_mask);
@@ -1306,7 +1117,6 @@ int msm_tdm_snd_hw_params(struct snd_pcm_substream *substream,
 			goto end;
 		}
 	} else if (substream->stream == SNDRV_PCM_STREAM_CAPTURE) {
-
 		ret = snd_soc_dai_set_tdm_slot(cpu_dai, slot_mask, 0,
 					       slots, slot_width);
 		if (ret < 0) {
@@ -3293,43 +3103,16 @@ const struct snd_kcontrol_new msm_common_snd_controls[] = {
 	SOC_ENUM_EXT("PRI_TDM_TX_0 SampleRate", tdm_tx_sample_rate,
 			tdm_tx_sample_rate_get,
 			tdm_tx_sample_rate_put),
-	SOC_ENUM_EXT("PRI_TDM_TX_1 SampleRate", tdm_tx_sample_rate,
-			tdm_tx_sample_rate_get,
-			tdm_tx_sample_rate_put),
-	SOC_ENUM_EXT("PRI_TDM_TX_2 SampleRate", tdm_tx_sample_rate,
-			tdm_tx_sample_rate_get,
-			tdm_tx_sample_rate_put),
-	SOC_ENUM_EXT("PRI_TDM_TX_3 SampleRate", tdm_tx_sample_rate,
-			tdm_tx_sample_rate_get,
-			tdm_tx_sample_rate_put),
 	SOC_ENUM_EXT("PRI_TDM_RX_0 Format", tdm_rx_format,
 			tdm_rx_format_get,
 			tdm_rx_format_put),
 	SOC_ENUM_EXT("PRI_TDM_TX_0 Format", tdm_tx_format,
 			tdm_tx_format_get,
 			tdm_tx_format_put),
-	SOC_ENUM_EXT("PRI_TDM_TX_1 Format", tdm_tx_format,
-			tdm_tx_format_get,
-			tdm_tx_format_put),
-	SOC_ENUM_EXT("PRI_TDM_TX_2 Format", tdm_tx_format,
-			tdm_tx_format_get,
-			tdm_tx_format_put),
-	SOC_ENUM_EXT("PRI_TDM_TX_3 Format", tdm_tx_format,
-			tdm_tx_format_get,
-			tdm_tx_format_put),
 	SOC_ENUM_EXT("PRI_TDM_RX_0 Channels", tdm_rx_chs,
 			tdm_rx_ch_get,
 			tdm_rx_ch_put),
 	SOC_ENUM_EXT("PRI_TDM_TX_0 Channels", tdm_tx_chs,
-			tdm_tx_ch_get,
-			tdm_tx_ch_put),
-	SOC_ENUM_EXT("PRI_TDM_TX_1 Channels", tdm_tx_chs,
-			tdm_tx_ch_get,
-			tdm_tx_ch_put),
-	SOC_ENUM_EXT("PRI_TDM_TX_2 Channels", tdm_tx_chs,
-			tdm_tx_ch_get,
-			tdm_tx_ch_put),
-	SOC_ENUM_EXT("PRI_TDM_TX_3 Channels", tdm_tx_chs,
 			tdm_tx_ch_get,
 			tdm_tx_ch_put),
 	SOC_ENUM_EXT("SEC_TDM_RX_0 SampleRate", tdm_rx_sample_rate,
@@ -3356,43 +3139,16 @@ const struct snd_kcontrol_new msm_common_snd_controls[] = {
 	SOC_ENUM_EXT("TERT_TDM_TX_0 SampleRate", tdm_tx_sample_rate,
 			tdm_tx_sample_rate_get,
 			tdm_tx_sample_rate_put),
-	SOC_ENUM_EXT("TERT_TDM_TX_1 SampleRate", tdm_tx_sample_rate,
-			tdm_tx_sample_rate_get,
-			tdm_tx_sample_rate_put),
-	SOC_ENUM_EXT("TERT_TDM_TX_2 SampleRate", tdm_tx_sample_rate,
-			tdm_tx_sample_rate_get,
-			tdm_tx_sample_rate_put),
-	SOC_ENUM_EXT("TERT_TDM_TX_3 SampleRate", tdm_tx_sample_rate,
-			tdm_tx_sample_rate_get,
-			tdm_tx_sample_rate_put),
 	SOC_ENUM_EXT("TERT_TDM_RX_0 Format", tdm_rx_format,
 			tdm_rx_format_get,
 			tdm_rx_format_put),
 	SOC_ENUM_EXT("TERT_TDM_TX_0 Format", tdm_tx_format,
 			tdm_tx_format_get,
 			tdm_tx_format_put),
-	SOC_ENUM_EXT("TERT_TDM_TX_1 Format", tdm_tx_format,
-			tdm_tx_format_get,
-			tdm_tx_format_put),
-	SOC_ENUM_EXT("TERT_TDM_TX_2 Format", tdm_tx_format,
-			tdm_tx_format_get,
-			tdm_tx_format_put),
-	SOC_ENUM_EXT("TERT_TDM_TX_3 Format", tdm_tx_format,
-			tdm_tx_format_get,
-			tdm_tx_format_put),
 	SOC_ENUM_EXT("TERT_TDM_RX_0 Channels", tdm_rx_chs,
 			tdm_rx_ch_get,
 			tdm_rx_ch_put),
 	SOC_ENUM_EXT("TERT_TDM_TX_0 Channels", tdm_tx_chs,
-			tdm_tx_ch_get,
-			tdm_tx_ch_put),
-	SOC_ENUM_EXT("TERT_TDM_TX_1 Channels", tdm_tx_chs,
-			tdm_tx_ch_get,
-			tdm_tx_ch_put),
-	SOC_ENUM_EXT("TERT_TDM_TX_2 Channels", tdm_tx_chs,
-			tdm_tx_ch_get,
-			tdm_tx_ch_put),
-	SOC_ENUM_EXT("TERT_TDM_TX_3 Channels", tdm_tx_chs,
 			tdm_tx_ch_get,
 			tdm_tx_ch_put),
 	SOC_ENUM_EXT("QUAT_TDM_RX_0 SampleRate", tdm_rx_sample_rate,
@@ -4920,17 +4676,6 @@ int msm_mi2s_snd_startup(struct snd_pcm_substream *substream)
 				__func__, index, ret);
 			goto clk_off;
 		}
-		//#ifdef OPLUS_ARCH_EXTENDS
-		/*Jianfeng.Qiu@PSW.MM.AudioDriver.FTM.1396163, 2018/05/27,
-		 *Add for FTM mode ak4376 pdn not pulldown, cause sleep current issue.
-		 */
-		if (index == SEC_MI2S) {
-			ret = snd_soc_dai_set_fmt(rtd->codec_dai, fmt|SND_SOC_DAIFMT_I2S);
-			if (ret < 0) {
-				pr_warn("%s: set codec fmt fail, ret=%d \n", __func__, ret);
-			}
-		}
-		//#endif /* OPLUS_ARCH_EXTENDS */
 		if (mi2s_intf_conf[index].msm_is_ext_mclk) {
 			mi2s_mclk[index].enable = 1;
 			pr_debug("%s: Enabling mclk, clk_freq_in_hz = %u\n",
@@ -5015,50 +4760,15 @@ static int msm_get_tdm_mode(u32 port_id)
 
 	switch (port_id) {
 	case AFE_PORT_ID_PRIMARY_TDM_RX:
-	case AFE_PORT_ID_PRIMARY_TDM_RX_1:
-	case AFE_PORT_ID_PRIMARY_TDM_RX_2:
-	case AFE_PORT_ID_PRIMARY_TDM_RX_3:
-	case AFE_PORT_ID_PRIMARY_TDM_RX_4:
-	case AFE_PORT_ID_PRIMARY_TDM_RX_5:
-	case AFE_PORT_ID_PRIMARY_TDM_RX_6:
-	case AFE_PORT_ID_PRIMARY_TDM_RX_7:
 	case AFE_PORT_ID_PRIMARY_TDM_TX:
-	case AFE_PORT_ID_PRIMARY_TDM_TX_1:
-	case AFE_PORT_ID_PRIMARY_TDM_TX_2:
-	case AFE_PORT_ID_PRIMARY_TDM_TX_3:
-	case AFE_PORT_ID_PRIMARY_TDM_TX_4:
-	case AFE_PORT_ID_PRIMARY_TDM_TX_5:
-	case AFE_PORT_ID_PRIMARY_TDM_TX_6:
-	case AFE_PORT_ID_PRIMARY_TDM_TX_7:
 		tdm_mode = TDM_PRI;
 		break;
 	case AFE_PORT_ID_SECONDARY_TDM_RX:
-	case AFE_PORT_ID_SECONDARY_TDM_RX_1:
-	case AFE_PORT_ID_SECONDARY_TDM_RX_2:
-	case AFE_PORT_ID_SECONDARY_TDM_RX_3:
-	case AFE_PORT_ID_SECONDARY_TDM_RX_4:
-	case AFE_PORT_ID_SECONDARY_TDM_RX_5:
-	case AFE_PORT_ID_SECONDARY_TDM_RX_6:
-	case AFE_PORT_ID_SECONDARY_TDM_RX_7:
 	case AFE_PORT_ID_SECONDARY_TDM_TX:
-	case AFE_PORT_ID_SECONDARY_TDM_TX_1:
-	case AFE_PORT_ID_SECONDARY_TDM_TX_2:
-	case AFE_PORT_ID_SECONDARY_TDM_TX_3:
-	case AFE_PORT_ID_SECONDARY_TDM_TX_4:
-	case AFE_PORT_ID_SECONDARY_TDM_TX_5:
-	case AFE_PORT_ID_SECONDARY_TDM_TX_6:
-	case AFE_PORT_ID_SECONDARY_TDM_TX_7:
 		tdm_mode = TDM_SEC;
 		break;
 	case AFE_PORT_ID_TERTIARY_TDM_RX:
 	case AFE_PORT_ID_TERTIARY_TDM_TX:
-	case AFE_PORT_ID_TERTIARY_TDM_TX_1:
-	case AFE_PORT_ID_TERTIARY_TDM_TX_2:
-	case AFE_PORT_ID_TERTIARY_TDM_TX_3:
-	case AFE_PORT_ID_TERTIARY_TDM_TX_4:
-	case AFE_PORT_ID_TERTIARY_TDM_TX_5:
-	case AFE_PORT_ID_TERTIARY_TDM_TX_6:
-	case AFE_PORT_ID_TERTIARY_TDM_TX_7:
 		tdm_mode = TDM_TERT;
 		break;
 	case AFE_PORT_ID_QUATERNARY_TDM_RX:
@@ -5369,30 +5079,10 @@ codec_dai:
 				index = of_property_match_string(cdev->of_node,
 							"asoc-codec-names",
 							PMIC_INT_ANALOG_CODEC);
-				phandle = of_parse_phandle(
-							cdev->of_node,
-							"asoc-codec",
-							index);
-				dai_link[i].codecs[ANA_CDC].of_node =
-								phandle;
-			}
-		}
-		if (pdata->snd_card_val == INT_DIG_SND_CARD) {
-			if ((dai_link[i].id ==
-					MSM_BACKEND_DAI_INT0_MI2S_RX) ||
-			    (dai_link[i].id ==
-					MSM_BACKEND_DAI_INT1_MI2S_RX) ||
-			    (dai_link[i].id ==
-					MSM_BACKEND_DAI_INT2_MI2S_TX) ||
-			    (dai_link[i].id ==
-					MSM_BACKEND_DAI_INT3_MI2S_TX)) {
-				index = of_property_match_string(cdev->of_node,
-							"asoc-codec-names",
-							MSM_INT_DIGITAL_CODEC);
 				phandle = of_parse_phandle(cdev->of_node,
 							   "asoc-codec",
 							   index);
-				dai_link[i].codec_of_node = phandle;
+				dai_link[i].codecs[ANA_CDC].of_node = phandle;
 			}
 		}
 	}
@@ -5421,7 +5111,7 @@ static int msm_wsa881x_init(struct snd_soc_component *component)
 				__func__, codec->component.name);
 		wsa881x_set_channel_map(codec, &spkleft_ports[0],
 				WSA881X_MAX_SWR_PORTS, &ch_mask[0],
-				&ch_rate[0]);
+				&ch_rate[0], NULL);
 		if (dapm->component) {
 			snd_soc_dapm_ignore_suspend(dapm, "SpkrLeft IN");
 			snd_soc_dapm_ignore_suspend(dapm, "SpkrLeft SPKR");
@@ -5431,7 +5121,7 @@ static int msm_wsa881x_init(struct snd_soc_component *component)
 				__func__, codec->component.name);
 		wsa881x_set_channel_map(codec, &spkright_ports[0],
 				WSA881X_MAX_SWR_PORTS, &ch_mask[0],
-				&ch_rate[0]);
+				&ch_rate[0], NULL);
 		if (dapm->component) {
 			snd_soc_dapm_ignore_suspend(dapm, "SpkrRight IN");
 			snd_soc_dapm_ignore_suspend(dapm, "SpkrRight SPKR");
@@ -5620,7 +5310,6 @@ static int msm_init_wsa_dev(struct platform_device *pdev,
 	}
 	card->codec_conf = msm_codec_conf;
 	card->aux_dev = msm_aux_dev;
-
 	return 0;
 
 err_dt_prop:
@@ -5688,10 +5377,6 @@ static const struct of_device_id sdm660_asoc_machine_of_match[]  = {
 	  .data = "tasha_codec"},
 	{ .compatible = "qcom,sdm670-asoc-snd-tavil",
 	  .data = "tavil_codec"},
-	{ .compatible = "qcom,qcs605-dig-asoc-snd",
-	  .data = "digital_codec"},
-	{ .compatible = "qcom,qcs605-asoc-snd-tavil",
-	  .data = "tavil_codec"},
 	{},
 };
 
@@ -5703,11 +5388,6 @@ static int msm_asoc_machine_probe(struct platform_device *pdev)
 	int ret = -EINVAL, id;
 	const struct of_device_id *match;
 	const char *usb_c_dt = "qcom,msm-mbhc-usbc-audio-supported";
-
-	//ifdef OPLUS_ARCH_EXTENDS
-	/* Jianfeng.Qiu@PSW.MM.AudioDriver.Machine,2017/09/21, Add for log*/
-	pr_info("%s: *** Enter\n", __func__);
-	//endif /* OPLUS_ARCH_EXTENDS */
 
 	pdata = devm_kzalloc(&pdev->dev,
 			     sizeof(struct msm_asoc_mach_data),
@@ -5743,11 +5423,6 @@ static int msm_asoc_machine_probe(struct platform_device *pdev)
 		ret = msm_int_cdc_init(pdev, pdata, &card, &mbhc_cfg);
 		if (ret)
 			goto err;
-	} else if (!strcmp(match->data, "digital_codec")) {
-		pdata->snd_card_val = INT_DIG_SND_CARD;
-		ret = msm_int_cdc_init(pdev, pdata, &card, NULL);
-		if (ret)
-			goto err;
 	} else {
 		dev_err(&pdev->dev,
 			"%s: Not a matching DT sound node\n", __func__);
@@ -5768,11 +5443,6 @@ static int msm_asoc_machine_probe(struct platform_device *pdev)
 					"qcom,cdc-ext-spk-gpios", 0);
 	}
 
-	if (pdata->snd_card_val == INT_DIG_SND_CARD) {
-		/*reading the gpio configurations from dtsi file*/
-		pdata->dmic_gpio_p = of_parse_phandle(pdev->dev.of_node,
-					"qcom,cdc-dmic-gpios", 0);
-	}
 	pdata->mi2s_gpio_p[PRIM_MI2S] = of_parse_phandle(pdev->dev.of_node,
 					"qcom,pri-mi2s-gpios", 0);
 	pdata->mi2s_gpio_p[SEC_MI2S] = of_parse_phandle(pdev->dev.of_node,
@@ -5815,7 +5485,6 @@ static int msm_asoc_machine_probe(struct platform_device *pdev)
 	ret = snd_soc_of_parse_audio_routing(card, "qcom,audio-routing");
 	if (ret)
 		goto err;
-
 	ret = msm_populate_dai_link_component_of_node(pdata, card);
 	if (ret) {
 		ret = -EPROBE_DEFER;
@@ -5844,22 +5513,8 @@ static int msm_asoc_machine_probe(struct platform_device *pdev)
 			ret);
 		goto err;
 	}
-	if (pdata->snd_card_val > INT_MAX_SND_CARD)
+	if (pdata->snd_card_val != INT_SND_CARD)
 		msm_ext_register_audio_notifier(pdev);
-
-	//ifdef OPLUS_ARCH_EXTENDS
-	/* Jianfeng.Qiu@PSW.MM.AudioDriver.Machine,2017/09/21, Add for log*/
-	pr_info("%s: sond card register success.\n", __func__);
-	//endif /* OPLUS_ARCH_EXTENDS */
-
-    #ifdef OPLUS_ARCH_EXTENDS
-	/*xiang.fei@PSW.MM.AudioDriver.Codec, 2019/01/10, Add for set defaut state with dmic data pin */
-	if (pdata->snd_card_val == INT_SND_CARD) {
-		if (msm_cdc_pinctrl_select_sleep_state(pdata->dmic_gpio_p)) {
-			pr_err("%s: set dmic data pin high-z state error\n", __func__);
-		}
-	}
-    #endif /* OPLUS_ARCH_EXTENDS */
 
 	return 0;
 err:
@@ -5880,6 +5535,8 @@ err:
 		gpio_free(pdata->hph_en0_gpio);
 		pdata->hph_en0_gpio = 0;
 	}
+	if (pdata->snd_card_val != INT_SND_CARD)
+		msm_ext_cdc_deinit(pdata);
 	devm_kfree(&pdev->dev, pdata);
 	return ret;
 }
@@ -5889,7 +5546,7 @@ static int msm_asoc_machine_remove(struct platform_device *pdev)
 	struct snd_soc_card *card = platform_get_drvdata(pdev);
 	struct msm_asoc_mach_data *pdata = snd_soc_card_get_drvdata(card);
 
-	if (pdata->snd_card_val <= INT_MAX_SND_CARD)
+	if (pdata->snd_card_val == INT_SND_CARD)
 		mutex_destroy(&pdata->cdc_int_mclk0_mutex);
 
 	if (gpio_is_valid(pdata->us_euro_gpio)) {
@@ -5905,8 +5562,10 @@ static int msm_asoc_machine_remove(struct platform_device *pdev)
 		pdata->hph_en0_gpio = 0;
 	}
 
-	if (pdata->snd_card_val > INT_MAX_SND_CARD)
+	if (pdata->snd_card_val != INT_SND_CARD) {
 		audio_notifier_deregister("sdm660");
+		msm_ext_cdc_deinit(pdata);
+	}
 
 	snd_soc_unregister_card(card);
 	return 0;

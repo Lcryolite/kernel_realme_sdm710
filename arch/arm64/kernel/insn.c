@@ -30,8 +30,8 @@
 #include <asm/cacheflush.h>
 #include <asm/debug-monitors.h>
 #include <asm/fixmap.h>
-#include <asm/opcodes.h>
 #include <asm/insn.h>
+#include <asm/kprobes.h>
 
 #define AARCH64_INSN_SF_BIT	BIT(31)
 #define AARCH64_INSN_N_BIT	BIT(22)
@@ -94,7 +94,7 @@ static void __kprobes *patch_map(void *addr, int fixmap)
 	bool module = !core_kernel_text(uintaddr);
 	struct page *page;
 
-	if (module && IS_ENABLED(CONFIG_DEBUG_SET_MODULE_RONX))
+	if (module && IS_ENABLED(CONFIG_STRICT_MODULE_RWX))
 		page = vmalloc_to_page(addr);
 	else if (!module)
 		page = phys_to_page(__pa_symbol(addr));
@@ -117,7 +117,7 @@ static void __kprobes patch_unmap(int fixmap)
 int __kprobes aarch64_insn_read(void *addr, u32 *insnp)
 {
 	int ret;
-	u32 val;
+	__le32 val;
 
 	ret = probe_kernel_read(&val, addr, AARCH64_INSN_SIZE);
 	if (!ret)
@@ -126,7 +126,7 @@ int __kprobes aarch64_insn_read(void *addr, u32 *insnp)
 	return ret;
 }
 
-static int __kprobes __aarch64_insn_write(void *addr, u32 insn)
+static int __kprobes __aarch64_insn_write(void *addr, __le32 insn)
 {
 	void *waddr = addr;
 	unsigned long flags = 0;
@@ -145,8 +145,7 @@ static int __kprobes __aarch64_insn_write(void *addr, u32 insn)
 
 int __kprobes aarch64_insn_write(void *addr, u32 insn)
 {
-	insn = cpu_to_le32(insn);
-	return __aarch64_insn_write(addr, insn);
+	return __aarch64_insn_write(addr, cpu_to_le32(insn));
 }
 
 static bool __kprobes __aarch64_insn_hotpatch_safe(u32 insn)
@@ -255,6 +254,7 @@ static int __kprobes aarch64_insn_patch_text_cb(void *arg)
 	return ret;
 }
 
+static
 int __kprobes aarch64_insn_patch_text_sync(void *addrs[], u32 insns[], int cnt)
 {
 	struct aarch64_insn_patch patch = {
@@ -267,8 +267,8 @@ int __kprobes aarch64_insn_patch_text_sync(void *addrs[], u32 insns[], int cnt)
 	if (cnt <= 0)
 		return -EINVAL;
 
-	return stop_machine(aarch64_insn_patch_text_cb, &patch,
-			    cpu_online_mask);
+	return stop_machine_cpuslocked(aarch64_insn_patch_text_cb, &patch,
+				       cpu_online_mask);
 }
 
 int __kprobes aarch64_insn_patch_text(void *addrs[], u32 insns[], int cnt)

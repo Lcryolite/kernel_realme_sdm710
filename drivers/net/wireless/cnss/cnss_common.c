@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -16,7 +16,7 @@
 #include <linux/pm.h>
 #include <linux/device.h>
 #include <linux/pm_wakeup.h>
-#include <linux/sched.h>
+#include <linux/sched/debug.h>
 #include <linux/suspend.h>
 #include <linux/mutex.h>
 #include <linux/rwsem.h>
@@ -73,7 +73,7 @@ static enum cnss_cc_src cnss_cc_source = CNSS_SOURCE_CORE;
 int cnss_set_wlan_unsafe_channel(u16 *unsafe_ch_list, u16 ch_count)
 {
 	mutex_lock(&unsafe_channel_list_lock);
-	if ((!unsafe_ch_list) || (ch_count > CNSS_MAX_CH_NUM)) {
+	if (!unsafe_ch_list || ch_count > CNSS_MAX_CH_NUM) {
 		mutex_unlock(&unsafe_channel_list_lock);
 		return -EINVAL;
 	}

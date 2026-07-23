@@ -16,7 +16,6 @@
 #include <asm/shmparam.h>
 #include <asm/cachetype.h>
 #include <asm/outercache.h>
-#include <asm/set_memory.h>
 
 #define CACHE_COLOUR(vaddr)	((vaddr & (SHMLBA - 1)) >> PAGE_SHIFT)
 
@@ -134,7 +133,7 @@ struct cpu_cache_fns {
 	void (*dma_inv_range)(const void *, const void *);
 	void (*dma_clean_range)(const void *, const void *);
 	void (*dma_flush_range)(const void *, const void *);
-};
+} __no_randomize_layout;
 
 /*
  * Select the calling method
@@ -181,9 +180,9 @@ extern void __cpuc_flush_dcache_area(void *, size_t);
  */
 extern void __dma_map_area(const void *addr, size_t size, int dir);
 extern void __dma_unmap_area(const void *addr, size_t size, int dir);
-extern void dmac_inv_range(const void *, const void *);
-extern void dmac_clean_range(const void *, const void *);
-extern void dmac_flush_range(const void *, const void *);
+extern void dmac_inv_range(const void *start, const void *end);
+extern void dmac_clean_range(const void *start, const void *end);
+extern void dmac_flush_range(const void *start, const void *end);
 
 static inline void __dma_inv_area(const void *start, size_t len)
 {
@@ -515,26 +514,6 @@ static inline void __sync_cache_range_r(volatile void *p, size_t size)
 	"ldmfd	sp!, {fp, ip}" \
 	: : : "r0","r1","r2","r3","r4","r5","r6","r7", \
 	      "r9","r10","lr","memory" )
-
-#ifdef CONFIG_MMU
-int set_memory_ro(unsigned long addr, int numpages);
-int set_memory_rw(unsigned long addr, int numpages);
-int set_memory_x(unsigned long addr, int numpages);
-int set_memory_nx(unsigned long addr, int numpages);
-#else
-static inline int set_memory_ro(unsigned long addr, int numpages) { return 0; }
-static inline int set_memory_rw(unsigned long addr, int numpages) { return 0; }
-static inline int set_memory_x(unsigned long addr, int numpages) { return 0; }
-static inline int set_memory_nx(unsigned long addr, int numpages) { return 0; }
-#endif
-
-#ifdef CONFIG_DEBUG_RODATA
-void set_kernel_text_rw(void);
-void set_kernel_text_ro(void);
-#else
-static inline void set_kernel_text_rw(void) { }
-static inline void set_kernel_text_ro(void) { }
-#endif
 
 void flush_uprobe_xol_access(struct page *page, unsigned long uaddr,
 			     void *kaddr, unsigned long len);

@@ -1,7 +1,7 @@
 /*
  * f_ccid.c -- CCID function Driver
  *
- * Copyright (c) 2011, 2013, 2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011, 2013, 2017, 2020, The Linux Foundation. All rights reserved.
 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -20,7 +20,7 @@
 #include <linux/module.h>
 #include <linux/usb/ccid_desc.h>
 #include <linux/usb/composite.h>
-#include <linux/miscdevice.h>
+#include <linux/cdev.h>
 #include <linux/uaccess.h>
 
 #include "f_ccid.h"
@@ -44,7 +44,7 @@ struct ccid_ctrl_dev {
 	wait_queue_head_t tx_wait_q;
 	unsigned char buf[CTRL_BUF_SIZE];
 	int tx_ctrl_done;
-	struct miscdevice ccid_ctrl_device;
+	struct cdev cdev;
 };
 
 struct ccid_bulk_dev {
@@ -56,7 +56,7 @@ struct ccid_bulk_dev {
 	struct usb_request *rx_req;
 	int rx_done;
 	struct list_head tx_idle;
-	struct miscdevice ccid_bulk_device;
+	struct cdev cdev;
 };
 
 struct ccid_opts {
@@ -78,6 +78,13 @@ struct f_ccid {
 	struct ccid_bulk_dev bulk_dev;
 	int dtr_state;
 };
+
+#define MAX_INSTANCES		4
+
+static int major;
+static struct class *ccid_class;
+static DEFINE_IDA(ccid_ida);
+static DEFINE_MUTEX(ccid_ida_lock);
 
 static inline struct f_ccid *ctrl_dev_to_ccid(struct ccid_ctrl_dev *d)
 {
@@ -329,6 +336,7 @@ static void ccid_bulk_complete_out(struct usb_ep *ep, struct usb_request *req)
 {
 	struct f_ccid *ccid_dev = req->context;
 	struct ccid_bulk_dev *bulk_dev = &ccid_dev->bulk_dev;
+
 	if (req->status != 0)
 		atomic_set(&bulk_dev->error, 1);
 
@@ -337,8 +345,7 @@ static void ccid_bulk_complete_out(struct usb_ep *ep, struct usb_request *req)
 }
 
 static struct usb_request *
-ccid_request_alloc(struct usb_ep *ep, size_t len, size_t extra_buf_alloc,
-							gfp_t kmalloc_flags)
+ccid_request_alloc(struct usb_ep *ep, size_t len, gfp_t kmalloc_flags)
 {
 	struct usb_request *req;
 
@@ -346,7 +353,7 @@ ccid_request_alloc(struct usb_ep *ep, size_t len, size_t extra_buf_alloc,
 
 	if (req != NULL) {
 		req->length = len;
-		req->buf = kmalloc(len + extra_buf_alloc, kmalloc_flags);
+		req->buf = kmalloc(len, kmalloc_flags);
 		if (req->buf == NULL) {
 			usb_ep_free_request(ep, req);
 			req = NULL;
@@ -468,8 +475,7 @@ ccid_function_set_alt(struct usb_function *f, unsigned int intf,
 	int i;
 
 	ccid_dev->notify_req = ccid_request_alloc(ccid_dev->notify,
-			sizeof(struct usb_ccid_notification),
-			cdev->gadget->extra_buf_alloc, GFP_ATOMIC);
+			sizeof(struct usb_ccid_notification), GFP_ATOMIC);
 	if (IS_ERR(ccid_dev->notify_req)) {
 		pr_err("%s: unable to allocate memory for notify req\n",
 				__func__);
@@ -480,7 +486,7 @@ ccid_function_set_alt(struct usb_function *f, unsigned int intf,
 
 	/* now allocate requests for our endpoints */
 	req = ccid_request_alloc(ccid_dev->out, BULK_OUT_BUFFER_SIZE,
-							0, GFP_ATOMIC);
+							GFP_ATOMIC);
 	if (IS_ERR(req)) {
 		pr_err("%s: unable to allocate memory for out req\n",
 				__func__);
@@ -493,7 +499,7 @@ ccid_function_set_alt(struct usb_function *f, unsigned int intf,
 
 	for (i = 0; i < TX_REQ_MAX; i++) {
 		req = ccid_request_alloc(ccid_dev->in, BULK_IN_BUFFER_SIZE,
-				cdev->gadget->extra_buf_alloc, GFP_ATOMIC);
+				GFP_ATOMIC);
 		if (IS_ERR(req)) {
 			pr_err("%s: unable to allocate memory for in req\n",
 					__func__);
@@ -632,7 +638,7 @@ static int ccid_function_bind(struct usb_configuration *c,
 					ccid_fs_notify_desc.bEndpointAddress;
 
 	ret = usb_assign_descriptors(f, ccid_fs_descs, ccid_hs_descs,
-						ccid_ss_descs, NULL);
+						ccid_ss_descs, ccid_ss_descs);
 	if (ret)
 		goto ep_auto_out_fail;
 
@@ -652,15 +658,14 @@ ep_auto_in_fail:
 	return ret;
 }
 
-static int ccid_bulk_open(struct inode *ip, struct file *fp)
+static int ccid_bulk_open(struct inode *inode, struct file *fp)
 {
-	struct ccid_bulk_dev *bulk_dev =  container_of(fp->private_data,
-						struct ccid_bulk_dev,
-						ccid_bulk_device);
+	struct ccid_bulk_dev *bulk_dev =  container_of(inode->i_cdev,
+						struct ccid_bulk_dev, cdev);
 	struct f_ccid *ccid_dev = bulk_dev_to_ccid(bulk_dev);
 	unsigned long flags;
 
-	pr_debug("ccid_bulk_open\n");
+	pr_debug("%s\n", __func__);
 	if (!atomic_read(&ccid_dev->online)) {
 		pr_debug("%s: USB cable not connected\n", __func__);
 		return -ENODEV;
@@ -685,7 +690,7 @@ static int ccid_bulk_release(struct inode *ip, struct file *fp)
 	struct f_ccid *ccid_dev =  fp->private_data;
 	struct ccid_bulk_dev *bulk_dev = &ccid_dev->bulk_dev;
 
-	pr_debug("ccid_bulk_release\n");
+	pr_debug("%s\n", __func__);
 	atomic_set(&bulk_dev->opened, 0);
 	return 0;
 }
@@ -700,7 +705,7 @@ static ssize_t ccid_bulk_read(struct file *fp, char __user *buf,
 	int ret;
 	unsigned long flags;
 
-	pr_debug("ccid_bulk_read(%zu)\n", count);
+	pr_debug("%s: %zu bytes\n", __func__, count);
 
 	if (count > BULK_OUT_BUFFER_SIZE) {
 		pr_err("%s: max_buffer_size:%d given_pkt_size:%zu\n",
@@ -782,7 +787,7 @@ requeue_req:
 		r = -EIO;
 	}
 done:
-	pr_debug("ccid_bulk_read returning %d\n", r);
+	pr_debug("%s returning %d\n", __func__, r);
 	return r;
 }
 
@@ -796,7 +801,7 @@ static ssize_t ccid_bulk_write(struct file *fp, const char __user *buf,
 	int ret;
 	unsigned long flags;
 
-	pr_debug("ccid_bulk_write(%zu)\n", count);
+	pr_debug("%s: %zu bytes\n", __func__, count);
 
 	if (!atomic_read(&ccid_dev->online)) {
 		pr_debug("%s: USB cable not connected\n", __func__);
@@ -844,7 +849,7 @@ static ssize_t ccid_bulk_write(struct file *fp, const char __user *buf,
 	req->length = count;
 	ret = usb_ep_queue(ccid_dev->in, req, GFP_KERNEL);
 	if (ret < 0) {
-		pr_debug("ccid_bulk_write: xfer error %d\n", ret);
+		pr_debug("%s: xfer error %d\n", __func__, ret);
 		atomic_set(&bulk_dev->error, 1);
 		ccid_req_put(ccid_dev, &bulk_dev->tx_idle, req);
 		r = -EIO;
@@ -857,12 +862,12 @@ static ssize_t ccid_bulk_write(struct file *fp, const char __user *buf,
 						&bulk_dev->tx_idle)))
 				ccid_request_free(req, ccid_dev->in);
 			r = -ENODEV;
-			goto done;
 		}
 		spin_unlock_irqrestore(&ccid_dev->lock, flags);
+		goto done;
 	}
 done:
-	pr_debug("ccid_bulk_write returning %d\n", r);
+	pr_debug("%s returning %d\n", __func__, r);
 	return r;
 }
 
@@ -874,33 +879,10 @@ static const struct file_operations ccid_bulk_fops = {
 	.release = ccid_bulk_release,
 };
 
-static int ccid_bulk_device_init(struct f_ccid *dev)
-{
-	int ret;
-	struct ccid_bulk_dev *bulk_dev = &dev->bulk_dev;
-
-	init_waitqueue_head(&bulk_dev->read_wq);
-	init_waitqueue_head(&bulk_dev->write_wq);
-	INIT_LIST_HEAD(&bulk_dev->tx_idle);
-
-	bulk_dev->ccid_bulk_device.name = CCID_BULK_DEV_NAME;
-	bulk_dev->ccid_bulk_device.fops = &ccid_bulk_fops;
-	bulk_dev->ccid_bulk_device.minor = MISC_DYNAMIC_MINOR;
-
-	ret = misc_register(&bulk_dev->ccid_bulk_device);
-	if (ret) {
-		pr_err("%s: failed to register misc device\n", __func__);
-		return ret;
-	}
-
-	return 0;
-}
-
 static int ccid_ctrl_open(struct inode *inode, struct file *fp)
 {
-	struct ccid_ctrl_dev *ctrl_dev =  container_of(fp->private_data,
-						struct ccid_ctrl_dev,
-						ccid_ctrl_device);
+	struct ccid_ctrl_dev *ctrl_dev =  container_of(inode->i_cdev,
+						struct ccid_ctrl_dev, cdev);
 	struct f_ccid *ccid_dev = ctrl_dev_to_ccid(ctrl_dev);
 	unsigned long flags;
 
@@ -1006,25 +988,48 @@ static const struct file_operations ccid_ctrl_fops = {
 	.unlocked_ioctl	= ccid_ctrl_ioctl,
 };
 
-static int ccid_ctrl_device_init(struct f_ccid *dev)
+static int ccid_cdev_init(struct cdev *cdev, const struct file_operations *fops,
+		const char *name)
 {
-	int ret;
-	struct ccid_ctrl_dev *ctrl_dev = &dev->ctrl_dev;
+	struct device *dev;
+	int ret, minor;
 
-	INIT_LIST_HEAD(&ctrl_dev->tx_q);
-	init_waitqueue_head(&ctrl_dev->tx_wait_q);
+	minor = ida_simple_get(&ccid_ida, 0, MAX_INSTANCES, GFP_KERNEL);
+	if (minor < 0) {
+		pr_err("%s: No more minor numbers left! rc:%d\n", __func__,
+				minor);
+		return minor;
+	}
 
-	ctrl_dev->ccid_ctrl_device.name = CCID_CTRL_DEV_NAME;
-	ctrl_dev->ccid_ctrl_device.fops = &ccid_ctrl_fops;
-	ctrl_dev->ccid_ctrl_device.minor = MISC_DYNAMIC_MINOR;
-
-	ret = misc_register(&ctrl_dev->ccid_ctrl_device);
+	cdev_init(cdev, fops);
+	ret = cdev_add(cdev, MKDEV(major, minor), 1);
 	if (ret) {
-		pr_err("%s: failed to register misc device\n", __func__);
-		return ret;
+		pr_err("Failed to add cdev for (%s)\n", name);
+		goto err_cdev_add;
+	}
+
+	dev = device_create(ccid_class, NULL, MKDEV(major, minor), NULL, name);
+	if (IS_ERR(dev)) {
+		ret = PTR_ERR(dev);
+		goto err_create_dev;
 	}
 
 	return 0;
+
+err_create_dev:
+	cdev_del(cdev);
+err_cdev_add:
+	ida_simple_remove(&ccid_ida, minor);
+	return ret;
+}
+
+static void ccid_cdev_free(struct cdev *cdev)
+{
+	int minor = MINOR(cdev->dev);
+
+	device_destroy(ccid_class, cdev->dev);
+	cdev_del(cdev);
+	ida_simple_remove(&ccid_ida, minor);
 }
 
 static void ccid_free_func(struct usb_function *f)
@@ -1034,7 +1039,7 @@ static void ccid_free_func(struct usb_function *f)
 
 static int ccid_bind_config(struct f_ccid *ccid_dev)
 {
-	pr_debug("ccid_bind_config\n");
+	pr_debug("%s\n", __func__);
 
 	ccid_dev->function.name = FUNCTION_NAME;
 	ccid_dev->function.bind = ccid_function_bind;
@@ -1045,6 +1050,50 @@ static int ccid_bind_config(struct f_ccid *ccid_dev)
 	ccid_dev->function.free_func = ccid_free_func;
 
 	return 0;
+}
+
+static int ccid_alloc_chrdev_region(void)
+{
+	int ret;
+	dev_t dev;
+
+	ccid_class = class_create(THIS_MODULE, "ccid_usb");
+	if (IS_ERR(ccid_class)) {
+		ret = PTR_ERR(ccid_class);
+		ccid_class = NULL;
+		pr_err("%s: class_create() failed:%d\n", __func__, ret);
+		return ret;
+	}
+
+	ret = alloc_chrdev_region(&dev, 0, MAX_INSTANCES, "ccid_usb");
+	if (ret) {
+		pr_err("%s: alloc_chrdev_region() failed:%d\n", __func__, ret);
+		class_destroy(ccid_class);
+		ccid_class = NULL;
+		return ret;
+	}
+
+	major = MAJOR(dev);
+
+	return 0;
+}
+
+static void ccid_free_chrdev_region(void)
+{
+	mutex_lock(&ccid_ida_lock);
+	if (ida_is_empty(&ccid_ida)) {
+		if (major) {
+			unregister_chrdev_region(MKDEV(major, 0),
+					MAX_INSTANCES);
+			major = 0;
+		}
+
+		if (ccid_class) {
+			class_destroy(ccid_class);
+			ccid_class = NULL;
+		}
+	}
+	mutex_unlock(&ccid_ida_lock);
 }
 
 static struct f_ccid *ccid_setup(void)
@@ -1059,14 +1108,32 @@ static struct f_ccid *ccid_setup(void)
 	}
 
 	spin_lock_init(&ccid_dev->lock);
+	INIT_LIST_HEAD(&ccid_dev->ctrl_dev.tx_q);
+	init_waitqueue_head(&ccid_dev->ctrl_dev.tx_wait_q);
+	init_waitqueue_head(&ccid_dev->bulk_dev.read_wq);
+	init_waitqueue_head(&ccid_dev->bulk_dev.write_wq);
+	INIT_LIST_HEAD(&ccid_dev->bulk_dev.tx_idle);
 
-	ret = ccid_ctrl_device_init(ccid_dev);
+	mutex_lock(&ccid_ida_lock);
+	if (ida_is_empty(&ccid_ida)) {
+		ret = ccid_alloc_chrdev_region();
+		if (ret) {
+			mutex_unlock(&ccid_ida_lock);
+			goto err_chrdev;
+		}
+	}
+	mutex_unlock(&ccid_ida_lock);
+
+	ret = ccid_cdev_init(&ccid_dev->ctrl_dev.cdev, &ccid_ctrl_fops,
+			CCID_CTRL_DEV_NAME);
 	if (ret) {
 		pr_err("%s: ccid_ctrl_device_init failed, err:%d\n",
 				__func__, ret);
 		goto err_ctrl_init;
 	}
-	ret = ccid_bulk_device_init(ccid_dev);
+
+	ret = ccid_cdev_init(&ccid_dev->bulk_dev.cdev, &ccid_bulk_fops,
+			CCID_BULK_DEV_NAME);
 	if (ret) {
 		pr_err("%s: ccid_bulk_device_init failed, err:%d\n",
 				__func__, ret);
@@ -1075,8 +1142,10 @@ static struct f_ccid *ccid_setup(void)
 
 	return ccid_dev;
 err_bulk_init:
-	misc_deregister(&ccid_dev->ctrl_dev.ccid_ctrl_device);
+	ccid_cdev_free(&ccid_dev->ctrl_dev.cdev);
 err_ctrl_init:
+	ccid_free_chrdev_region();
+err_chrdev:
 	kfree(ccid_dev);
 error:
 	pr_err("ccid gadget driver failed to initialize\n");
@@ -1132,8 +1201,9 @@ static void ccid_free_inst(struct usb_function_instance *f)
 	if (!opts->ccid)
 		return;
 
-	misc_deregister(&opts->ccid->ctrl_dev.ccid_ctrl_device);
-	misc_deregister(&opts->ccid->bulk_dev.ccid_bulk_device);
+	ccid_cdev_free(&opts->ccid->ctrl_dev.cdev);
+	ccid_cdev_free(&opts->ccid->bulk_dev.cdev);
+	ccid_free_chrdev_region();
 
 	kfree(opts->ccid);
 	kfree(opts);

@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "milestone": "M2-current-candidate",
+  "status": "PASS",
+  "commit": "d13ec62256091330a024560285c256725febd6a0",
+  "kernel_release": "4.14.357-openela-RMX1901-A17-M2",
+  "toolchain": {
+    "clang": "Android (6443078 based on r383902) clang 11.0.1",
+    "lld": "LLD 11.0.1"
+  },
+  "inputs": {
+    "defconfig": "arch/arm64/configs/vendor/rmx1901_m2_defconfig",
+    "defconfig_sha256": "707c0160f92b00e0e59d887c49e324bc2abc60e6b73787553d2d0b069e57aa20",
+    "dot_config_sha256": "02a78e4515d97eaa96c8830729796efc24a91e57d74c1ac488c9386ced8fc46f",
+    "module_signing_pem_sha256": "3eebca2a75fbd744e0f2a42a60fff8d97cbc2ee073c7912e17fe1b58a6fb0e03",
+    "known_good_overlay_entry": 46,
+    "overlay_sha256": "4649a0431ef594d6366ed0ad616e65b8c5b873906003bc80f951369c00e33301"
+  },
+  "reproducibility": {
+    "clean_builds": 2,
+    "output_a": "/home/lknife/android/kernel_realme_sdm710-4.14-bringup/out-m2-d13ec62-a",
+    "output_b": "/home/lknife/android/kernel_realme_sdm710-4.14-bringup/out-m2-d13ec62-b",
+    "all_declared_artifacts_byte_identical": true
+  },
+  "artifacts": {
+    "Image": {"bytes": 46997504, "sha256": "76541da47bb19297873ed13cf10e2e83be25fddb1159c0aa8a5524ab81524b4f"},
+    "Image.gz": {"bytes": 17892732, "sha256": "469786fb499d6297e04f9e1918e543fff556e85f2f6d30fb0249510e0e60b0fe"},
+    "vmlinux": {"bytes": 981382888, "sha256": "88a30288970e87184948cecd2efb1d68c421783367238b3c80a669eb310032e8", "build_id": "f7d4463f1738f40c"},
+    "vmlinux_o": {"bytes": 2805585760, "sha256": "4a8f5b7adb35f4347c4374439c40e21a25b399451c763d229be3f9ac4a33750d"},
+    "System.map": {"bytes": 8584865, "sha256": "f8deda90f4c4b42c428c0e3a536a01ab906bd3a27a6b93a0315c44eaeffd17e6"},
+    "Module.symvers": {"bytes": 684453, "sha256": "6715aa6a194bc2135efdc30e2169aaf7a7f16891cac85ca1e0b90660c8c6b055"},
+    "rmx1901_dtb": {"bytes": 383739, "sha256": "2847b2fe3474c9e18db37e24accd894f9ed5096448050b3b01cc2c8f5f67c6c7"},
+    "module_gspca_main": {"bytes": 598888, "sha256": "d6bb0fa3a13038703656e18aef6779c3c5a1f184f81c1a505c2160cd3521cf6a"},
+    "module_rmnet_perf": {"bytes": 2121312, "sha256": "899a3edac97c13405d1bf75bc220e8b5d97cf5dbfdcf89493dac1d287702a212"},
+    "module_rmnet_shs": {"bytes": 3043264, "sha256": "c2678749a4f94a7d7ba870a6960594ba8e05e5adf733188ccee4922e95d5b251"},
+    "module_signing_x509": {"sha256": "e4db0c74f32306baf093f81e1f87c6d8d541d5dde2669f39f21a7343c2cc4dbe"}
+  },
+  "device_tree_gate": {
+    "overlay_fixups_required": 179,
+    "overlay_fixups_satisfied": 179,
+    "reserved_memory_regions": 19,
+    "reserved_memory_overlaps": 0,
+    "critical_nodes": "PASS"
+  },
+  "diagnostics": {"errors": 0, "warning_lines": 10, "all_warnings_in_m1_baseline": true},
+  "vendor_uapi_gate": "PASS",
+  "boot_image_repack_validation": "NOT_STARTED",
+  "device_flash_allowed": false
+}

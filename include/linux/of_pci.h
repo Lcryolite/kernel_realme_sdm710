@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __OF_PCI_H
 #define __OF_PCI_H
 
@@ -10,12 +11,12 @@ struct device_node;
 
 #ifdef CONFIG_OF_PCI
 int of_irq_parse_pci(const struct pci_dev *pdev, struct of_phandle_args *out_irq);
-struct device_node *of_pci_find_child_device(struct device_node *parent,
-					     unsigned int devfn);
+struct device_node *of_pci_find_child_device(struct pci_dev *dev);
 int of_pci_get_devfn(struct device_node *np);
 int of_irq_parse_and_map_pci(const struct pci_dev *dev, u8 slot, u8 pin);
 int of_pci_parse_bus_range(struct device_node *node, struct resource *res);
 int of_get_pci_domain_nr(struct device_node *node);
+int of_pci_get_max_link_speed(struct device_node *node);
 void of_pci_check_probe_only(void);
 int of_pci_map_rid(struct device_node *np, u32 rid,
 		   const char *map_name, const char *map_mask_name,
@@ -26,8 +27,7 @@ static inline int of_irq_parse_pci(const struct pci_dev *pdev, struct of_phandle
 	return 0;
 }
 
-static inline struct device_node *of_pci_find_child_device(struct device_node *parent,
-					     unsigned int devfn)
+static inline struct device_node *of_pci_find_child_device(struct pci_dev *dev)
 {
 	return NULL;
 }
@@ -62,6 +62,12 @@ static inline int of_pci_map_rid(struct device_node *np, u32 rid,
 	return -EINVAL;
 }
 
+static inline int
+of_pci_get_max_link_speed(struct device_node *node)
+{
+	return -EINVAL;
+}
+
 static inline void of_pci_check_probe_only(void) { }
 #endif
 
@@ -76,17 +82,6 @@ static inline int of_pci_get_host_bridge_resources(struct device_node *dev,
 {
 	return -EINVAL;
 }
-#endif
-
-#if defined(CONFIG_OF) && defined(CONFIG_PCI_MSI)
-int of_pci_msi_chip_add(struct msi_controller *chip);
-void of_pci_msi_chip_remove(struct msi_controller *chip);
-struct msi_controller *of_pci_find_msi_chip_by_node(struct device_node *of_node);
-#else
-static inline int of_pci_msi_chip_add(struct msi_controller *chip) { return -EINVAL; }
-static inline void of_pci_msi_chip_remove(struct msi_controller *chip) { }
-static inline struct msi_controller *
-of_pci_find_msi_chip_by_node(struct device_node *of_node) { return NULL; }
 #endif
 
 #endif

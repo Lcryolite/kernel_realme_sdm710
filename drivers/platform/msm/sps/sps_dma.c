@@ -584,7 +584,7 @@ int sps_alloc_dma_chan(const struct sps_alloc_dma_chan *alloc,
 	chan->priority = alloc->priority;
 	chan->weight = weight;
 
-	SPS_DBG3(sps, "sps:sps_alloc_dma_chan. pipe %d.\n", pipe_index);
+	SPS_DBG3(sps, "sps:%s. pipe %d.\n", __func__, pipe_index);
 
 	/* Report allocated pipes to client */
 	chan_info->dev = dev->h;
@@ -632,8 +632,8 @@ int sps_free_dma_chan(struct sps_dma_chan *chan)
 	if (pipe_index >= dev->num_pipes || ((pipe_index & 1)) ||
 	    (pipe_index + 1) != chan->src_pipe_index) {
 		SPS_ERR(sps,
-			"sps:sps_free_dma_chan. Invalid pipe indices. num_pipes=%d.dest=%d.src=%d.",
-			dev->num_pipes,
+			"sps:%s. Invalid pipe indices. num_pipes=%d.dest=%d.src=%d.",
+			__func__, dev->num_pipes,
 			chan->dest_pipe_index,
 			chan->src_pipe_index);
 		result = SPS_ERROR;
@@ -771,7 +771,7 @@ int sps_dma_pipe_enable(void *bam_arg, u32 pipe_index)
 	u32 channel;
 	int result = SPS_ERROR;
 
-	SPS_DBG3(sps, "sps:sps_dma_pipe_enable.pipe %d", pipe_index);
+	SPS_DBG3(sps, "sps:%s.pipe %d", __func__, pipe_index);
 
 	mutex_lock(&bam_dma_lock);
 

@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2019, 2021, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -13,10 +13,12 @@
 #ifndef _SLIM_MSM_H
 #define _SLIM_MSM_H
 
+#include <linux/ipc_logging.h>
 #include <linux/irq.h>
 #include <linux/kthread.h>
-#include <soc/qcom/msm_qmi_interface.h>
-#include <linux/ipc_logging.h>
+#include <linux/qrtr.h>
+#include <linux/soc/qcom/qmi.h>
+#include <net/sock.h>
 
 /* Per spec.max 40 bytes per received message */
 #define SLIM_MSGQ_BUF_LEN	40
@@ -41,7 +43,7 @@
 #define MSM_SLIM_VE_MAX_MAP_ADDR	0xFFF
 #define SLIM_MAX_VE_SLC_BYTES		16
 
-#define MSM_SLIM_AUTOSUSPEND		MSEC_PER_SEC
+#define MSM_SLIM_AUTOSUSPEND		(MSEC_PER_SEC / 10)
 
 #define SLIM_RX_MSGQ_TIMEOUT_VAL	0x10000
 /*
@@ -94,8 +96,8 @@
 #define SLIMBUS_QMI_SVC_V1 1
 #define SLIMBUS_QMI_INS_ID 0
 
-/* QMI response timeout of 500ms */
-#define SLIM_QMI_RESP_TOUT 1000
+/* QMI response timeout of 1000ms */
+#define SLIM_QMI_RESP_TOUT (HZ)
 
 #define PGD_THIS_EE(r, v) ((v) ? PGD_THIS_EE_V2(r) : PGD_THIS_EE_V1(r))
 #define PGD_PORT(r, p, v) ((v) ? PGD_PORT_V2(r, p) : PGD_PORT_V1(r, p))
@@ -221,17 +223,14 @@ struct msm_slim_endp {
 
 struct msm_slim_qmi {
 	struct qmi_handle		*handle;
-	struct task_struct		*task;
+	struct sockaddr_qrtr		svc_info;
 	struct task_struct		*slave_thread;
 	struct completion		slave_notify;
-	struct kthread_work		kwork;
-	struct kthread_worker		kworker;
 	struct completion		qmi_comp;
-	struct notifier_block		nb;
+	struct qmi_handle		svc_event_hdl;
 	bool				deferred_resp;
 	struct qmi_response_type_v01	resp;
-	struct msg_desc			resp_desc;
-	struct completion		defer_comp;
+	struct qmi_txn			deferred_txn;
 };
 
 enum msm_slim_dom {
@@ -267,6 +266,7 @@ struct msm_slim_iommu {
 	struct device			*cb_dev;
 	struct dma_iommu_mapping	*iommu_map;
 	bool				s1_bypass;
+	bool				atomic_ctx;
 };
 
 struct msm_slim_ctrl {
@@ -322,10 +322,12 @@ struct msm_slim_ctrl {
 	int			ipc_log_mask;
 	bool			sysfs_created;
 	void			*ipc_slimbus_log;
+	void			*ipc_slimbus_log_err;
 	void (*rx_slim)(struct msm_slim_ctrl *dev, u8 *buf);
 	u32			current_rx_buf[10];
 	int			current_count;
 	atomic_t		ssr_in_progress;
+	struct completion	qmi_up;
 };
 
 struct msm_sat_chan {
@@ -377,6 +379,9 @@ enum {
 	if (dev->ipc_slimbus_log && dev->ipc_log_mask >= DBG_LEV) { \
 		ipc_log_string(dev->ipc_slimbus_log, x); \
 	} \
+	if (dev->ipc_slimbus_log_err && dev->ipc_log_mask == FATAL_LEV) { \
+		ipc_log_string(dev->ipc_slimbus_log_err, x); \
+	} \
 } while (0)
 
 #define SLIM_INFO(dev, x...) do { \
@@ -384,25 +389,35 @@ enum {
 	if (dev->ipc_slimbus_log && dev->ipc_log_mask >= INFO_LEV) {\
 		ipc_log_string(dev->ipc_slimbus_log, x); \
 	} \
+	if (dev->ipc_slimbus_log_err && dev->ipc_log_mask == FATAL_LEV) { \
+		ipc_log_string(dev->ipc_slimbus_log_err, x); \
+	} \
 } while (0)
 
 /* warnings and errors show up on console always */
 #define SLIM_WARN(dev, x...) do { \
-	pr_warn(x); \
-	if (dev->ipc_slimbus_log && dev->ipc_log_mask >= WARN_LEV) \
+	if (dev->ipc_slimbus_log && dev->ipc_log_mask >= WARN_LEV) { \
+		pr_warn(x); \
 		ipc_log_string(dev->ipc_slimbus_log, x); \
+	} \
+	if (dev->ipc_slimbus_log_err && dev->ipc_log_mask == FATAL_LEV) { \
+		ipc_log_string(dev->ipc_slimbus_log_err, x); \
+	} \
 } while (0)
 
 /* ERROR condition in the driver sets the hs_serial_debug_mask
  * to ERR_FATAL level, so that this message can be seen
- * in IPC logging. Further errors continue to log on the console
+ * in IPC logging. Further errors continue to log on the error IPC logging.
  */
 #define SLIM_ERR(dev, x...) do { \
-	pr_err(x); \
 	if (dev->ipc_slimbus_log && dev->ipc_log_mask >= ERR_LEV) { \
+		pr_err(x); \
 		ipc_log_string(dev->ipc_slimbus_log, x); \
 		dev->default_ipc_log_mask = dev->ipc_log_mask; \
 		dev->ipc_log_mask = FATAL_LEV; \
+	} \
+	if (dev->ipc_slimbus_log_err && dev->ipc_log_mask == FATAL_LEV) { \
+		ipc_log_string(dev->ipc_slimbus_log_err, x); \
 	} \
 } while (0)
 

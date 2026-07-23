@@ -363,7 +363,7 @@ static int get_cpmf_mult_x2(void)
  */
 
 /* applies to the IPS_DIV, and PCI_DIV values */
-static struct clk_div_table divtab_2346[] = {
+static const struct clk_div_table divtab_2346[] = {
 	{ .val = 2, .div = 2, },
 	{ .val = 3, .div = 3, },
 	{ .val = 4, .div = 4, },
@@ -372,7 +372,7 @@ static struct clk_div_table divtab_2346[] = {
 };
 
 /* applies to the MBX_DIV, LPC_DIV, and NFC_DIV values */
-static struct clk_div_table divtab_1234[] = {
+static const struct clk_div_table divtab_1234[] = {
 	{ .val = 1, .div = 1, },
 	{ .val = 2, .div = 2, },
 	{ .val = 3, .div = 3, },
@@ -985,7 +985,7 @@ static void mpc5121_clk_provide_migration_support(void)
 
 #define NODE_PREP do { \
 	of_address_to_resource(np, 0, &res); \
-	snprintf(devname, sizeof(devname), "%08x.%s", res.start, np->name); \
+	snprintf(devname, sizeof(devname), "%pa.%s", &res.start, np->name); \
 } while (0)
 
 #define NODE_CHK(clkname, clkitem, regnode, regflag) do { \

@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2015, 2018 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2015,2017 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -14,7 +14,6 @@
 #define _IPC_LOGGING_H
 
 #include <linux/types.h>
-#include <linux/err.h>
 
 #define MAX_MSG_SIZE 255
 
@@ -124,13 +123,6 @@ void ipc_log_write(void *ctxt, struct encode_context *ectxt);
  * @fmt:    Data specified using format specifiers
  */
 int ipc_log_string(void *ilctxt, const char *fmt, ...) __printf(2, 3);
-
-/*
- * ipc_log_ctrl_all - disable/enable logging in all clients
- *
- * @ Data specified using format specifiers
- */
-void ipc_log_ctrl_all(bool disable);
 
 /**
  * ipc_log_extract - Reads and deserializes log

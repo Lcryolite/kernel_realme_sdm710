@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -34,6 +34,9 @@
  * @DSI_CTRL_VERSION_UNKNOWN: Unknown controller version
  * @DSI_CTRL_VERSION_1_4:     DSI host v1.4 controller
  * @DSI_CTRL_VERSION_2_0:     DSI host v2.0 controller
+ * @DSI_CTRL_VERSION_2_2:     DSI host v2.2 controller
+ * @DSI_CTRL_VERSION_2_3:     DSI host v2.3 controller
+ * @DSI_CTRL_VERSION_2_4:     DSI host v2.4 controller
  * @DSI_CTRL_VERSION_MAX:     max version
  */
 enum dsi_ctrl_version {
@@ -41,6 +44,8 @@ enum dsi_ctrl_version {
 	DSI_CTRL_VERSION_1_4,
 	DSI_CTRL_VERSION_2_0,
 	DSI_CTRL_VERSION_2_2,
+	DSI_CTRL_VERSION_2_3,
+	DSI_CTRL_VERSION_2_4,
 	DSI_CTRL_VERSION_MAX
 };
 
@@ -380,6 +385,13 @@ struct dsi_ctrl_hw_ops {
 	void (*video_engine_en)(struct dsi_ctrl_hw *ctrl, bool on);
 
 	/**
+	 * setup_avr() - set the AVR_SUPPORT_ENABLE bit in DSI_VIDEO_MODE_CTRL
+	 * @ctrl:	   Pointer to controller host hardware.
+	 * @enable:	   Controls whether this bit is set or cleared
+	 */
+	void (*setup_avr)(struct dsi_ctrl_hw *ctrl, bool enable);
+
+	/**
 	 * video_engine_setup() - Setup dsi host controller for video mode
 	 * @ctrl:          Pointer to controller host hardware.
 	 * @common_cfg:    Common configuration parameters.
@@ -449,6 +461,15 @@ struct dsi_ctrl_hw_ops {
 	 * @ctrl:        Pointer to the controller host hardware.
 	 */
 	void (*phy_sw_reset)(struct dsi_ctrl_hw *ctrl);
+
+	/**
+	 * config_clk_gating() - enable/disable DSI PHY clk gating
+	 * @ctrl:          Pointer to the controller host hardware.
+	 * @enable:        enable/disable DSI PHY clock gating.
+	 * @clk_selection:        clock to enable/disable clock gating.
+	 */
+	void (*config_clk_gating)(struct dsi_ctrl_hw *ctrl, bool enable,
+			enum dsi_clk_gate_type clk_selection);
 
 	/**
 	 * debug_bus() - get dsi debug bus status.
@@ -816,6 +837,13 @@ struct dsi_ctrl_hw_ops {
 	 * @ctrl:         Pointer to the controller host hardware.
 	 */
 	int (*wait4dynamic_refresh_done)(struct dsi_ctrl_hw *ctrl);
+
+	/**
+	 * hw.ops.hs_req_sel() - enable continuous clk support through phy
+	 * @ctrl:	Pointer to the controller host hardware.
+	 * @sel_phy:	Bool to control whether to select phy or controller
+	 */
+	void (*hs_req_sel)(struct dsi_ctrl_hw *ctrl, bool sel_phy);
 };
 
 /*

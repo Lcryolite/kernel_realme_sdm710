@@ -12,8 +12,6 @@
 #ifndef _DEBUGFS_INTERNAL_H_
 #define _DEBUGFS_INTERNAL_H_
 
-#include <linux/refcount.h>
-
 struct file_operations;
 
 /* declared over in file.c */

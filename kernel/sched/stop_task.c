@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "sched.h"
 #include "walt.h"
 
@@ -12,7 +13,8 @@
 
 #ifdef CONFIG_SMP
 static int
-select_task_rq_stop(struct task_struct *p, int cpu, int sd_flag, int flags)
+select_task_rq_stop(struct task_struct *p, int cpu, int sd_flag, int flags,
+		    int sibling_count_hint)
 {
 	return task_cpu(p); /* stop tasks as never migrate */
 }
@@ -139,6 +141,5 @@ const struct sched_class stop_sched_class = {
 	.update_curr		= update_curr_stop,
 #ifdef CONFIG_SCHED_WALT
 	.fixup_walt_sched_stats	= fixup_walt_sched_stats_common,
-	.fixup_cumulative_runnable_avg = walt_fixup_cumulative_runnable_avg,
 #endif
 };

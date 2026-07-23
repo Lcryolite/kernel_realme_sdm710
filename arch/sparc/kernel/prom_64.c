@@ -381,7 +381,7 @@ bool arch_find_n_match_cpu_physical_id(struct device_node *cpun,
 	int this_cpu_id;
 
 	/* On hypervisor based platforms we interrogate the 'reg'
-	 * property.  On everything else we look for a 'upa-portis',
+	 * property.  On everything else we look for a 'upa-portid',
 	 * 'portid', or 'cpuid' property.
 	 */
 
@@ -479,7 +479,9 @@ static void *record_one_cpu(struct device_node *dp, int cpuid, int arg)
 	ncpus_probed++;
 #ifdef CONFIG_SMP
 	set_cpu_present(cpuid, true);
-	set_cpu_possible(cpuid, true);
+
+	if (num_possible_cpus() < nr_cpu_ids)
+		set_cpu_possible(cpuid, true);
 #endif
 	return NULL;
 }

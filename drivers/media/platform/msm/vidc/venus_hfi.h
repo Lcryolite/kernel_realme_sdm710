@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -206,6 +206,10 @@ struct vidc_iface_q_info {
 #define venus_hfi_for_each_subcache_reverse(__device, __sinfo) \
 	venus_hfi_for_each_thing_reverse(__device, __sinfo, subcache)
 
+#define call_venus_op(d, op, args...)			\
+	(((d) && (d)->vpu_ops && (d)->vpu_ops->op) ? \
+	((d)->vpu_ops->op(args)):0)
+
 /* Internal data used in vidc_hal not exposed to msm_vidc*/
 struct hal_data {
 	u32 irq;
@@ -218,9 +222,28 @@ struct venus_resources {
 	struct msm_vidc_fw fw;
 };
 
+enum dsp_flag {
+	DSP_INIT = BIT(0),
+	DSP_SUSPEND = BIT(1),
+};
+
 enum venus_hfi_state {
 	VENUS_STATE_DEINIT = 1,
 	VENUS_STATE_INIT,
+};
+
+enum reset_state {
+	INIT = 1,
+	ASSERT,
+	DEASSERT,
+};
+
+struct venus_hfi_device;
+
+struct venus_hfi_vpu_ops {
+	void (*interrupt_init)(struct venus_hfi_device *ptr);
+	void (*setup_dsp_uc_memmap)(struct venus_hfi_device *device);
+	void (*clock_config_on_enable)(struct venus_hfi_device *device);
 };
 
 struct venus_hfi_device {
@@ -237,11 +260,13 @@ struct venus_hfi_device {
 	struct mutex lock;
 	msm_vidc_callback callback;
 	struct vidc_mem_addr iface_q_table;
+	struct vidc_mem_addr dsp_iface_q_table;
 	struct vidc_mem_addr qdss;
 	struct vidc_mem_addr sfr;
 	struct vidc_mem_addr mem_addr;
 	struct vidc_iface_q_info iface_queues[VIDC_IFACEQ_NUMQ];
-	struct smem_client *hal_client;
+	struct vidc_iface_q_info dsp_iface_queues[VIDC_IFACEQ_NUMQ];
+	u32 dsp_flags;
 	struct hal_data *hal_data;
 	struct workqueue_struct *vidc_workq;
 	struct workqueue_struct *venus_pm_workq;
@@ -257,6 +282,7 @@ struct venus_hfi_device {
 	struct pm_qos_request qos;
 	unsigned int skip_pc_count;
 	struct msm_vidc_capability *sys_init_capabilities;
+	struct venus_hfi_vpu_ops *vpu_ops;
 };
 
 void venus_hfi_delete_device(void *device);

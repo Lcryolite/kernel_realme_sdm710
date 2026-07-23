@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2020 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -32,7 +32,7 @@
 #define to_sde_encoder_phys_cmd(x) \
 	container_of(x, struct sde_encoder_phys_cmd, base)
 
-#define PP_TIMEOUT_MAX_TRIALS	2
+#define PP_TIMEOUT_MAX_TRIALS	4
 
 /*
  * Tearcheck sync start and continue thresholds are empirically found
@@ -49,6 +49,8 @@
  * CTL_START_IRQ is received just after RD_PTR_IRQ
  */
 #define SDE_ENC_CTL_START_THRESHOLD_US 500
+
+#define SDE_ENC_MAX_POLL_TIMEOUT_US	2000
 
 static inline int _sde_encoder_phys_cmd_get_idle_timeout(
 		struct sde_encoder_phys_cmd *cmd_enc)
@@ -93,10 +95,11 @@ static void _sde_encoder_phys_cmd_config_autorefresh(
 	struct sde_encoder_phys_cmd *cmd_enc =
 			to_sde_encoder_phys_cmd(phys_enc);
 	struct sde_hw_pingpong *hw_pp = phys_enc->hw_pp;
+	struct sde_hw_intf *hw_intf = phys_enc->hw_intf;
 	struct drm_connector *conn = phys_enc->connector;
 	struct sde_hw_autorefresh *cfg_cur, cfg_nxt;
 
-	if (!conn || !conn->state || !hw_pp)
+	if (!conn || !conn->state || !hw_pp || !hw_intf)
 		return;
 
 	cfg_cur = &cmd_enc->autorefresh.cfg;
@@ -108,39 +111,51 @@ static void _sde_encoder_phys_cmd_config_autorefresh(
 
 	SDE_DEBUG_CMDENC(cmd_enc, "autorefresh state %d->%d framecount %d\n",
 			cfg_cur->enable, cfg_nxt.enable, cfg_nxt.frame_count);
-	SDE_EVT32(DRMID(phys_enc->parent), hw_pp->idx, cfg_cur->enable,
-			cfg_nxt.enable, cfg_nxt.frame_count);
+	SDE_EVT32(DRMID(phys_enc->parent), hw_pp->idx, hw_intf->idx,
+			cfg_cur->enable, cfg_nxt.enable, cfg_nxt.frame_count);
 
 	/* only proceed on state changes */
 	if (cfg_nxt.enable == cfg_cur->enable)
 		return;
 
 	memcpy(cfg_cur, &cfg_nxt, sizeof(*cfg_cur));
-	if (hw_pp->ops.setup_autorefresh)
+
+	if (phys_enc->has_intf_te && hw_intf->ops.setup_autorefresh)
+		hw_intf->ops.setup_autorefresh(hw_intf, cfg_cur);
+	else if (hw_pp->ops.setup_autorefresh)
 		hw_pp->ops.setup_autorefresh(hw_pp, cfg_cur);
 }
 
 static void _sde_encoder_phys_cmd_update_flush_mask(
 		struct sde_encoder_phys *phys_enc)
 {
-	struct sde_encoder_phys_cmd *cmd_enc =
-			to_sde_encoder_phys_cmd(phys_enc);
+	struct sde_encoder_phys_cmd *cmd_enc;
 	struct sde_hw_ctl *ctl;
-	u32 flush_mask = 0;
 
-	if (!phys_enc)
+	if (!phys_enc || !phys_enc->hw_intf || !phys_enc->hw_pp)
 		return;
 
+	cmd_enc = to_sde_encoder_phys_cmd(phys_enc);
 	ctl = phys_enc->hw_ctl;
-	if (!ctl || !ctl->ops.get_bitmask_intf ||
-			!ctl->ops.update_pending_flush)
+
+	if (!ctl)
 		return;
 
-	ctl->ops.get_bitmask_intf(ctl, &flush_mask, phys_enc->intf_idx);
-	ctl->ops.update_pending_flush(ctl, flush_mask);
+	if (!ctl->ops.update_bitmask_intf ||
+		(test_bit(SDE_CTL_ACTIVE_CFG, &ctl->caps->features) &&
+		!ctl->ops.update_bitmask_merge3d)) {
+		SDE_ERROR("invalid hw_ctl ops %d\n", ctl->idx);
+		return;
+	}
 
-	SDE_DEBUG_CMDENC(cmd_enc, "update pending flush ctl %d flush_mask %x\n",
-			ctl->idx - CTL_0, flush_mask);
+	ctl->ops.update_bitmask_intf(ctl, phys_enc->intf_idx, 1);
+
+	if (ctl->ops.update_bitmask_merge3d && phys_enc->hw_pp->merge_3d)
+		ctl->ops.update_bitmask_merge3d(ctl,
+			phys_enc->hw_pp->merge_3d->idx, 1);
+
+	SDE_DEBUG_CMDENC(cmd_enc, "update pending flush ctl %d intf_idx %x\n",
+			ctl->idx - CTL_0, phys_enc->intf_idx);
 }
 
 static void _sde_encoder_phys_cmd_update_intf_cfg(
@@ -149,20 +164,26 @@ static void _sde_encoder_phys_cmd_update_intf_cfg(
 	struct sde_encoder_phys_cmd *cmd_enc =
 			to_sde_encoder_phys_cmd(phys_enc);
 	struct sde_hw_ctl *ctl;
-	struct sde_hw_intf_cfg intf_cfg = { 0 };
 
 	if (!phys_enc)
 		return;
 
 	ctl = phys_enc->hw_ctl;
-	if (!ctl || !ctl->ops.setup_intf_cfg)
+	if (!ctl)
 		return;
 
-	intf_cfg.intf = phys_enc->intf_idx;
-	intf_cfg.intf_mode_sel = SDE_CTL_MODE_SEL_CMD;
-	intf_cfg.stream_sel = cmd_enc->stream_sel;
-	intf_cfg.mode_3d = sde_encoder_helper_get_3d_blend_mode(phys_enc);
-	ctl->ops.setup_intf_cfg(ctl, &intf_cfg);
+	if (ctl->ops.setup_intf_cfg) {
+		struct sde_hw_intf_cfg intf_cfg = { 0 };
+
+		intf_cfg.intf = phys_enc->intf_idx;
+		intf_cfg.intf_mode_sel = SDE_CTL_MODE_SEL_CMD;
+		intf_cfg.stream_sel = cmd_enc->stream_sel;
+		intf_cfg.mode_3d =
+			sde_encoder_helper_get_3d_blend_mode(phys_enc);
+		ctl->ops.setup_intf_cfg(ctl, &intf_cfg);
+	} else if (test_bit(SDE_CTL_ACTIVE_CFG, &ctl->caps->features)) {
+		sde_encoder_helper_update_intf_cfg(phys_enc);
+	}
 }
 
 static void sde_encoder_phys_cmd_pp_tx_done_irq(void *arg, int irq_idx)
@@ -230,19 +251,21 @@ static void sde_encoder_phys_cmd_autorefresh_done_irq(void *arg, int irq_idx)
 	spin_unlock_irqrestore(phys_enc->enc_spinlock, lock_flags);
 
 	SDE_EVT32_IRQ(DRMID(phys_enc->parent),
-			phys_enc->hw_pp->idx - PINGPONG_0, new_cnt);
+			phys_enc->hw_pp->idx - PINGPONG_0,
+			phys_enc->hw_intf->idx - INTF_0,
+			new_cnt);
 
 	/* Signal any waiting atomic commit thread */
 	wake_up_all(&cmd_enc->autorefresh.kickoff_wq);
 }
 
-static void sde_encoder_phys_cmd_pp_rd_ptr_irq(void *arg, int irq_idx)
+static void sde_encoder_phys_cmd_te_rd_ptr_irq(void *arg, int irq_idx)
 {
 	struct sde_encoder_phys *phys_enc = arg;
 	struct sde_encoder_phys_cmd *cmd_enc;
 	u32 event = 0;
 
-	if (!phys_enc || !phys_enc->hw_pp)
+	if (!phys_enc || !phys_enc->hw_pp || !phys_enc->hw_intf)
 		return;
 
 	SDE_ATRACE_BEGIN("rd_ptr_irq");
@@ -264,7 +287,9 @@ static void sde_encoder_phys_cmd_pp_rd_ptr_irq(void *arg, int irq_idx)
 	}
 
 	SDE_EVT32_IRQ(DRMID(phys_enc->parent),
-			phys_enc->hw_pp->idx - PINGPONG_0, event, 0xfff);
+			phys_enc->hw_pp->idx - PINGPONG_0,
+			phys_enc->hw_intf->idx - INTF_0,
+			event, 0xfff);
 
 	if (phys_enc->parent_ops.handle_vblank_virt)
 		phys_enc->parent_ops.handle_vblank_virt(phys_enc->parent,
@@ -304,9 +329,11 @@ static void sde_encoder_phys_cmd_ctl_start_irq(void *arg, int irq_idx)
 		 * Handle rare cases where the ctl_start_irq is received
 		 * after rd_ptr_irq. If it falls within a threshold, it is
 		 * guaranteed the frame would be picked up in the current TE.
-		 * Signal retire fence immediately in such case.
+		 * Signal retire fence immediately in such case. The threshold
+		 * timer adds extra line time duration based on lowest panel
+		 * fps for qsync enabled case.
 		 */
-		if ((time_diff_us <= SDE_ENC_CTL_START_THRESHOLD_US)
+		if ((time_diff_us <= cmd_enc->ctl_start_threshold)
 			    && atomic_add_unless(
 				&phys_enc->pending_retire_fence_cnt, -1, 0)) {
 
@@ -350,10 +377,20 @@ static void _sde_encoder_phys_cmd_setup_irq_hw_idx(
 		struct sde_encoder_phys *phys_enc)
 {
 	struct sde_encoder_irq *irq;
-	struct sde_kms *sde_kms = phys_enc->sde_kms;
 	int ret = 0;
 
-	mutex_lock(&sde_kms->vblank_ctl_global_lock);
+	if (!phys_enc || !phys_enc->hw_pp || !phys_enc->hw_ctl) {
+		SDE_ERROR("invalid args %d %d\n", !phys_enc,
+			phys_enc ? !phys_enc->hw_pp : 0);
+		return;
+	}
+
+	if (phys_enc->has_intf_te && !phys_enc->hw_intf) {
+		SDE_ERROR("invalid intf configuration\n");
+		return;
+	}
+
+	mutex_lock(phys_enc->vblank_ctl_lock);
 
 	if (atomic_read(&phys_enc->vblank_refcount)) {
 		SDE_ERROR(
@@ -365,8 +402,8 @@ static void _sde_encoder_phys_cmd_setup_irq_hw_idx(
 			SDE_ERROR(
 			"control vblank irq registration error %d\n",
 				ret);
-
 	}
+
 	atomic_set(&phys_enc->vblank_refcount, 0);
 
 	irq = &phys_enc->irq[INTR_IDX_CTL_START];
@@ -378,24 +415,34 @@ static void _sde_encoder_phys_cmd_setup_irq_hw_idx(
 	irq->irq_idx = -EINVAL;
 
 	irq = &phys_enc->irq[INTR_IDX_RDPTR];
-	irq->hw_idx = phys_enc->hw_pp->idx;
 	irq->irq_idx = -EINVAL;
+	if (phys_enc->has_intf_te)
+		irq->hw_idx = phys_enc->hw_intf->idx;
+	else
+		irq->hw_idx = phys_enc->hw_pp->idx;
 
 	irq = &phys_enc->irq[INTR_IDX_UNDERRUN];
 	irq->hw_idx = phys_enc->intf_idx;
 	irq->irq_idx = -EINVAL;
 
 	irq = &phys_enc->irq[INTR_IDX_AUTOREFRESH_DONE];
-	irq->hw_idx = phys_enc->hw_pp->idx;
 	irq->irq_idx = -EINVAL;
+	if (phys_enc->has_intf_te)
+		irq->hw_idx = phys_enc->hw_intf->idx;
+	else
+		irq->hw_idx = phys_enc->hw_pp->idx;
 
-	mutex_unlock(&sde_kms->vblank_ctl_global_lock);
+	mutex_unlock(phys_enc->vblank_ctl_lock);
 }
 
 static void sde_encoder_phys_cmd_cont_splash_mode_set(
 		struct sde_encoder_phys *phys_enc,
 		struct drm_display_mode *adj_mode)
 {
+	struct sde_hw_intf *hw_intf;
+	struct sde_hw_pingpong *hw_pp;
+	struct sde_encoder_phys_cmd *cmd_enc;
+
 	if (!phys_enc || !adj_mode) {
 		SDE_ERROR("invalid args\n");
 		return;
@@ -409,6 +456,21 @@ static void sde_encoder_phys_cmd_cont_splash_mode_set(
 			(phys_enc->hw_ctl == NULL),
 			(phys_enc->hw_pp == NULL));
 		return;
+	}
+
+	if (sde_encoder_phys_cmd_is_master(phys_enc)) {
+		cmd_enc = to_sde_encoder_phys_cmd(phys_enc);
+		hw_pp = phys_enc->hw_pp;
+		hw_intf = phys_enc->hw_intf;
+
+		if (phys_enc->has_intf_te && hw_intf &&
+				hw_intf->ops.get_autorefresh) {
+			hw_intf->ops.get_autorefresh(hw_intf,
+					&cmd_enc->autorefresh.cfg);
+		} else if (hw_pp && hw_pp->ops.get_autorefresh) {
+			hw_pp->ops.get_autorefresh(hw_pp,
+					&cmd_enc->autorefresh.cfg);
+		}
 	}
 
 	_sde_encoder_phys_cmd_setup_irq_hw_idx(phys_enc);
@@ -449,35 +511,42 @@ static void sde_encoder_phys_cmd_mode_set(
 		return;
 	}
 
+	sde_rm_init_hw_iter(&iter, phys_enc->parent->base.id, SDE_HW_BLK_INTF);
+	for (i = 0; i <= instance; i++) {
+		if (sde_rm_get_hw(rm, &iter))
+			phys_enc->hw_intf = (struct sde_hw_intf *)iter.hw;
+	}
+
+	if (IS_ERR_OR_NULL(phys_enc->hw_intf)) {
+		SDE_ERROR_CMDENC(cmd_enc, "failed to init intf: %ld\n",
+				PTR_ERR(phys_enc->hw_intf));
+		phys_enc->hw_intf = NULL;
+		return;
+	}
+
 	_sde_encoder_phys_cmd_setup_irq_hw_idx(phys_enc);
 }
 
-static bool _sde_encoder_phys_is_ppsplit(struct sde_encoder_phys *phys_enc)
-{
-	enum sde_rm_topology_name topology;
-
-	if (!phys_enc)
-		return false;
-
-	topology = sde_connector_get_topology_name(phys_enc->connector);
-	if (topology == SDE_RM_TOPOLOGY_PPSPLIT)
-		return true;
-
-	return false;
-}
-
 static int _sde_encoder_phys_cmd_handle_ppdone_timeout(
-		struct sde_encoder_phys *phys_enc)
+		struct sde_encoder_phys *phys_enc,
+		bool recovery_events)
 {
 	struct sde_encoder_phys_cmd *cmd_enc =
 			to_sde_encoder_phys_cmd(phys_enc);
 	u32 frame_event = SDE_ENCODER_FRAME_EVENT_ERROR
 				| SDE_ENCODER_FRAME_EVENT_SIGNAL_RELEASE_FENCE;
+	struct drm_connector *conn;
+	struct sde_connector *sde_conn;
+	int event;
+	u32 pending_kickoff_cnt;
 
 	if (!phys_enc || !phys_enc->hw_pp || !phys_enc->hw_ctl)
 		return -EINVAL;
 
+	conn = phys_enc->connector;
+	sde_conn = to_sde_connector(conn);
 	cmd_enc->pp_timeout_report_cnt++;
+	pending_kickoff_cnt = atomic_read(&phys_enc->pending_kickoff_cnt);
 
 	if (sde_encoder_phys_cmd_is_master(phys_enc)) {
 		 /* trigger the retire fence if it was missed */
@@ -492,40 +561,51 @@ static int _sde_encoder_phys_cmd_handle_ppdone_timeout(
 
 	SDE_EVT32(DRMID(phys_enc->parent), phys_enc->hw_pp->idx - PINGPONG_0,
 			cmd_enc->pp_timeout_report_cnt,
-			atomic_read(&phys_enc->pending_kickoff_cnt),
+			pending_kickoff_cnt,
 			frame_event);
 
+	/* decrement the kickoff_cnt before checking for ESD status */
+	atomic_add_unless(&phys_enc->pending_kickoff_cnt, -1, 0);
+
 	/* check if panel is still sending TE signal or not */
-	if (sde_connector_esd_status(phys_enc->connector))
+	if (sde_connector_esd_status(phys_enc->connector) ||
+	    sde_conn->panel_dead)
 		goto exit;
 
-	if (cmd_enc->pp_timeout_report_cnt >= PP_TIMEOUT_MAX_TRIALS) {
-		cmd_enc->pp_timeout_report_cnt = PP_TIMEOUT_MAX_TRIALS;
-		frame_event |= SDE_ENCODER_FRAME_EVENT_PANEL_DEAD;
-
-#ifndef VENDOR_EDIT
-		SDE_DBG_DUMP("panic");
-#else /*VENDOR_EDIT*/
-		SDE_DBG_DUMP("all", "dbg_bus", "vbif_dbg_bus");
-#endif
-	} else if (cmd_enc->pp_timeout_report_cnt == 1) {
-		/* to avoid flooding, only log first time, and "dead" time */
+	/* to avoid flooding, only log first time, and "dead" time */
+	if (cmd_enc->pp_timeout_report_cnt == 1) {
 		SDE_ERROR_CMDENC(cmd_enc,
-				"pp:%d kickoff timed out ctl %d cnt %d koff_cnt %d\n",
+				"pp:%d kickoff timed out ctl %d koff_cnt %d\n",
 				phys_enc->hw_pp->idx - PINGPONG_0,
 				phys_enc->hw_ctl->idx - CTL_0,
-				cmd_enc->pp_timeout_report_cnt,
-				atomic_read(&phys_enc->pending_kickoff_cnt));
+				pending_kickoff_cnt);
 
 		SDE_EVT32(DRMID(phys_enc->parent), SDE_EVTLOG_FATAL);
+		sde_encoder_helper_unregister_irq(phys_enc, INTR_IDX_RDPTR);
+		if (sde_kms_is_secure_session_inprogress(phys_enc->sde_kms))
+			SDE_DBG_DUMP("secure");
+		else
+			SDE_DBG_DUMP("all", "dbg_bus", "vbif_dbg_bus");
+		sde_encoder_helper_register_irq(phys_enc, INTR_IDX_RDPTR);
+	}
+
+	/*
+	 * if the recovery event is registered by user, don't panic
+	 * trigger panic on first timeout if no listener registered
+	 */
+	if (recovery_events) {
+		event = cmd_enc->pp_timeout_report_cnt > PP_TIMEOUT_MAX_TRIALS ?
+			SDE_RECOVERY_HARD_RESET : SDE_RECOVERY_CAPTURE;
+		sde_connector_event_notify(conn, DRM_EVENT_SDE_HW_RECOVERY,
+				sizeof(uint8_t), event);
+	} else if (cmd_enc->pp_timeout_report_cnt) {
+		SDE_DBG_DUMP("dsi_dbg_bus", "panic");
 	}
 
 	/* request a ctl reset before the next kickoff */
 	phys_enc->enable_state = SDE_ENC_ERR_NEEDS_HW_RESET;
 
 exit:
-	atomic_add_unless(&phys_enc->pending_kickoff_cnt, -1, 0);
-
 	if (phys_enc->parent_ops.handle_frame_done)
 		phys_enc->parent_ops.handle_frame_done(
 				phys_enc->parent, phys_enc, frame_event);
@@ -564,36 +644,58 @@ static int _sde_encoder_phys_cmd_poll_write_pointer_started(
 	struct sde_encoder_phys_cmd *cmd_enc =
 			to_sde_encoder_phys_cmd(phys_enc);
 	struct sde_hw_pingpong *hw_pp = phys_enc->hw_pp;
+	struct sde_hw_intf *hw_intf = phys_enc->hw_intf;
 	struct sde_hw_pp_vsync_info info;
 	u32 timeout_us = SDE_ENC_WR_PTR_START_TIMEOUT_US;
-	int ret;
+	int ret = 0;
 
-	if (!hw_pp || !hw_pp->ops.get_vsync_info ||
-			!hw_pp->ops.poll_timeout_wr_ptr)
+	if (!hw_pp || !hw_intf)
 		return 0;
 
-	ret = hw_pp->ops.get_vsync_info(hw_pp, &info);
+	if (phys_enc->has_intf_te) {
+		if (!hw_intf->ops.get_vsync_info ||
+				!hw_intf->ops.poll_timeout_wr_ptr)
+			goto end;
+	} else {
+		if (!hw_pp->ops.get_vsync_info ||
+				!hw_pp->ops.poll_timeout_wr_ptr)
+			goto end;
+	}
+
+	if (phys_enc->has_intf_te)
+		ret = hw_intf->ops.get_vsync_info(hw_intf, &info);
+	else
+		ret = hw_pp->ops.get_vsync_info(hw_pp, &info);
+
 	if (ret)
 		return ret;
 
 	SDE_DEBUG_CMDENC(cmd_enc,
-			"pp:%d rd_ptr %d wr_ptr %d\n",
+			"pp:%d intf:%d rd_ptr %d wr_ptr %d\n",
 			phys_enc->hw_pp->idx - PINGPONG_0,
+			phys_enc->hw_intf->idx - INTF_0,
 			info.rd_ptr_line_count,
 			info.wr_ptr_line_count);
 	SDE_EVT32_VERBOSE(DRMID(phys_enc->parent),
 			phys_enc->hw_pp->idx - PINGPONG_0,
+			phys_enc->hw_intf->idx - INTF_0,
 			info.wr_ptr_line_count);
 
-	ret = hw_pp->ops.poll_timeout_wr_ptr(hw_pp, timeout_us);
+	if (phys_enc->has_intf_te)
+		ret = hw_intf->ops.poll_timeout_wr_ptr(hw_intf, timeout_us);
+	else
+		ret = hw_pp->ops.poll_timeout_wr_ptr(hw_pp, timeout_us);
+
 	if (ret) {
 		SDE_EVT32(DRMID(phys_enc->parent),
 				phys_enc->hw_pp->idx - PINGPONG_0,
+				phys_enc->hw_intf->idx - INTF_0,
 				timeout_us,
 				ret);
 		SDE_DBG_DUMP("all", "dbg_bus", "vbif_dbg_bus", "panic");
 	}
 
+end:
 	return ret;
 }
 
@@ -602,18 +704,28 @@ static bool _sde_encoder_phys_cmd_is_ongoing_pptx(
 {
 	struct sde_hw_pingpong *hw_pp;
 	struct sde_hw_pp_vsync_info info;
+	struct sde_hw_intf *hw_intf;
 
 	if (!phys_enc)
 		return false;
 
-	hw_pp = phys_enc->hw_pp;
-	if (!hw_pp || !hw_pp->ops.get_vsync_info)
-		return false;
+	if (phys_enc->has_intf_te) {
+		hw_intf = phys_enc->hw_intf;
+		if (!hw_intf || !hw_intf->ops.get_vsync_info)
+			return false;
 
-	hw_pp->ops.get_vsync_info(hw_pp, &info);
+		hw_intf->ops.get_vsync_info(hw_intf, &info);
+	} else {
+		hw_pp = phys_enc->hw_pp;
+		if (!hw_pp || !hw_pp->ops.get_vsync_info)
+			return false;
+
+		hw_pp->ops.get_vsync_info(hw_pp, &info);
+	}
 
 	SDE_EVT32(DRMID(phys_enc->parent),
 			phys_enc->hw_pp->idx - PINGPONG_0,
+			phys_enc->hw_intf->idx - INTF_0,
 			atomic_read(&phys_enc->pending_kickoff_cnt),
 			info.wr_ptr_line_count,
 			phys_enc->cached_mode.vdisplay);
@@ -631,6 +743,7 @@ static int _sde_encoder_phys_cmd_wait_for_idle(
 	struct sde_encoder_phys_cmd *cmd_enc =
 			to_sde_encoder_phys_cmd(phys_enc);
 	struct sde_encoder_wait_info wait_info;
+	bool recovery_events;
 	int ret;
 
 	if (!phys_enc) {
@@ -641,6 +754,8 @@ static int _sde_encoder_phys_cmd_wait_for_idle(
 	wait_info.wq = &phys_enc->pending_kickoff_wq;
 	wait_info.atomic_cnt = &phys_enc->pending_kickoff_cnt;
 	wait_info.timeout_ms = KICKOFF_TIMEOUT_MS;
+	recovery_events = sde_encoder_recovery_events_enabled(
+			phys_enc->parent);
 
 	/* slave encoder doesn't enable for ppsplit */
 	if (_sde_encoder_phys_is_ppsplit_slave(phys_enc))
@@ -648,10 +763,20 @@ static int _sde_encoder_phys_cmd_wait_for_idle(
 
 	ret = sde_encoder_helper_wait_for_irq(phys_enc, INTR_IDX_PINGPONG,
 			&wait_info);
-	if (ret == -ETIMEDOUT)
-		_sde_encoder_phys_cmd_handle_ppdone_timeout(phys_enc);
-	else if (!ret)
+	if (ret == -ETIMEDOUT) {
+		_sde_encoder_phys_cmd_handle_ppdone_timeout(phys_enc,
+				recovery_events);
+	} else if (!ret) {
+		if (cmd_enc->pp_timeout_report_cnt && recovery_events) {
+			struct drm_connector *conn = phys_enc->connector;
+
+			sde_connector_event_notify(conn,
+					DRM_EVENT_SDE_HW_RECOVERY,
+					sizeof(uint8_t),
+					SDE_RECOVERY_SUCCESS);
+		}
 		cmd_enc->pp_timeout_report_cnt = 0;
+	}
 
 	return ret;
 }
@@ -700,15 +825,13 @@ static int sde_encoder_phys_cmd_control_vblank_irq(
 		to_sde_encoder_phys_cmd(phys_enc);
 	int ret = 0;
 	int refcount;
-	struct sde_kms *sde_kms;
 
 	if (!phys_enc || !phys_enc->hw_pp) {
 		SDE_ERROR("invalid encoder\n");
 		return -EINVAL;
 	}
-	sde_kms = phys_enc->sde_kms;
 
-	mutex_lock(&sde_kms->vblank_ctl_global_lock);
+	mutex_lock(phys_enc->vblank_ctl_lock);
 	refcount = atomic_read(&phys_enc->vblank_refcount);
 
 	/* Slave encoders don't report vblank */
@@ -748,7 +871,7 @@ end:
 				enable, refcount, SDE_EVTLOG_ERROR);
 	}
 
-	mutex_unlock(&sde_kms->vblank_ctl_global_lock);
+	mutex_unlock(phys_enc->vblank_ctl_lock);
 	return ret;
 }
 
@@ -799,6 +922,79 @@ void sde_encoder_phys_cmd_irq_control(struct sde_encoder_phys *phys_enc,
 	}
 }
 
+static int _get_tearcheck_threshold(struct sde_encoder_phys *phys_enc,
+	u32 *extra_frame_trigger_time)
+{
+	struct drm_connector *conn = phys_enc->connector;
+	u32 qsync_mode;
+	struct drm_display_mode *mode;
+	u32 threshold_lines = 0;
+	struct sde_encoder_phys_cmd *cmd_enc =
+			to_sde_encoder_phys_cmd(phys_enc);
+
+	*extra_frame_trigger_time = 0;
+	if (!conn || !conn->state)
+		return 0;
+
+	mode = &phys_enc->cached_mode;
+	qsync_mode = sde_connector_get_qsync_mode(conn);
+
+	if (mode && (qsync_mode == SDE_RM_QSYNC_CONTINUOUS_MODE)) {
+		u32 qsync_min_fps = 0;
+		u32 default_fps = mode->vrefresh;
+		u32 yres = mode->vtotal;
+		u32 slow_time_ns;
+		u32 default_time_ns;
+		u32 extra_time_ns;
+		u32 total_extra_lines;
+		u32 default_line_time_ns;
+
+		if (phys_enc->parent_ops.get_qsync_fps)
+			phys_enc->parent_ops.get_qsync_fps(
+				phys_enc->parent, &qsync_min_fps);
+
+		if (!qsync_min_fps || !default_fps || !yres) {
+			SDE_ERROR_CMDENC(cmd_enc,
+				"wrong qsync params %d %d %d\n",
+				qsync_min_fps, default_fps, yres);
+			goto exit;
+		}
+
+		if (qsync_min_fps >= default_fps) {
+			SDE_ERROR_CMDENC(cmd_enc,
+				"qsync fps:%d must be less than default:%d\n",
+				qsync_min_fps, default_fps);
+			goto exit;
+		}
+
+		/* Calculate the number of extra lines*/
+		slow_time_ns = (1 * 1000000000) / qsync_min_fps;
+		default_time_ns = (1 * 1000000000) / default_fps;
+		extra_time_ns = slow_time_ns - default_time_ns;
+		default_line_time_ns = (1 * 1000000000) / (default_fps * yres);
+
+		total_extra_lines = extra_time_ns / default_line_time_ns;
+		threshold_lines += total_extra_lines;
+
+		SDE_DEBUG_CMDENC(cmd_enc, "slow:%d default:%d extra:%d(ns)\n",
+			slow_time_ns, default_time_ns, extra_time_ns);
+		SDE_DEBUG_CMDENC(cmd_enc, "extra_lines:%d threshold:%d\n",
+			total_extra_lines, threshold_lines);
+		SDE_DEBUG_CMDENC(cmd_enc, "min_fps:%d fps:%d yres:%d\n",
+			qsync_min_fps, default_fps, yres);
+
+		SDE_EVT32(qsync_mode, qsync_min_fps, extra_time_ns, default_fps,
+			yres, threshold_lines);
+
+		*extra_frame_trigger_time = extra_time_ns;
+	}
+
+exit:
+	threshold_lines += DEFAULT_TEARCHECK_SYNC_THRESH_START;
+
+	return threshold_lines;
+}
+
 static void sde_encoder_phys_cmd_tearcheck_config(
 		struct sde_encoder_phys *phys_enc)
 {
@@ -807,22 +1003,32 @@ static void sde_encoder_phys_cmd_tearcheck_config(
 	struct sde_hw_tear_check tc_cfg = { 0 };
 	struct drm_display_mode *mode;
 	bool tc_enable = true;
-	u32 vsync_hz;
+	u32 vsync_hz, extra_frame_trigger_time;
 	struct msm_drm_private *priv;
 	struct sde_kms *sde_kms;
 
-	if (!phys_enc || !phys_enc->hw_pp) {
+	if (!phys_enc || !phys_enc->hw_pp || !phys_enc->hw_intf) {
 		SDE_ERROR("invalid encoder\n");
 		return;
 	}
 	mode = &phys_enc->cached_mode;
 
-	SDE_DEBUG_CMDENC(cmd_enc, "pp %d\n", phys_enc->hw_pp->idx - PINGPONG_0);
+	SDE_DEBUG_CMDENC(cmd_enc, "pp %d, intf %d\n",
+			phys_enc->hw_pp->idx - PINGPONG_0,
+			phys_enc->hw_intf->idx - INTF_0);
 
-	if (!phys_enc->hw_pp->ops.setup_tearcheck ||
-		!phys_enc->hw_pp->ops.enable_tearcheck) {
-		SDE_DEBUG_CMDENC(cmd_enc, "tearcheck not supported\n");
-		return;
+	if (phys_enc->has_intf_te) {
+		if (!phys_enc->hw_intf->ops.setup_tearcheck ||
+			!phys_enc->hw_intf->ops.enable_tearcheck) {
+			SDE_DEBUG_CMDENC(cmd_enc, "tearcheck not supported\n");
+			return;
+		}
+	} else {
+		if (!phys_enc->hw_pp->ops.setup_tearcheck ||
+			!phys_enc->hw_pp->ops.enable_tearcheck) {
+			SDE_DEBUG_CMDENC(cmd_enc, "tearcheck not supported\n");
+			return;
+		}
 	}
 
 	sde_kms = phys_enc->sde_kms;
@@ -859,36 +1065,51 @@ static void sde_encoder_phys_cmd_tearcheck_config(
 	 * disable sde hw generated TE signal, since hw TE will arrive first.
 	 * Only caveat is if due to error, we hit wrap-around.
 	 */
-#ifndef VENDOR_EDIT
 	tc_cfg.sync_cfg_height = 0xFFF0;
-#else  /*VENDOR_EDIT*/
-	tc_cfg.sync_cfg_height = 2589;
-#endif /*VENDOR_EDIT*/
 	tc_cfg.vsync_init_val = mode->vdisplay;
-	tc_cfg.sync_threshold_start = DEFAULT_TEARCHECK_SYNC_THRESH_START;
+	tc_cfg.sync_threshold_start = _get_tearcheck_threshold(phys_enc,
+			&extra_frame_trigger_time);
 	tc_cfg.sync_threshold_continue = DEFAULT_TEARCHECK_SYNC_THRESH_CONTINUE;
 	tc_cfg.start_pos = mode->vdisplay;
 	tc_cfg.rd_ptr_irq = mode->vdisplay + 1;
 
-	SDE_DEBUG_CMDENC(cmd_enc,
-		"tc %d vsync_clk_speed_hz %u vtotal %u vrefresh %u\n",
-		phys_enc->hw_pp->idx - PINGPONG_0, vsync_hz,
-		mode->vtotal, mode->vrefresh);
-	SDE_DEBUG_CMDENC(cmd_enc,
-		"tc %d enable %u start_pos %u rd_ptr_irq %u\n",
-		phys_enc->hw_pp->idx - PINGPONG_0, tc_enable, tc_cfg.start_pos,
-		tc_cfg.rd_ptr_irq);
-	SDE_DEBUG_CMDENC(cmd_enc,
-		"tc %d hw_vsync_mode %u vsync_count %u vsync_init_val %u\n",
-		phys_enc->hw_pp->idx - PINGPONG_0, tc_cfg.hw_vsync_mode,
-		tc_cfg.vsync_count, tc_cfg.vsync_init_val);
-	SDE_DEBUG_CMDENC(cmd_enc,
-		"tc %d cfgheight %u thresh_start %u thresh_cont %u\n",
-		phys_enc->hw_pp->idx - PINGPONG_0, tc_cfg.sync_cfg_height,
-		tc_cfg.sync_threshold_start, tc_cfg.sync_threshold_continue);
+	cmd_enc->ctl_start_threshold = (extra_frame_trigger_time / 1000) +
+			SDE_ENC_CTL_START_THRESHOLD_US;
 
-	phys_enc->hw_pp->ops.setup_tearcheck(phys_enc->hw_pp, &tc_cfg);
-	phys_enc->hw_pp->ops.enable_tearcheck(phys_enc->hw_pp, tc_enable);
+	SDE_DEBUG_CMDENC(cmd_enc,
+		"tc %d intf %d vsync_clk_speed_hz %u vtotal %u vrefresh %u\n",
+		phys_enc->hw_pp->idx - PINGPONG_0,
+		phys_enc->hw_intf->idx - INTF_0,
+		vsync_hz, mode->vtotal, mode->vrefresh);
+	SDE_DEBUG_CMDENC(cmd_enc,
+		"tc %d intf %d enable %u start_pos %u rd_ptr_irq %u\n",
+		phys_enc->hw_pp->idx - PINGPONG_0,
+		phys_enc->hw_intf->idx - INTF_0,
+		tc_enable, tc_cfg.start_pos, tc_cfg.rd_ptr_irq);
+	SDE_DEBUG_CMDENC(cmd_enc,
+		"tc %d intf %d hw_vsync_mode %u vsync_count %u vsync_init_val %u\n",
+		phys_enc->hw_pp->idx - PINGPONG_0,
+		phys_enc->hw_intf->idx - INTF_0,
+		tc_cfg.hw_vsync_mode, tc_cfg.vsync_count,
+		tc_cfg.vsync_init_val);
+	SDE_DEBUG_CMDENC(cmd_enc,
+		"tc %d intf %d cfgheight %u thresh_start %u thresh_cont %u ctl_start_threshold:%d\n",
+		phys_enc->hw_pp->idx - PINGPONG_0,
+		phys_enc->hw_intf->idx - INTF_0,
+		tc_cfg.sync_cfg_height,
+		tc_cfg.sync_threshold_start, tc_cfg.sync_threshold_continue,
+		cmd_enc->ctl_start_threshold);
+
+	if (phys_enc->has_intf_te) {
+		phys_enc->hw_intf->ops.setup_tearcheck(phys_enc->hw_intf,
+				&tc_cfg);
+		phys_enc->hw_intf->ops.enable_tearcheck(phys_enc->hw_intf,
+				tc_enable);
+	} else {
+		phys_enc->hw_pp->ops.setup_tearcheck(phys_enc->hw_pp, &tc_cfg);
+		phys_enc->hw_pp->ops.enable_tearcheck(phys_enc->hw_pp,
+				tc_enable);
+	}
 }
 
 static void _sde_encoder_phys_cmd_pingpong_config(
@@ -897,8 +1118,8 @@ static void _sde_encoder_phys_cmd_pingpong_config(
 	struct sde_encoder_phys_cmd *cmd_enc =
 		to_sde_encoder_phys_cmd(phys_enc);
 
-	if (!phys_enc || !phys_enc->hw_pp) {
-		SDE_ERROR("invalid arg(s), enc %d\n", phys_enc != NULL);
+	if (!phys_enc || !phys_enc->hw_ctl || !phys_enc->hw_pp) {
+		SDE_ERROR("invalid arg(s), enc %d\n", phys_enc != 0);
 		return;
 	}
 
@@ -906,29 +1127,15 @@ static void _sde_encoder_phys_cmd_pingpong_config(
 			phys_enc->hw_pp->idx - PINGPONG_0);
 	drm_mode_debug_printmodeline(&phys_enc->cached_mode);
 
-	if (!_sde_encoder_phys_is_ppsplit_slave(phys_enc))
-		_sde_encoder_phys_cmd_update_intf_cfg(phys_enc);
+	_sde_encoder_phys_cmd_update_intf_cfg(phys_enc);
+
 	sde_encoder_phys_cmd_tearcheck_config(phys_enc);
-}
-
-static bool sde_encoder_phys_cmd_needs_single_flush(
-		struct sde_encoder_phys *phys_enc)
-{
-	if (!phys_enc)
-		return false;
-
-	return phys_enc->cont_splash_settings ?
-		phys_enc->cont_splash_single_flush :
-		_sde_encoder_phys_is_ppsplit(phys_enc);
 }
 
 static void sde_encoder_phys_cmd_enable_helper(
 		struct sde_encoder_phys *phys_enc)
 {
-	struct sde_hw_ctl *ctl;
-	u32 flush_mask = 0;
-
-	if (!phys_enc || !phys_enc->hw_pp) {
+	if (!phys_enc || !phys_enc->hw_ctl || !phys_enc->hw_pp) {
 		SDE_ERROR("invalid arg(s), encoder %d\n", phys_enc != 0);
 		return;
 	}
@@ -937,25 +1144,8 @@ static void sde_encoder_phys_cmd_enable_helper(
 
 	_sde_encoder_phys_cmd_pingpong_config(phys_enc);
 
-	/*
-	 * For pp-split, skip setting the flush bit for the slave intf, since
-	 * both intfs use same ctl and HW will only flush the master.
-	 */
-	if (_sde_encoder_phys_is_ppsplit(phys_enc) &&
-		!sde_encoder_phys_cmd_is_master(phys_enc))
-		goto skip_flush;
+	_sde_encoder_phys_cmd_update_flush_mask(phys_enc);
 
-	if (!phys_enc->hw_ctl) {
-		SDE_ERROR("invalid ctl\n");
-		return;
-	}
-
-	ctl = phys_enc->hw_ctl;
-	ctl->ops.get_bitmask_intf(ctl, &flush_mask, phys_enc->intf_idx);
-	ctl->ops.update_pending_flush(ctl, flush_mask);
-
-skip_flush:
-	return;
 }
 
 static void sde_encoder_phys_cmd_enable(struct sde_encoder_phys *phys_enc)
@@ -971,7 +1161,7 @@ static void sde_encoder_phys_cmd_enable(struct sde_encoder_phys *phys_enc)
 	SDE_DEBUG_CMDENC(cmd_enc, "pp %d\n", phys_enc->hw_pp->idx - PINGPONG_0);
 
 	if (phys_enc->enable_state == SDE_ENC_ENABLED) {
-		if (!phys_enc->sde_kms->splash_data.cont_splash_en)
+		if (!phys_enc->cont_splash_enabled)
 			SDE_ERROR("already enabled\n");
 		return;
 	}
@@ -984,20 +1174,30 @@ static bool sde_encoder_phys_cmd_is_autorefresh_enabled(
 		struct sde_encoder_phys *phys_enc)
 {
 	struct sde_hw_pingpong *hw_pp;
+	struct sde_hw_intf *hw_intf;
 	struct sde_hw_autorefresh cfg;
 	int ret;
 
-	if (!phys_enc || !phys_enc->hw_pp)
+	if (!phys_enc || !phys_enc->hw_pp || !phys_enc->hw_intf)
 		return 0;
 
 	if (!sde_encoder_phys_cmd_is_master(phys_enc))
 		return 0;
 
-	hw_pp = phys_enc->hw_pp;
-	if (!hw_pp->ops.get_autorefresh)
-		return 0;
+	if (phys_enc->has_intf_te) {
+		hw_intf = phys_enc->hw_intf;
+		if (!hw_intf->ops.get_autorefresh)
+			return 0;
 
-	ret = hw_pp->ops.get_autorefresh(hw_pp, &cfg);
+		ret = hw_intf->ops.get_autorefresh(hw_intf, &cfg);
+	} else {
+		hw_pp = phys_enc->hw_pp;
+		if (!hw_pp->ops.get_autorefresh)
+			return 0;
+
+		ret = hw_pp->ops.get_autorefresh(hw_pp, &cfg);
+	}
+
 	if (ret)
 		return 0;
 
@@ -1007,50 +1207,80 @@ static bool sde_encoder_phys_cmd_is_autorefresh_enabled(
 static void sde_encoder_phys_cmd_connect_te(
 		struct sde_encoder_phys *phys_enc, bool enable)
 {
-	if (!phys_enc || !phys_enc->hw_pp ||
-			!phys_enc->hw_pp->ops.connect_external_te)
+	if (!phys_enc || !phys_enc->hw_pp || !phys_enc->hw_intf)
+		return;
+
+	if (phys_enc->has_intf_te &&
+			phys_enc->hw_intf->ops.connect_external_te)
+		phys_enc->hw_intf->ops.connect_external_te(phys_enc->hw_intf,
+				enable);
+	else if (phys_enc->hw_pp->ops.connect_external_te)
+		phys_enc->hw_pp->ops.connect_external_te(phys_enc->hw_pp,
+				enable);
+	else
 		return;
 
 	SDE_EVT32(DRMID(phys_enc->parent), enable);
-	phys_enc->hw_pp->ops.connect_external_te(phys_enc->hw_pp, enable);
 }
 
-static int sde_encoder_phys_cmd_get_line_count(
+static int sde_encoder_phys_cmd_te_get_line_count(
 		struct sde_encoder_phys *phys_enc)
 {
 	struct sde_hw_pingpong *hw_pp;
+	struct sde_hw_intf *hw_intf;
+	u32 line_count;
 
-	if (!phys_enc || !phys_enc->hw_pp)
+	if (!phys_enc || !phys_enc->hw_pp || !phys_enc->hw_intf)
 		return -EINVAL;
 
 	if (!sde_encoder_phys_cmd_is_master(phys_enc))
 		return -EINVAL;
 
-	hw_pp = phys_enc->hw_pp;
-	if (!hw_pp->ops.get_line_count)
-		return -EINVAL;
+	if (phys_enc->has_intf_te) {
+		hw_intf = phys_enc->hw_intf;
+		if (!hw_intf->ops.get_line_count)
+			return -EINVAL;
 
-	return hw_pp->ops.get_line_count(hw_pp);
+		line_count = hw_intf->ops.get_line_count(hw_intf);
+	} else {
+		hw_pp = phys_enc->hw_pp;
+		if (!hw_pp->ops.get_line_count)
+			return -EINVAL;
+
+		line_count = hw_pp->ops.get_line_count(hw_pp);
+	}
+
+	return line_count;
 }
 
 static int sde_encoder_phys_cmd_get_write_line_count(
 		struct sde_encoder_phys *phys_enc)
 {
 	struct sde_hw_pingpong *hw_pp;
+	struct sde_hw_intf *hw_intf;
 	struct sde_hw_pp_vsync_info info;
 
-	if (!phys_enc || !phys_enc->hw_pp)
+	if (!phys_enc || !phys_enc->hw_pp || !phys_enc->hw_intf)
 		return -EINVAL;
 
 	if (!sde_encoder_phys_cmd_is_master(phys_enc))
 		return -EINVAL;
 
-	hw_pp = phys_enc->hw_pp;
-	if (!hw_pp->ops.get_vsync_info)
-		return -EINVAL;
+	if (phys_enc->has_intf_te) {
+		hw_intf = phys_enc->hw_intf;
+		if (!hw_intf->ops.get_vsync_info)
+			return -EINVAL;
 
-	if (hw_pp->ops.get_vsync_info(hw_pp, &info))
-		return -EINVAL;
+		if (hw_intf->ops.get_vsync_info(hw_intf, &info))
+			return -EINVAL;
+	} else {
+		hw_pp = phys_enc->hw_pp;
+		if (!hw_pp->ops.get_vsync_info)
+			return -EINVAL;
+
+		if (hw_pp->ops.get_vsync_info(hw_pp, &info))
+			return -EINVAL;
+	}
 
 	return (int)info.wr_ptr_line_count;
 }
@@ -1060,15 +1290,17 @@ static void sde_encoder_phys_cmd_disable(struct sde_encoder_phys *phys_enc)
 	struct sde_encoder_phys_cmd *cmd_enc =
 		to_sde_encoder_phys_cmd(phys_enc);
 
-	if (!phys_enc || !phys_enc->hw_pp) {
+	if (!phys_enc || !phys_enc->hw_pp || !phys_enc->hw_intf) {
 		SDE_ERROR("invalid encoder\n");
 		return;
 	}
 	atomic_set(&phys_enc->ctlstart_timeout, 0);
-	SDE_DEBUG_CMDENC(cmd_enc, "pp %d state %d\n",
+	SDE_DEBUG_CMDENC(cmd_enc, "pp %d intf %d state %d\n",
 			phys_enc->hw_pp->idx - PINGPONG_0,
+			phys_enc->hw_intf->idx - INTF_0,
 			phys_enc->enable_state);
 	SDE_EVT32(DRMID(phys_enc->parent), phys_enc->hw_pp->idx - PINGPONG_0,
+			phys_enc->hw_intf->idx - INTF_0,
 			phys_enc->enable_state);
 
 	if (phys_enc->enable_state == SDE_ENC_DISABLED) {
@@ -1076,8 +1308,14 @@ static void sde_encoder_phys_cmd_disable(struct sde_encoder_phys *phys_enc)
 		return;
 	}
 
-	if (phys_enc->hw_pp->ops.enable_tearcheck)
-		phys_enc->hw_pp->ops.enable_tearcheck(phys_enc->hw_pp, false);
+	if (phys_enc->has_intf_te && phys_enc->hw_intf->ops.enable_tearcheck)
+		phys_enc->hw_intf->ops.enable_tearcheck(
+				phys_enc->hw_intf,
+				false);
+	else if (phys_enc->hw_pp->ops.enable_tearcheck)
+		phys_enc->hw_pp->ops.enable_tearcheck(phys_enc->hw_pp,
+				false);
+
 	phys_enc->enable_state = SDE_ENC_DISABLED;
 }
 
@@ -1119,9 +1357,11 @@ static int sde_encoder_phys_cmd_prepare_for_kickoff(
 		struct sde_encoder_phys *phys_enc,
 		struct sde_encoder_kickoff_params *params)
 {
+	struct sde_hw_tear_check tc_cfg = {0};
 	struct sde_encoder_phys_cmd *cmd_enc =
 			to_sde_encoder_phys_cmd(phys_enc);
 	int ret;
+	u32 extra_frame_trigger_time;
 
 	if (!phys_enc || !phys_enc->hw_pp) {
 		SDE_ERROR("invalid encoder\n");
@@ -1144,6 +1384,25 @@ static int sde_encoder_phys_cmd_prepare_for_kickoff(
 		SDE_EVT32(DRMID(phys_enc->parent),
 				phys_enc->hw_pp->idx - PINGPONG_0);
 		SDE_ERROR("failed wait_for_idle: %d\n", ret);
+	}
+
+	if (sde_connector_is_qsync_updated(phys_enc->connector)) {
+		tc_cfg.sync_threshold_start =
+			_get_tearcheck_threshold(phys_enc,
+				&extra_frame_trigger_time);
+		if (phys_enc->has_intf_te &&
+				phys_enc->hw_intf->ops.update_tearcheck)
+			phys_enc->hw_intf->ops.update_tearcheck(
+					phys_enc->hw_intf, &tc_cfg);
+		else if (phys_enc->hw_pp->ops.update_tearcheck)
+			phys_enc->hw_pp->ops.update_tearcheck(
+					phys_enc->hw_pp, &tc_cfg);
+
+		cmd_enc->ctl_start_threshold =
+			(extra_frame_trigger_time / 1000) +
+				SDE_ENC_CTL_START_THRESHOLD_US;
+		SDE_EVT32(DRMID(phys_enc->parent),
+		    tc_cfg.sync_threshold_start, cmd_enc->ctl_start_threshold);
 	}
 
 	SDE_DEBUG_CMDENC(cmd_enc, "pp:%d pending_cnt %d\n",
@@ -1206,6 +1465,7 @@ static int _sde_encoder_phys_cmd_wait_for_ctl_start(
 				&phys_enc->pending_ctlstart_cnt, -1, 0);
 			atomic_inc_return(&phys_enc->ctlstart_timeout);
 		}
+
 	}
 
 	return ret;
@@ -1324,7 +1584,7 @@ static void sde_encoder_phys_cmd_prepare_commit(
 {
 	struct sde_encoder_phys_cmd *cmd_enc =
 		to_sde_encoder_phys_cmd(phys_enc);
-	unsigned long lock_flags;
+	int trial = 0;
 
 	if (!phys_enc)
 		return;
@@ -1338,35 +1598,31 @@ static void sde_encoder_phys_cmd_prepare_commit(
 	if (!sde_encoder_phys_cmd_is_autorefresh_enabled(phys_enc))
 		return;
 
-	/**
-	 * Autorefresh must be disabled carefully:
-	 *  - Autorefresh must be disabled between pp_done and te
-	 *    signal prior to sdm845 targets. All targets after sdm845
-	 *    supports autorefresh disable without turning off the
-	 *    hardware TE and pp_done wait.
-	 *
-	 *  - Wait for TX to Complete
-	 *    Wait for PPDone confirms the last frame transfer is complete.
-	 *
-	 *  - Leave Autorefresh Disabled
-	 *    - Assume disable of Autorefresh since it is now safe
-	 *    - Can now safely Disable Encoder, do debug printing, etc.
-	 *     without worrying that Autorefresh will kickoff
+	/*
+	 * If autorefresh is enabled, disable it and make sure it is safe to
+	 * proceed with current frame commit/push. Sequence fallowed is,
+	 * 1. Disable TE
+	 * 2. Disable autorefresh config
+	 * 4. Poll for frame transfer ongoing to be false
+	 * 5. Enable TE back
 	 */
-
-	spin_lock_irqsave(phys_enc->enc_spinlock, lock_flags);
+	sde_encoder_phys_cmd_connect_te(phys_enc, false);
 
 	_sde_encoder_phys_cmd_config_autorefresh(phys_enc, 0);
 
-	/* check for outstanding TX */
-	if (_sde_encoder_phys_cmd_is_ongoing_pptx(phys_enc))
-		atomic_add_unless(&phys_enc->pending_kickoff_cnt, 1, 1);
-	spin_unlock_irqrestore(phys_enc->enc_spinlock, lock_flags);
+	do {
+		udelay(SDE_ENC_MAX_POLL_TIMEOUT_US);
+		if ((trial * SDE_ENC_MAX_POLL_TIMEOUT_US)
+				> (KICKOFF_TIMEOUT_MS * USEC_PER_MSEC)) {
+			SDE_ERROR_CMDENC(cmd_enc,
+					"disable autorefresh failed\n");
+			break;
+		}
 
-	/* wait for ppdone if necessary due to catching ongoing TX */
-	if (_sde_encoder_phys_cmd_wait_for_idle(phys_enc))
-		SDE_ERROR_CMDENC(cmd_enc, "pp:%d kickoff timed out\n",
-				phys_enc->hw_pp->idx - PINGPONG_0);
+		trial++;
+	} while (_sde_encoder_phys_cmd_is_ongoing_pptx(phys_enc));
+
+	sde_encoder_phys_cmd_connect_te(phys_enc, true);
 
 	SDE_DEBUG_CMDENC(cmd_enc, "disabled autorefresh\n");
 }
@@ -1391,8 +1647,21 @@ static void sde_encoder_phys_cmd_trigger_start(
 	}
 }
 
-static void sde_encoder_phys_cmd_init_ops(
-		struct sde_encoder_phys_ops *ops)
+static void sde_encoder_phys_cmd_setup_vsync_source(
+		struct sde_encoder_phys *phys_enc,
+		u32 vsync_source, bool is_dummy)
+{
+	if (!phys_enc || !phys_enc->hw_intf)
+		return;
+
+	sde_encoder_helper_vsync_config(phys_enc, vsync_source, is_dummy);
+
+	if (phys_enc->has_intf_te && phys_enc->hw_intf->ops.vsync_sel)
+		phys_enc->hw_intf->ops.vsync_sel(phys_enc->hw_intf,
+				vsync_source);
+}
+
+static void sde_encoder_phys_cmd_init_ops(struct sde_encoder_phys_ops *ops)
 {
 	ops->prepare_commit = sde_encoder_phys_cmd_prepare_commit;
 	ops->is_master = sde_encoder_phys_cmd_is_master;
@@ -1410,7 +1679,7 @@ static void sde_encoder_phys_cmd_init_ops(
 	ops->wait_for_vblank = sde_encoder_phys_cmd_wait_for_vblank;
 	ops->trigger_flush = sde_encoder_helper_trigger_flush;
 	ops->trigger_start = sde_encoder_phys_cmd_trigger_start;
-	ops->needs_single_flush = sde_encoder_phys_cmd_needs_single_flush;
+	ops->needs_single_flush = sde_encoder_phys_needs_single_flush;
 	ops->hw_reset = sde_encoder_helper_hw_reset;
 	ops->irq_control = sde_encoder_phys_cmd_irq_control;
 	ops->update_split_role = sde_encoder_phys_cmd_update_split_role;
@@ -1418,9 +1687,10 @@ static void sde_encoder_phys_cmd_init_ops(
 	ops->control_te = sde_encoder_phys_cmd_connect_te;
 	ops->is_autorefresh_enabled =
 			sde_encoder_phys_cmd_is_autorefresh_enabled;
-	ops->get_line_count = sde_encoder_phys_cmd_get_line_count;
+	ops->get_line_count = sde_encoder_phys_cmd_te_get_line_count;
 	ops->get_wr_line_count = sde_encoder_phys_cmd_get_write_line_count;
 	ops->wait_for_active = NULL;
+	ops->setup_vsync_source = sde_encoder_phys_cmd_setup_vsync_source;
 }
 
 struct sde_encoder_phys *sde_encoder_phys_cmd_init(
@@ -1451,7 +1721,6 @@ struct sde_encoder_phys *sde_encoder_phys_cmd_init(
 	phys_enc->hw_mdptop = hw_mdp;
 	phys_enc->intf_idx = p->intf_idx;
 
-	sde_encoder_phys_cmd_init_ops(&phys_enc->ops);
 	phys_enc->parent = p->parent;
 	phys_enc->parent_ops = p->parent_ops;
 	phys_enc->sde_kms = p->sde_kms;
@@ -1460,8 +1729,16 @@ struct sde_encoder_phys *sde_encoder_phys_cmd_init(
 	phys_enc->enc_spinlock = p->enc_spinlock;
 	phys_enc->vblank_ctl_lock = p->vblank_ctl_lock;
 	cmd_enc->stream_sel = 0;
+	cmd_enc->ctl_start_threshold = SDE_ENC_CTL_START_THRESHOLD_US;
 	phys_enc->enable_state = SDE_ENC_DISABLED;
+	sde_encoder_phys_cmd_init_ops(&phys_enc->ops);
 	phys_enc->comp_type = p->comp_type;
+
+	if (sde_hw_intf_te_supported(phys_enc->sde_kms->catalog))
+		phys_enc->has_intf_te = true;
+	else
+		phys_enc->has_intf_te = false;
+
 	for (i = 0; i < INTR_IDX_MAX; i++) {
 		irq = &phys_enc->irq[i];
 		INIT_LIST_HEAD(&irq->cb.list);
@@ -1483,10 +1760,15 @@ struct sde_encoder_phys *sde_encoder_phys_cmd_init(
 	irq->cb.func = sde_encoder_phys_cmd_pp_tx_done_irq;
 
 	irq = &phys_enc->irq[INTR_IDX_RDPTR];
-	irq->name = "pp_rd_ptr";
-	irq->intr_type = SDE_IRQ_TYPE_PING_PONG_RD_PTR;
 	irq->intr_idx = INTR_IDX_RDPTR;
-	irq->cb.func = sde_encoder_phys_cmd_pp_rd_ptr_irq;
+	irq->name = "te_rd_ptr";
+
+	if (phys_enc->has_intf_te)
+		irq->intr_type = SDE_IRQ_TYPE_INTF_TEAR_RD_PTR;
+	else
+		irq->intr_type = SDE_IRQ_TYPE_PING_PONG_RD_PTR;
+
+	irq->cb.func = sde_encoder_phys_cmd_te_rd_ptr_irq;
 
 	irq = &phys_enc->irq[INTR_IDX_UNDERRUN];
 	irq->name = "underrun";
@@ -1496,7 +1778,12 @@ struct sde_encoder_phys *sde_encoder_phys_cmd_init(
 
 	irq = &phys_enc->irq[INTR_IDX_AUTOREFRESH_DONE];
 	irq->name = "autorefresh_done";
-	irq->intr_type = SDE_IRQ_TYPE_PING_PONG_AUTO_REF;
+
+	if (phys_enc->has_intf_te)
+		irq->intr_type = SDE_IRQ_TYPE_INTF_TEAR_AUTO_REF;
+	else
+		irq->intr_type = SDE_IRQ_TYPE_PING_PONG_AUTO_REF;
+
 	irq->intr_idx = INTR_IDX_AUTOREFRESH_DONE;
 	irq->cb.func = sde_encoder_phys_cmd_autorefresh_done_irq;
 

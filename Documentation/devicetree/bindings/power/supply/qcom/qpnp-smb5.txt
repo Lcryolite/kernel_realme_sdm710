@@ -27,6 +27,23 @@ Charger specific properties:
   Definition: Should specify the phandle of PMI's revid module. This is used to
 		identify the PMI subtype.
 
+- qcom,sec-charger-config
+  Usage:      optional
+  Value type: <u32>
+  Definition: Specify how the secondary chargers are configured.
+		0 - No secondary charger.
+		1 - Charge Pump SMB1390.
+		2 - SMB1355 parallel charger.
+		3 - Both Charge Pump and SMB1355.
+		If the value is not present, 0 is used as default.
+
+- io-channels
+- io-channel-names
+  Usage:      optional
+  Value type: <phandle>
+  Definition: For details about IIO bindings see:
+		Documentation/devicetree/bindings/iio/iio-bindings.txt
+
 - qcom,batteryless-platform
   Usage:      optional
   Value type: <empty>
@@ -34,6 +51,18 @@ Charger specific properties:
 		battery, and therefore charging should be disabled. In
 		addition battery properties will be faked such that the device
 		assumes normal operation.
+
+- qcom,charger-temp-max
+  Usage:      optional
+  Value type: <u32>
+  Definition: Specifies the charger temp REG_H_THRESHOLD for PM8150B in deciDegC.
+		If the value is not present, use the setting read from the device.
+
+- qcom,smb-temp-max
+  Usage:      optional
+  Value type: <u32>
+  Definition: Specifies the charger temp REG_H_THRESHOLD for SMB1355 in deciDegC.
+		If the value is not present, use the setting read from the device.
 
 - qcom,fcc-max-ua
   Usage:      optional
@@ -149,6 +178,14 @@ Charger specific properties:
   Definition: Boolean flag which when present enables input suspend for
 		debug battery.
 
+- qcom,fake-chg-status-on-debug-batt
+  Usage:      optional
+  Value type: <empty>
+  Definition: Boolean flag which when present shows charging status as
+		unknown for debug battery. This needs to be specified only if
+		the device needs to be kept powered on always with
+		"svc power stayon true".
+
 - qcom,min-freq-khz
   Usage:      optional
   Value type: <u32>
@@ -171,6 +208,12 @@ Charger specific properties:
   Usage:      optional
   Value type: bool
   Definition: Boolean flag which when present enables step-charging.
+
+- qcom,typec-legacy-rp-icl
+  Usage:       optional
+  Value type:  bool
+  Definition:  Boolean property to enable setting ICL based on Rp for
+		Type-C non-compliant legacy cables.
 
 - qcom,wd-bark-time-secs
   Usage:      optional
@@ -216,42 +259,111 @@ Charger specific properties:
 		This is only applicable to certain PMICs like PMI632 which
 		has SCHGM_FLASH peripheral.
 
-- qcom,chg-vadc
-	Usage:      optional
-	Value type: <phandle>
-	Definition: Phandle for the VADC node, it is used to obtain USBIN_V
-		    and USBIN_I readings on PMIC632 based platform.
-
-- qcom,hw-die-temp-mitigation
-	Usage:      optional
-	Value type: bool
-	Definition: Boolean flag which when present enables h/w based thermal
-		    mitigation.
-
-- qcom,hw-connector-mitigation
-	Usage:      optional
-	Value type: bool
-	Definition: Boolean flag which when present enables h/w based
-		    connector temperature mitigation.
-
-- qcom,connector-internal-pull-kohm
-	Usage:      optional
-	Value type: <u32>
-	Definition: Specifies internal pull-up configuration to be applied to
-		    connector THERM, only valid values are (0/30/100/400).
-		    If not specified 100K is used as default pull-up.
-
-- qcom,moisture-protection-enable
-	Usage:      optional
-	Value type: bool
-	Definition: Boolean flag which when present enables mositure protection
-		    feature.
-
 - qcom,fcc-stepping-enable
   Usage:      optional
   Value type: bool
   Definition: Boolean flag which when present enables stepwise change in FCC.
 		The default stepping rate is 100mA/sec.
+
+- qcom,disable-suspend-on-collapse
+  Usage:      optional
+  Value type: bool
+  Definition: Boolean flag which when present disables suspend on collapse
+		feature of charger hardware.
+
+- qcom,uusb-moisture-protection-enable
+	Usage:      optional
+	Value type: bool
+	Definition: Boolean flag which when present enables mositure protection
+		    feature for uUSB connector type.
+
+- qcom,hvdcp-autonomous-enable
+  Usage:      optional
+  Value type: bool
+  Definition: Boolean flag which when present enables hardware-controlled
+		operation of HVDCP.
+
+- qcom,usb-pd-disable
+  Usage:      optional
+  Value type: bool
+  Definition: Boolean flag which when present disables USB-PD operation. Not
+		applicable for PMI632, where PD is not supported.
+
+- qcom,lpd-disable
+  Usage:      optional
+  Value type: bool
+  Definition: Boolean flag which when present disables liquid presence
+		detection. Not applicable for PMI632, which does not
+		support Type-C port.
+
+- qcom,hw-die-temp-mitigation
+  Usage:      optional
+  Value type: bool
+  Definition: Boolean flag which when present enables h/w based thermal
+		mitigation.
+
+- qcom,hw-connector-mitigation
+  Usage:      optional
+  Value type: bool
+  Definition: Boolean flag which when present enables h/w based
+		connector temperature mitigation.
+
+- qcom,hw-skin-temp-mitigation
+  Usage:      optional
+  Value type: bool
+  Definition: Boolean flag which when present enables h/w based skin
+		temperature mitigation.
+
+- qcom,en-skin-therm-mitigation
+  Usage:      optional
+  Value type: bool
+  Definition: Boolean flag which when present enables skin
+		thermal mitigation.
+
+- qcom,connector-internal-pull-kohm
+  Usage:      optional
+  Value type: <u32>
+  Definition: Specifies internal pull-up configuration to be applied to
+		connector THERM, only valid values are (0/30/100/400).
+		If not specified 100K is used as default pull-up.
+
+- qcom,smb-internal-pull-kohm
+  Usage:      optional
+  Value type: <u32>
+  Definition: Specifies internal pull-up configuration to be applied to
+		smb THERM, only valid values are (0/30/100/400).
+		If not specified 100K is used as default pull-up.
+
+- qcom,wd-snarl-time-config
+  Usage:      optional
+  Value type: <u32>
+  Definition: WDOG snarl timeout configuration value. The possible values are
+		0 to 7, where 0 = 62.5ms, 1 = 125ms, 2 = 250ms, 3 = 500ms,
+		4 = 1s, 5 = 2s, 6 = 4s and 7 = 8s. If not defined, wdog-snarl
+		irq is disabled by default.
+
+- qcom,adc-based-aicl
+  Usage:      optional
+  Value type: bool
+  Definition: Boolean flag which when present enables ADC based AICL.
+
+- qcom,disable-sw-thermal-regulation
+  Usage:      optional
+  Value type: bool
+  Definition: Boolean flag which when present disables the software thermal
+		regulation.
+
+- qcom,disable-fcc-restriction
+  Usage:      optional
+  Value type: bool
+  Definition: Boolean flag which when present disables FCC restriction.
+
+- qcom,wls-current-max-ua
+  Usage:      optional
+  Value type: <u32>
+  Definition: Upper limit of charging current supplied by the wireless
+		charger. If left unspecified, the HW min value of 1.5 A is
+		applied by default.
 
 =============================================
 Second Level Nodes - SMB5 Charger Peripherals
@@ -278,12 +390,23 @@ Peripheral specific properties:
 Example
 =======
 
-pmi8998_charger: qcom,qpnp-smb5 {
+pm8150b_charger: qcom,qpnp-smb5 {
 	compatible = "qcom,qpnp-smb5";
 	#address-cells = <1>;
 	#size-cells = <1>;
 
+	qcom,pmic-revid = <&pm8150b_revid>;
+
 	dpdm-supply = <&qusb_phy0>;
+
+	qcom,sec-charger-config = <1>;
+
+	io-channels = <&pm8150b_vadc ADC_USB_IN_V_16>,
+	              <&pm8150b_vadc ADC_USB_IN_I>,
+	              <&pm8150b_vadc ADC_CHG_TEMP>;
+	io-channel-names = "usb_in_voltage",
+	                   "usb_in_current",
+	                   "chg_temp";
 
 	qcom,chgr@1000 {
 		reg = <0x1000 0x100>;

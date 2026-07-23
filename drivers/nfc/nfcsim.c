@@ -345,10 +345,6 @@ static struct dentry *nfcsim_debugfs_root;
 static void nfcsim_debugfs_init(void)
 {
 	nfcsim_debugfs_root = debugfs_create_dir("nfcsim", NULL);
-
-	if (!nfcsim_debugfs_root)
-		pr_err("Could not create debugfs entry\n");
-
 }
 
 static void nfcsim_debugfs_remove(void)
@@ -481,8 +477,10 @@ static int __init nfcsim_init(void)
 exit_err:
 	pr_err("Failed to initialize nfcsim driver (%d)\n", rc);
 
-	nfcsim_link_free(link0);
-	nfcsim_link_free(link1);
+	if (link0)
+		nfcsim_link_free(link0);
+	if (link1)
+		nfcsim_link_free(link1);
 
 	return rc;
 }

@@ -1,5 +1,4 @@
-/*
- * Copyright (C) 2007 Google, Inc.
+/* Copyright (C) 2007 Google, Inc.
  * Copyright (c) 2007-2017, The Linux Foundation. All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
@@ -8,9 +7,8 @@
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.	 See the
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
  * GNU General Public License for more details.
- *
  */
 
 #include <linux/kernel.h>
@@ -825,17 +823,17 @@ int clk_set_flags(struct clk *clk, unsigned long flags)
 }
 EXPORT_SYMBOL(clk_set_flags);
 
-int clk_set_duty_cycle(struct clk *clk, u32 numerator, u32 denominator)
+int clk_set_duty_cycle(struct clk *clk, unsigned int num, unsigned int den)
 {
 	if (IS_ERR_OR_NULL(clk))
 		return -EINVAL;
 
-	if (numerator > denominator) {
+	if (num > den) {
 		pr_err("Numerator cannot be > denominator\n");
 		return -EINVAL;
 	}
 
-	if (!denominator) {
+	if (!den) {
 		pr_err("Denominator can not be Zero\n");
 		return -EINVAL;
 	}
@@ -843,7 +841,7 @@ int clk_set_duty_cycle(struct clk *clk, u32 numerator, u32 denominator)
 	if (!clk->ops->set_duty_cycle)
 		return -EINVAL;
 
-	return clk->ops->set_duty_cycle(clk, numerator, denominator);
+	return clk->ops->set_duty_cycle(clk, num, den);
 }
 EXPORT_SYMBOL(clk_set_duty_cycle);
 

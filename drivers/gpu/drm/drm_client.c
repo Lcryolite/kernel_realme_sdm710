@@ -9,12 +9,17 @@
 #include <linux/seq_file.h>
 #include <linux/slab.h>
 
-#include <drm/drmP.h>
+#include <drm/drm_client.h>
+#include <drm/drm_debugfs.h>
+#include <drm/drm_device.h>
+#include <drm/drm_drv.h>
+#include <drm/drm_file.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_gem.h>
 #include <drm/drm_mode.h>
+#include <drm/drm_print.h>
+#include <drm/drmP.h>
 
-#include <drm/drm_client.h>
 #include "drm_crtc_internal.h"
 #include "drm_internal.h"
 
@@ -71,7 +76,7 @@ static void drm_client_close(struct drm_client_dev *client)
  * Zero on success or negative error code on failure.
  */
 int drm_client_init(struct drm_device *dev, struct drm_client_dev *client,
-		   const char *name, const struct drm_client_funcs *funcs)
+		    const char *name, const struct drm_client_funcs *funcs)
 {
 	int ret;
 
@@ -97,7 +102,6 @@ int drm_client_init(struct drm_device *dev, struct drm_client_dev *client,
 	drm_dev_ref(dev);
 
 	return 0;
-
 err_free:
 	drm_client_modeset_free(client);
 err_put_module:
@@ -242,7 +246,7 @@ static void drm_client_buffer_delete(struct drm_client_buffer *buffer)
 		dev->driver->gem_prime_vunmap(buffer->gem, buffer->vaddr);
 
 	if (buffer->gem)
-		drm_gem_object_unreference_unlocked(buffer->gem);
+		drm_gem_object_put_unlocked(buffer->gem);
 
 	if (buffer->handle)
 		drm_mode_destroy_dumb(dev, buffer->handle, buffer->client->file);
@@ -325,14 +329,16 @@ void *drm_client_buffer_vmap(struct drm_client_buffer *buffer)
 	 * final step optional for internal users.
 	 */
 	vaddr = dev->driver->gem_prime_vmap(buffer->gem);
-	if (IS_ERR(vaddr))
+	if (IS_ERR(vaddr)) {
 		return vaddr;
+	}
 
 	buffer->vaddr = vaddr;
 
 	return vaddr;
 }
 EXPORT_SYMBOL(drm_client_buffer_vmap);
+
 /**
  * drm_client_buffer_vunmap - Unmap DRM client buffer
  * @buffer: DRM client buffer
@@ -355,13 +361,11 @@ EXPORT_SYMBOL(drm_client_buffer_vunmap);
 static void drm_client_buffer_rmfb(struct drm_client_buffer *buffer)
 {
 	int ret;
-	u32 id = 0;
 
 	if (!buffer->fb)
 		return;
 
-	id = buffer->fb->base.id;
-	ret = drm_mode_rmfb(buffer->client->dev, id, buffer->client->file);
+	ret = drm_mode_rmfb(buffer->client->dev, buffer->fb->base.id, buffer->client->file);
 	if (ret)
 		DRM_DEV_ERROR(buffer->client->dev->dev,
 			      "Error removing FB:%u (%d)\n", buffer->fb->base.id, ret);
@@ -374,12 +378,12 @@ static int drm_client_buffer_addfb(struct drm_client_buffer *buffer,
 {
 	struct drm_client_dev *client = buffer->client;
 	struct drm_mode_fb_cmd fb_req = { };
-	unsigned int depth, bpp;
+	const struct drm_format_info *info;
 	int ret;
 
-	drm_fb_get_bpp_depth(format, &depth, &bpp);
-	fb_req.bpp = bpp;
-	fb_req.depth = depth;
+	info = drm_format_info(format);
+	fb_req.bpp = info->cpp[0] * 8;
+	fb_req.depth = info->depth;
 	fb_req.width = width;
 	fb_req.height = height;
 	fb_req.handle = buffer->handle;
@@ -389,12 +393,12 @@ static int drm_client_buffer_addfb(struct drm_client_buffer *buffer,
 	if (ret)
 		return ret;
 
-	buffer->fb = drm_framebuffer_lookup(client->dev, fb_req.fb_id);
+	buffer->fb = drm_framebuffer_lookup(client->dev, buffer->client->file, fb_req.fb_id);
 	if (WARN_ON(!buffer->fb))
 		return -ENOENT;
 
 	/* drop the reference we picked up in framebuffer lookup */
-	drm_framebuffer_unreference(buffer->fb);
+	drm_framebuffer_put(buffer->fb);
 
 	strscpy(buffer->fb->comm, client->name, TASK_COMM_LEN);
 
@@ -454,11 +458,12 @@ static int drm_client_debugfs_internal_clients(struct seq_file *m, void *data)
 {
 	struct drm_info_node *node = m->private;
 	struct drm_device *dev = node->minor->dev;
+	struct drm_printer p = drm_seq_file_printer(m);
 	struct drm_client_dev *client;
 
 	mutex_lock(&dev->clientlist_mutex);
 	list_for_each_entry(client, &dev->clientlist, list)
-		seq_printf(m, "%s\n", client->name);
+		drm_printf(&p, "%s\n", client->name);
 	mutex_unlock(&dev->clientlist_mutex);
 
 	return 0;

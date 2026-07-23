@@ -146,21 +146,6 @@ int mwifiex_init_fw_complete(struct mwifiex_adapter *adapter)
 }
 
 /*
- * Firmware shutdown complete callback handler.
- *
- * This function sets the hardware status to not ready and wakes up
- * the function waiting on the init wait queue for the firmware
- * shutdown to complete.
- */
-int mwifiex_shutdown_fw_complete(struct mwifiex_adapter *adapter)
-{
-	adapter->hw_status = MWIFIEX_HW_STATUS_NOT_READY;
-	adapter->init_wait_q_woken = true;
-	wake_up_interruptible(&adapter->init_wait_q);
-	return 0;
-}
-
-/*
  * This function sends init/shutdown command
  * to firmware.
  */
@@ -289,13 +274,13 @@ int mwifiex_debug_info_to_buffer(struct mwifiex_private *priv, char *buf,
 				val = *((u8 *)addr);
 				break;
 			case 2:
-				val = *((u16 *)addr);
+				val = get_unaligned((u16 *)addr);
 				break;
 			case 4:
-				val = *((u32 *)addr);
+				val = get_unaligned((u32 *)addr);
 				break;
 			case 8:
-				val = *((long long *)addr);
+				val = get_unaligned((long long *)addr);
 				break;
 			default:
 				val = -1;
@@ -418,11 +403,15 @@ mwifiex_process_mgmt_packet(struct mwifiex_private *priv,
 	}
 
 	rx_pd = (struct rxpd *)skb->data;
+	pkt_len = le16_to_cpu(rx_pd->rx_pkt_length);
+	if (pkt_len < sizeof(struct ieee80211_hdr) + sizeof(pkt_len)) {
+		mwifiex_dbg(priv->adapter, ERROR, "invalid rx_pkt_length");
+		return -1;
+	}
 
 	skb_pull(skb, le16_to_cpu(rx_pd->rx_pkt_offset));
 	skb_pull(skb, sizeof(pkt_len));
-
-	pkt_len = le16_to_cpu(rx_pd->rx_pkt_length);
+	pkt_len -= sizeof(pkt_len);
 
 	ieee_hdr = (void *)skb->data;
 	if (ieee80211_is_mgmt(ieee_hdr->frame_control)) {
@@ -435,7 +424,7 @@ mwifiex_process_mgmt_packet(struct mwifiex_private *priv,
 		skb->data + sizeof(struct ieee80211_hdr),
 		pkt_len - sizeof(struct ieee80211_hdr));
 
-	pkt_len -= ETH_ALEN + sizeof(pkt_len);
+	pkt_len -= ETH_ALEN;
 	rx_pd->rx_pkt_length = cpu_to_le16(pkt_len);
 
 	cfg80211_rx_mgmt(&priv->wdev, priv->roc_cfg.chan.center_freq,

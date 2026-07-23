@@ -406,6 +406,9 @@ int handle_sthyi(struct kvm_vcpu *vcpu)
 	u64 code, addr, cc = 0;
 	struct sthyi_sctns *sctns = NULL;
 
+	if (!test_kvm_facility(vcpu->kvm, 74))
+		return kvm_s390_inject_program_int(vcpu, PGM_OPERATION);
+
 	/*
 	 * STHYI requires extensive locking in the higher hypervisors
 	 * and is very computational/memory expensive. Therefore we
@@ -434,14 +437,6 @@ int handle_sthyi(struct kvm_vcpu *vcpu)
 
 	if (addr & ~PAGE_MASK)
 		return kvm_s390_inject_program_int(vcpu, PGM_SPECIFICATION);
-
-	/*
-	 * If the page has not yet been faulted in, we want to do that
-	 * now and not after all the expensive calculations.
-	 */
-	r = write_guest(vcpu, addr, reg2, &cc, 1);
-	if (r)
-		return kvm_s390_inject_prog_cond(vcpu, r);
 
 	sctns = (void *)get_zeroed_page(GFP_KERNEL);
 	if (!sctns)

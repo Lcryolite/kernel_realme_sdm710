@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __ASMARM_ARCH_TIMER_H
 #define __ASMARM_ARCH_TIMER_H
 
@@ -92,14 +93,7 @@ static inline u64 arch_counter_get_cntvct(void)
 	u64 cval;
 
 	isb();
-#if IS_ENABLED(CONFIG_MSM_TIMER_LEAP)
-#define L32_BITS	0x00000000FFFFFFFF
-	do {
-		asm volatile("mrrc p15, 1, %Q0, %R0, c14" : "=r" (cval));
-	} while ((cval & L32_BITS) == L32_BITS);
-#else
 	asm volatile("mrrc p15, 1, %Q0, %R0, c14" : "=r" (cval));
-#endif
 	return cval;
 }
 

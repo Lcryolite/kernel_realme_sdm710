@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
  * Copyright (C) 2013 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
  *
@@ -58,13 +58,13 @@ struct sde_encoder_hw_resources {
  * @is_primary: set to true if the display is primary display
  * @affected_displays:  bitmask, bit set means the ROI of the commit lies within
  *                      the bounds of the physical display at the bit index
- * @num_channels: Add number of encoder channels
+ * @recovery_events_enabled: indicates status of client for recoovery events
  */
 struct sde_encoder_kickoff_params {
 	u32 inline_rotate_prefill;
 	u32 is_primary;
 	unsigned long affected_displays;
-	u32 num_channels;
+	bool recovery_events_enabled;
 };
 
 /**
@@ -73,6 +73,22 @@ struct sde_encoder_kickoff_params {
  */
 struct sde_encoder_rsc_config {
 	u32 inline_rotate_prefill;
+};
+
+/**
+ * struct sde_encoder_ops - callback functions for generic sde encoder
+ * Individual callbacks documented below.
+ */
+struct sde_encoder_ops {
+	/**
+	 * phys_init - phys initialization function
+	 * @type: controller type
+	 * @controller_id: controller id
+	 * @phys_init_params: Pointer of structure sde_enc_phys_init_params
+	 * Returns: Pointer of sde_encoder_phys, NULL if failed
+	 */
+	void *(*phys_init)(enum sde_intf_type type,
+			u32 controller_id, void *phys_init_params);
 };
 
 /**
@@ -202,12 +218,12 @@ void sde_encoder_virt_restore(struct drm_encoder *encoder);
 bool sde_encoder_is_dsc_merge(struct drm_encoder *drm_enc);
 
 /**
- * sde_encoder_check_mode - check if given mode is supported or not
+ * sde_encoder_check_curr_mode - check if given mode is supported or not
  * @drm_enc: Pointer to drm encoder object
  * @mode: Mode to be checked
  * @Return: true if it is cmd mode
  */
-bool sde_encoder_check_mode(struct drm_encoder *drm_enc, u32 mode);
+bool sde_encoder_check_curr_mode(struct drm_encoder *drm_enc, u32 mode);
 
 /**
  * sde_encoder_init - initialize virtual encoder object
@@ -218,6 +234,18 @@ bool sde_encoder_check_mode(struct drm_encoder *drm_enc, u32 mode);
 struct drm_encoder *sde_encoder_init(
 		struct drm_device *dev,
 		struct msm_display_info *disp_info);
+
+/**
+ * sde_encoder_init_with_ops - initialize virtual encoder object with init ops
+ * @dev:        Pointer to drm device structure
+ * @disp_info:  Pointer to display information structure
+ * @ops:        Pointer to encoder ops structure
+ * Returns:     Pointer to newly created drm encoder
+ */
+struct drm_encoder *sde_encoder_init_with_ops(
+		struct drm_device *dev,
+		struct msm_display_info *disp_info,
+		const struct sde_encoder_ops *ops);
 
 /**
  * sde_encoder_destroy - destroy previously initialized virtual encoder
@@ -236,28 +264,69 @@ void sde_encoder_prepare_commit(struct drm_encoder *drm_enc);
  * sde_encoder_update_caps_for_cont_splash - update encoder settings during
  *	device bootup when cont_splash is enabled
  * @drm_enc:    Pointer to drm encoder structure
+ * @splash_display: Pointer to sde_splash_display corresponding to this encoder
+ * @enable:	boolean indicates enable or displae state of splash
  * @Return:     true if successful in updating the encoder structure
  */
-int sde_encoder_update_caps_for_cont_splash(struct drm_encoder *encoder);
+int sde_encoder_update_caps_for_cont_splash(struct drm_encoder *encoder,
+		struct sde_splash_display *splash_display, bool enable);
 
 /**
  * sde_encoder_display_failure_notification - update sde encoder state for
  * esd timeout or other display failure notification. This event flows from
  * dsi, sde_connector to sde_encoder.
  *
+ * This api must not be called from crtc_commit (display) thread because it
+ * requests the flush work on same thread. It is called from esd check thread
+ * based on current design.
+ *
  *      TODO: manage the event at sde_kms level for forward processing.
  * @drm_enc:    Pointer to drm encoder structure
+ * @skip_pre_kickoff:    Caller can avoid pre_kickoff if it is triggering this
+ *                       event only to switch the panel TE to watchdog mode.
  * @Return:     true if successful in updating the encoder structure
  */
-int sde_encoder_display_failure_notification(struct drm_encoder *enc);
+int sde_encoder_display_failure_notification(struct drm_encoder *enc,
+	bool skip_pre_kickoff);
 
+/**
+ * sde_encoder_recovery_events_enabled - checks if client has enabled
+ * sw recovery mechanism for this connector
+ * @drm_enc:    Pointer to drm encoder structure
+ * @Return:     true if enabled
+ */
+bool sde_encoder_recovery_events_enabled(struct drm_encoder *encoder);
+
+/**
+ * sde_encoder_recovery_events_handler - handler to enable/disable the
+ * sw recovery for this connector
+ * @drm_enc:    Pointer to drm encoder structure
+ */
+void sde_encoder_recovery_events_handler(struct drm_encoder *encoder,
+		bool val);
 /**
  * sde_encoder_in_clone_mode - checks if underlying phys encoder is in clone
  *	mode or independent display mode. ref@ WB in Concurrent writeback mode.
  * @drm_enc:    Pointer to drm encoder structure
  * @Return:     true if successful in updating the encoder structure
  */
-int sde_encoder_in_clone_mode(struct drm_encoder *enc);
+bool sde_encoder_in_clone_mode(struct drm_encoder *enc);
+
+/**
+ *sde_encoder_is_topology_ppsplit - checks if the current encoder is in
+	ppsplit topology.
+ *@drm_enc:	Pointer to drm encoder structure
+ *@Return:	true if the present topology is ppsplit
+ */
+bool sde_encoder_is_topology_ppsplit(struct drm_encoder *drm_enc);
+
+/**
+ * sde_encoder_is_primary_display - checks if underlying display is primary
+ *     display or not.
+ * @drm_enc:    Pointer to drm encoder structure
+ * @Return:     true if it is primary display. false if secondary display
+ */
+bool sde_encoder_is_primary_display(struct drm_encoder *enc);
 
 /**
  * sde_encoder_control_idle_pc - control enable/disable of idle power collapse
@@ -265,6 +334,13 @@ int sde_encoder_in_clone_mode(struct drm_encoder *enc);
  * @enable:	enable/disable flag
  */
 void sde_encoder_control_idle_pc(struct drm_encoder *enc, bool enable);
+
+/**
+ * sde_encoder_in_cont_splash - checks if display is in continuous splash
+ * @drm_enc:    Pointer to drm encoder structure
+ * @Return:     true if display in continuous splash
+ */
+int sde_encoder_in_cont_splash(struct drm_encoder *enc);
 
 /**
  * sde_encoder_get_ctlstart_timeout_state - checks if ctl start timeout happened
@@ -277,6 +353,6 @@ int sde_encoder_get_ctlstart_timeout_state(struct drm_encoder *enc);
  * sde_encoder_trigger_early_wakeup - trigger early wake up
  * @drm_enc:    Pointer to drm encoder structure
  */
-void sde_encoder_trigger_early_wakeup(struct drm_encoder *drm_enc,
-				struct msm_drm_private *priv);
+void sde_encoder_trigger_early_wakeup(struct drm_encoder *drm_enc);
+
 #endif /* __SDE_ENCODER_H__ */

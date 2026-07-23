@@ -1189,13 +1189,8 @@ int hci_conn_check_link_mode(struct hci_conn *conn)
 		return 0;
 	}
 
-	/* If Secure Simple Pairing is not enabled, then legacy connection
-	 * setup is used and no encryption or key sizes can be enforced.
-	 */
-	if (!hci_conn_ssp_enabled(conn))
-		return 1;
-
-	if (!test_bit(HCI_CONN_ENCRYPT, &conn->flags))
+	if (hci_conn_ssp_enabled(conn) &&
+	    !test_bit(HCI_CONN_ENCRYPT, &conn->flags))
 		return 0;
 
 	return 1;
@@ -1226,12 +1221,10 @@ static int hci_conn_auth(struct hci_conn *conn, __u8 sec_level, __u8 auth_type)
 		hci_send_cmd(conn->hdev, HCI_OP_AUTH_REQUESTED,
 			     sizeof(cp), &cp);
 
-		/* If we're already encrypted set the REAUTH_PEND flag,
-		 * otherwise set the ENCRYPT_PEND.
+		/* Set the ENCRYPT_PEND to trigger encryption after
+		 * authentication.
 		 */
-		if (test_bit(HCI_CONN_ENCRYPT, &conn->flags))
-			set_bit(HCI_CONN_REAUTH_PEND, &conn->flags);
-		else
+		if (!test_bit(HCI_CONN_ENCRYPT, &conn->flags))
 			set_bit(HCI_CONN_ENCRYPT_PEND, &conn->flags);
 	}
 

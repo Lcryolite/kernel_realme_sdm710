@@ -10,6 +10,7 @@ Required properties:
 
 Optional properties:
 - label:		A string used to describe the controller used.
+
 Example:
 mdss_spi_display: qcom,mdss_spi_display {
 	compatible = "qcom,mdss-spi-display";

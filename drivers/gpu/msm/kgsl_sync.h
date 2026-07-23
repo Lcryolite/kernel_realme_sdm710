@@ -1,5 +1,4 @@
-
-/* Copyright (c) 2012-2014,2017-2018 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2014, 2018-2019 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -56,7 +55,7 @@ struct kgsl_sync_timeline {
  * @timestamp: Context timestamp that this fence is associated with
  */
 struct kgsl_sync_fence {
-	struct fence fence;
+	struct dma_fence fence;
 	struct sync_file *sync_file;
 	struct kgsl_sync_timeline *parent;
 	struct list_head child_list;
@@ -73,8 +72,8 @@ struct kgsl_sync_fence {
  * false if the sync callback is marked for cancellation in a separate thread.
  */
 struct kgsl_sync_fence_cb {
-	struct fence_cb fence_cb;
-	struct fence *fence;
+	struct dma_fence_cb fence_cb;
+	struct dma_fence *fence;
 	void *priv;
 	bool (*func)(void *priv);
 };
@@ -111,9 +110,6 @@ void kgsl_syncsource_put(struct kgsl_syncsource *syncsource);
 
 void kgsl_syncsource_process_release_syncsources(
 		struct kgsl_process_private *private);
-
-void kgsl_dump_fence(struct kgsl_drawobj_sync_event *event,
-					char *fence_str, int len);
 
 #else
 static inline int kgsl_add_fence_event(struct kgsl_device *device,
@@ -187,11 +183,6 @@ static inline void kgsl_syncsource_process_release_syncsources(
 		struct kgsl_process_private *private)
 {
 
-}
-
-static inline void kgsl_dump_fence(struct kgsl_drawobj_sync_event *event,
-					char *fence_str, int len)
-{
 }
 
 #endif /* CONFIG_SYNC_FILE */

@@ -59,8 +59,9 @@ static int cistpl_vers_1(struct mmc_card *card, struct sdio_func *func,
 	string = (char*)(buffer + nr_strings);
 
 	for (i = 0; i < nr_strings; i++) {
+		size_t buf_len = strlen(buf);
 		buffer[i] = string;
-		memcpy(string, buf, strlen(buf) + 1);
+		strlcpy(string, buf, buf_len + 1);
 		string += strlen(string) + 1;
 		buf += strlen(buf) + 1;
 	}
@@ -267,7 +268,8 @@ static int sdio_read_cis(struct mmc_card *card, struct sdio_func *func)
 	else
 		prev = &card->tuples;
 
-	BUG_ON(*prev);
+	if (*prev)
+		return -EINVAL;
 
 	do {
 		unsigned char tpl_code, tpl_link;
@@ -290,8 +292,8 @@ static int sdio_read_cis(struct mmc_card *card, struct sdio_func *func)
 				 card->cis.device == 0x23F1 ||
 				 card->cis.device == 0x23F0))
 				break;
-			else
-				continue;
+
+			continue;
 		}
 
 		ret = mmc_io_rw_direct(card, 0, 0, ptr++, 0, &tpl_link);

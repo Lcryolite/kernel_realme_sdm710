@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2018, 2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -16,6 +16,7 @@
 #include <linux/slab.h>
 #include <linux/types.h>
 #include <linux/msm-bus.h>
+#define CREATE_TRACE_POINTS
 #include <trace/events/trace_msm_bus.h>
 
 struct node_vote_info {
@@ -93,10 +94,8 @@ static struct rule_node_info *gen_node(u32 id, void *data)
 
 	if (!node_match) {
 		node_match = kzalloc(sizeof(struct rule_node_info), GFP_KERNEL);
-		if (!node_match) {
-			pr_err("%s: Cannot allocate memory", __func__);
+		if (!node_match)
 			goto exit_node_match;
-		}
 
 		node_match->id = id;
 		node_match->cur_rule = NULL;
@@ -681,14 +680,10 @@ bool msm_rule_update(struct bus_rule_type *old_rule,
 {
 	bool rc = true;
 
-	if (!old_rule || !new_rule) {
-		pr_err("%s:msm_rule_update: void rules, error\n", __func__);
+	if (!old_rule || !new_rule)
 		return false;
-	}
 	mutex_lock(&msm_bus_rules_lock);
 	if (!__rule_unregister(1, old_rule, nb)) {
-		pr_err("%s:msm_rule_update: failed to unregister old rule\n",
-				__func__);
 		rc = false;
 		goto exit_rule_update;
 	}
@@ -698,8 +693,6 @@ bool msm_rule_update(struct bus_rule_type *old_rule,
 		 * Registering new rule has failed for some reason, attempt
 		 * to re-register the old rule and return error.
 		 */
-		pr_err("%s:msm_rule_update: failed to register new rule\n",
-				__func__);
 		__rule_register(1, old_rule, nb);
 		rc = false;
 	}

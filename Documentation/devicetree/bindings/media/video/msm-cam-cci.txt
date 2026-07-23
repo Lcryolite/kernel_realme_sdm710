@@ -732,6 +732,11 @@ IRLED MODULE
 	for the device for the cci operating in
 	compatible mode.
 
+- pwms
+  Usage: optional
+  Value type: <phandle>
+  Definition: should contain phandle to pwm node used for IRLED
+
 - pinctrl-names
   Usage: required
   Value type: <string>
@@ -775,31 +780,28 @@ Example:
          status = "ok";
     };
 
-    ir_led: qcom,camera-ir-led@0 {
-        cell-index = <0>;
-        reg = <0x00>;
-        compatible = "qcom,camera-ir-led";
-        enable-active-high;
+    ir_led: camera-ir-led@0 {
+         cell-index = <0>;
+         reg = <0x00>;
+         compatible = "qcom,camera-ir-led";
+         pwms = <&pm6150l_pwm_1  0 0>;
 
-        gpio-no-mux = <0>;
-        pinctrl-names = "cam_default", "cam_suspend";
-        pinctrl-0 = <&cam_sensor_ir_led_on>;
-        pinctrl-1 = <&cam_sensor_ir_led_off>;
-        gpios = <&tlmm 22 0>,
-                <&tlmm 141 0>,
-                <&tlmm 142 0>,
-                <&tlmm 107 0>,
-                <&tlmm 110 0>;
-        gpio-req-tbl-num = <0 1 2 3 4>;
-        gpio-req-tbl-flags = <0 0 0 0 0>;
-        gpio-req-tbl-label = "CAM_IR_LED",
-                             "CAM_IR_LED_CUR0",
-                             "CAM_IR_LED_CUR1",
-                             "CAM_IR_CUT1",
-                             "CAM_IR_CUT2";
-        status = "ok";
+         enable-active-high;
+         pinctrl-names = "default", "cam_default", "cam_suspend";
+         pinctrl-0 = <&irled_pwm>;
+         pinctrl-1 = <&cam_sensor_ir_cut_on>;
+         pinctrl-2 = <&cam_sensor_ir_cut_off>;
+         gpios = <&tlmm 73 0>,
+                 <&tlmm 74 0>;
+         qcom,gpio-ir-p = <0>;
+         qcom,gpio-ir-m =  <1>;
+         qcom,gpio-req-tbl-num = <0 1>;
+         qcom,gpio-req-tbl-flags = <0 0>;
+         qcom,gpio-req-tbl-label = "IR_CUT_FILTER_P",
+                                   "IR_CUT_FILTER_M";
+         gpio-no-mux = <0>;
+         status = "ok";
     };
-
 };
 
 &cam_cci0 {

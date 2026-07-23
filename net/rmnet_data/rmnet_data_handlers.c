@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2018, 2020 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -41,30 +41,26 @@ module_param(dump_pkt_tx, uint, 0644);
 MODULE_PARM_DESC(dump_pkt_tx, "Dump packets exiting egress handler");
 #endif /* CONFIG_RMNET_DATA_DEBUG_PKT */
 
-static bool gro_flush_logic_on __read_mostly = 1;
-module_param(gro_flush_logic_on, bool, 0644);
-MODULE_PARM_DESC(gro_flush_logic_on, "If off let GRO determine flushing");
-
-static bool dynamic_gro_on __read_mostly = 1;
-module_param(dynamic_gro_on, bool, 0644);
-MODULE_PARM_DESC(dynamic_gro_on, "Toggle to turn on dynamic gro logic");
-
 /* Time in nano seconds. This number must be less that a second. */
-static long lower_flush_time __read_mostly = 10000L;
-module_param(lower_flush_time, long, 0644);
-MODULE_PARM_DESC(lower_flush_time, "Min time value for flushing GRO");
+long gro_flush_time __read_mostly = 10000L;
+module_param(gro_flush_time, long, 0644);
+MODULE_PARM_DESC(gro_flush_time, "Flush GRO when spaced more than this");
 
-static unsigned int lower_byte_limit __read_mostly = 7500;
-module_param(lower_byte_limit, uint, 0644);
-MODULE_PARM_DESC(lower_byte_limit, "Min byte count for flushing GRO");
+unsigned int gro_min_byte_thresh __read_mostly = 7500;
+module_param(gro_min_byte_thresh, uint, 0644);
+MODULE_PARM_DESC(gro_min_byte_thresh, "Min byte thresh to change flush time");
+
+unsigned int dynamic_gro_on __read_mostly = 1;
+module_param(dynamic_gro_on, uint, 0644);
+MODULE_PARM_DESC(dynamic_gro_on, "Toggle to turn on dynamic gro logic");
 
 unsigned int upper_flush_time __read_mostly = 15000;
 module_param(upper_flush_time, uint, 0644);
-MODULE_PARM_DESC(upper_flush_time, "Max time value for flushing GRO");
+MODULE_PARM_DESC(upper_flush_time, "Upper limit on flush time");
 
 unsigned int upper_byte_limit __read_mostly = 10500;
 module_param(upper_byte_limit, uint, 0644);
-MODULE_PARM_DESC(upper_byte_limit, "Max byte count for flushing GRO");
+MODULE_PARM_DESC(upper_byte_limit, "Upper byte limit");
 
 #define RMNET_DATA_IP_VERSION_4 0x40
 #define RMNET_DATA_IP_VERSION_6 0x60
@@ -182,7 +178,7 @@ static rx_handler_result_t rmnet_bridge_handler
 		     skb->dev->name);
 		rmnet_kfree_skb(skb, RMNET_STATS_SKBFREE_BRDG_NO_EGRESS);
 	} else {
-		rmnet_egress_handler(skb, ep);
+		rmnet_data_egress_handler(skb, ep);
 	}
 
 	return RX_HANDLER_CONSUMED;
@@ -262,64 +258,62 @@ static void rmnet_optional_gro_flush(struct napi_struct *napi,
 {
 	struct timespec curr_time, diff;
 
-	if (!gro_flush_logic_on)
+	if (!gro_flush_time)
 		return;
 
-	if (unlikely(ep->last_flush_time.tv_sec == 0)) {
-		getnstimeofday(&ep->last_flush_time);
+	if (unlikely(ep->flush_time.tv_sec == 0)) {
+		getnstimeofday(&ep->flush_time);
 		ep->flush_byte_count = 0;
-		ep->curr_time_limit = lower_flush_time;
-		ep->curr_byte_threshold = lower_byte_limit;
 	} else {
 		getnstimeofday(&(curr_time));
-		diff = timespec_sub(curr_time, ep->last_flush_time);
+		diff = timespec_sub(curr_time, ep->flush_time);
 		ep->flush_byte_count += skb_size;
 
 		if (dynamic_gro_on) {
 			if ((!(diff.tv_sec > 0) || diff.tv_nsec <=
-					ep->curr_time_limit) &&
+					gro_flush_time) &&
 					ep->flush_byte_count >=
-					ep->curr_byte_threshold) {
+					gro_min_byte_thresh) {
 				/* Processed many bytes in a small time window.
 				 * No longer need to flush so often and we can
 				 * increase our byte limit
 				 */
-				ep->curr_time_limit = upper_flush_time;
-				ep->curr_byte_threshold = upper_byte_limit;
+				gro_flush_time = upper_flush_time;
+				gro_min_byte_thresh = upper_byte_limit;
 			} else if ((diff.tv_sec > 0 ||
-					diff.tv_nsec > ep->curr_time_limit) &&
+					diff.tv_nsec > gro_flush_time) &&
 					ep->flush_byte_count <
-					ep->curr_byte_threshold) {
+					gro_min_byte_thresh) {
 				/* We have not hit our time limit and we are not
 				 * receive many bytes. Demote ourselves to the
 				 * lowest limits and flush
 				 */
 				napi_gro_flush(napi, false);
-				ep->last_flush_time = curr_time;
+				getnstimeofday(&ep->flush_time);
 				ep->flush_byte_count = 0;
-				ep->curr_time_limit = lower_flush_time;
-				ep->curr_byte_threshold = lower_byte_limit;
+				gro_flush_time = 10000L;
+				gro_min_byte_thresh = 7500L;
 			} else if ((diff.tv_sec > 0 ||
-					diff.tv_nsec > ep->curr_time_limit) &&
+					diff.tv_nsec > gro_flush_time) &&
 					ep->flush_byte_count >=
-					ep->curr_byte_threshold) {
+					gro_min_byte_thresh) {
 				/* Above byte and time limt, therefore we can
 				 * move/maintain our limits to be the max
 				 * and flush
 				 */
 				napi_gro_flush(napi, false);
-				ep->last_flush_time = curr_time;
+				getnstimeofday(&ep->flush_time);
 				ep->flush_byte_count = 0;
-				ep->curr_time_limit = upper_flush_time;
-				ep->curr_byte_threshold = upper_byte_limit;
+				gro_flush_time = upper_flush_time;
+				gro_min_byte_thresh = upper_byte_limit;
 			}
 			/* else, below time limit and below
 			 * byte thresh, so change nothing
 			 */
 		} else if (diff.tv_sec > 0 ||
-				diff.tv_nsec >= lower_flush_time) {
+				diff.tv_nsec >= gro_flush_time) {
 			napi_gro_flush(napi, false);
-			ep->last_flush_time = curr_time;
+			getnstimeofday(&ep->flush_time);
 			ep->flush_byte_count = 0;
 		}
 	}
@@ -356,7 +350,6 @@ static rx_handler_result_t __rmnet_deliver_skb
 			napi = get_current_napi_context();
 
 			skb_size = skb->len;
-			skb_get_hash(skb);
 			gro_res = napi_gro_receive(napi, skb);
 			trace_rmnet_gro_downlink(gro_res);
 			rmnet_optional_gro_flush(napi, ep, skb_size);
@@ -432,7 +425,7 @@ static rx_handler_result_t _rmnet_map_ingress_handler
 	if (RMNET_MAP_GET_CD_BIT(skb)) {
 		if (config->ingress_data_format
 		    & RMNET_INGRESS_FORMAT_MAP_COMMANDS)
-			return rmnet_map_command(skb, config);
+			return rmnet_data_map_command(skb, config);
 
 		LOGM("MAP command packet on %s; %s", skb->dev->name,
 		     "Not configured for MAP commands");
@@ -454,8 +447,9 @@ static rx_handler_result_t _rmnet_map_ingress_handler
 	}
 
 	ep = &config->muxed_ep[mux_id];
+
 	if (!ep->refcount) {
-		LOGD("Packet on %s:%d; has no logical endpoint config",
+		LOGE("Packet on %s:%d; has no logical endpoint config",
 		     skb->dev->name, mux_id);
 
 		rmnet_kfree_skb(skb, RMNET_STATS_SKBFREE_MAPINGRESS_MUX_NO_EP);
@@ -466,7 +460,7 @@ static rx_handler_result_t _rmnet_map_ingress_handler
 
 	if ((config->ingress_data_format & RMNET_INGRESS_FORMAT_MAP_CKSUMV3) ||
 	    (config->ingress_data_format & RMNET_INGRESS_FORMAT_MAP_CKSUMV4)) {
-		ckresult = rmnet_map_checksum_downlink_packet(skb);
+		ckresult = rmnet_map_data_checksum_downlink_packet(skb);
 		trace_rmnet_map_checksum_downlink_packet(skb, ckresult);
 		rmnet_stats_dl_checksum(ckresult);
 		if (likely((ckresult == RMNET_MAP_CHECKSUM_OK) ||
@@ -512,9 +506,9 @@ static rx_handler_result_t rmnet_map_ingress_handler
 
 	if (config->ingress_data_format & RMNET_INGRESS_FORMAT_DEAGGREGATION) {
 		trace_rmnet_start_deaggregation(skb);
-		while ((skbn = rmnet_map_deaggregate(skb, config)) != 0) {
+		while ((skbn = rmnet_data_map_deaggregate(skb, config)) != 0)
 			_rmnet_map_ingress_handler(skbn, config);
-		}
+
 		rmnet_kfree_skb(skb, RMNET_STATS_SKBFREE_MAPINGRESS_AGGBUF);
 		rc = RX_HANDLER_CONSUMED;
 	} else {
@@ -571,7 +565,7 @@ static int rmnet_map_egress_handler(struct sk_buff *skb,
 	}
 
 	if (csum_required) {
-		ckresult = rmnet_map_checksum_uplink_packet
+		ckresult = rmnet_map_data_checksum_uplink_packet
 				(skb, orig_dev, config->egress_data_format);
 		trace_rmnet_map_checksum_uplink_packet(orig_dev, ckresult);
 		rmnet_stats_ul_checksum(ckresult);
@@ -583,10 +577,10 @@ static int rmnet_map_egress_handler(struct sk_buff *skb,
 	if ((!(config->egress_data_format &
 	    RMNET_EGRESS_FORMAT_AGGREGATION)) || csum_required ||
 	    non_linear_skb)
-		map_header = rmnet_map_add_map_header
+		map_header = rmnet_data_map_add_map_header
 		(skb, additional_header_length, RMNET_MAP_NO_PAD_BYTES);
 	else
-		map_header = rmnet_map_add_map_header
+		map_header = rmnet_data_map_add_map_header
 		(skb, additional_header_length, RMNET_MAP_ADD_PAD_BYTES);
 
 	if (!map_header) {
@@ -698,7 +692,7 @@ rx_handler_result_t rmnet_ingress_handler(struct sk_buff *skb)
 	return rc;
 }
 
-/* rmnet_rx_handler() - Rx handler callback registered with kernel
+/* rmnet_data_rx_handler() - Rx handler callback registered with kernel
  * @pskb: Packet to be processed by rx handler
  *
  * Standard kernel-expected footprint for rx handlers. Calls
@@ -707,12 +701,12 @@ rx_handler_result_t rmnet_ingress_handler(struct sk_buff *skb)
  * Return:
  *      - Whatever rmnet_ingress_handler() returns
  */
-rx_handler_result_t rmnet_rx_handler(struct sk_buff **pskb)
+rx_handler_result_t rmnet_data_rx_handler(struct sk_buff **pskb)
 {
 	return rmnet_ingress_handler(*pskb);
 }
 
-/* rmnet_egress_handler() - Egress handler entry point
+/* rmnet_data_egress_handler() - Egress handler entry point
  * @skb:        packet to transmit
  * @ep:         logical endpoint configuration of the packet originator
  *              (e.g.. RmNet virtual network device)
@@ -721,8 +715,8 @@ rx_handler_result_t rmnet_rx_handler(struct sk_buff **pskb)
  * for egress device configured in logical endpoint. Packet is then transmitted
  * on the egress device.
  */
-void rmnet_egress_handler(struct sk_buff *skb,
-			  struct rmnet_logical_ep_conf_s *ep)
+void rmnet_data_egress_handler(struct sk_buff *skb,
+			       struct rmnet_logical_ep_conf_s *ep)
 {
 	struct rmnet_phys_ep_config *config;
 	struct net_device *orig_dev;
@@ -764,6 +758,10 @@ void rmnet_egress_handler(struct sk_buff *skb,
 
 	rmnet_print_packet(skb, skb->dev->name, 't');
 	trace_rmnet_egress_handler(skb);
+
+	if (config->egress_data_format & RMNET_EGRESS_FORMAT__RESERVED__)
+		skb_push(skb, RMNET_ETHERNET_HEADER_LENGTH);
+
 	rc = dev_queue_xmit(skb);
 	if (rc != 0) {
 		LOGD("Failed to queue packet for transmission on [%s]",

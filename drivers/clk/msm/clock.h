@@ -1,5 +1,4 @@
-/*
- * Copyright (c) 2013-2014, 2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2014, 2020, The Linux Foundation. All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -9,7 +8,6 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
  */
 
 #ifndef __DRIVERS_CLK_MSM_CLOCK_H
@@ -48,7 +46,7 @@ static inline int clock_debug_register(struct clk *unused)
 {
 	return 0;
 }
-static inline void clock_debug_print_enabled(void) { return; }
+static inline void clock_debug_print_enabled(bool unused) { return; }
 #endif
 
 #endif

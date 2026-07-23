@@ -1,4 +1,4 @@
-/* Copyright (c) 2018 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2018-2020 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -15,9 +15,9 @@
 #include <linux/device.h>
 #include <linux/interrupt.h>
 #include <linux/power_supply.h>
-#include <linux/qpnp/qpnp-adc.h>
 #include <linux/regmap.h>
 #include <linux/rtc.h>
+#include <linux/iio/consumer.h>
 #include <uapi/linux/qg.h>
 #include "qg-sdam.h"
 #include "qg-core.h"
@@ -127,6 +127,14 @@ int qg_read_raw_data(struct qpnp_qg *chip, int addr, u32 *data)
 	return rc;
 }
 
+s64 qg_iraw_to_ua(struct qpnp_qg *chip, int iraw)
+{
+	if (chip->qg_subtype == QG_ADC_IBAT_5A)
+		return div_s64(152588LL * (s64)iraw, 1000);
+	else
+		return div_s64(305176LL * (s64)iraw, 1000);
+}
+
 int get_fifo_length(struct qpnp_qg *chip, u32 *fifo_length, bool rt)
 {
 	int rc;
@@ -167,6 +175,8 @@ int get_sample_count(struct qpnp_qg *chip, u32 *sample_count)
 	return rc;
 }
 
+#define QG_CLK_RATE		32000
+#define QG_ACTUAL_CLK_RATE	32764
 int get_sample_interval(struct qpnp_qg *chip, u32 *sample_interval)
 {
 	int rc;
@@ -180,6 +190,11 @@ int get_sample_interval(struct qpnp_qg *chip, u32 *sample_interval)
 	}
 
 	*sample_interval = reg * 10;
+
+	if (chip->wa_flags & QG_CLK_ADJUST_WA) {
+		*sample_interval = DIV_ROUND_CLOSEST(
+			*sample_interval * QG_CLK_RATE, QG_ACTUAL_CLK_RATE);
+	}
 
 	return rc;
 }
@@ -260,6 +275,18 @@ static bool is_usb_available(struct qpnp_qg *chip)
 	return true;
 }
 
+static bool is_dc_available(struct qpnp_qg *chip)
+{
+	if (chip->dc_psy)
+		return true;
+
+	chip->dc_psy = power_supply_get_by_name("dc");
+	if (!chip->dc_psy)
+		return false;
+
+	return true;
+}
+
 bool is_usb_present(struct qpnp_qg *chip)
 {
 	union power_supply_propval pval = {0, };
@@ -269,6 +296,22 @@ bool is_usb_present(struct qpnp_qg *chip)
 			POWER_SUPPLY_PROP_PRESENT, &pval);
 
 	return pval.intval ? true : false;
+}
+
+bool is_dc_present(struct qpnp_qg *chip)
+{
+	union power_supply_propval pval = {0, };
+
+	if (is_dc_available(chip))
+		power_supply_get_property(chip->dc_psy,
+			POWER_SUPPLY_PROP_PRESENT, &pval);
+
+	return pval.intval ? true : false;
+}
+
+bool is_input_present(struct qpnp_qg *chip)
+{
+	return is_usb_present(chip) || is_dc_present(chip);
 }
 
 static bool is_parallel_available(struct qpnp_qg *chip)
@@ -312,25 +355,20 @@ int qg_write_monotonic_soc(struct qpnp_qg *chip, int msoc)
 int qg_get_battery_temp(struct qpnp_qg *chip, int *temp)
 {
 	int rc = 0;
-	struct qpnp_vadc_result result;
 
 	if (chip->battery_missing) {
 		*temp = 250;
 		return 0;
 	}
 
-	rc = qpnp_vadc_read(chip->vadc_dev, VADC_BAT_THERM_PU2, &result);
-	if (rc) {
-		pr_err("Failed reading adc channel=%d, rc=%d\n",
-					VADC_BAT_THERM_PU2, rc);
+	rc = iio_read_channel_processed(chip->batt_therm_chan, temp);
+	if (rc < 0) {
+		pr_err("Failed reading BAT_TEMP over ADC rc=%d\n", rc);
 		return rc;
 	}
-	pr_debug("batt_temp = %lld meas = 0x%llx\n",
-			result.physical, result.measurement);
+	pr_debug("batt_temp = %d\n", *temp);
 
-	*temp = (int)result.physical;
-
-	return rc;
+	return 0;
 }
 
 int qg_get_battery_current(struct qpnp_qg *chip, int *ibat_ua)
@@ -339,11 +377,6 @@ int qg_get_battery_current(struct qpnp_qg *chip, int *ibat_ua)
 
 	if (chip->battery_missing) {
 		*ibat_ua = 0;
-		return 0;
-	}
-
-	if (chip->dt.qg_vbms_mode) {
-		*ibat_ua = chip->vbms_ibat_ua;
 		return 0;
 	}
 
@@ -364,7 +397,7 @@ int qg_get_battery_current(struct qpnp_qg *chip, int *ibat_ua)
 	}
 
 	last_ibat = sign_extend32(last_ibat, 15);
-	*ibat_ua = I_RAW_TO_UA(last_ibat);
+	*ibat_ua = qg_iraw_to_ua(chip, last_ibat);
 
 release:
 	/* release */
@@ -393,4 +426,39 @@ int qg_get_battery_voltage(struct qpnp_qg *chip, int *vbat_uv)
 	*vbat_uv = V_RAW_TO_UV(last_vbat);
 
 	return rc;
+}
+
+int qg_get_vbat_avg(struct qpnp_qg *chip, int *vbat_uv)
+{
+	int rc = 0;
+	u64 last_vbat = 0;
+
+	rc = qg_read(chip, chip->qg_base + QG_S2_NORMAL_AVG_V_DATA0_REG,
+				(u8 *)&last_vbat, 2);
+	if (rc < 0) {
+		pr_err("Failed to read S2_NORMAL_AVG_V reg, rc=%d\n", rc);
+		return rc;
+	}
+
+	*vbat_uv = V_RAW_TO_UV(last_vbat);
+
+	return 0;
+}
+
+int qg_get_ibat_avg(struct qpnp_qg *chip, int *ibat_ua)
+{
+	int rc = 0;
+	int last_ibat = 0;
+
+	rc = qg_read(chip, chip->qg_base + QG_S2_NORMAL_AVG_I_DATA0_REG,
+				(u8 *)&last_ibat, 2);
+	if (rc < 0) {
+		pr_err("Failed to read S2_NORMAL_AVG_I reg, rc=%d\n", rc);
+		return rc;
+	}
+
+	last_ibat = sign_extend32(last_ibat, 15);
+	*ibat_ua = qg_iraw_to_ua(chip, last_ibat);
+
+	return 0;
 }

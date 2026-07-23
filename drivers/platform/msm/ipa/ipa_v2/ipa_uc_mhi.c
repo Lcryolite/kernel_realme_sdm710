@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2016, 2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -266,7 +266,7 @@ union IpaHwMhiStopEventUpdateData_t {
  * @channelHandle: The channel identifier
  * @additonalParams: For stop: the number of pending bam descriptors currently
  *	queued
-*/
+ */
 union IpaHwMhiChangeChannelStateResponseData_t {
 	struct IpaHwMhiChangeChannelStateResponseParams_t {
 		u32 state:8;
@@ -538,19 +538,20 @@ static void ipa_uc_mhi_event_log_info_hdlr(
 		return;
 	}
 
-	if (uc_event_top_mmio->statsInfo.featureInfo[IPA_HW_FEATURE_MHI].
-		params.size != sizeof(struct IpaHwStatsMhiInfoData_t)) {
-		IPAERR("mhi stats sz invalid exp=%zu is=%u\n",
-			sizeof(struct IpaHwStatsMhiInfoData_t),
-			uc_event_top_mmio->statsInfo.
-			featureInfo[IPA_HW_FEATURE_MHI].params.size);
+if (uc_event_top_mmio->statsInfo.featureInfo[IPA_HW_FEATURE_MHI].params.size !=
+	sizeof(struct IpaHwStatsMhiInfoData_t)) {
+	IPAERR("mhi stats sz invalid exp=%zu is=%u\n",
+	sizeof(struct IpaHwStatsMhiInfoData_t),
+	uc_event_top_mmio->statsInfo.featureInfo[IPA_HW_FEATURE_MHI].params.size
+	);
 		return;
-	}
+}
 
-	ipa_uc_mhi_ctx->mhi_uc_stats_ofst = uc_event_top_mmio->
-		statsInfo.baseAddrOffset + uc_event_top_mmio->statsInfo.
-		featureInfo[IPA_HW_FEATURE_MHI].params.offset;
-	IPAERR("MHI stats ofst=0x%x\n", ipa_uc_mhi_ctx->mhi_uc_stats_ofst);
+ipa_uc_mhi_ctx->mhi_uc_stats_ofst =
+uc_event_top_mmio->statsInfo.baseAddrOffset +
+uc_event_top_mmio->statsInfo.featureInfo[IPA_HW_FEATURE_MHI].params.offset;
+IPAERR("MHI stats ofst=0x%x\n", ipa_uc_mhi_ctx->mhi_uc_stats_ofst);
+
 	if (ipa_uc_mhi_ctx->mhi_uc_stats_ofst +
 		sizeof(struct IpaHwStatsMhiInfoData_t) >=
 		ipa_ctx->ctrl->ipa_reg_base_ofst +
@@ -602,7 +603,7 @@ int ipa2_uc_mhi_init(void (*ready_cb)(void), void (*wakeup_request_cb)(void))
 
 void ipa2_uc_mhi_cleanup(void)
 {
-	struct ipa_uc_hdlrs null_hdlrs = { 0 };
+	struct ipa_uc_hdlrs null_hdlrs = { NULL };
 
 	IPADBG("Enter\n");
 

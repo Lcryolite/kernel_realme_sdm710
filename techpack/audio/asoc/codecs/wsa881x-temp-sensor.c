@@ -80,9 +80,11 @@ temp_retry:
 	if (pdata->wsa_temp_reg_read) {
 		ret = pdata->wsa_temp_reg_read(codec, &reg);
 		if (ret) {
-			pr_err("%s: temperature register read failed: %d\n",
-				__func__, ret);
-			return ret;
+			pr_err("%s: temp read failed: %d, current temp: %d\n",
+				__func__, ret, pdata->curr_temp);
+			if (temp)
+				*temp = pdata->curr_temp;
+			return 0;
 		}
 	} else {
 		pr_err("%s: wsa_temp_reg_read is NULL\n", __func__);
@@ -146,7 +148,6 @@ static int wsa881x_pm_notify(struct notifier_block *nb,
 
 	switch (mode) {
 	case PM_SUSPEND_PREPARE:
-	case PM_HIBERNATION_PREPARE:
 		atomic_set(&pdata->is_suspend_spk, 1);
 		break;
 	default:

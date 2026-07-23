@@ -1,5 +1,4 @@
-/*
- * Copyright (c) 2012-2018, 2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -9,7 +8,6 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
  */
 
 #define pr_fmt(fmt) "%s: " fmt, __func__
@@ -19,7 +17,7 @@
 #include <linux/err.h>
 #include <linux/clk.h>
 #include <linux/io.h>
-#include <linux/sched.h>
+#include <linux/sched/clock.h>
 #include <soc/qcom/clock-pll.h>
 #include <soc/qcom/msm-clock-controller.h>
 
@@ -463,7 +461,7 @@ static int variable_rate_pll_clk_enable(struct clk *c)
 			 */
 			if ((readl_relaxed(PLL_STATUS_REG(pll)) & lockmask))
 				break;
-			early_lock = true;
+				early_lock = true;
 		}
 		udelay(1);
 	}

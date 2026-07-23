@@ -17,7 +17,6 @@
 #define _INET_SOCK_H
 
 #include <linux/bitops.h>
-#include <linux/kmemcheck.h>
 #include <linux/string.h>
 #include <linux/types.h>
 #include <linux/jhash.h>
@@ -84,7 +83,6 @@ struct inet_request_sock {
 #define ireq_state		req.__req_common.skc_state
 #define ireq_family		req.__req_common.skc_family
 
-	kmemcheck_bitfield_begin(flags);
 	u16			snd_wscale : 4,
 				rcv_wscale : 4,
 				tstamp_ok  : 1,
@@ -92,8 +90,8 @@ struct inet_request_sock {
 				wscale_ok  : 1,
 				ecn_ok	   : 1,
 				acked	   : 1,
-				no_srccheck: 1;
-	kmemcheck_bitfield_end(flags);
+				no_srccheck: 1,
+				smc_ok	   : 1;
 	u32                     ir_mark;
 	union {
 		struct ip_options_rcu __rcu	*ireq_opt;
@@ -144,6 +142,7 @@ struct inet_cork {
 	__u8			ttl;
 	__s16			tos;
 	char			priority;
+	__u16			gso_size;
 };
 
 struct inet_cork_full {
@@ -233,6 +232,7 @@ struct inet_sock {
 #define IP_CMSG_PASSSEC		BIT(5)
 #define IP_CMSG_ORIGDSTADDR	BIT(6)
 #define IP_CMSG_CHECKSUM	BIT(7)
+#define IP_CMSG_RECVFRAGSIZE	BIT(8)
 
 /**
  * sk_to_full_sk - Access to a full socket

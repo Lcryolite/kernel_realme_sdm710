@@ -16,7 +16,7 @@
  * @buf_size: number of allocated bytes/data size on return
  * @buffer: data location
  *
- * Received: buffer and buf_size (available space for transfered data)
+ * Received: buffer and buf_size (available space for transferred data)
  * Submitted: opcode, idn, length, buf_size
  */
 struct ufs_ioctl_query_data {

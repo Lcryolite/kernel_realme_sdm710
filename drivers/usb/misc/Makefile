@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0
 #
 # Makefile for the rest of the USB drivers
 # (the ones that don't fit into any other categories)
@@ -22,10 +23,15 @@ obj-$(CONFIG_USB_TRANCEVIBRATOR)	+= trancevibrator.o
 obj-$(CONFIG_USB_USS720)		+= uss720.o
 obj-$(CONFIG_USB_SEVSEG)		+= usbsevseg.o
 obj-$(CONFIG_USB_YUREX)			+= yurex.o
+obj-$(CONFIG_USB_HUB_USB251XB)		+= usb251xb.o
 obj-$(CONFIG_USB_HSIC_USB3503)		+= usb3503.o
 obj-$(CONFIG_USB_HSIC_USB4604)		+= usb4604.o
 obj-$(CONFIG_USB_CHAOSKEY)		+= chaoskey.o
-obj-$(CONFIG_UCSI)			+= ucsi.o
+obj-$(CONFIG_USB_TYPEC_MUX_NXP5150A)	+= nxp_typec.o
 
 obj-$(CONFIG_USB_SISUSBVGA)		+= sisusbvga/
 obj-$(CONFIG_USB_LINK_LAYER_TEST)	+= lvstest.o
+obj-$(CONFIG_USB_REDRIVER_NB7VPQ904M)	+= ssusb-redriver-nb7vpq904m.o
+obj-$(CONFIG_USB_QTI_DIAG_BRIDGE)	+= diag_bridge.o
+obj-$(CONFIG_USB_QTI_MDM_DATA_BRIDGE)	+= mdm_data_bridge.o
+obj-$(CONFIG_USB_QTI_KS_BRIDGE)		+= ks_bridge.o

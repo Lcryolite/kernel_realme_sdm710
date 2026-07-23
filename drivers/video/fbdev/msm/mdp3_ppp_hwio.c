@@ -1121,8 +1121,8 @@ int config_ppp_blend(struct ppp_blit_op *blit_op,
 			bg_alpha |= smart_blit_bg_alpha << 24;
 			PPP_WRITEL(bg_alpha, MDP3_PPP_BLEND_BG_ALPHA_SEL);
 		} else {
-		PPP_WRITEL(0, MDP3_PPP_BLEND_BG_ALPHA_SEL);
-	}
+			PPP_WRITEL(0, MDP3_PPP_BLEND_BG_ALPHA_SEL);
+		}
 	}
 
 	if (*pppop_reg_ptr & PPP_OP_BLEND_ON) {
@@ -1144,9 +1144,9 @@ int config_ppp_blend(struct ppp_blit_op *blit_op,
 	if (is_yuv_smart_blit) {
 		PPP_WRITEL(0, MDP3_PPP_BLEND_PARAM);
 	} else {
-	val = (alpha << MDP_BLEND_CONST_ALPHA);
-	val |= (trans_color & MDP_BLEND_TRASP_COL_MASK);
-	PPP_WRITEL(val, MDP3_PPP_BLEND_PARAM);
+		val = (alpha << MDP_BLEND_CONST_ALPHA);
+		val |= (trans_color & MDP_BLEND_TRASP_COL_MASK);
+		PP_WRITEL(val, MDP3_PPP_BLEND_PARAM);
 	}
 	return 0;
 }
@@ -1275,7 +1275,7 @@ int config_ppp_op_mode(struct ppp_blit_op *blit_op)
 		}
 		memset(&bg_img_param, 0, sizeof(bg_img_param));
 	} else {
-	blit_op->bg = blit_op->dst;
+		blit_op->bg = blit_op->dst;
 	}
 	/* Cache smart blit BG layer info */
 	if (blit_op->mdp_op & MDPOP_SMART_BLIT)

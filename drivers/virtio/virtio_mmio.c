@@ -71,10 +71,21 @@
 #include <linux/spinlock.h>
 #include <linux/virtio.h>
 #include <linux/virtio_config.h>
-#include <linux/virtio_mmio.h>
+#include <uapi/linux/virtio_mmio.h>
 #include <linux/virtio_ring.h>
 
+#ifdef CONFIG_QTI_GVM_QUIN
+#include <linux/virtio_ids.h>
+#include <linux/of.h>
 
+struct virtio_wakeup_device {
+	const char *name;
+	struct list_head node;
+};
+
+static LIST_HEAD(wakeup_devs);
+static DEFINE_MUTEX(wakeup_devs_lock);
+#endif
 
 /* The alignment to use between consumer and producer parts of vring.
  * Currently hardcoded to the page size. */
@@ -352,7 +363,7 @@ static void vm_del_vqs(struct virtio_device *vdev)
 
 static struct virtqueue *vm_setup_vq(struct virtio_device *vdev, unsigned index,
 				  void (*callback)(struct virtqueue *vq),
-				  const char *name)
+				  const char *name, bool ctx)
 {
 	struct virtio_mmio_device *vm_dev = to_virtio_mmio_device(vdev);
 	struct virtio_mmio_vq_info *info;
@@ -389,7 +400,7 @@ static struct virtqueue *vm_setup_vq(struct virtio_device *vdev, unsigned index,
 
 	/* Create the vring */
 	vq = vring_create_virtqueue(index, num, VIRTIO_MMIO_VRING_ALIGN, vdev,
-				 true, true, vm_notify, callback, name);
+				 true, true, ctx, vm_notify, callback, name);
 	if (!vq) {
 		err = -ENOMEM;
 		goto error_new_virtqueue;
@@ -447,7 +458,9 @@ error_available:
 static int vm_find_vqs(struct virtio_device *vdev, unsigned nvqs,
 		       struct virtqueue *vqs[],
 		       vq_callback_t *callbacks[],
-		       const char * const names[])
+		       const char * const names[],
+		       const bool *ctx,
+		       struct irq_affinity *desc)
 {
 	struct virtio_mmio_device *vm_dev = to_virtio_mmio_device(vdev);
 	unsigned int irq = platform_get_irq(vm_dev->pdev, 0);
@@ -458,8 +471,30 @@ static int vm_find_vqs(struct virtio_device *vdev, unsigned nvqs,
 	if (err)
 		return err;
 
+#ifdef CONFIG_QTI_GVM_QUIN
+	if ((vdev->id.device == VIRTIO_ID_INPUT) &&
+			!list_empty(&wakeup_devs)) {
+		struct virtio_wakeup_device *wk_dev;
+		const char *devname = dev_name(&vm_dev->pdev->dev);
+
+		list_for_each_entry(wk_dev, &wakeup_devs, node) {
+			if (strnstr(devname, wk_dev->name, strlen(devname))) {
+				pr_info("Setting %s, IRQ %d as wakeup source.\n",
+						devname, irq);
+				enable_irq_wake(irq);
+
+				mutex_lock(&wakeup_devs_lock);
+				list_del(&wk_dev->node);
+				mutex_unlock(&wakeup_devs_lock);
+				break;
+			}
+		}
+	}
+#endif
+
 	for (i = 0; i < nvqs; ++i) {
-		vqs[i] = vm_setup_vq(vdev, i, callbacks[i], names[i]);
+		vqs[i] = vm_setup_vq(vdev, i, callbacks[i], names[i],
+				     ctx ? ctx[i] : false);
 		if (IS_ERR(vqs[i])) {
 			vm_del_vqs(vdev);
 			return PTR_ERR(vqs[i]);
@@ -513,6 +548,7 @@ static const struct dev_pm_ops virtio_mmio_pm_ops = {
 };
 #endif
 
+static void virtio_mmio_release_dev_empty(struct device *_d) {}
 
 /* Platform device */
 
@@ -522,6 +558,30 @@ static int virtio_mmio_probe(struct platform_device *pdev)
 	struct resource *mem;
 	unsigned long magic;
 	int rc;
+
+#ifdef CONFIG_QTI_GVM_QUIN
+	/*
+	 * Assuming only virito-input supports virtual machine wakeup, there
+	 * will be a duplicate virtio mmio device under soc{} in device tree.
+	 * It marks the capability as wakeup source and exits here. The real
+	 * virito_mmio_probe depends on similar node under vdevs{} in device
+	 * tree inserted by host machine.
+	 */
+	if (of_property_read_bool(pdev->dev.of_node, "virtio,wakeup")) {
+		struct virtio_wakeup_device *wk_dev;
+
+		wk_dev = devm_kzalloc(&pdev->dev, sizeof(*wk_dev), GFP_KERNEL);
+		if (!wk_dev)
+			return  -ENOMEM;
+		wk_dev->name = pdev->dev.of_node->name;
+
+		mutex_lock(&wakeup_devs_lock);
+		list_add(&wk_dev->node, &wakeup_devs);
+		mutex_unlock(&wakeup_devs_lock);
+
+		return 0;
+	}
+#endif
 
 	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!mem)
@@ -536,6 +596,7 @@ static int virtio_mmio_probe(struct platform_device *pdev)
 		return  -ENOMEM;
 
 	vm_dev->vdev.dev.parent = &pdev->dev;
+	vm_dev->vdev.dev.release = virtio_mmio_release_dev_empty;
 	vm_dev->vdev.config = &virtio_mmio_config_ops;
 	vm_dev->pdev = pdev;
 	INIT_LIST_HEAD(&vm_dev->virtqueues);
@@ -770,7 +831,7 @@ static void __exit virtio_mmio_exit(void)
 	vm_unregister_cmdline_devices();
 }
 
-module_init(virtio_mmio_init);
+arch_initcall(virtio_mmio_init);
 module_exit(virtio_mmio_exit);
 
 MODULE_AUTHOR("Pawel Moll <pawel.moll@arm.com>");

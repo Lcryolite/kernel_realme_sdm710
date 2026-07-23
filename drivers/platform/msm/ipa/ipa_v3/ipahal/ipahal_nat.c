@@ -1,4 +1,4 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2018-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -142,10 +142,31 @@ static int ipa_nat_ipv4_stringify_entry_v_4_0(const void *entry,
 	length = ipa_nat_ipv4_stringify_entry_v_3_0(entry, buff, buff_size);
 
 	length += scnprintf(buff + length, buff_size - length,
-		"\t\tPDN_Index=%d\n", nat_entry->pdn_index);
+		"\t\tPDN_Index=%d\n",
+		nat_entry->pdn_index);
 
 	return length;
 }
+
+
+static int ipa_nat_ipv4_stringify_entry_v_4_5(const void *entry,
+	char *buff, size_t buff_size)
+{
+	int length;
+	const struct ipa_nat_hw_ipv4_entry *nat_entry =
+		(const struct ipa_nat_hw_ipv4_entry *)entry;
+
+	length = ipa_nat_ipv4_stringify_entry_v_4_0(entry, buff, buff_size);
+
+	length += scnprintf(buff + length, buff_size - length,
+		"\t\tucp=%s address=%s uc_activation_index=%d\n",
+		(nat_entry->ucp) ? "Enabled" : "Disabled",
+		(nat_entry->s) ? "System" : "Local",
+		nat_entry->uc_activation_index);
+
+	return length;
+}
+
 
 static int ipa_nat_ipv4_index_stringify_entry_v_3_0(const void *entry,
 	char *buff, size_t buff_size)
@@ -224,6 +245,54 @@ static int ipa_nat_ipv6ct_stringify_entry_v_4_0(const void *entry,
 	return length;
 }
 
+static int ipa_nat_ipv6ct_stringify_entry_v_4_5(const void *entry,
+	char *buff, size_t buff_size)
+{
+	int length;
+	const struct ipa_nat_hw_ipv6ct_entry *ipv6ct_entry =
+		(const struct ipa_nat_hw_ipv6ct_entry *)entry;
+
+	length = ipa_nat_ipv6ct_stringify_entry_v_4_0(entry, buff, buff_size);
+
+	length += scnprintf(buff + length, buff_size - length,
+		"\t\tucp=%s address=%s uc_activation_index=%d\n",
+		(ipv6ct_entry->ucp) ? "Enabled" : "Disabled",
+		(ipv6ct_entry->s) ? "System" : "Local",
+		ipv6ct_entry->uc_activation_index);
+
+	return length;
+}
+
+static void ipa_nat_ipv4_pdn_construct_entry_v_4_0(const void *fields,
+	u32 *address)
+{
+	const struct ipahal_nat_pdn_entry *pdn_entry =
+		(const struct ipahal_nat_pdn_entry *)fields;
+
+	struct ipa_nat_hw_pdn_entry *pdn_entry_address =
+		(struct ipa_nat_hw_pdn_entry *)address;
+
+	memset(pdn_entry_address, 0, sizeof(struct ipa_nat_hw_pdn_entry));
+
+	pdn_entry_address->public_ip = pdn_entry->public_ip;
+	pdn_entry_address->src_metadata = pdn_entry->src_metadata;
+	pdn_entry_address->dst_metadata = pdn_entry->dst_metadata;
+}
+
+static void ipa_nat_ipv4_pdn_parse_entry_v_4_0(void *fields,
+	const u32 *address)
+{
+	struct ipahal_nat_pdn_entry *pdn_entry =
+		(struct ipahal_nat_pdn_entry *)fields;
+
+	const struct ipa_nat_hw_pdn_entry *pdn_entry_address =
+		(const struct ipa_nat_hw_pdn_entry *)address;
+
+	pdn_entry->public_ip = pdn_entry_address->public_ip;
+	pdn_entry->src_metadata = pdn_entry_address->src_metadata;
+	pdn_entry->dst_metadata = pdn_entry_address->dst_metadata;
+}
+
 /*
  * struct ipahal_nat_obj - H/W information for specific IPA version
  * @entry_size - CB to get the size of the entry
@@ -232,12 +301,16 @@ static int ipa_nat_ipv6ct_stringify_entry_v_4_0(const void *entry,
  *  Validity criterium depends on entry type. E.g. for NAT base table
  *   Entry need to be with valid protocol and enabled.
  * @stringify_entry - CB to create string that represents an entry
+ * @construct_entry - CB to create NAT entry using the given fields
+ * @parse_entry - CB to parse NAT entry to the given fields structure
  */
 struct ipahal_nat_obj {
 	size_t (*entry_size)(void);
 	bool (*is_entry_zeroed)(const void *entry);
 	bool (*is_entry_valid)(const void *entry);
 	int (*stringify_entry)(const void *entry, char *buff, size_t buff_size);
+	void (*construct_entry)(const void *fields, u32 *address);
+	void (*parse_entry)(void *fields, const u32 *address);
 };
 
 /*
@@ -275,13 +348,29 @@ static struct ipahal_nat_obj ipahal_nat_objs[IPA_HW_MAX][IPA_NAT_MAX] = {
 			ipa_nat_ipv4_pdn_entry_size_v_4_0,
 			ipa_nat_ipv4_is_pdn_entry_zeroed_v_4_0,
 			ipa_nat_ipv4_is_pdn_entry_valid_v_4_0,
-			ipa_nat_ipv4_pdn_stringify_entry_v_4_0
+			ipa_nat_ipv4_pdn_stringify_entry_v_4_0,
+			ipa_nat_ipv4_pdn_construct_entry_v_4_0,
+			ipa_nat_ipv4_pdn_parse_entry_v_4_0
 		},
 	[IPA_HW_v4_0][IPAHAL_NAT_IPV6CT] = {
 			ipa_nat_ipv6ct_entry_size_v_4_0,
 			ipa_nat_ipv6ct_is_entry_zeroed_v_4_0,
 			ipa_nat_ipv6ct_is_entry_valid_v_4_0,
 			ipa_nat_ipv6ct_stringify_entry_v_4_0
+		},
+
+	/* IPAv4.5 */
+	[IPA_HW_v4_5][IPAHAL_NAT_IPV4] = {
+			ipa_nat_ipv4_entry_size_v_3_0,
+			ipa_nat_ipv4_is_entry_zeroed_v_3_0,
+			ipa_nat_ipv4_is_entry_valid_v_3_0,
+			ipa_nat_ipv4_stringify_entry_v_4_5
+		},
+	[IPA_HW_v4_5][IPAHAL_NAT_IPV6CT] = {
+			ipa_nat_ipv6ct_entry_size_v_4_0,
+			ipa_nat_ipv6ct_is_entry_zeroed_v_4_0,
+			ipa_nat_ipv6ct_is_entry_valid_v_4_0,
+			ipa_nat_ipv6ct_stringify_entry_v_4_5
 		}
 };
 
@@ -352,8 +441,10 @@ int ipahal_nat_entry_size(enum ipahal_nat_type nat_type, size_t *entry_size)
 
 	IPAHAL_DBG("Get the entry size for NAT type=%s\n",
 		ipahal_nat_type_str(nat_type));
-	*entry_size = ipahal_nat_objs[ipahal_ctx->hw_type][nat_type].
-		entry_size();
+
+	*entry_size =
+		ipahal_nat_objs[ipahal_ctx->hw_type][nat_type].entry_size();
+
 	IPAHAL_DBG("The entry size is %zu\n", *entry_size);
 
 	return 0;
@@ -362,6 +453,8 @@ int ipahal_nat_entry_size(enum ipahal_nat_type nat_type, size_t *entry_size)
 int ipahal_nat_is_entry_zeroed(enum ipahal_nat_type nat_type, void *entry,
 	bool *entry_zeroed)
 {
+	struct ipahal_nat_obj *nat_ptr;
+
 	if (WARN(entry == NULL || entry_zeroed == NULL,
 		"NULL pointer received\n"))
 		return -EINVAL;
@@ -371,8 +464,12 @@ int ipahal_nat_is_entry_zeroed(enum ipahal_nat_type nat_type, void *entry,
 
 	IPAHAL_DBG("Determine whether the entry is zeroed for NAT type=%s\n",
 		ipahal_nat_type_str(nat_type));
-	*entry_zeroed = ipahal_nat_objs[ipahal_ctx->hw_type][nat_type].
-		is_entry_zeroed(entry);
+
+	nat_ptr =
+		&ipahal_nat_objs[ipahal_ctx->hw_type][nat_type];
+
+	*entry_zeroed = nat_ptr->is_entry_zeroed(entry);
+
 	IPAHAL_DBG("The entry is %szeroed\n", (*entry_zeroed) ? "" : "not ");
 
 	return 0;
@@ -381,6 +478,8 @@ int ipahal_nat_is_entry_zeroed(enum ipahal_nat_type nat_type, void *entry,
 int ipahal_nat_is_entry_valid(enum ipahal_nat_type nat_type, void *entry,
 	bool *entry_valid)
 {
+	struct ipahal_nat_obj *nat_obj;
+
 	if (WARN(entry == NULL || entry_valid == NULL,
 		"NULL pointer received\n"))
 		return -EINVAL;
@@ -390,8 +489,8 @@ int ipahal_nat_is_entry_valid(enum ipahal_nat_type nat_type, void *entry,
 
 	IPAHAL_DBG("Determine whether the entry is valid for NAT type=%s\n",
 		ipahal_nat_type_str(nat_type));
-	*entry_valid = ipahal_nat_objs[ipahal_ctx->hw_type][nat_type].
-		is_entry_valid(entry);
+	nat_obj = &ipahal_nat_objs[ipahal_ctx->hw_type][nat_type];
+	*entry_valid = nat_obj->is_entry_valid(entry);
 	IPAHAL_DBG("The entry is %svalid\n", (*entry_valid) ? "" : "not ");
 
 	return 0;
@@ -401,6 +500,7 @@ int ipahal_nat_stringify_entry(enum ipahal_nat_type nat_type, void *entry,
 	char *buff, size_t buff_size)
 {
 	int result;
+	struct ipahal_nat_obj *nat_obj_ptr;
 
 	if (WARN(entry == NULL || buff == NULL, "NULL pointer received\n"))
 		return -EINVAL;
@@ -410,13 +510,61 @@ int ipahal_nat_stringify_entry(enum ipahal_nat_type nat_type, void *entry,
 		"requested NAT type %d is invalid\n", nat_type))
 		return -EINVAL;
 
+	nat_obj_ptr =
+		&ipahal_nat_objs[ipahal_ctx->hw_type][nat_type];
+
 	IPAHAL_DBG("Create the string for the entry of NAT type=%s\n",
 		ipahal_nat_type_str(nat_type));
-	result = ipahal_nat_objs[ipahal_ctx->hw_type][nat_type].
-		stringify_entry(entry, buff, buff_size);
+
+	result = nat_obj_ptr->stringify_entry(entry, buff, buff_size);
+
 	IPAHAL_DBG("The string successfully created with length %d\n",
 		result);
 
 	return result;
 }
 
+int ipahal_nat_construct_entry(enum ipahal_nat_type nat_type,
+	const void *fields,
+	void *address)
+{
+	struct ipahal_nat_obj *nat_obj_ptr;
+
+	if (WARN(address == NULL || fields == NULL, "NULL pointer received\n"))
+		return -EINVAL;
+	if (WARN(nat_type < 0 || nat_type >= IPA_NAT_MAX,
+		"requested NAT type %d is invalid\n", nat_type))
+		return -EINVAL;
+
+	IPAHAL_DBG("Create %s entry using given fields\n",
+		ipahal_nat_type_str(nat_type));
+
+	nat_obj_ptr =
+		&ipahal_nat_objs[ipahal_ctx->hw_type][nat_type];
+
+	nat_obj_ptr->construct_entry(fields, address);
+
+	return 0;
+}
+
+int ipahal_nat_parse_entry(enum ipahal_nat_type nat_type, void *fields,
+	const void *address)
+{
+	struct ipahal_nat_obj *nat_obj_ptr;
+
+	if (WARN(address == NULL || fields == NULL, "NULL pointer received\n"))
+		return -EINVAL;
+	if (WARN(nat_type < 0 || nat_type >= IPA_NAT_MAX,
+		"requested NAT type %d is invalid\n", nat_type))
+		return -EINVAL;
+
+	IPAHAL_DBG("Get the parsed values for NAT type=%s\n",
+		ipahal_nat_type_str(nat_type));
+
+	nat_obj_ptr =
+		&ipahal_nat_objs[ipahal_ctx->hw_type][nat_type];
+
+	nat_obj_ptr->parse_entry(fields, address);
+
+	return 0;
+}

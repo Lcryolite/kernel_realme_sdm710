@@ -173,6 +173,8 @@ void schgm_flash_torch_priority(struct smb_charger *chg, enum torch_mode mode)
 	if (rc < 0)
 		pr_err("Couldn't configure Torch priority control rc=%d\n",
 				rc);
+
+	pr_debug("Torch priority changed to: %d\n", mode);
 }
 
 int schgm_flash_init(struct smb_charger *chg)

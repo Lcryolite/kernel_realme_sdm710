@@ -19,7 +19,7 @@
  *
  *
  * For more information on the algorithm and kmemleak usage, please see
- * Documentation/kmemleak.txt.
+ * Documentation/dev-tools/kmemleak.rst.
  *
  * Notes on locking
  * ----------------
@@ -73,7 +73,9 @@
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
-#include <linux/sched.h>
+#include <linux/sched/signal.h>
+#include <linux/sched/task.h>
+#include <linux/sched/task_stack.h>
 #include <linux/jiffies.h>
 #include <linux/delay.h>
 #include <linux/export.h>
@@ -108,7 +110,7 @@
 #include <linux/atomic.h>
 
 #include <linux/kasan.h>
-#include <linux/kmemcheck.h>
+#include <linux/kfence.h>
 #include <linux/kmemleak.h>
 #include <linux/memory_hotplug.h>
 
@@ -577,7 +579,7 @@ static struct kmemleak_object *create_object(unsigned long ptr, size_t size,
 	atomic_set(&object->use_count, 1);
 	object->flags = OBJECT_ALLOCATED;
 	object->pointer = ptr;
-	object->size = size;
+	object->size = kfence_ksize((void *)ptr) ?: size;
 	object->excess_ref = 0;
 	object->min_count = min_count;
 	object->count = 0;			/* white color initially */
@@ -1248,9 +1250,6 @@ static bool update_checksum(struct kmemleak_object *object)
 {
 	u32 old_csum = object->checksum;
 
-	if (!kmemcheck_is_obj_initialized(object->pointer, object->size))
-		return false;
-
 	kasan_disable_current();
 	object->checksum = crc32(0, (void *)object->pointer, object->size);
 	kasan_enable_current();
@@ -1324,11 +1323,6 @@ static void scan_block(void *_start, void *_end,
 		if (scan_should_stop())
 			break;
 
-		/* don't scan uninitialized memory */
-		if (!kmemcheck_is_obj_initialized((unsigned long)ptr,
-						  BYTES_PER_POINTER))
-			continue;
-
 		kasan_disable_current();
 		pointer = *ptr;
 		kasan_enable_current();
@@ -1383,6 +1377,7 @@ static void scan_block(void *_start, void *_end,
 /*
  * Scan a large memory block in MAX_SCAN_SIZE chunks to reduce the latency.
  */
+#ifdef CONFIG_SMP
 static void scan_large_block(void *start, void *end)
 {
 	void *next;
@@ -1394,6 +1389,7 @@ static void scan_large_block(void *start, void *end)
 		cond_resched();
 	}
 }
+#endif
 
 /*
  * Scan a memory block corresponding to a kmemleak_object. A condition is
@@ -1510,11 +1506,6 @@ static void kmemleak_scan(void)
 		spin_unlock_irqrestore(&object->lock, flags);
 	}
 	rcu_read_unlock();
-
-	/* data/bss scanning */
-	scan_large_block(_sdata, _edata);
-	scan_large_block(__bss_start, __bss_stop);
-	scan_large_block(__start_data_ro_after_init, __end_data_ro_after_init);
 
 #ifdef CONFIG_SMP
 	/* per-cpu sections scanning */
@@ -2045,6 +2036,17 @@ void __init kmemleak_init(void)
 		kmemleak_free_enabled = 1;
 	}
 	local_irq_restore(flags);
+
+	/* register the data/bss sections */
+	create_object((unsigned long)_sdata, _edata - _sdata,
+		      KMEMLEAK_GREY, GFP_ATOMIC);
+	create_object((unsigned long)__bss_start, __bss_stop - __bss_start,
+		      KMEMLEAK_GREY, GFP_ATOMIC);
+	/* only register .data..ro_after_init if not within .data */
+	if (&__start_ro_after_init < &_sdata || &__end_ro_after_init > &_edata)
+		create_object((unsigned long)__start_ro_after_init,
+			      __end_ro_after_init - __start_ro_after_init,
+			      KMEMLEAK_GREY, GFP_ATOMIC);
 
 	/*
 	 * This is the point where tracking allocations is safe. Automatic

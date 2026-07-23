@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2019, 2021 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -134,11 +134,6 @@ struct compat_fastrpc_ctrl_latency {
 	compat_uint_t level;	/* level of control */
 };
 
-#define FASTRPC_CONTROL_SMMU (2)
-struct compat_fastrpc_ctrl_smmu {
-	compat_uint_t sharedcb;
-};
-
 #define FASTRPC_CONTROL_KALLOC		(3)
 struct compat_fastrpc_ctrl_kalloc {
 	compat_uint_t kalloc_support; /* Remote memory allocation from kernel */
@@ -148,7 +143,6 @@ struct compat_fastrpc_ioctl_control {
 	compat_uint_t req;
 	union {
 		struct compat_fastrpc_ctrl_latency lp;
-		struct compat_fastrpc_ctrl_smmu smmu;
 		struct compat_fastrpc_ctrl_kalloc kalloc;
 	};
 };
@@ -400,17 +394,19 @@ static int compat_put_fastrpc_ioctl_get_dsp_info(
 		struct compat_fastrpc_ioctl_dsp_capabilities __user *info32,
 		struct fastrpc_ioctl_dsp_capabilities __user *info)
 {
+	uint32_t __user *dsp_attr, *dsp_attr_32;
 	compat_uint_t u;
 	int err, ii;
 
+	dsp_attr = info->dsp_attributes;
+	dsp_attr_32 = info32->dsp_attributes;
 	for (ii = 0, err = 0; ii < FASTRPC_MAX_DSP_ATTRIBUTES; ii++) {
-		err |= get_user(u, &info->dsp_attributes[ii]);
-		err |= put_user(u, &info32->dsp_attributes[ii]);
+		err |= get_user(u, dsp_attr++);
+		err |= put_user(u, dsp_attr_32++);
 	}
 
 	return err;
 }
-
 
 
 static int compat_fastrpc_get_dsp_info(struct file *filp,
@@ -590,6 +586,7 @@ long compat_fastrpc_device_ioctl(struct file *filp, unsigned int cmd,
 	case FASTRPC_IOCTL_SETMODE:
 		return filp->f_op->unlocked_ioctl(filp, cmd,
 						(unsigned long)compat_ptr(arg));
+
 	case COMPAT_FASTRPC_IOCTL_CONTROL:
 	{
 		struct compat_fastrpc_ioctl_control __user *ctrl32;
@@ -643,7 +640,9 @@ long compat_fastrpc_device_ioctl(struct file *filp, unsigned int cmd,
 		return err;
 	}
 	case COMPAT_FASTRPC_IOCTL_GET_DSP_INFO:
+	{
 		return compat_fastrpc_get_dsp_info(filp, arg);
+	}
 	default:
 		return -ENOIOCTLCMD;
 	}

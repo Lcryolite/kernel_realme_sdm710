@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -294,8 +294,10 @@ int sdmx_open_session(int *session_handle)
 	res = qseecom_start_app(&qseecom_handle, "securemm",
 		QSEECOM_SBUFF_SIZE);
 
-	if (res < 0)
+	if (res < 0) {
+		pr_debug("%s: Fail to load securemm app\n", __func__);
 		return SDMX_STATUS_GENERAL_FAILURE;
+	}
 
 	cmd_len = sizeof(struct sdmx_open_ses_req);
 	rsp_len = sizeof(struct sdmx_open_ses_rsp);
@@ -337,10 +339,10 @@ int sdmx_open_session(int *session_handle)
 	/* Get and print the app version */
 	version_ret = sdmx_get_version(*session_handle, &version);
 	if (version_ret == SDMX_SUCCESS)
-		pr_info("TZ SDMX version is %x.%x\n", version >> 8,
-			version & 0xFF);
+		pr_info("%s: TZ SDMX version is %x.%x\n", __func__,
+			version >> 8, version & 0xFF);
 	else
-		pr_err("Error reading TZ SDMX version\n");
+		pr_err("%s: Error reading TZ SDMX version\n", __func__);
 
 	return ret;
 }

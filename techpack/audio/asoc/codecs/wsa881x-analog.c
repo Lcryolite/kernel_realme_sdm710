@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2016, 2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2016, 2018-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -11,6 +11,7 @@
  */
 
 #include <linux/module.h>
+#include <linux/clk.h>
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/of_gpio.h>
@@ -59,7 +60,7 @@ struct wsa881x_pdata {
 	bool regmap_flag;
 	bool wsa_active;
 	int index;
-	int (*enable_mclk)(struct snd_soc_card *, bool);
+	struct clk *wsa_mclk;
 	struct wsa881x_tz_priv tz_pdata;
 	int bg_cnt;
 	int clk_cnt;
@@ -93,7 +94,6 @@ const char *wsa_tz_names[] = {"wsa881x.0e", "wsa881x.0f"};
 
 struct wsa881x_pdata wsa_pdata[MAX_WSA881X_DEVICE];
 
-static bool pinctrl_init;
 
 static int wsa881x_populate_dt_pdata(struct device *dev, int wsa881x_index);
 static int wsa881x_reset(struct wsa881x_pdata *pdata, bool enable);
@@ -245,7 +245,7 @@ static int wsa881x_i2c_read_device(struct wsa881x_pdata *wsa881x,
 		for (i = 0; rc && i < ARRAY_SIZE(delay_array_msec); i++) {
 			pr_err_ratelimited("Failed reading reg=%u - retry(%d)\n",
 								reg, i);
-			/* retry after delay of increasing order */
+			/*retry after delay of increasing orde*/
 			msleep(delay_array_msec[i]);
 			rc = regmap_read(wsa881x->regmap[wsa881x_index],
 						reg, &val);
@@ -471,7 +471,7 @@ static int wsa881x_visense_adc_ctrl(struct snd_soc_codec *codec, bool enable)
 	pr_debug("%s: enable:%d\n", __func__, enable);
 	if (enable) {
 		if (!WSA881X_IS_2_0(wsa881x->version))
-		snd_soc_update_bits(codec, WSA881X_ADC_SEL_IBIAS,
+			snd_soc_update_bits(codec, WSA881X_ADC_SEL_IBIAS,
 							0x70, 0x40);
 		snd_soc_update_bits(codec, WSA881X_ADC_EN_SEL_IBIAS,
 							0x07, 0x04);
@@ -716,7 +716,7 @@ static const char * const rdac_text[] = {
 };
 
 static const struct soc_enum rdac_enum =
-	SOC_ENUM_SINGLE(0, 0, ARRAY_SIZE(rdac_text), rdac_text);
+	SOC_ENUM_SINGLE(SND_SOC_NOPM, 0, ARRAY_SIZE(rdac_text), rdac_text);
 
 static const struct snd_kcontrol_new rdac_mux[] = {
 	SOC_DAPM_ENUM("RDAC", rdac_enum)
@@ -904,15 +904,8 @@ static int wsa881x_startup(struct wsa881x_pdata *pdata)
 			__func__, "wsa_clk");
 		return ret;
 	}
-	if (pdata->enable_mclk) {
-		ret = pdata->enable_mclk(card, true);
-		if (ret < 0) {
-			dev_err_ratelimited(codec->dev,
-				"%s: mclk enable failed %d\n",
-				__func__, ret);
-			return ret;
-		}
-	}
+	clk_prepare_enable(pdata->wsa_mclk);
+
 	ret = wsa881x_reset(pdata, true);
 	return ret;
 }
@@ -921,7 +914,6 @@ static int wsa881x_shutdown(struct wsa881x_pdata *pdata)
 {
 	int ret = 0;
 	struct snd_soc_codec *codec = pdata->codec;
-	struct snd_soc_card *card = codec->component.card;
 
 	pr_debug("%s(): wsa shutdown, enable_cnt:%d\n", __func__,
 					pdata->enable_cnt);
@@ -934,15 +926,7 @@ static int wsa881x_shutdown(struct wsa881x_pdata *pdata)
 		return ret;
 	}
 
-	if (pdata->enable_mclk) {
-		ret = pdata->enable_mclk(card, false);
-		if (ret < 0) {
-			pr_err("%s: mclk disable failed %d\n",
-				__func__, ret);
-			return ret;
-		}
-	}
-
+	clk_disable_unprepare(pdata->wsa_mclk);
 	ret = msm_cdc_pinctrl_select_sleep_state(pdata->wsa_clk_gpio_p);
 	if (ret) {
 		pr_err("%s: gpio set cannot be suspended %s\n",
@@ -1227,6 +1211,7 @@ static int wsa881x_populate_dt_pdata(struct device *dev, int wsa881x_index)
 {
 	int ret = 0;
 	struct wsa881x_pdata *pdata = &wsa_pdata[wsa881x_index];
+
 	/* reading the gpio configurations from dtsi file */
 	pdata->wsa_vi_gpio_p = of_parse_phandle(dev->of_node,
 				"qcom,wsa-analog-vi-gpio", 0);
@@ -1246,6 +1231,7 @@ static int wsa881x_i2c_probe(struct i2c_client *client,
 	struct wsa881x_pdata *pdata = NULL;
 
 	ret = wsa881x_i2c_get_client_index(client, &wsa881x_index);
+
 	if (ret != 0) {
 		dev_err(&client->dev, "%s: I2C get codec I2C\n"
 			"client failed\n", __func__);
@@ -1327,7 +1313,16 @@ static int wsa881x_i2c_probe(struct i2c_client *client,
 				__func__, ret);
 			goto err;
 		}
-		/* bus reset sequence */
+		pdata->wsa_mclk = devm_clk_get(&client->dev, "wsa_mclk");
+	}
+		if (IS_ERR(pdata->wsa_mclk)) {
+			ret = PTR_ERR(pdata->wsa_mclk);
+			dev_dbg(&client->dev, "%s: clk get %s failed %d\n",
+				__func__, "wsa_mclk", ret);
+			pdata->wsa_mclk = NULL;
+			ret = 0;
+		}
+		/*bus reset sequence*/
 		ret = wsa881x_reset(pdata, true);
 		if (ret < 0) {
 			wsa881x_probing_count++;
@@ -1362,7 +1357,6 @@ static int wsa881x_i2c_probe(struct i2c_client *client,
 		if (ret < 0)
 			goto err1;
 		pdata->status = WSA881X_STATUS_I2C;
-	}
 err1:
 	wsa881x_reset(pdata, false);
 err:

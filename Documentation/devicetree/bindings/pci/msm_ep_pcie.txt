@@ -34,10 +34,10 @@ Optional Properties:
   - qcom,<supply-name>-voltage-level: specifies voltage levels for supply.
     Should be specified in pairs (max, min, optimal), units uV.
   - clock-names: list of names of clock inputs.
-		     Should be "pcie_0_pipe_clk",
-				"pcie_0_aux_clk", "pcie_0_cfg_ahb_clk",
-				"pcie_0_mstr_axi_clk", "pcie_0_slv_axi_clk",
-				"pcie_0_ldo";
+		     Should be "pcie_pipe_clk",
+				"pcie_aux_clk", "pcie_cfg_ahb_clk",
+				"pcie_mstr_axi_clk", "pcie_slv_axi_clk",
+				"pcie_ldo";
   - max-clock-frequency-hz: list of the maximum operating frequencies stored
 				in the same order of clock names;
   - resets: reset specifier pair consists of phandle for the reset controller
@@ -48,6 +48,8 @@ Optional Properties:
   - qcom,phy-init: The initialization sequence to bring up the PCIe PHY.
     Should be specified in groups (offset, value, delay, direction).
   - qcom,phy-status-reg: Register offset for PHY status.
+  - qcom,phy-status-reg2: For sdxprairie and above use only
+    qcom,phy-status-reg2 as register offset for PHY status.
   - qcom,dbi-base-reg: Register offset for DBI base address.
   - qcom,slv-space-reg: Register offset for slave address space size.
   - qcom,pcie-vendor-id: Vendor id to be written to the Vendor ID register.
@@ -56,10 +58,12 @@ Optional Properties:
     1, 2 or 3.
   - qcom,pcie-active-config: boolean type; active configuration of PCIe
     addressing.
+  - qcom,pcie-edma: boolean type; edma usage for PCIe.
   - qcom,pcie-aggregated-irq: boolean type; interrupts are aggregated.
   - qcom,pcie-mhi-a7-irq: boolean type; MHI a7 has separate irq.
   - qcom,pcie-perst-enum: Link enumeration will be triggered by PERST
     deassertion.
+  - qcom,tcsr-not-supported: TCSR pcie perst is not supported.
   - mdm2apstatus-gpio: GPIO used by PCIe endpoint side to notify the host side.
   - Refer to "Documentation/devicetree/bindings/arm/msm/msm_bus.txt" for
     below optional properties:
@@ -67,6 +71,8 @@ Optional Properties:
 	- qcom,msm-bus,num-cases
 	- qcom,msm-bus,num-paths
 	- qcom,msm-bus,vectors-KBps
+  - qcom,pcie-m2-autonomous: Enable L1ss sleep/exit to support M2 autonomous mode.
+  - qcom,mhi-soc-reset-offset: AXI register offset to initiate a SOC reset.
 
 Example:
 
@@ -111,17 +117,17 @@ Example:
 		qcom,vreg-1.8-voltage-level = <1800000 1800000 1000>;
 		qcom,vreg-0.9-voltage-level = <950000 950000 24000>;
 
-		clock-names = "pcie_0_pipe_clk",
-				"pcie_0_aux_clk", "pcie_0_cfg_ahb_clk",
-				"pcie_0_mstr_axi_clk", "pcie_0_slv_axi_clk",
-				"pcie_0_ldo";
+		clock-names = "pcie_pipe_clk",
+				"pcie_aux_clk", "pcie_cfg_ahb_clk",
+				"pcie_mstr_axi_clk", "pcie_slv_axi_clk",
+				"pcie_ldo";
 		max-clock-frequency-hz = <62500000>, <1000000>,
 						<0>, <0>, <0>, <0>;
 
 		resets = <&clock_gcc GCC_PCIE_BCR>,
 			<&clock_gcc GCC_PCIE_PHY_BCR>;
 
-		reset-names = "pcie_0_core_reset", "pcie_0_phy_reset";
+		reset-names = "pcie_core_reset", "pcie_phy_reset";
 
 		qcom,msm-bus,name = "pcie-ep";
 		qcom,msm-bus,num-cases = <2>;

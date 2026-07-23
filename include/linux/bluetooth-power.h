@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2018,2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -59,23 +59,13 @@ struct bt_power_clk_data {
 struct bluetooth_power_platform_data {
 	/* Bluetooth reset gpio */
 	int bt_gpio_sys_rst;
+	/* Bluetooth 3p3 gpio */
+	int bt_gpio_3p3_en;
+	/* Bluetooth 1p3 gpio */
+	int bt_gpio_1p3_en;
 	struct device *slim_dev;
 	/* VDDIO voltage regulator */
-	struct bt_power_vreg_data *bt_vdd_io;
-	/* VDD_PA voltage regulator */
-	struct bt_power_vreg_data *bt_vdd_pa;
-	/* VDD_LDOIN voltage regulator */
-	struct bt_power_vreg_data *bt_vdd_ldo;
-	/* VDD_XTAL voltage regulator */
-	struct bt_power_vreg_data *bt_vdd_xtal;
-	/* VDD_CORE voltage regulator */
-	struct bt_power_vreg_data *bt_vdd_core;
-	/* Optional: chip power down gpio-regulator
-	 * chip power down data is required when bluetooth module
-	 * and other modules like wifi co-exist in a single chip and
-	 * shares a common gpio to bring chip out of reset.
-	 */
-	struct bt_power_vreg_data *bt_chip_pwd;
+	struct bt_power_vreg_data *vreg_info;
 	/* bluetooth reference clock */
 	struct bt_power_clk_data *bt_chip_clk;
 	/* Optional: Bluetooth power setup function */
@@ -88,7 +78,4 @@ int get_chipset_version(void);
 #define BT_CMD_SLIM_TEST		0xbfac
 #define BT_CMD_PWR_CTRL			0xbfad
 #define BT_CMD_CHIPSET_VERS		0xbfae
-
-#define BT_RESET_GPIO_HIGH_VAL	0x1
-
 #endif /* __LINUX_BLUETOOTH_POWER_H */

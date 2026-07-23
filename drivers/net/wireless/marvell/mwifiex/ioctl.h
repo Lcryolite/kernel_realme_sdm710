@@ -91,6 +91,8 @@ struct wep_key {
 #define MWIFIEX_TDLS_DEF_QOS_CAPAB		0xf
 #define MWIFIEX_PRIO_BK				2
 #define MWIFIEX_PRIO_VI				5
+#define MWIFIEX_SUPPORTED_CHANNELS		2
+#define MWIFIEX_OPERATING_CLASSES		16
 
 struct mwifiex_uap_bss_param {
 	u8 channel;
@@ -117,6 +119,7 @@ struct mwifiex_uap_bss_param {
 	u8 qos_info;
 	u8 power_constraint;
 	struct mwifiex_types_wmm_info wmm_info;
+	u8 mac_addr[ETH_ALEN];
 };
 
 enum {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2016-2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013, 2018, The Linux Foundation. All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -63,6 +63,7 @@ struct clk_pll {
 extern const struct clk_ops clk_pll_ops;
 extern const struct clk_ops clk_pll_vote_ops;
 extern const struct clk_ops clk_pll_sr2_ops;
+extern const struct clk_ops clk_pll_hf_ops;
 
 #define to_clk_pll(_hw) container_of(to_clk_regmap(_hw), struct clk_pll, clkr)
 
@@ -70,7 +71,6 @@ struct pll_config {
 	u16 l;
 	u32 m;
 	u32 n;
-	u32 frac;
 	u32 vco_val;
 	u32 vco_mask;
 	u32 pre_div_val;
@@ -80,11 +80,6 @@ struct pll_config {
 	u32 mn_ena_mask;
 	u32 main_output_mask;
 	u32 aux_output_mask;
-	u32 aux2_output_mask;
-	u32 early_output_mask;
-	u32 config_ctl_val;
-	u32 config_ctl_hi_val;
-	u32 config_ctl_hi1_val;
 };
 
 void clk_pll_configure_sr(struct clk_pll *pll, struct regmap *regmap,

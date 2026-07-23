@@ -1,9 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 #ifndef _UAPI__LINUX_NETFILTER_H
 #define _UAPI__LINUX_NETFILTER_H
 
 #include <linux/types.h>
 #include <linux/compiler.h>
-#include <linux/sysctl.h>
 #include <linux/in.h>
 #include <linux/in6.h>
 
@@ -14,13 +14,7 @@
 #define NF_QUEUE 3
 #define NF_REPEAT 4
 #define NF_STOP 5	/* Deprecated, for userspace nf_queue compatibility. */
-
-#ifdef OPLUS_FEATURE_WIFI_LIMMITBGSPEED
-#define NF_IMQ_QUEUE 6
-#define NF_MAX_VERDICT NF_IMQ_QUEUE
-#else /* OPLUS_FEATURE_WIFI_LIMMITBGSPEED */
 #define NF_MAX_VERDICT NF_STOP
-#endif /* OPLUS_FEATURE_WIFI_LIMMITBGSPEED */
 
 /* we overload the higher bits for encoding auxiliary data such as the queue
  * number or errno values. Not nice, but better than additional function

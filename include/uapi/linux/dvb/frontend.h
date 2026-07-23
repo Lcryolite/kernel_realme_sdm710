@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1+ WITH Linux-syscall-note */
 /*
  * frontend.h
  *
@@ -239,11 +240,11 @@ enum fe_sec_mini_cmd {
  * @FE_NONE:		The frontend doesn't have any kind of lock.
  *			That's the initial frontend status
  * @FE_HAS_SIGNAL:	Has found something above the noise level.
- * @FE_HAS_CARRIER:	Has found a DVB signal.
+ * @FE_HAS_CARRIER:	Has found a signal.
  * @FE_HAS_VITERBI:	FEC inner coding (Viterbi, LDPC or other inner code).
  *			is stable.
  * @FE_HAS_SYNC:	Synchronization bytes was found.
- * @FE_HAS_LOCK:	DVB were locked and everything is working.
+ * @FE_HAS_LOCK:	Digital TV were locked and everything is working.
  * @FE_TIMEDOUT:	Fo lock within the last about 2 seconds.
  * @FE_REINIT:		Frontend was reinitialized, application is recommended
  *			to reset DiSEqC, tone and parameters.
@@ -269,7 +270,7 @@ enum fe_status {
  * This parameter indicates if spectral inversion should be presumed or
  * not. In the automatic setting (``INVERSION_AUTO``) the hardware will try
  * to figure out the correct setting by itself. If the hardware doesn't
- * support, the DVB core will try to lock at the carrier first with
+ * support, the %dvb_frontend will try to lock at the carrier first with
  * inversion off. If it fails, it will try to enable inversion.
  */
 enum fe_spectral_inversion {
@@ -562,10 +563,10 @@ enum fe_pilot {
 };
 
 /**
- * enum fe_rolloff - Rolloff factor (also known as alpha)
- * @ROLLOFF_35:		Roloff factor: 35%
- * @ROLLOFF_20:		Roloff factor: 20%
- * @ROLLOFF_25:		Roloff factor: 25%
+ * enum fe_rolloff - Rolloff factor
+ * @ROLLOFF_35:		Roloff factor: α=35%
+ * @ROLLOFF_20:		Roloff factor: α=20%
+ * @ROLLOFF_25:		Roloff factor: α=25%
  * @ROLLOFF_AUTO:	Auto-detect the roloff factor.
  *
  * .. note:
@@ -830,7 +831,7 @@ struct dtv_fe_stats {
  * @cmd:	Digital TV command.
  * @reserved:	Not used.
  * @u:		Union with the values for the command.
- * @result:	Unused
+ * @result:	Result of the command set (currently unused).
  *
  * The @u union may have either one of the values below:
  *
@@ -907,7 +908,7 @@ struct dtv_properties {
 #define FE_SET_PROPERTY		   _IOW('o', 82, struct dtv_properties)
 #define FE_GET_PROPERTY		   _IOR('o', 83, struct dtv_properties)
 
-#if defined(__DVB_CORE__) || !defined (__KERNEL__)
+#if defined(__DVB_CORE__) || !defined(__KERNEL__)
 
 /*
  * DEPRECATED: Everything below is deprecated in favor of DVBv5 API
@@ -982,8 +983,8 @@ struct dvb_ofdm_parameters {
 };
 
 struct dvb_frontend_parameters {
-	__u32 frequency;     /* (absolute) frequency in Hz for DVB-C/DVB-T/ATSC */
-			     /* intermediate frequency in kHz for DVB-S */
+	__u32 frequency;  /* (absolute) frequency in Hz for DVB-C/DVB-T/ATSC */
+			  /* intermediate frequency in kHz for DVB-S */
 	fe_spectral_inversion_t inversion;
 	union {
 		struct dvb_qpsk_parameters qpsk;	/* DVB-S */

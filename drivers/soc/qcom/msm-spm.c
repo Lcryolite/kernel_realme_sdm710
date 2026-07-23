@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -151,7 +151,7 @@ static uint32_t num_pmic_data;
 static void msm_spm_drv_flush_shadow(struct msm_spm_driver_data *dev,
 		unsigned int reg_index)
 {
-	if (!dev || (dev->reg_shadow == NULL))
+	if (!dev)
 		return;
 
 	__raw_writel(dev->reg_shadow[reg_index],
@@ -498,7 +498,9 @@ static void msm_spm_drv_disable_avs(struct msm_spm_driver_data *dev) { }
 static void msm_spm_drv_enable_avs(struct msm_spm_driver_data *dev) { }
 
 static void msm_spm_drv_set_avs_vlevel(struct msm_spm_driver_data *dev,
-		unsigned int vlevel) { }
+		unsigned int vlevel)
+{
+}
 #endif
 
 static inline int msm_spm_drv_validate_data(struct msm_spm_driver_data *dev,
@@ -758,7 +760,7 @@ int msm_spm_drv_init(struct msm_spm_driver_data *dev,
 	num_spm_entry = msm_spm_drv_get_num_spm_entry(dev);
 
 	dev->reg_seq_entry_shadow =
-		kzalloc(sizeof(*dev->reg_seq_entry_shadow) * num_spm_entry,
+		kcalloc(num_spm_entry, sizeof(*dev->reg_seq_entry_shadow),
 				GFP_KERNEL);
 
 	if (!dev->reg_seq_entry_shadow)

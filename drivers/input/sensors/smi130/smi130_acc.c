@@ -6970,16 +6970,16 @@ static void store_acc_boot_sample(struct smi130_acc_data *client_data,
 	mutex_lock(&client_data->acc_sensor_buff);
 	if (ts.tv_sec <  client_data->max_buffer_time) {
 		if (client_data->acc_bufsample_cnt < SMI_ACC_MAXSAMPLE) {
-			client_data->smi130_acc_samplist[client_data->
-				acc_bufsample_cnt]->xyz[0] = x;
-			client_data->smi130_acc_samplist[client_data->
-				acc_bufsample_cnt]->xyz[1] = y;
-			client_data->smi130_acc_samplist[client_data->
-				acc_bufsample_cnt]->xyz[2] = z;
-			client_data->smi130_acc_samplist[client_data->
-				acc_bufsample_cnt]->tsec = ts.tv_sec;
-			client_data->smi130_acc_samplist[client_data->
-				acc_bufsample_cnt]->tnsec = ts.tv_nsec;
+			client_data->smi130_acc_samplist[client_data
+				->acc_bufsample_cnt]->xyz[0] = x;
+			client_data->smi130_acc_samplist[client_data
+				->acc_bufsample_cnt]->xyz[1] = y;
+			client_data->smi130_acc_samplist[client_data
+				->acc_bufsample_cnt]->xyz[2] = z;
+			client_data->smi130_acc_samplist[client_data
+				->acc_bufsample_cnt]->tsec = ts.tv_sec;
+			client_data->smi130_acc_samplist[client_data
+				->acc_bufsample_cnt]->tnsec = ts.tv_nsec;
 			client_data->acc_bufsample_cnt++;
 		}
 	} else {
@@ -7153,7 +7153,6 @@ static irqreturn_t smi130_acc_irq_work_func(int irq, void *handle)
 	return IRQ_HANDLED;
 #endif
 	smi130_acc_get_interruptstatus1(smi130_acc->smi130_acc_client, &status);
-	PDEBUG("smi130_acc_irq_work_func, status = 0x%x\n", status);
 
 #ifdef CONFIG_SIG_MOTION
 	if (status & 0x04)	{

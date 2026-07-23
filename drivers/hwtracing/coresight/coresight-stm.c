@@ -79,6 +79,9 @@
 /* Reserve the first 10 channels for kernel usage */
 #define STM_CHANNEL_OFFSET		0
 
+#define APPS_NIDEN_SHIFT			17
+#define APPS_DBGEN_SHIFT			16
+
 static int boot_nr_channel;
 
 /*
@@ -86,7 +89,7 @@ static int boot_nr_channel;
  * remain consistent with existing use cases for now.
  */
 module_param_named(
-	boot_nr_channel, boot_nr_channel, int, 0444
+	boot_nr_channel, boot_nr_channel, int, S_IRUGO
 );
 
 static void stm_hwevent_enable_hw(struct stm_drvdata *drvdata)
@@ -246,7 +249,8 @@ static inline bool stm_addr_unaligned(const void *addr, u8 write_bytes)
 	return ((unsigned long)addr & (write_bytes - 1));
 }
 
-void stm_send(void *addr, const void *data, u32 size, u8 write_bytes)
+void stm_send(void __iomem *addr, const void *data,
+		     u32 size, u8 write_bytes)
 {
 	u8 paload[8];
 
@@ -295,11 +299,9 @@ static void stm_generic_unlink(struct stm_data *stm_data,
 						   struct stm_drvdata, stm);
 	if (!drvdata || !drvdata->csdev)
 		return;
-
 	/* If any OST entity is enabled do not disable the device */
 	if (!bitmap_empty(drvdata->entities, OST_ENTITY_MAX))
 		return;
-
 	coresight_disable(drvdata->csdev);
 }
 
@@ -350,7 +352,7 @@ static long stm_generic_set_options(struct stm_data *stm_data,
 	return 0;
 }
 
-static ssize_t stm_generic_packet(struct stm_data *stm_data,
+static ssize_t notrace stm_generic_packet(struct stm_data *stm_data,
 				  unsigned int master,
 				  unsigned int channel,
 				  unsigned int packet,
@@ -358,17 +360,20 @@ static ssize_t stm_generic_packet(struct stm_data *stm_data,
 				  unsigned int size,
 				  const unsigned char *payload)
 {
-	unsigned long ch_addr;
+	void __iomem *ch_addr;
 	struct stm_drvdata *drvdata = container_of(stm_data,
 						   struct stm_drvdata, stm);
 
 	if (!(drvdata && local_read(&drvdata->mode)))
-		return 0;
+		return -EACCES;
+
+	if (!drvdata->master_enable)
+		return -EPERM;
 
 	if (channel >= drvdata->numsp)
-		return 0;
+		return -EINVAL;
 
-	ch_addr = (unsigned long)stm_channel_addr(drvdata, channel);
+	ch_addr = stm_channel_addr(drvdata, channel);
 
 	flags = (flags == STP_PACKET_TIMESTAMPED) ? STM_FLAG_TIMESTAMPED : 0;
 	flags |= test_bit(channel, drvdata->chs.guaranteed) ?
@@ -381,20 +386,20 @@ static ssize_t stm_generic_packet(struct stm_data *stm_data,
 
 	switch (packet) {
 	case STP_PACKET_FLAG:
-		ch_addr |= stm_channel_off(STM_PKT_TYPE_FLAG, flags);
+		ch_addr += stm_channel_off(STM_PKT_TYPE_FLAG, flags);
 
 		/*
 		 * The generic STM core sets a size of '0' on flag packets.
 		 * As such send a flag packet of size '1' and tell the
 		 * core we did so.
 		 */
-		stm_send((void *)ch_addr, payload, 1, drvdata->write_bytes);
+		stm_send(ch_addr, payload, 1, drvdata->write_bytes);
 		size = 1;
 		break;
 
 	case STP_PACKET_DATA:
-		ch_addr |= stm_channel_off(STM_PKT_TYPE_DATA, flags);
-		stm_send((void *)ch_addr, payload, size,
+		ch_addr += stm_channel_off(STM_PKT_TYPE_DATA, flags);
+		stm_send(ch_addr, payload, size,
 				drvdata->write_bytes);
 		break;
 
@@ -580,13 +585,13 @@ static ssize_t traceid_store(struct device *dev,
 static DEVICE_ATTR_RW(traceid);
 
 static ssize_t entities_show(struct device *dev,
-			       struct device_attribute *attr, char *buf)
+				struct device_attribute *attr, char *buf)
 {
 	struct stm_drvdata *drvdata = dev_get_drvdata(dev->parent);
 	ssize_t len;
 
 	len = scnprintf(buf, PAGE_SIZE, "%*pb\n",
-			OST_ENTITY_MAX, drvdata->entities);
+				OST_ENTITY_MAX, drvdata->entities);
 
 	if (PAGE_SIZE - len < 2)
 		len = -EINVAL;
@@ -597,8 +602,8 @@ static ssize_t entities_show(struct device *dev,
 }
 
 static ssize_t entities_store(struct device *dev,
-				struct device_attribute *attr,
-				const char *buf, size_t size)
+			struct device_attribute *attr,
+			const char *buf, size_t size)
 {
 	struct stm_drvdata *drvdata = dev_get_drvdata(dev->parent);
 	unsigned long val1, val2;
@@ -621,21 +626,23 @@ static ssize_t entities_store(struct device *dev,
 }
 static DEVICE_ATTR_RW(entities);
 
-#define coresight_stm_simple_func(name, offset)	\
-	coresight_simple_func(struct stm_drvdata, NULL, name, offset)
+ #define coresight_stm_simple_func(name, offset)	\
 
-coresight_stm_simple_func(tcsr, STMTCSR);
-coresight_stm_simple_func(tsfreqr, STMTSFREQR);
-coresight_stm_simple_func(syncr, STMSYNCR);
-coresight_stm_simple_func(sper, STMSPER);
-coresight_stm_simple_func(spter, STMSPTER);
-coresight_stm_simple_func(privmaskr, STMPRIVMASKR);
-coresight_stm_simple_func(spscr, STMSPSCR);
-coresight_stm_simple_func(spmscr, STMSPMSCR);
-coresight_stm_simple_func(spfeat1r, STMSPFEAT1R);
-coresight_stm_simple_func(spfeat2r, STMSPFEAT2R);
-coresight_stm_simple_func(spfeat3r, STMSPFEAT3R);
-coresight_stm_simple_func(devid, CORESIGHT_DEVID);
+#define coresight_stm_reg(name, offset)	\
+	coresight_simple_reg32(struct stm_drvdata, name, offset)
+
+coresight_stm_reg(tcsr, STMTCSR);
+coresight_stm_reg(tsfreqr, STMTSFREQR);
+coresight_stm_reg(syncr, STMSYNCR);
+coresight_stm_reg(sper, STMSPER);
+coresight_stm_reg(spter, STMSPTER);
+coresight_stm_reg(privmaskr, STMPRIVMASKR);
+coresight_stm_reg(spscr, STMSPSCR);
+coresight_stm_reg(spmscr, STMSPMSCR);
+coresight_stm_reg(spfeat1r, STMSPFEAT1R);
+coresight_stm_reg(spfeat2r, STMSPFEAT2R);
+coresight_stm_reg(spfeat3r, STMSPFEAT3R);
+coresight_stm_reg(devid, CORESIGHT_DEVID);
 
 static struct attribute *coresight_stm_attrs[] = {
 	&dev_attr_hwevent_enable.attr,
@@ -778,6 +785,17 @@ static void stm_init_generic_data(struct stm_drvdata *drvdata)
 	drvdata->stm.set_options = stm_generic_set_options;
 }
 
+static bool is_apps_debug_disabled(struct stm_drvdata *drvdata)
+{
+	u32 val;
+
+	val = readl_relaxed(drvdata->debug_status_chs.base);
+
+	val &= BIT(APPS_NIDEN_SHIFT);
+
+	return val == 0;
+}
+
 static int stm_probe(struct amba_device *adev, const struct amba_id *id)
 {
 	int ret;
@@ -788,6 +806,7 @@ static int stm_probe(struct amba_device *adev, const struct amba_id *id)
 	struct stm_drvdata *drvdata;
 	struct resource *res = &adev->res;
 	struct resource ch_res;
+	struct resource debug_ch_res;
 	size_t res_size, bitmap_size;
 	struct coresight_desc desc = { 0 };
 	struct device_node *np = adev->dev.of_node;
@@ -825,6 +844,22 @@ static int stm_probe(struct amba_device *adev, const struct amba_id *id)
 	if (IS_ERR(base))
 		return PTR_ERR(base);
 	drvdata->chs.base = base;
+
+	ret = stm_get_resource_byname(np, "stm-debug-status", &debug_ch_res);
+	/*
+	 * By default, master enable is true, means not controlled
+	 * by debug status register
+	 */
+	if (!ret) {
+		drvdata->debug_status_chs.phys = debug_ch_res.start;
+		base = devm_ioremap_resource(dev, &debug_ch_res);
+		if (!IS_ERR(base)) {
+			drvdata->debug_status_chs.base = base;
+			drvdata->master_enable =
+				!is_apps_debug_disabled(drvdata);
+		}
+	} else
+		drvdata->master_enable = true;
 
 	drvdata->write_bytes = stm_fundamental_data_size(drvdata);
 
@@ -874,7 +909,8 @@ static int stm_probe(struct amba_device *adev, const struct amba_id *id)
 
 	pm_runtime_put(&adev->dev);
 
-	dev_info(dev, "%s initialized\n", (char *)id->data);
+	dev_info(dev, "%s initialized with master %s\n", (char *)id->data,
+		       drvdata->master_enable ? "Enabled" : "Disabled");
 	return 0;
 
 stm_unregister:
@@ -908,11 +944,16 @@ static const struct dev_pm_ops stm_dev_pm_ops = {
 	SET_RUNTIME_PM_OPS(stm_runtime_suspend, stm_runtime_resume, NULL)
 };
 
-static struct amba_id stm_ids[] = {
+static const struct amba_id stm_ids[] = {
 	{
 		.id     = 0x0003b962,
 		.mask   = 0x0003ffff,
 		.data	= "STM32",
+	},
+	{
+		.id	= 0x0003b963,
+		.mask	= 0x0003ffff,
+		.data	= "STM500",
 	},
 	{ 0, 0},
 };

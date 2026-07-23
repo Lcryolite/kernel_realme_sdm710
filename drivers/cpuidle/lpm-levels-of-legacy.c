@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -988,7 +988,7 @@ void cluster_dt_walkthrough(struct lpm_cluster *cluster)
 
 		pr_info("%d ndevices:%d\n", __LINE__, cluster->ndevices);
 		for (j = 0; j < cluster->ndevices; j++)
-			pr_info("%sDevice: %pk id:%pk\n", str,
+			pr_info("%sDevice: %pK id:%pK\n", str,
 					&cluster->name[j], &l->mode[i]);
 	}
 

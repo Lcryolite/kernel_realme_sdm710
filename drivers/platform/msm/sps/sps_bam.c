@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2017, 2019-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -232,8 +232,8 @@ static irqreturn_t bam_isr(int irq, void *ctxt)
 {
 	struct sps_bam *dev = ctxt;
 
-	SPS_DBG1(dev, "sps:bam_isr: bam:%pa; IRQ #:%d.\n",
-		BAM_ID(dev), irq);
+	SPS_DBG1(dev, "sps:%s: bam:%pa; IRQ #:%d.\n",
+		__func__, BAM_ID(dev), irq);
 
 	if (dev->props.options & SPS_BAM_RES_CONFIRM) {
 		if (dev->props.callback) {
@@ -242,18 +242,18 @@ static irqreturn_t bam_isr(int irq, void *ctxt)
 			dev->props.callback(SPS_CALLBACK_BAM_RES_REQ, &ready);
 			if (ready) {
 				SPS_DBG1(dev,
-					"sps:bam_isr: handle IRQ for bam:%pa IRQ #:%d.\n",
-					BAM_ID(dev), irq);
+					"sps:%s: handle IRQ for bam:%pa IRQ #:%d.\n",
+					__func__, BAM_ID(dev), irq);
 				if (sps_bam_check_irq(dev))
 					SPS_DBG2(dev,
-						"sps:bam_isr: callback bam:%pa IRQ #:%d to poll the pipes.\n",
-						BAM_ID(dev), irq);
+						"sps:%s: callback bam:%pa IRQ #:%d to poll the pipes.\n",
+						__func__, BAM_ID(dev), irq);
 				dev->props.callback(SPS_CALLBACK_BAM_RES_REL,
 							&ready);
 			} else {
 				SPS_DBG1(dev,
-					"sps:bam_isr: BAM is not ready and thus skip IRQ for bam:%pa IRQ #:%d.\n",
-					BAM_ID(dev), irq);
+					"sps:%s: BAM is not ready and thus skip IRQ for bam:%pa IRQ #:%d.\n",
+					__func__, BAM_ID(dev), irq);
 			}
 		} else {
 			SPS_ERR(dev,
@@ -646,18 +646,11 @@ int sps_bam_reset(struct sps_bam *dev)
 		      pipe_index++) {
 			pipe = dev->pipes[pipe_index];
 			if (BAM_PIPE_IS_ASSIGNED(pipe)) {
-				if (!(dev->props.options &
-							SPS_BAM_FORCE_RESET)) {
-					SPS_ERR(dev,
-						"sps:BAM device %pa RESET failed: pipe %d in use\n",
-						BAM_ID(dev), pipe_index);
-					result = SPS_ERROR;
-					break;
-				}
-
-				SPS_DBG2(dev,
-					"sps: BAM %pa is force reset with pipe %d in use\n",
+				SPS_ERR(dev,
+					"sps:BAM device %pa RESET failed: pipe %d in use\n",
 					BAM_ID(dev), pipe_index);
+				result = SPS_ERROR;
+				break;
 			}
 		}
 
@@ -882,13 +875,15 @@ int sps_bam_pipe_connect(struct sps_pipe *bam_pipe,
 	}
 
 	/* Determine operational mode */
-	if (other_pipe->bam != NULL) {
+	if ((bam_pipe->connect.options & SPS_O_DUMMY_PEER) ||
+						other_pipe->bam != NULL) {
 		unsigned long iova;
-		struct sps_bam *peer_bam = (struct sps_bam *)(other_pipe->bam);
+		struct sps_bam *peer_bam;
 		/* BAM-to-BAM mode */
 		bam_pipe->state |= BAM_STATE_BAM2BAM;
 		hw_params.mode = BAM_PIPE_MODE_BAM2BAM;
-
+		if (!(bam_pipe->connect.options & SPS_O_DUMMY_PEER))
+			peer_bam = (struct sps_bam *)(other_pipe->bam);
 		if (dev->props.options & SPS_BAM_SMMU_EN) {
 			if (bam_pipe->mode == SPS_MODE_SRC)
 				iova = bam_pipe->connect.dest_iova;
@@ -899,11 +894,19 @@ int sps_bam_pipe_connect(struct sps_pipe *bam_pipe,
 				 BAM_ID(dev), pipe_index, (void *)iova);
 			hw_params.peer_phys_addr = (u32)iova;
 		} else {
-			hw_params.peer_phys_addr = peer_bam->props.phys_addr;
+			if (!(bam_pipe->connect.options & SPS_O_DUMMY_PEER))
+				hw_params.peer_phys_addr =
+					peer_bam->props.phys_addr;
 		}
-
-		hw_params.peer_pipe = other_pipe->pipe_index;
-
+		if (!(bam_pipe->connect.options & SPS_O_DUMMY_PEER)) {
+			hw_params.peer_pipe = other_pipe->pipe_index;
+		} else {
+			hw_params.peer_phys_addr =
+					bam_pipe->connect.destination;
+			hw_params.peer_pipe =
+					bam_pipe->connect.dest_pipe_index;
+			hw_params.dummy_peer = true;
+		}
 		/* Verify FIFO buffers are allocated for BAM-to-BAM pipes */
 		if (map->desc.phys_base == SPS_ADDR_INVALID ||
 		    map->data.phys_base == SPS_ADDR_INVALID ||
@@ -1719,8 +1722,8 @@ static void trigger_event(struct sps_bam *dev,
 
 	if (event_reg->xfer_done) {
 		complete(event_reg->xfer_done);
-		SPS_DBG(dev, "sps:trigger_event.done=%d.\n",
-			event_reg->xfer_done->done);
+		SPS_DBG(dev, "sps:%s.done=%d.\n",
+			__func__, event_reg->xfer_done->done);
 	}
 
 	if (event_reg->callback) {
@@ -2045,8 +2048,8 @@ static void pipe_handler(struct sps_bam *dev, struct sps_pipe *pipe)
 	pipe_index = pipe->pipe_index;
 	status = bam_pipe_get_and_clear_irq_status(&dev->base, pipe_index);
 
-	SPS_DBG(dev, "sps:pipe_handler.bam %pa.pipe %d.status=0x%x.\n",
-			BAM_ID(dev), pipe_index, status);
+	SPS_DBG(dev, "sps:%s.bam %pa.pipe %d.status=0x%x.\n",
+			__func__, BAM_ID(dev), pipe_index, status);
 
 	/* Check for enabled interrupt sources */
 	status &= pipe->irq_mask;

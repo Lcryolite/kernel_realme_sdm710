@@ -304,24 +304,17 @@ static void store_acc_boot_sample(struct inv_mpu_state *st, u64 t,
 	if (false == st->acc_buffer_inv_samples)
 		return;
 	mutex_lock(&st->acc_sensor_buff);
-	st->timestamp.tv64 = t;
+	st->timestamp = t;
 	if (ktime_to_timespec(st->timestamp).tv_sec
 			<  st->max_buffer_time) {
 		if (st->acc_bufsample_cnt < INV_ACC_MAXSAMPLE) {
-			st->inv_acc_samplist[st->
-				acc_bufsample_cnt]->xyz[0] = x;
-			st->inv_acc_samplist[st->
-				acc_bufsample_cnt]->xyz[1] = y;
-			st->inv_acc_samplist[st->
-				acc_bufsample_cnt]->xyz[2] = z;
-			st->inv_acc_samplist[st->
-				acc_bufsample_cnt]->tsec =
-				ktime_to_timespec(st
-						->timestamp).tv_sec;
-			st->inv_acc_samplist[st->
-				acc_bufsample_cnt]->tnsec =
-				ktime_to_timespec(st
-						->timestamp).tv_nsec;
+			st->inv_acc_samplist[st->acc_bufsample_cnt]->xyz[0] = x;
+			st->inv_acc_samplist[st->acc_bufsample_cnt]->xyz[1] = y;
+			st->inv_acc_samplist[st->acc_bufsample_cnt]->xyz[2] = z;
+			st->inv_acc_samplist[st->acc_bufsample_cnt]->tsec =
+				ktime_to_timespec(st->timestamp).tv_sec;
+			st->inv_acc_samplist[st->acc_bufsample_cnt]->tnsec =
+				ktime_to_timespec(st->timestamp).tv_nsec;
 			st->acc_bufsample_cnt++;
 		}
 	} else {
@@ -337,24 +330,20 @@ static void store_gyro_boot_sample(struct inv_mpu_state *st, u64 t,
 	if (false == st->gyro_buffer_inv_samples)
 		return;
 	mutex_lock(&st->gyro_sensor_buff);
-	st->timestamp.tv64 = t;
+	st->timestamp = t;
 	if (ktime_to_timespec(st->timestamp).tv_sec
 			<  st->max_buffer_time) {
 		if (st->gyro_bufsample_cnt < INV_GYRO_MAXSAMPLE) {
-			st->inv_gyro_samplist[st->
-				gyro_bufsample_cnt]->xyz[0] = x;
-			st->inv_gyro_samplist[st->
-				gyro_bufsample_cnt]->xyz[1] = y;
-			st->inv_gyro_samplist[st->
-				gyro_bufsample_cnt]->xyz[2] = z;
-			st->inv_gyro_samplist[st->
-				gyro_bufsample_cnt]->tsec =
-				ktime_to_timespec(st->
-						timestamp).tv_sec;
-			st->inv_gyro_samplist[st->
-				gyro_bufsample_cnt]->tnsec =
-				ktime_to_timespec(st->
-						timestamp).tv_nsec;
+			st->inv_gyro_samplist[st->gyro_bufsample_cnt]
+				->xyz[0] = x;
+			st->inv_gyro_samplist[st->gyro_bufsample_cnt]
+				->xyz[1] = y;
+			st->inv_gyro_samplist[st->gyro_bufsample_cnt]
+				->xyz[2] = z;
+			st->inv_gyro_samplist[st->gyro_bufsample_cnt]->tsec =
+				ktime_to_timespec(st->timestamp).tv_sec;
+			st->inv_gyro_samplist[st->gyro_bufsample_cnt]->tnsec =
+				ktime_to_timespec(st->timestamp).tv_nsec;
 			st->gyro_bufsample_cnt++;
 		}
 	} else {

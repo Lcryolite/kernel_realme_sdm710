@@ -21,9 +21,6 @@ Required properties :
 
 Optional properties :
 - reg: Additional registers
-     "tcsr_base" : top-level CSR register to be written during power-on reset
-     initialize the internal MUX that controls whether to use USB3 controller
-     with primary port.
      "ahb2phy_base" : top-level register to configure read/write wait cycle with
      both QMP and QUSB PHY registers.
 - Refer to "Documentation/devicetree/bindings/arm/msm/msm_bus.txt" for
@@ -32,8 +29,8 @@ Optional properties :
     - qcom,msm_bus,num_cases
     - qcom,msm_bus,num_paths
     - qcom,msm_bus,vectors
+- qcom,default-bus-vote: To use default bus voting other than NOMINAL. Default is NOMINAL.
 - interrupt-names : Optional interrupt resource entries are:
-    "pmic_id_irq" : Interrupt from PMIC for external ID pin notification.
     "ss_phy_irq"  : Interrupt from super speed phy for wake up notification.
     "hs_phy_irq" : Interrupt from HS PHY for asynchronous events in LPM.
     "dp_hs_phy_irq" : Interrupt from HS PHY for asynchronous events in LPM
@@ -50,15 +47,13 @@ Optional properties :
 - vbus_dwc3-supply: phandle to the 5V VBUS supply regulator used for host mode.
 - USB3_GDSC-supply : phandle to the globally distributed switch controller
   regulator node to the USB controller.
+- dpdm-supply: phandle to dpdm supply which will be used to drive dp/dm lines
+  in high-z state.
 - qcom,dwc-usb3-msm-tx-fifo-size: If present, represents RAM size available for
 		TX fifo allocation in bytes
-- qcom,usb-dbm : phandle for the DBM device
 - qcom,lpm-to-suspend-delay-ms: Indicates timeout (in milliseconds) to release wakeup source
   after USB is kept into LPM.
-- qcom,ext-hub-reset-gpio: This corresponds to gpio which is used for HUB reset.
 - qcom,disable-dev-mode-pm: If present, it disables PM runtime functionality for device mode.
-- qcom,disable-host-mode-pm: If present, it disables XHCI PM runtime functionality when USB
-  host mode is used.
 - qcom,core-clk-rate: If present, indicates clock frequency to be set for USB master clock.
 - qcom,core-clk-rate-hs: If present, indicates min core clock frequency required to support
   hs speed.
@@ -77,14 +72,29 @@ Optional properties :
 	  events.
 - qcom,num-gsi-evt-buffs: If present, specifies number of GSI based hardware accelerated
   event buffers. 1 event buffer is needed per h/w accelerated endpoint.
+- qcom,gsi-reg-offset: USB GSI wrapper registers offset. It is must to provide this
+  if qcom,num-gsi-evt-buffs property is specified. Check dwc3-msm driver for order
+  and name of register offset need to provide.
+- qcom,gsi-disable-io-coherency: IO-coherency is enabled by default in usb gsi driver.
+  This property disables io-coherency in usb gsi driver.
 - qcom,pm-qos-latency: This represents max tolerable CPU latency in microsecs,
 	which is used as a vote by driver to get max performance in perf mode.
 - qcom,smmu-s1-bypass: If present, configure SMMU to bypass stage 1 translation.
-- qcom,no-vbus-vote-with-type-C: If present, then do not try to get and enable VBUS
-	regulator in type-C host mode from dwc3-msm driver.
-- qcom,connector-type-uAB: HW platform is using micro-AB USB connector type.
-- qcom,gadget-imod-val: If present, specifies default value of interrupt moderation in
-	usecs for normal EPs.
+- qcom,dbm-version: If present, specifies DBM version. Currently "1.4" or "1.5"
+	are supported. If omitted, assume HW supports "1.5".
+- qcom,reset-ep-after-lpm-resume: If present, dbm requires ep reset after
+	going to lpm
+- qcom,ignore-wakeup-src-in-hostmode: If present, PM suspend/freeze allowed
+	irrespective of host runtimePM state. In PM suspend/resume case, core
+	will stay powered and connected devices will just be suspended/resumed.
+	In hibernation, core will power collapse and connected devices will
+	reset-resume on PM restore.
+- qcom,default-mode-none: If present, do not start any mode on probe for an OTG
+	capable DWC3 which does not have extcon handle.
+- qcom,default-mode-host: If present, start host mode on probe for an OTG
+	capable DWC3 which does not have extcon handle.
+- qcom,dual-port: If present, 2 different physical ports are supported by this
+	core. Please note that this flag is valid for cores supporting only host mode.
 
 Sub nodes:
 - Sub node for "DWC3- USB3 controller".
@@ -95,10 +105,8 @@ Example MSM USB3.0 controller device node :
 	usb@f9200000 {
 		compatible = "qcom,dwc-usb3-msm";
 		reg = <0xf9200000 0xfc000>,
-		      <0xfd4ab000 0x4>,
 		      <0xf9b3e000 0x3ff>;
 		reg-names = "core_base",
-			"tcsr_base",
 			"ahb2phy_base",
 		interrupts = <0 133 0>;
 		interrupt-names = "hs_phy_irq";

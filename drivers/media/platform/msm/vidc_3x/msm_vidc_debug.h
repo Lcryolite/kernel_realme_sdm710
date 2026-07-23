@@ -1,4 +1,5 @@
-/* Copyright (c) 2012-2015, 2017-2018, The Linux Foundation.
+/*
+ * Copyright (c) 2012-2015, 2017-2019, The Linux Foundation.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -9,7 +10,6 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
  */
 
 #ifndef __MSM_VIDC_DEBUG__
@@ -110,15 +110,9 @@ static inline char *VIDC_MSG_PRIO2STRING(int __level)
 				pr_info(VIDC_DBG_TAG __fmt, \
 						VIDC_MSG_PRIO2STRING(__level), \
 						## arg); \
-			} else if (msm_vidc_debug_out == VIDC_OUT_FTRACE) { \
-				trace_printk(KERN_DEBUG VIDC_DBG_TAG __fmt, \
-						VIDC_MSG_PRIO2STRING(__level), \
-						## arg); \
 			} \
 		} \
-	} while (0)
-
-
+} while (0)
 
 struct dentry *msm_vidc_debugfs_init_drv(void);
 struct dentry *msm_vidc_debugfs_init_core(struct msm_vidc_core *core,

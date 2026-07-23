@@ -31,7 +31,7 @@ static void mq_destroy(struct Qdisc *sch)
 	if (!priv->qdiscs)
 		return;
 	for (ntx = 0; ntx < dev->num_tx_queues && priv->qdiscs[ntx]; ntx++)
-		qdisc_destroy(priv->qdiscs[ntx]);
+		qdisc_put(priv->qdiscs[ntx]);
 	kfree(priv->qdiscs);
 }
 
@@ -81,10 +81,10 @@ static void mq_attach(struct Qdisc *sch)
 		qdisc = priv->qdiscs[ntx];
 		old = dev_graft_qdisc(qdisc->dev_queue, qdisc);
 		if (old)
-			qdisc_destroy(old);
+			qdisc_put(old);
 #ifdef CONFIG_NET_SCHED
 		if (ntx < dev->real_num_tx_queues)
-			qdisc_hash_add(qdisc);
+			qdisc_hash_add(qdisc, false);
 #endif
 
 	}
@@ -165,17 +165,13 @@ static struct Qdisc *mq_leaf(struct Qdisc *sch, unsigned long cl)
 	return dev_queue->qdisc_sleeping;
 }
 
-static unsigned long mq_get(struct Qdisc *sch, u32 classid)
+static unsigned long mq_find(struct Qdisc *sch, u32 classid)
 {
 	unsigned int ntx = TC_H_MIN(classid);
 
 	if (!mq_queue_get(sch, ntx))
 		return 0;
 	return ntx;
-}
-
-static void mq_put(struct Qdisc *sch, unsigned long cl)
-{
 }
 
 static int mq_dump_class(struct Qdisc *sch, unsigned long cl,
@@ -224,8 +220,7 @@ static const struct Qdisc_class_ops mq_class_ops = {
 	.select_queue	= mq_select_queue,
 	.graft		= mq_graft,
 	.leaf		= mq_leaf,
-	.get		= mq_get,
-	.put		= mq_put,
+	.find		= mq_find,
 	.walk		= mq_walk,
 	.dump		= mq_dump_class,
 	.dump_stats	= mq_dump_class_stats,

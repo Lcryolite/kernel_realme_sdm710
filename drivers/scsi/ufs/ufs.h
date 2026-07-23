@@ -68,8 +68,6 @@
 #define UFS_MAX_WLUS			4
 #define UFS_MAX_LUS	(UFS_UPIU_MAX_GENERAL_LUN + UFS_MAX_WLUS)
 
-#define QUERY_DESC_IDN_CONFIGURATION	QUERY_DESC_IDN_CONFIGURAION
-
 /* Well known logical unit id in LUN field of UPIU */
 enum {
 	UFS_UPIU_REPORT_LUNS_WLUN	= 0x81,
@@ -85,7 +83,7 @@ enum {
  */
 static inline bool ufs_is_valid_unit_desc_lun(u8 lun)
 {
-	return lun == UFS_UPIU_RPMB_WLUN || (lun < UFS_UPIU_MAX_GENERAL_LUN);
+	return (lun == UFS_UPIU_RPMB_WLUN || (lun < UFS_UPIU_MAX_GENERAL_LUN));
 }
 
 /*
@@ -153,24 +151,10 @@ enum ufs_desc_def_size {
 	QUERY_DESC_CONFIGURATION_DEF_SIZE	= 0x90,
 	QUERY_DESC_UNIT_DEF_SIZE		= 0x23,
 	QUERY_DESC_INTERCONNECT_DEF_SIZE	= 0x06,
-	QUERY_DESC_GEOMETRY_DEF_SIZE		= 0x44,
+	QUERY_DESC_GEOMETRY_DEF_SIZE		= 0x48,
 	QUERY_DESC_POWER_DEF_SIZE		= 0x62,
-#ifdef VENDOR_EDIT
-	QUERY_DESC_HEALTH_DEF_SIZE              = 0x25,
-#endif	
+	QUERY_DESC_HEALTH_DEF_SIZE		= 0x25,
 };
-
-#ifdef VENDOR_EDIT
-/* Health descriptor parameters offsets in bytes*/
-enum health_desc_param {
-       HEALTH_DESC_PARAM_LEN                   = 0x0,
-       HEALTH_DESC_PARAM_TYPE                  = 0x1,
-       HEALTH_DESC_PARAM_EOL_INFO              = 0x2,
-       HEALTH_DESC_PARAM_LIFE_TIME_EST_A       = 0x3,
-       HEALTH_DESC_PARAM_LIFE_TIME_EST_B       = 0x4,
-       //HEALTH_DESC_PARAM_VENDOR_PROPINFO	   = 0x5,
-};
-#endif
 
 /* Unit descriptor parameters offsets in bytes*/
 enum unit_desc_param {
@@ -222,6 +206,16 @@ enum device_desc_param {
 	DEVICE_DESC_PARAM_RTT_CAP		= 0x1C,
 	DEVICE_DESC_PARAM_FRQ_RTC		= 0x1D,
 };
+
+/* Health descriptor parameters offsets in bytes*/
+enum health_desc_param {
+	HEALTH_DESC_PARAM_LEN			= 0x0,
+	HEALTH_DESC_PARAM_TYPE			= 0x1,
+	HEALTH_DESC_PARAM_EOL_INFO		= 0x2,
+	HEALTH_DESC_PARAM_LIFE_TIME_EST_A	= 0x3,
+	HEALTH_DESC_PARAM_LIFE_TIME_EST_B	= 0x4,
+};
+
 /*
  * Logical Unit Write Protect
  * 00h: LU not write protected
@@ -478,9 +472,9 @@ struct ufs_query_res {
 #define UFS_VREG_VCC_MAX_UV	   3600000 /* uV */
 #define UFS_VREG_VCC_1P8_MIN_UV    1700000 /* uV */
 #define UFS_VREG_VCC_1P8_MAX_UV    1950000 /* uV */
-#define UFS_VREG_VCCQ_MIN_UV	   1100000 /* uV */
+#define UFS_VREG_VCCQ_MIN_UV	   1140000 /* uV */
 #define UFS_VREG_VCCQ_MAX_UV	   1300000 /* uV */
-#define UFS_VREG_VCCQ2_MIN_UV	   1650000 /* uV */
+#define UFS_VREG_VCCQ2_MIN_UV	   1700000 /* uV */
 #define UFS_VREG_VCCQ2_MAX_UV	   1950000 /* uV */
 
 /*
@@ -496,6 +490,8 @@ struct ufs_vreg {
 	bool unused;
 	int min_uV;
 	int max_uV;
+	bool low_voltage_sup;
+	bool low_voltage_active;
 	int min_uA;
 	int max_uA;
 };
@@ -532,6 +528,19 @@ struct ufs_dev_info {
 
 	/* Device deviations from standard UFS device spec. */
 	unsigned int quirks;
+};
+
+#define MAX_MODEL_LEN 16
+/**
+ * ufs_dev_desc - ufs device details from the device descriptor
+ *
+ * @wmanufacturerid: card details
+ * @model: card model
+ */
+struct ufs_dev_desc {
+	u16 wmanufacturerid;
+	char model[MAX_MODEL_LEN + 1];
+	u16 wspecversion;
 };
 
 #endif /* End of Header */

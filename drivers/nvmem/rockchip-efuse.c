@@ -1,17 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Rockchip eFuse Driver
  *
  * Copyright (c) 2015 Rockchip Electronics Co. Ltd.
  * Author: Caesar Wang <wxt@rock-chips.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of version 2 of the GNU General Public License as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
- * more details.
  */
 
 #include <linux/clk.h>
@@ -167,6 +159,10 @@ static const struct of_device_id rockchip_efuse_match[] = {
 	},
 	{
 		.compatible = "rockchip,rk3188-efuse",
+		.data = (void *)&rockchip_rk3288_efuse_read,
+	},
+	{
+		.compatible = "rockchip,rk3228-efuse",
 		.data = (void *)&rockchip_rk3288_efuse_read,
 	},
 	{

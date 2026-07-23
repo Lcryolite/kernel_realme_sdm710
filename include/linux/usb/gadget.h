@@ -44,7 +44,6 @@
 #define MSM_VENDOR_ID			BIT(16)
 
 struct usb_ep;
-struct usb_gadget;
 
 enum ep_type {
 	EP_TYPE_NORMAL = 0,
@@ -67,7 +66,6 @@ enum gsi_ep_op {
 	GSI_EP_OP_SET_CLR_BLOCK_DBL,
 	GSI_EP_OP_CHECK_FOR_SUSPEND,
 	GSI_EP_OP_DISABLE,
-	GSI_EP_OP_UPDATE_DB,
 };
 
 /*
@@ -87,6 +85,7 @@ enum gsi_ep_op {
  * @db_reg_phs_addr_msb: IPA channel doorbell register's physical address MSB
  * @sgt_trb_xfer_ring: USB TRB ring related sgtable entries
  * @sgt_data_buff: Data buffer related sgtable entries
+ * @dev: pointer to the DMA-capable dwc device
  */
 struct usb_gsi_request {
 	void *buf_base_addr;
@@ -98,6 +97,7 @@ struct usb_gsi_request {
 	u32 db_reg_phs_addr_msb;
 	struct sg_table sgt_trb_xfer_ring;
 	struct sg_table sgt_data_buff;
+	struct device *dev;
 };
 
 /*
@@ -295,7 +295,7 @@ struct usb_ep_caps {
  * @caps:The structure describing types and directions supported by endoint.
  * @maxpacket:The maximum packet size used on this endpoint.  The initial
  *	value can sometimes be reduced (hardware allowing), according to
- *      the endpoint descriptor used to configure the endpoint.
+ *	the endpoint descriptor used to configure the endpoint.
  * @maxpacket_limit:The maximum packet size value which can be handled by this
  *	endpoint. It's set once by UDC driver when endpoint is initialized, and
  *	should not be changed. Should not be confused with maxpacket.
@@ -361,8 +361,6 @@ int usb_ep_fifo_status(struct usb_ep *ep);
 void usb_ep_fifo_flush(struct usb_ep *ep);
 int usb_gsi_ep_op(struct usb_ep *ep,
 		struct usb_gsi_request *req, enum gsi_ep_op op);
-int usb_gadget_restart(struct usb_gadget *gadget);
-int usb_gadget_func_wakeup(struct usb_gadget *gadget, int  interface_id);
 #else
 static inline void usb_ep_set_maxpacket_limit(struct usb_ep *ep,
 		unsigned maxpacket_limit)
@@ -396,10 +394,6 @@ static inline void usb_ep_fifo_flush(struct usb_ep *ep)
 static int usb_gsi_ep_op(struct usb_ep *ep,
 		struct usb_gsi_request *req, enum gsi_ep_op op)
 { return 0; }
-static int usb_gadget_restart(struct usb_gadget *gadget)
-{ return 0; }
-static int usb_gadget_func_wakeup(struct usb_gadget *gadget, int  interface_id)
-{ return 0; }
 #endif /* USB_GADGET */
 
 /*-------------------------------------------------------------------------*/
@@ -412,6 +406,7 @@ struct usb_dcd_config_params {
 };
 
 
+struct usb_gadget;
 struct usb_gadget_driver;
 struct usb_udc;
 
@@ -432,6 +427,7 @@ struct usb_gadget_ops {
 	int	(*udc_start)(struct usb_gadget *,
 			struct usb_gadget_driver *);
 	int	(*udc_stop)(struct usb_gadget *);
+	void	(*udc_set_speed)(struct usb_gadget *, enum usb_device_speed);
 	struct usb_ep *(*match_ep)(struct usb_gadget *,
 			struct usb_endpoint_descriptor *,
 			struct usb_ss_ep_comp_descriptor *);
@@ -481,10 +477,8 @@ struct usb_gadget_ops {
  * @deactivated: True if gadget is deactivated - in deactivated state it cannot
  *	be connected.
  * @connected: True if gadget is connected.
- * @bam2bam_func_enabled; Indicates function using bam2bam is enabled or not.
- * @extra_buf_alloc: Extra allocation size for AXI prefetch so that out of
- * boundary access is protected.
- * @is_chipidea: True if ChipIdea device controller
+ * @lpm_capable: If the gadget max_speed is FULL or HIGH, this flag
+ *	indicates that it supports LPM as per the LPM ECN & errata.
  *
  * Gadgets have a mostly-portable "gadget driver" implementing device
  * functions, handling all usb configurations and interfaces.  Gadget
@@ -537,7 +531,8 @@ struct usb_gadget {
 	unsigned			is_selfpowered:1;
 	unsigned			deactivated:1;
 	unsigned			connected:1;
-	bool				remote_wakeup;
+	unsigned			lpm_capable:1;
+	unsigned			remote_wakeup:1;
 	bool				bam2bam_func_enabled;
 	u32				extra_buf_alloc;
 	bool				l1_supported;
@@ -676,6 +671,7 @@ static inline int gadget_is_otg(struct usb_gadget *g)
 #if IS_ENABLED(CONFIG_USB_GADGET)
 int usb_gadget_frame_number(struct usb_gadget *gadget);
 int usb_gadget_wakeup(struct usb_gadget *gadget);
+int usb_gadget_func_wakeup(struct usb_gadget *gadget, int interface_id);
 int usb_gadget_set_selfpowered(struct usb_gadget *gadget);
 int usb_gadget_clear_selfpowered(struct usb_gadget *gadget);
 int usb_gadget_vbus_connect(struct usb_gadget *gadget);
@@ -689,6 +685,8 @@ int usb_gadget_activate(struct usb_gadget *gadget);
 static inline int usb_gadget_frame_number(struct usb_gadget *gadget)
 { return 0; }
 static inline int usb_gadget_wakeup(struct usb_gadget *gadget)
+{ return 0; }
+static int usb_gadget_func_wakeup(struct usb_gadget *gadget, int interface_id)
 { return 0; }
 static inline int usb_gadget_set_selfpowered(struct usb_gadget *gadget)
 { return 0; }
@@ -805,6 +803,8 @@ struct usb_gadget_driver {
 	struct list_head	pending;
 	unsigned                match_existing_only:1;
 };
+
+
 
 /*-------------------------------------------------------------------------*/
 

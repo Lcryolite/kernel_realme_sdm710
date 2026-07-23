@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -28,12 +28,46 @@
 #define DSI_CTRL_DYNAMIC_FORCE_ON         (0x23F|BIT(8)|BIT(9)|BIT(11)|BIT(21))
 #define DSI_CTRL_CMD_MISR_ENABLE          BIT(28)
 #define DSI_CTRL_VIDEO_MISR_ENABLE        BIT(16)
+#define DSI_CTRL_DMA_LINK_SEL             (BIT(12)|BIT(13))
+#define DSI_CTRL_MDP0_LINK_SEL            (BIT(20)|BIT(22))
 
 /* Unsupported formats default to RGB888 */
 static const u8 cmd_mode_format_map[DSI_PIXEL_FORMAT_MAX] = {
 	0x6, 0x7, 0x8, 0x8, 0x0, 0x3, 0x4 };
 static const u8 video_mode_format_map[DSI_PIXEL_FORMAT_MAX] = {
 	0x0, 0x1, 0x2, 0x3, 0x3, 0x3, 0x3 };
+
+/**
+ * dsi_split_link_setup() - setup dsi split link configurations
+ * @ctrl:             Pointer to the controller host hardware.
+ * @cfg:              DSI host configuration that is common to both video and
+ *                    command modes.
+ */
+static void dsi_split_link_setup(struct dsi_ctrl_hw *ctrl,
+				struct dsi_host_common_cfg *cfg)
+{
+	u32 reg;
+
+	if (!cfg->split_link.split_link_enabled)
+		return;
+
+	reg = DSI_R32(ctrl, DSI_SPLIT_LINK);
+
+	/* DMA_LINK_SEL */
+	reg &= ~(0x7 << 12);
+	reg |= DSI_CTRL_DMA_LINK_SEL;
+
+	/* MDP0_LINK_SEL */
+	reg &= ~(0x7 << 20);
+	reg |= DSI_CTRL_MDP0_LINK_SEL;
+
+	/* EN */
+	reg |= 0x1;
+
+	/* DSI_SPLIT_LINK */
+	DSI_W32(ctrl, DSI_SPLIT_LINK, reg);
+	wmb(); /* make sure split link is asserted */
+}
 
 /**
  * dsi_setup_trigger_controls() - setup dsi trigger configurations
@@ -66,6 +100,15 @@ void dsi_ctrl_hw_cmn_host_setup(struct dsi_ctrl_hw *ctrl,
 	u32 reg_value = 0;
 
 	dsi_setup_trigger_controls(ctrl, cfg);
+	dsi_split_link_setup(ctrl, cfg);
+
+	/* Setup T_CLK_PRE extend register */
+	reg_value = DSI_R32(ctrl, DSI_TEST_PATTERN_GEN_VIDEO_ENABLE);
+	if (cfg->t_clk_pre_extend)
+		reg_value |= BIT(0);
+	else
+		reg_value &= ~BIT(0);
+	DSI_W32(ctrl, DSI_TEST_PATTERN_GEN_VIDEO_ENABLE, reg_value);
 
 	/* Setup clocking timing controls */
 	reg_value = ((cfg->t_clk_post & 0x3F) << 8);
@@ -91,6 +134,9 @@ void dsi_ctrl_hw_cmn_host_setup(struct dsi_ctrl_hw *ctrl,
 	reg_value |= ((cfg->data_lanes & DSI_DATA_LANE_0) ? BIT(4) : 0);
 
 	DSI_W32(ctrl, DSI_CTRL, reg_value);
+
+	if (cfg->phy_type == DSI_PHY_TYPE_CPHY)
+		DSI_W32(ctrl, DSI_CPHY_MODE_CTRL, BIT(0));
 
 	if (ctrl->phy_isolation_enabled)
 		DSI_W32(ctrl, DSI_DEBUG_CTRL, BIT(28));
@@ -220,12 +266,12 @@ u32 dsi_ctrl_hw_cmn_collect_misr(struct dsi_ctrl_hw *ctrl,
 }
 
 /**
-* set_timing_db() - enable/disable Timing DB register
-* @ctrl:          Pointer to controller host hardware.
-* @enable:        Enable/Disable flag.
-*
-* Enable or Disabe the Timing DB register.
-*/
+ * set_timing_db() - enable/disable Timing DB register
+ * @ctrl:          Pointer to controller host hardware.
+ * @enable:        Enable/Disable flag.
+ *
+ * Enable or Disabe the Timing DB register.
+ */
 void dsi_ctrl_hw_cmn_set_timing_db(struct dsi_ctrl_hw *ctrl,
 				     bool enable)
 {
@@ -275,7 +321,7 @@ void dsi_ctrl_hw_cmn_set_video_timing(struct dsi_ctrl_hw *ctrl,
 		reg |= 1;
 		DSI_W32(ctrl, DSI_VIDEO_COMPRESSION_MODE_CTRL, reg);
 	} else {
-		width = mode->h_active;
+		width = mode->h_active + mode->overlap_pixels;
 	}
 
 	hs_end = mode->h_sync_width;
@@ -386,8 +432,8 @@ void dsi_ctrl_hw_cmn_setup_cmd_stream(struct dsi_ctrl_hw *ctrl,
 		stride_final = roi->w * 3;
 		height_final = roi->h;
 	} else {
-		width_final = mode->h_active;
-		stride_final = h_stride;
+		width_final = mode->h_active + mode->overlap_pixels;
+		stride_final = h_stride + mode->overlap_pixels * 3;
 		height_final = mode->v_active;
 	}
 
@@ -418,6 +464,27 @@ void dsi_ctrl_hw_cmn_setup_cmd_stream(struct dsi_ctrl_hw *ctrl,
 
 	pr_debug("ctrl %d stream_ctrl 0x%x stream_total 0x%x\n", ctrl->index,
 			stream_ctrl, stream_total);
+}
+
+/**
+ * setup_avr() - set the AVR_SUPPORT_ENABLE bit in DSI_VIDEO_MODE_CTRL
+ * @ctrl:          Pointer to controller host hardware.
+ * @enable:        Controls whether this bit is set or cleared
+ *
+ * Set or clear the AVR_SUPPORT_ENABLE bit in DSI_VIDEO_MODE_CTRL.
+ */
+void dsi_ctrl_hw_cmn_setup_avr(struct dsi_ctrl_hw *ctrl, bool enable)
+{
+	u32 reg = DSI_R32(ctrl, DSI_VIDEO_MODE_CTRL);
+
+	if (enable)
+		reg |= BIT(29);
+	else
+		reg &= ~BIT(29);
+
+	DSI_W32(ctrl, DSI_VIDEO_MODE_CTRL, reg);
+	pr_debug("ctrl %d AVR %s\n", ctrl->index,
+			enable ? "enabled" : "disabled");
 }
 
 /**
@@ -454,7 +521,6 @@ void dsi_ctrl_hw_cmn_video_engine_setup(struct dsi_ctrl_hw *ctrl,
 	DSI_W32(ctrl, DSI_VIDEO_MODE_DATA_CTRL, reg);
 	/* Disable Timing double buffering */
 	DSI_W32(ctrl, DSI_DSI_TIMING_DB_MODE, 0x0);
-
 
 	pr_debug("[DSI_%d] Video engine setup done\n", ctrl->index);
 }
@@ -1359,7 +1425,7 @@ void dsi_ctrl_hw_dln0_phy_err(struct dsi_ctrl_hw *ctrl)
 	status = DSI_R32(ctrl, DSI_DLN0_PHY_ERR);
 	if (status & 0x011111) {
 		DSI_W32(ctrl, DSI_DLN0_PHY_ERR, status);
-		pr_err("%s: phy_err_status = %x\n", __func__, status);
+		pr_debug("%s: phy_err_status = %x\n", __func__, status);
 	}
 }
 
@@ -1416,9 +1482,19 @@ int dsi_ctrl_hw_cmn_ctrl_reset(struct dsi_ctrl_hw *ctrl,
 void dsi_ctrl_hw_cmn_mask_error_intr(struct dsi_ctrl_hw *ctrl, u32 idx, bool en)
 {
 	u32 reg = 0;
+	u32 fifo_status = 0, timeout_status = 0;
+	u32 overflow_clear = BIT(10) | BIT(18) | BIT(22) | BIT(26) | BIT(30);
+	u32 underflow_clear = BIT(19) | BIT(23) | BIT(27) | BIT(31);
+	u32 lp_rx_clear = BIT(4);
 
 	reg = DSI_R32(ctrl, 0x10c);
 
+	/*
+	 * Before unmasking we should clear the corresponding error status bits
+	 * that might have been set while we masked these errors. Since these
+	 * are sticky bits, these errors will trigger the moment we unmask
+	 * the error bits.
+	 */
 	if (idx & BIT(DSI_FIFO_OVERFLOW)) {
 		if (en) {
 			reg |= (0x1f << 16);
@@ -1426,21 +1502,29 @@ void dsi_ctrl_hw_cmn_mask_error_intr(struct dsi_ctrl_hw *ctrl, u32 idx, bool en)
 		} else {
 			reg &= ~(0x1f << 16);
 			reg &= ~BIT(9);
+			fifo_status = DSI_R32(ctrl, 0x00c);
+			DSI_W32(ctrl, 0x00c, fifo_status | overflow_clear);
 		}
 	}
 
 	if (idx & BIT(DSI_FIFO_UNDERFLOW)) {
-		if (en)
+		if (en) {
 			reg |= (0x1b << 26);
-		else
+		} else {
 			reg &= ~(0x1b << 26);
+			fifo_status = DSI_R32(ctrl, 0x00c);
+			DSI_W32(ctrl, 0x00c, fifo_status | underflow_clear);
+		}
 	}
 
 	if (idx & BIT(DSI_LP_Rx_TIMEOUT)) {
-		if (en)
+		if (en) {
 			reg |= (0x7 << 23);
-		else
+		} else {
 			reg &= ~(0x7 << 23);
+			timeout_status = DSI_R32(ctrl, 0x0c0);
+			DSI_W32(ctrl, 0x0c0, timeout_status | lp_rx_clear);
+		}
 	}
 
 	if (idx & BIT(DSI_PLL_UNLOCK_ERR)) {
@@ -1502,6 +1586,19 @@ int dsi_ctrl_hw_cmn_wait_for_cmd_mode_mdp_idle(struct dsi_ctrl_hw *ctrl)
 		pr_err("%s: timed out waiting for idle\n", __func__);
 
 	return rc;
+}
+
+void dsi_ctrl_hw_cmn_hs_req_sel(struct dsi_ctrl_hw *ctrl, bool sel_phy)
+{
+	u32 reg = 0;
+
+	reg = DSI_R32(ctrl, DSI_LANE_CTRL);
+	if (sel_phy)
+		reg &= ~BIT(24);
+	else
+		reg |= BIT(24);
+	DSI_W32(ctrl, DSI_LANE_CTRL, reg);
+	wmb(); /* make sure request is set */
 }
 
 void dsi_ctrl_hw_cmn_set_continuous_clk(struct dsi_ctrl_hw *ctrl, bool enable)

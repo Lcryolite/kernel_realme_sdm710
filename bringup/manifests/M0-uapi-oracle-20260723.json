@@ -1,0 +1,36 @@
+{
+  "schema": 2,
+  "milestone": "M0-vendor-uapi-oracle",
+  "status": "PASS",
+  "baseline_commit": "e7a1612ee260c815354c80c13440eaf49e8b30f4",
+  "candidate_commit": "d13ec62256091330a024560285c256725febd6a0",
+  "toolchain": "Android (6443078 based on r383902) clang 11.0.1",
+  "policy": {
+    "candidate_additions_allowed": true,
+    "baseline_removals_allowed": false,
+    "baseline_value_or_layout_changes_allowed": false,
+    "header_unit": "each exported header is compiled independently",
+    "target_execution_required": false
+  },
+  "result": {
+    "arm64": {"baseline_values": 35664, "candidate_values": 38409, "additions": 2745, "removals": 0, "value_changes": 0, "incompatible_differences": 0, "pass": true},
+    "arm32": {"baseline_values": 35664, "candidate_values": 38409, "additions": 2745, "removals": 0, "value_changes": 0, "incompatible_differences": 0, "pass": true}
+  },
+  "restored_categories": ["ion", "fscrypt_verity", "kgsl", "drm_sde", "audio", "vidc", "camera", "ipa_rmnet"],
+  "evidence": {
+    "primary_root": "/home/lknife/android/rmx1901-4.14-bringup-evidence/UAPI-ipa-d13ec62-20260723",
+    "off_disk_root": "/home/lknife/rmx1901-4.14-bringup-evidence-offdisk/UAPI-ipa-d13ec62-20260723",
+    "pairwise_directory_diff": "PASS",
+    "sha256_check": "PASS",
+    "sha256": {
+      "old64_oracle": "28b7c4a928a782fb491e5f29ea82d17456788d5d1e4c1761d3c65902ab5f87df",
+      "old32_oracle": "64f0527a7b19cbfd9eb3b168fd9a7df2ace4538322566e23b44d8773b7d5a0af",
+      "new64_oracle": "b87552289b9b90c3967e2aeabba57a4360caca48bc939fc22e154f1d7a3274a8",
+      "new32_oracle": "897c33d522aefaaa71e271877ad288b86105f7b9b4d7ee5e53e559bc666fde9e",
+      "diff_arm64": "befe48b5ac88c8ebd3a929b3d7c9481c78d06cbf7e217af57ac8ba6dcebb7825",
+      "diff_arm32": "bb0aa00f108b9992cacea172b63b2fa4a8555817b9bd5f2297d929c1791ef154"
+    }
+  },
+  "remaining_gate": "boot image repack and DTB selection validation",
+  "device_flash_allowed": false
+}

@@ -21,33 +21,31 @@
 #ifdef CONFIG_DIAGFWD_BRIDGE_CODE
 #include "diagfwd_bridge.h"
 #endif
-#ifdef CONFIG_USB_QCOM_DIAG_BRIDGE
+#ifdef CONFIG_USB_QTI_DIAG_BRIDGE
 #include "diagfwd_hsic.h"
-#include "diagfwd_smux.h"
 #endif
-#ifdef CONFIG_MSM_MHI
+#ifdef CONFIG_MHI_BUS
 #include "diagfwd_mhi.h"
 #endif
 #include "diagmem.h"
 #include "diag_dci.h"
 #include "diag_usb.h"
 #include "diagfwd_peripheral.h"
-#include "diagfwd_smd.h"
 #include "diagfwd_socket.h"
-#include "diagfwd_glink.h"
+#include "diagfwd_rpmsg.h"
 #include "diag_pcie.h"
 #include "diag_debugfs.h"
 #include "diag_ipc_logging.h"
 
 #define DEBUG_BUF_SIZE	4096
+#define CMD_SIZE 10
 static struct dentry *diag_dbgfs_dent;
 static int diag_dbgfs_table_index;
 static int diag_dbgfs_mempool_index;
 static int diag_dbgfs_usbinfo_index;
 static int diag_dbgfs_pcieinfo_index;
-static int diag_dbgfs_smdinfo_index;
 static int diag_dbgfs_socketinfo_index;
-static int diag_dbgfs_glinkinfo_index;
+static int diag_dbgfs_rpmsginfo_index;
 static int diag_dbgfs_hsicinfo_index;
 static int diag_dbgfs_mhiinfo_index;
 static int diag_dbgfs_bridgeinfo_index;
@@ -91,12 +89,12 @@ static ssize_t diag_dbgfs_read_status(struct file *file, char __user *ubuf,
 		driver->supports_apps_hdlc_encoding,
 		driver->supports_apps_header_untagging,
 		driver->supports_sockets,
-		driver->logging_mode,
+		driver->logging_mode[DIAG_LOCAL_PROC],
 		driver->rsp_buf_busy,
 		driver->hdlc_disabled,
 		driver->time_sync_enabled,
-		driver->md_session_mode,
-		driver->md_session_mask,
+		driver->md_session_mode[DIAG_LOCAL_PROC],
+		driver->md_session_mask[DIAG_LOCAL_PROC],
 		driver->uses_time_api,
 		driver->supports_pd_buffering);
 
@@ -182,10 +180,8 @@ static ssize_t diag_dbgfs_read_dcistats(struct file *file,
 		bytes_written = scnprintf(buf+bytes_in_buf,
 					  bytes_remaining,
 					  "dci power: active, relax: %lu, %lu\n",
-					  driver->diag_dev->power.wakeup->
-						active_count,
-					  driver->diag_dev->
-						power.wakeup->relax_count);
+			driver->diag_dev->power.wakeup->active_count,
+			driver->diag_dev->power.wakeup->relax_count);
 		bytes_in_buf += bytes_written;
 		bytes_remaining -= bytes_written;
 
@@ -250,7 +246,7 @@ static ssize_t diag_dbgfs_read_power(struct file *file, char __user *ubuf,
 		driver->num_dci_client,
 		driver->md_ws.ref_count,
 		driver->md_ws.copy_count,
-		driver->logging_mode,
+		driver->logging_mode[DIAG_LOCAL_PROC],
 		driver->diag_dev->power.wakeup->active_count,
 		driver->diag_dev->power.wakeup->relax_count);
 
@@ -449,8 +445,7 @@ static ssize_t diag_dbgfs_read_usbinfo(struct file *file, char __user *ubuf,
 			"write count: %lu\n"
 			"read work pending: %d\n"
 			"read done work pending: %d\n"
-			"connect work pending: %d\n"
-			"disconnect work pending: %d\n"
+			"event work pending: %d\n"
 			"max size supported: %d\n\n",
 			usb_info->id,
 			usb_info->name,
@@ -464,8 +459,7 @@ static ssize_t diag_dbgfs_read_usbinfo(struct file *file, char __user *ubuf,
 			usb_info->write_cnt,
 			work_pending(&usb_info->read_work),
 			work_pending(&usb_info->read_done_work),
-			work_pending(&usb_info->connect_work),
-			work_pending(&usb_info->disconnect_work),
+			work_pending(&usb_info->event_work),
 			usb_info->max_size);
 		bytes_in_buffer += bytes_written;
 
@@ -543,112 +537,6 @@ static ssize_t diag_dbgfs_read_pcieinfo(struct file *file, char __user *ubuf,
 	return ret;
 }
 
-#ifdef CONFIG_DIAG_USES_SMD
-static ssize_t diag_dbgfs_read_smdinfo(struct file *file, char __user *ubuf,
-				       size_t count, loff_t *ppos)
-{
-	char *buf = NULL;
-	int ret = 0;
-	int i = 0;
-	int j = 0;
-	unsigned int buf_size;
-	unsigned int bytes_remaining = 0;
-	unsigned int bytes_written = 0;
-	unsigned int bytes_in_buffer = 0;
-	struct diag_smd_info *smd_info = NULL;
-	struct diagfwd_info *fwd_ctxt = NULL;
-
-	if (diag_dbgfs_smdinfo_index >= NUM_PERIPHERALS) {
-		/* Done. Reset to prepare for future requests */
-		diag_dbgfs_smdinfo_index = 0;
-		return 0;
-	}
-
-	buf = kzalloc(sizeof(char) * DEBUG_BUF_SIZE, GFP_KERNEL);
-	if (!buf)
-		return -ENOMEM;
-
-	buf_size = DEBUG_BUF_SIZE;
-	bytes_remaining = buf_size;
-	for (i = 0; i < NUM_TYPES; i++) {
-		for (j = 0; j < NUM_PERIPHERALS; j++) {
-			switch (i) {
-			case TYPE_DATA:
-				smd_info = &smd_data[j];
-				break;
-			case TYPE_CNTL:
-				smd_info = &smd_cntl[j];
-				break;
-			case TYPE_DCI:
-				smd_info = &smd_dci[j];
-				break;
-			case TYPE_CMD:
-				smd_info = &smd_cmd[j];
-				break;
-			case TYPE_DCI_CMD:
-				smd_info = &smd_dci_cmd[j];
-				break;
-			default:
-				return -EINVAL;
-			}
-
-			fwd_ctxt = (struct diagfwd_info *)(smd_info->fwd_ctxt);
-
-			bytes_written = scnprintf(buf+bytes_in_buffer,
-				bytes_remaining,
-				"name\t\t:\t%s\n"
-				"hdl\t\t:\t%pK\n"
-				"inited\t\t:\t%d\n"
-				"opened\t\t:\t%d\n"
-				"diag_state\t:\t%d\n"
-				"fifo size\t:\t%d\n"
-				"open pending\t:\t%d\n"
-				"close pending\t:\t%d\n"
-				"read pending\t:\t%d\n"
-				"buf_1 busy\t:\t%d\n"
-				"buf_2 busy\t:\t%d\n"
-				"bytes read\t:\t%lu\n"
-				"bytes written\t:\t%lu\n"
-				"fwd inited\t:\t%d\n"
-				"fwd opened\t:\t%d\n"
-				"fwd ch_open\t:\t%d\n\n",
-				smd_info->name,
-				smd_info->hdl,
-				smd_info->inited,
-				atomic_read(&smd_info->opened),
-				atomic_read(&smd_info->diag_state),
-				smd_info->fifo_size,
-				work_pending(&smd_info->open_work),
-				work_pending(&smd_info->close_work),
-				work_pending(&smd_info->read_work),
-				(fwd_ctxt && fwd_ctxt->buf_1) ?
-				atomic_read(&fwd_ctxt->buf_1->in_busy) : -1,
-				(fwd_ctxt && fwd_ctxt->buf_2) ?
-				atomic_read(&fwd_ctxt->buf_2->in_busy) : -1,
-				(fwd_ctxt) ? fwd_ctxt->read_bytes : 0,
-				(fwd_ctxt) ? fwd_ctxt->write_bytes : 0,
-				(fwd_ctxt) ? fwd_ctxt->inited : -1,
-				(fwd_ctxt) ?
-				atomic_read(&fwd_ctxt->opened) : -1,
-				(fwd_ctxt) ? fwd_ctxt->ch_open : -1);
-			bytes_in_buffer += bytes_written;
-
-			/* Check if there is room to add another table entry */
-			bytes_remaining = buf_size - bytes_in_buffer;
-
-			if (bytes_remaining < bytes_written)
-				break;
-		}
-	}
-	diag_dbgfs_smdinfo_index = i+1;
-	*ppos = 0;
-	ret = simple_read_from_buffer(ubuf, count, ppos, buf, bytes_in_buffer);
-
-	kfree(buf);
-	return ret;
-}
-#endif
-
 static ssize_t diag_dbgfs_read_socketinfo(struct file *file, char __user *ubuf,
 					  size_t count, loff_t *ppos)
 {
@@ -663,7 +551,7 @@ static ssize_t diag_dbgfs_read_socketinfo(struct file *file, char __user *ubuf,
 	struct diag_socket_info *info = NULL;
 	struct diagfwd_info *fwd_ctxt = NULL;
 
-	if (diag_dbgfs_socketinfo_index >= NUM_PERIPHERALS) {
+	if (diag_dbgfs_socketinfo_index >= NUM_TYPES) {
 		/* Done. Reset to prepare for future requests */
 		diag_dbgfs_socketinfo_index = 0;
 		return 0;
@@ -755,7 +643,7 @@ static ssize_t diag_dbgfs_read_socketinfo(struct file *file, char __user *ubuf,
 	return ret;
 }
 
-static ssize_t diag_dbgfs_read_glinkinfo(struct file *file, char __user *ubuf,
+static ssize_t diag_dbgfs_read_rpmsginfo(struct file *file, char __user *ubuf,
 					  size_t count, loff_t *ppos)
 {
 	char *buf = NULL;
@@ -766,12 +654,12 @@ static ssize_t diag_dbgfs_read_glinkinfo(struct file *file, char __user *ubuf,
 	unsigned int bytes_remaining = 0;
 	unsigned int bytes_written = 0;
 	unsigned int bytes_in_buffer = 0;
-	struct diag_glink_info *info = NULL;
+	struct diag_rpmsg_info *info = NULL;
 	struct diagfwd_info *fwd_ctxt = NULL;
 
-	if (diag_dbgfs_glinkinfo_index >= NUM_PERIPHERALS) {
+	if (diag_dbgfs_rpmsginfo_index >= NUM_TYPES) {
 		/* Done. Reset to prepare for future requests */
-		diag_dbgfs_socketinfo_index = 0;
+		diag_dbgfs_rpmsginfo_index = 0;
 		return 0;
 	}
 
@@ -785,19 +673,19 @@ static ssize_t diag_dbgfs_read_glinkinfo(struct file *file, char __user *ubuf,
 		for (j = 0; j < NUM_PERIPHERALS; j++) {
 			switch (i) {
 			case TYPE_DATA:
-				info = &glink_data[j];
+				info = &rpmsg_data[j];
 				break;
 			case TYPE_CNTL:
-				info = &glink_cntl[j];
+				info = &rpmsg_cntl[j];
 				break;
 			case TYPE_DCI:
-				info = &glink_dci[j];
+				info = &rpmsg_dci[j];
 				break;
 			case TYPE_CMD:
-				info = &glink_cmd[j];
+				info = &rpmsg_cmd[j];
 				break;
 			case TYPE_DCI_CMD:
-				info = &glink_dci_cmd[j];
+				info = &rpmsg_dci_cmd[j];
 				break;
 			default:
 				return -EINVAL;
@@ -807,14 +695,13 @@ static ssize_t diag_dbgfs_read_glinkinfo(struct file *file, char __user *ubuf,
 
 			bytes_written = scnprintf(buf+bytes_in_buffer,
 				bytes_remaining,
-				"name\t\t:\t%s\n"
+				"name\t\t:\t%s:\t%s\n"
 				"hdl\t\t:\t%pK\n"
 				"inited\t\t:\t%d\n"
 				"opened\t\t:\t%d\n"
 				"diag_state\t:\t%d\n"
 				"buf_1 busy\t:\t%d\n"
 				"buf_2 busy\t:\t%d\n"
-				"tx_intent_ready\t:\t%d\n"
 				"open pending\t:\t%d\n"
 				"close pending\t:\t%d\n"
 				"read pending\t:\t%d\n"
@@ -823,6 +710,7 @@ static ssize_t diag_dbgfs_read_glinkinfo(struct file *file, char __user *ubuf,
 				"fwd inited\t:\t%d\n"
 				"fwd opened\t:\t%d\n"
 				"fwd ch_open\t:\t%d\n\n",
+				info->edge,
 				info->name,
 				info->hdl,
 				info->inited,
@@ -832,7 +720,6 @@ static ssize_t diag_dbgfs_read_glinkinfo(struct file *file, char __user *ubuf,
 				atomic_read(&fwd_ctxt->buf_1->in_busy) : -1,
 				(fwd_ctxt && fwd_ctxt->buf_2) ?
 				atomic_read(&fwd_ctxt->buf_2->in_busy) : -1,
-				atomic_read(&info->tx_intent_ready),
 				work_pending(&info->open_work),
 				work_pending(&info->close_work),
 				work_pending(&info->read_work),
@@ -851,7 +738,7 @@ static ssize_t diag_dbgfs_read_glinkinfo(struct file *file, char __user *ubuf,
 				break;
 		}
 	}
-	diag_dbgfs_glinkinfo_index = i+1;
+	diag_dbgfs_rpmsginfo_index = i+1;
 	*ppos = 0;
 	ret = simple_read_from_buffer(ubuf, count, ppos, buf, bytes_in_buffer);
 
@@ -863,15 +750,14 @@ static ssize_t diag_dbgfs_read_glinkinfo(struct file *file, char __user *ubuf,
 static ssize_t diag_dbgfs_write_debug(struct file *fp, const char __user *buf,
 				      size_t count, loff_t *ppos)
 {
-	const int size = 10;
-	unsigned char cmd[size];
+	unsigned char cmd[CMD_SIZE];
 	long value = 0;
 	int len = 0;
 
 	if (count < 1)
 		return -EINVAL;
 
-	len = (count < (size - 1)) ? count : size - 1;
+	len = (count < (CMD_SIZE - 1)) ? count : CMD_SIZE - 1;
 	if (copy_from_user(cmd, buf, len))
 		return -EFAULT;
 
@@ -893,7 +779,7 @@ static ssize_t diag_dbgfs_write_debug(struct file *fp, const char __user *buf,
 #endif
 
 #ifdef CONFIG_DIAGFWD_BRIDGE_CODE
-#ifdef CONFIG_USB_QCOM_DIAG_BRIDGE
+#ifdef CONFIG_USB_QTI_DIAG_BRIDGE
 static ssize_t diag_dbgfs_read_hsicinfo(struct file *file, char __user *ubuf,
 					size_t count, loff_t *ppos)
 {
@@ -906,7 +792,7 @@ static ssize_t diag_dbgfs_read_hsicinfo(struct file *file, char __user *ubuf,
 	unsigned int bytes_in_buffer = 0;
 	struct diag_hsic_info *hsic_info = NULL;
 
-	if (diag_dbgfs_hsicinfo_index >= NUM_DIAG_USB_DEV) {
+	if (diag_dbgfs_hsicinfo_index >= NUM_HSIC_DEV) {
 		/* Done. Reset to prepare for future requests */
 		diag_dbgfs_hsicinfo_index = 0;
 		return 0;
@@ -965,7 +851,7 @@ const struct file_operations diag_dbgfs_hsicinfo_ops = {
 	.read = diag_dbgfs_read_hsicinfo,
 };
 #endif
-#ifdef CONFIG_MSM_MHI
+#ifdef CONFIG_MHI_BUS
 static ssize_t diag_dbgfs_read_mhiinfo(struct file *file, char __user *ubuf,
 				       size_t count, loff_t *ppos)
 {
@@ -997,24 +883,22 @@ static ssize_t diag_dbgfs_read_mhiinfo(struct file *file, char __user *ubuf,
 		bytes_written = scnprintf(buf+bytes_in_buffer, bytes_remaining,
 			"id: %d\n"
 			"name: %s\n"
+			"enabled %d\n"
 			"bridge index: %s\n"
 			"mempool: %s\n"
 			"read ch opened: %d\n"
-			"read ch hdl: %pK\n"
 			"write ch opened: %d\n"
-			"write ch hdl: %pK\n"
 			"read work pending: %d\n"
 			"read done work pending: %d\n"
 			"open work pending: %d\n"
 			"close work pending: %d\n\n",
 			mhi_info->id,
 			mhi_info->name,
+			mhi_info->enabled,
 			DIAG_BRIDGE_GET_NAME(mhi_info->dev_id),
 			DIAG_MEMPOOL_GET_NAME(mhi_info->mempool),
 			atomic_read(&mhi_info->read_ch.opened),
-			mhi_info->read_ch.hdl,
 			atomic_read(&mhi_info->write_ch.opened),
-			mhi_info->write_ch.hdl,
 			work_pending(&mhi_info->read_work),
 			work_pending(&mhi_info->read_done_work),
 			work_pending(&mhi_info->open_work),
@@ -1053,7 +937,7 @@ static ssize_t diag_dbgfs_read_bridge(struct file *file, char __user *ubuf,
 	unsigned int bytes_in_buffer = 0;
 	struct diagfwd_bridge_info *info = NULL;
 
-	if (diag_dbgfs_bridgeinfo_index >= NUM_DIAG_USB_DEV) {
+	if (diag_dbgfs_bridgeinfo_index >= NUM_REMOTE_DEV) {
 		/* Done. Reset to prepare for future requests */
 		diag_dbgfs_bridgeinfo_index = 0;
 		return 0;
@@ -1116,18 +1000,12 @@ const struct file_operations diag_dbgfs_status_ops = {
 	.read = diag_dbgfs_read_status,
 };
 
-#ifdef CONFIG_DIAG_USES_SMD
-static const struct file_operations diag_dbgfs_smdinfo_ops = {
-	.read = diag_dbgfs_read_smdinfo,
-};
-#endif
-
 const struct file_operations diag_dbgfs_socketinfo_ops = {
 	.read = diag_dbgfs_read_socketinfo,
 };
 
-const struct file_operations diag_dbgfs_glinkinfo_ops = {
-	.read = diag_dbgfs_read_glinkinfo,
+const struct file_operations diag_dbgfs_rpmsginfo_ops = {
+	.read = diag_dbgfs_read_rpmsginfo,
 };
 
 const struct file_operations diag_dbgfs_table_ops = {
@@ -1173,20 +1051,13 @@ int diag_debugfs_init(void)
 	if (!entry)
 		goto err;
 
-#ifdef CONFIG_DIAG_USES_SMD
-	entry = debugfs_create_file("smdinfo", 0444, diag_dbgfs_dent, NULL,
-				    &diag_dbgfs_smdinfo_ops);
-	if (!entry)
-		goto err;
-#endif
-
 	entry = debugfs_create_file("socketinfo", 0444, diag_dbgfs_dent, 0,
 				    &diag_dbgfs_socketinfo_ops);
 	if (!entry)
 		goto err;
 
-	entry = debugfs_create_file("glinkinfo", 0444, diag_dbgfs_dent, 0,
-				    &diag_dbgfs_glinkinfo_ops);
+	entry = debugfs_create_file("rpmsginfo", 0444, diag_dbgfs_dent, 0,
+				    &diag_dbgfs_rpmsginfo_ops);
 	if (!entry)
 		goto err;
 
@@ -1231,13 +1102,13 @@ int diag_debugfs_init(void)
 				    &diag_dbgfs_bridge_ops);
 	if (!entry)
 		goto err;
-#ifdef CONFIG_USB_QCOM_DIAG_BRIDGE
+#ifdef CONFIG_USB_QTI_DIAG_BRIDGE
 	entry = debugfs_create_file("hsicinfo", 0444, diag_dbgfs_dent, 0,
 				    &diag_dbgfs_hsicinfo_ops);
 	if (!entry)
 		goto err;
 #endif
-#ifdef CONFIG_MSM_MHI
+#ifdef CONFIG_MHI_BUS
 	entry = debugfs_create_file("mhiinfo", 0444, diag_dbgfs_dent, 0,
 				    &diag_dbgfs_mhiinfo_ops);
 	if (!entry)
@@ -1247,7 +1118,6 @@ int diag_debugfs_init(void)
 	diag_dbgfs_table_index = 0;
 	diag_dbgfs_mempool_index = 0;
 	diag_dbgfs_usbinfo_index = 0;
-	diag_dbgfs_smdinfo_index = 0;
 	diag_dbgfs_socketinfo_index = 0;
 	diag_dbgfs_hsicinfo_index = 0;
 	diag_dbgfs_bridgeinfo_index = 0;

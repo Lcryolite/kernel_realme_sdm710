@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2015, 2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2015, 2017-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -40,12 +40,24 @@ esoc_link_info_show(struct device *dev, struct device_attribute *attr,
 				to_esoc_clink(dev)->link_info);
 }
 
-static struct device_attribute esoc_clink_attrs[] = {
+static DEVICE_ATTR_RO(esoc_name);
+static DEVICE_ATTR_RO(esoc_link);
+static DEVICE_ATTR_RO(esoc_link_info);
 
-	__ATTR_RO(esoc_name),
-	__ATTR_RO(esoc_link),
-	__ATTR_RO(esoc_link_info),
-	__ATTR_NULL,
+static struct attribute *esoc_clink_attrs[] = {
+	&dev_attr_esoc_name.attr,
+	&dev_attr_esoc_link.attr,
+	&dev_attr_esoc_link_info.attr,
+	NULL
+};
+
+static struct attribute_group esoc_clink_attr_group = {
+	.attrs = esoc_clink_attrs,
+};
+
+const struct attribute_group *esoc_clink_attr_groups[] = {
+	&esoc_clink_attr_group,
+	NULL,
 };
 
 static int esoc_bus_match(struct device *dev, struct device_driver *drv)
@@ -80,7 +92,7 @@ static int esoc_bus_probe(struct device *dev)
 struct bus_type esoc_bus_type = {
 	.name = "esoc",
 	.match = esoc_bus_match,
-	.dev_attrs = esoc_clink_attrs,
+	.dev_groups = esoc_clink_attr_groups,
 };
 EXPORT_SYMBOL(esoc_bus_type);
 
@@ -126,9 +138,7 @@ static int esoc_clink_match_node(struct device *dev, void *id)
 
 void esoc_for_each_dev(void *data, int (*fn)(struct device *dev, void *))
 {
-	int ret;
-
-	ret = bus_for_each_dev(&esoc_bus_type, NULL, data, fn);
+	bus_for_each_dev(&esoc_bus_type, NULL, data, fn);
 }
 EXPORT_SYMBOL(esoc_for_each_dev);
 

@@ -2,17 +2,24 @@
  * Copyright (C) 2013 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
  *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
  *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
+ * The above copyright notice and this permission notice (including the next
+ * paragraph) shall be included in all copies or substantial portions of the
+ * Software.
  *
- * You should have received a copy of the GNU General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 
 #ifndef __MSM_DRM_H__
@@ -110,6 +117,7 @@ struct drm_msm_ext_hdr_properties {
 #define MSM_PARAM_CHIP_ID    0x03
 #define MSM_PARAM_MAX_FREQ   0x04
 #define MSM_PARAM_TIMESTAMP  0x05
+#define MSM_PARAM_GMEM_BASE  0x06
 
 struct drm_msm_param {
 	__u32 pipe;           /* in, MSM_PIPE_x */
@@ -141,10 +149,17 @@ struct drm_msm_gem_new {
 	__u32 handle;         /* out */
 };
 
+#define MSM_INFO_IOVA	0x01
+
+#define MSM_INFO_FLAGS (MSM_INFO_IOVA)
+
 struct drm_msm_gem_info {
 	__u32 handle;         /* in */
-	__u32 pad;
-	__u64 offset;         /* out, offset to pass to mmap() */
+	union {
+		__u32 pad;
+		__u32 flags;  /* in - combination of MSM_INFO_* flags */
+	};
+	__u64 offset;         /* out, mmap() offset or iova */
 };
 
 #define MSM_PREP_READ        0x01
@@ -208,7 +223,7 @@ struct drm_msm_gem_submit_cmd {
 	__u32 size;           /* in, cmdstream size */
 	__u32 pad;
 	__u32 nr_relocs;      /* in, number of submit_reloc's */
-	__u64 __user relocs;  /* in, ptr to array of submit_reloc's */
+	__u64 relocs;         /* in, ptr to array of submit_reloc's */
 };
 
 /* Each buffer referenced elsewhere in the cmdstream submit (ie. the
@@ -252,8 +267,8 @@ struct drm_msm_gem_submit {
 	__u32 fence;          /* out */
 	__u32 nr_bos;         /* in, number of submit_bo's */
 	__u32 nr_cmds;        /* in, number of submit_cmd's */
-	__u64 __user bos;     /* in, ptr to array of submit_bo's */
-	__u64 __user cmds;    /* in, ptr to array of submit_cmd's */
+	__u64 bos;            /* in, ptr to array of submit_bo's */
+	__u64 cmds;           /* in, ptr to array of submit_cmd's */
 	__s32 fence_fd;       /* in/out fence fd (see MSM_SUBMIT_FENCE_FD_IN/OUT) */
 };
 
@@ -348,6 +363,16 @@ struct drm_msm_event_resp {
 	__u8 data[];
 };
 
+/**
+ * struct drm_msm_power_ctrl: Payload to enable/disable the power vote
+ * @enable: enable/disable the power vote
+ * @flags:  operation control flags, for future use
+ */
+struct drm_msm_power_ctrl {
+	__u32 enable;
+	__u32 flags;
+};
+
 #define DRM_MSM_GET_PARAM              0x00
 /* placeholder:
 #define DRM_MSM_SET_PARAM              0x01
@@ -364,6 +389,7 @@ struct drm_msm_event_resp {
 #define DRM_MSM_REGISTER_EVENT         0x41
 #define DRM_MSM_DEREGISTER_EVENT       0x42
 #define DRM_MSM_RMFB2                  0x43
+#define DRM_MSM_POWER_CTRL             0x44
 
 /* sde custom events */
 #define DRM_EVENT_HISTOGRAM 0x80000000
@@ -373,6 +399,7 @@ struct drm_msm_event_resp {
 #define DRM_EVENT_SDE_POWER 0x80000004
 #define DRM_EVENT_IDLE_NOTIFY 0x80000005
 #define DRM_EVENT_PANEL_DEAD 0x80000006 /* ESD event */
+#define DRM_EVENT_SDE_HW_RECOVERY 0X80000007
 
 #define DRM_IOCTL_MSM_GET_PARAM        DRM_IOWR(DRM_COMMAND_BASE + DRM_MSM_GET_PARAM, struct drm_msm_param)
 #define DRM_IOCTL_MSM_GEM_NEW          DRM_IOWR(DRM_COMMAND_BASE + DRM_MSM_GEM_NEW, struct drm_msm_gem_new)
@@ -390,6 +417,8 @@ struct drm_msm_event_resp {
 			DRM_MSM_DEREGISTER_EVENT), struct drm_msm_event_req)
 #define DRM_IOCTL_MSM_RMFB2 DRM_IOW((DRM_COMMAND_BASE + \
 			DRM_MSM_RMFB2), unsigned int)
+#define DRM_IOCTL_MSM_POWER_CTRL DRM_IOW((DRM_COMMAND_BASE + \
+			DRM_MSM_POWER_CTRL), struct drm_msm_power_ctrl)
 
 #if defined(__cplusplus)
 }

@@ -1,4 +1,5 @@
-/* Copyright (c) 2012-2018, 2021 The Linux Foundation. All rights reserved.
+/*
+ * Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -8,7 +9,6 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
  */
 
 #include <linux/debugfs.h>
@@ -23,7 +23,6 @@
 #include <linux/types.h>
 #include <linux/version.h>
 #include <linux/io.h>
-#include <linux/pm_qos.h>
 #include <media/msm_vidc.h>
 #include "msm_vidc_common.h"
 #include "msm_vidc_debug.h"
@@ -35,8 +34,6 @@
 
 #define BASE_DEVICE_NUMBER 32
 
-
-static struct pm_qos_request msm_v4l2_vidc_pm_qos_request;
 struct msm_vidc_drv *vidc_driver;
 
 uint32_t msm_vidc_pwr_collapse_delay = 2000;
@@ -55,7 +52,7 @@ static int msm_v4l2_open(struct file *filp)
 	struct msm_vidc_core *core = video_drvdata(filp);
 	struct msm_vidc_inst *vidc_inst;
 
-	trace_msm_v4l2_vidc_open_start("msm_v4l2_open start");
+	trace_msm_v4l2_vidc_open_start("v4l2-vidc open start");
 	vidc_inst = msm_vidc_open(core->id, vid_dev->type);
 	if (!vidc_inst) {
 		dprintk(VIDC_ERR,
@@ -63,13 +60,9 @@ static int msm_v4l2_open(struct file *filp)
 		core->id, vid_dev->type);
 		return -ENOMEM;
 	}
-
-	pm_qos_add_request(&msm_v4l2_vidc_pm_qos_request,
-			PM_QOS_CPU_DMA_LATENCY, 1000);
-
 	clear_bit(V4L2_FL_USES_V4L2_FH, &vdev->flags);
 	filp->private_data = &(vidc_inst->event_handler);
-	trace_msm_v4l2_vidc_open_end("msm_v4l2_open end");
+	trace_msm_v4l2_vidc_open_end("v4l2-vidc open end");
 	return 0;
 }
 
@@ -78,7 +71,7 @@ static int msm_v4l2_close(struct file *filp)
 	int rc = 0;
 	struct msm_vidc_inst *vidc_inst;
 
-	trace_msm_v4l2_vidc_close_start("msm_v4l2_close start");
+	trace_msm_v4l2_vidc_close_start("v4l2-vidc close start");
 	vidc_inst = get_vidc_inst(filp, NULL);
 	rc = msm_vidc_release_buffers(vidc_inst,
 			V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE);
@@ -87,13 +80,7 @@ static int msm_v4l2_close(struct file *filp)
 			"Failed in %s for release output buffers\n", __func__);
 
 	rc = msm_vidc_close(vidc_inst);
-	
-	pm_qos_update_request(&msm_v4l2_vidc_pm_qos_request,
-			PM_QOS_DEFAULT_VALUE);
-	pm_qos_remove_request(&msm_v4l2_vidc_pm_qos_request);
-
-
-	trace_msm_v4l2_vidc_close_end("msm_v4l2_close end");
+	trace_msm_v4l2_vidc_close_end("v4l2-vidc close end");
 	return rc;
 }
 
@@ -599,6 +586,32 @@ static int msm_vidc_probe_vidc_device(struct platform_device *pdev)
 				"Failed to create link name sysfs for encoder");
 		goto err_enc_attr_link_name;
 	}
+	/* setup the encoder device with cma */
+	core->vdev[MSM_VIDC_ENCODER_CMA].vdev.release =
+		msm_vidc_release_video_device;
+	core->vdev[MSM_VIDC_ENCODER_CMA].vdev.fops = &msm_v4l2_vidc_fops;
+	core->vdev[MSM_VIDC_ENCODER_CMA].vdev.ioctl_ops = &msm_v4l2_ioctl_ops;
+	core->vdev[MSM_VIDC_ENCODER_CMA].vdev.vfl_dir = VFL_DIR_M2M;
+	core->vdev[MSM_VIDC_ENCODER_CMA].type = MSM_VIDC_ENCODER_CMA;
+	core->vdev[MSM_VIDC_ENCODER_CMA].vdev.v4l2_dev = &core->v4l2_dev;
+	rc = video_register_device(&core->vdev[MSM_VIDC_ENCODER_CMA].vdev,
+				VFL_TYPE_GRABBER, nr + 3);
+	if (rc) {
+		dprintk(VIDC_ERR,
+				"Failed to register video cma encoder device");
+
+		goto err_enc_register;
+	}
+
+	video_set_drvdata(&core->vdev[MSM_VIDC_ENCODER_CMA].vdev, core);
+	dev = &core->vdev[MSM_VIDC_ENCODER_CMA].vdev.dev;
+	rc = device_create_file(dev, &dev_attr_link_name);
+	if (rc) {
+		dprintk(VIDC_ERR,
+				"Failed to create link name sysfs for encoder cma");
+
+		goto err_enc_attr_link_name;
+	}
 
 	/* finish setting up the 'core' */
 	mutex_lock(&vidc_driver->lock);
@@ -640,8 +653,6 @@ static int msm_vidc_probe_vidc_device(struct platform_device *pdev)
 	vidc_driver->capability_version =
 		msm_vidc_read_efuse_version(
 			pdev, core->resources.pf_cap_tbl, "efuse2");
-	if (vidc_driver->capability_version)
-		core->resources.target_version = 1;
 
 	rc = call_hfi_op(core->device, core_early_init,
 		core->device->hfi_device_data);

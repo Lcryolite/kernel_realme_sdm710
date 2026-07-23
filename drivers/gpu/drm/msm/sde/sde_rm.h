@@ -20,6 +20,9 @@
 #include "msm_kms.h"
 #include "sde_hw_top.h"
 
+#define SINGLE_CTL	1
+#define DUAL_CTL	2
+
 /**
  * enum sde_rm_topology_name - HW resource use case in use by connector
  * @SDE_RM_TOPOLOGY_NONE:                 No topology in use currently
@@ -31,9 +34,6 @@
  * @SDE_RM_TOPOLOGY_DUALPIPE_3DMERGE_DSC: 2 LM, 2 PP, 3DMux, 1 DSC, 1 INTF/WB
  * @SDE_RM_TOPOLOGY_DUALPIPE_DSCMERGE:    2 LM, 2 PP, 2 DSC Merge, 1 INTF/WB
  * @SDE_RM_TOPOLOGY_PPSPLIT:              1 LM, 2 PPs, 2 INTF/WB
- * @SDE_RM_TOPOLOGY_QUADPIPE_3DMERGE      4 LM, 4 PP, 3DMux, 2 INTF
- * @SDE_RM_TOPOLOGY_QUADPIPE_DSCMERE      4 LM, 4 PP, 4 DSC Merge, 2 INTF
- * @SDE_RM_TOPOLOGY_QUADPIPE_3DMERGE_DSC  4 LM, 4 PP, 3DMux, 2 DSC, 2 INTF
  */
 enum sde_rm_topology_name {
 	SDE_RM_TOPOLOGY_NONE = 0,
@@ -45,9 +45,6 @@ enum sde_rm_topology_name {
 	SDE_RM_TOPOLOGY_DUALPIPE_3DMERGE_DSC,
 	SDE_RM_TOPOLOGY_DUALPIPE_DSCMERGE,
 	SDE_RM_TOPOLOGY_PPSPLIT,
-	SDE_RM_TOPOLOGY_QUADPIPE_3DMERGE,
-	SDE_RM_TOPOLOGY_QUADPIPE_DSCMERGE,
-	SDE_RM_TOPOLOGY_QUADPIPE_3DMERGE_DSC,
 	SDE_RM_TOPOLOGY_MAX,
 };
 
@@ -63,12 +60,47 @@ enum sde_rm_topology_name {
  *                               reservation list during the AtomicTest phase.
  * @SDE_RM_TOPCTL_DSPP: Require layer mixers with DSPP capabilities
  * @SDE_RM_TOPCTL_DS  : Require layer mixers with DS capabilities
+ * @SDE_RM_TOPCTL_CWB  : Require layer mixers with CWB capabilities
  */
 enum sde_rm_topology_control {
 	SDE_RM_TOPCTL_RESERVE_LOCK,
 	SDE_RM_TOPCTL_RESERVE_CLEAR,
 	SDE_RM_TOPCTL_DSPP,
 	SDE_RM_TOPCTL_DS,
+	SDE_RM_TOPCTL_CWB,
+};
+
+/**
+ * enum sde_rm_topology_control - HW resource use case in use by connector
+ * @SDE_RM_QSYNC_DISABLED: If set, Qsync feature is supported and in
+ *                              disable state.
+ * @SDE_RM_QSYNC_CONTINUOUS_MODE: If set, Qsync is enabled in continuous
+ *                              mode.
+ * @SDE_RM_QSYNC_ONE_SHOT_MODE: If set, Qsync is enabled in one shot mode.
+ *
+ */
+enum sde_rm_qsync_modes {
+	SDE_RM_QSYNC_DISABLED,
+	SDE_RM_QSYNC_CONTINUOUS_MODE,
+	SDE_RM_QSYNC_ONE_SHOT_MODE
+};
+
+/**
+ * struct sde_rm_topology_def - Topology table definition
+ * @top_name: name identifying this topology
+ * @num_lm:   number of layer mixers used
+ * @num_comp_enc: number of encoders used
+ * @num_intf: number of interface used
+ * @num_ctl: number of control path used
+ * @needs_split_display: If set split display is enabled
+ */
+struct sde_rm_topology_def {
+	enum sde_rm_topology_name top_name;
+	int num_lm;
+	int num_comp_enc;
+	int num_intf;
+	int num_ctl;
+	int needs_split_display;
 };
 
 /**
@@ -90,6 +122,7 @@ struct sde_rm {
 	uint32_t lm_max_width;
 	uint32_t rsvp_next_seq;
 	struct mutex rm_lock;
+	const struct sde_rm_topology_def *topology_tbl;
 };
 
 /**
@@ -113,6 +146,18 @@ struct sde_rm_hw_iter {
 };
 
 /**
+ * struct sde_rm_hw_request - data for requesting hw blk
+ * @hw: sde_hw object requested, or NULL on failure
+ * @type: Hardware Block Type client wishes to search for
+ * @id: Hardware block id
+ */
+struct sde_rm_hw_request {
+	void *hw;
+	enum sde_hw_blk_type type;
+	int id;
+};
+
+/**
  * sde_rm_get_topology_name - get the name of the given topology config
  * @topology: msm_display_topology topology config
  * @Return: name of the given topology
@@ -120,12 +165,6 @@ struct sde_rm_hw_iter {
 enum sde_rm_topology_name sde_rm_get_topology_name(
 	struct msm_display_topology topology);
 
-/**
- * sde_rm_get_topology_num_encoders - get number of encoders in given topology
- * @topology: topology name
- * @Return: number of encoders in given topology
- */
-int sde_rm_get_topology_num_encoders(enum sde_rm_topology_name topology);
 
 /**
  * sde_rm_init - Read hardware catalog and create reservation tracking objects
@@ -211,14 +250,13 @@ void sde_rm_init_hw_iter(
  */
 bool sde_rm_get_hw(struct sde_rm *rm, struct sde_rm_hw_iter *iter);
 
-int sde_rm_get_hw_count(struct sde_rm *rm, uint32_t enc_id,
-	enum sde_hw_blk_type type);
 /**
- * sde_rm_check_property_topctl - validate property bitmask before it is set
- * @val: user's proposed topology control bitmask
- * @Return: 0 on success or error
+ * sde_rm_request_hw_blk - retrieve the requested hardware block
+ * @rm: SDE Resource Manager handle
+ * @hw: holds the input and output information of the requested hw block
+ * @Return: true on match found, false on no match found
  */
-int sde_rm_check_property_topctl(uint64_t val);
+bool sde_rm_request_hw_blk(struct sde_rm *rm, struct sde_rm_hw_request *hw);
 
 /**
  * sde_rm_cont_splash_res_init - Read the current MDSS configuration
@@ -244,4 +282,45 @@ int sde_rm_cont_splash_res_init(struct msm_drm_private *priv,
 int sde_rm_update_topology(struct drm_connector_state *conn_state,
 	struct msm_display_topology *topology);
 
+/**
+ * sde_rm_topology_is_dual_ctl - checks if topoloy requires two control paths
+ * @rm: SDE Resource Manager handle
+ * @topology: topology selected for the display
+ * @return: true if two control paths are required or false
+ */
+static inline bool sde_rm_topology_is_dual_ctl(struct sde_rm *rm,
+		enum sde_rm_topology_name topology)
+{
+	if ((!rm) || (topology <= SDE_RM_TOPOLOGY_NONE) ||
+			(topology >= SDE_RM_TOPOLOGY_MAX)) {
+		pr_err("invalid arguments: rm:%d topology:%d\n",
+				rm == NULL, topology);
+
+		return false;
+	}
+
+	return rm->topology_tbl[topology].num_ctl == DUAL_CTL;
+}
+
+/**
+ * sde_rm_ext_blk_create_reserve - Create external HW blocks
+ *	in resource manager and reserve for specific encoder.
+ * @rm: SDE Resource Manager handle
+ * @hw: external HW block
+ * @drm_enc: DRM Encoder handle
+ * @Return: 0 on Success otherwise -ERROR
+ */
+int sde_rm_ext_blk_create_reserve(struct sde_rm *rm,
+				struct sde_hw_blk *hw,
+				struct drm_encoder *enc);
+
+/**
+ * sde_rm_ext_blk_destroy - Given the encoder for the display chain, release
+ *	external HW blocks created for that.
+ * @rm: SDE Resource Manager handle
+ * @enc: DRM Encoder handle
+ * @Return: 0 on Success otherwise -ERROR
+ */
+int sde_rm_ext_blk_destroy(struct sde_rm *rm,
+				struct drm_encoder *enc);
 #endif /* __SDE_RM_H__ */

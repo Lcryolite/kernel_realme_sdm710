@@ -216,12 +216,13 @@ struct hfi_extradata_header {
 	(HFI_PROPERTY_PARAM_VENC_OX_START + 0x005)
 #define HFI_PROPERTY_PARAM_VENC_FRAME_QP_EXTRADATA		\
 	(HFI_PROPERTY_PARAM_VENC_OX_START + 0x006)
-#define  HFI_PROPERTY_PARAM_VENC_YUVSTAT_INFO_EXTRADATA		\
-	(HFI_PROPERTY_PARAM_VENC_OX_START + 0x007)
 #define  HFI_PROPERTY_PARAM_VENC_ROI_QP_EXTRADATA		\
 	(HFI_PROPERTY_PARAM_VENC_OX_START + 0x008)
-#define  HFI_PROPERTY_PARAM_VENC_OVERRIDE_QP_EXTRADATA		\
-	(HFI_PROPERTY_PARAM_VENC_OX_START + 0x009)
+#define HFI_PROPERTY_PARAM_VENC_HDR10PLUS_METADATA_EXTRADATA	\
+	(HFI_PROPERTY_PARAM_VENC_OX_START + 0x00A)
+#define HFI_PROPERTY_PARAM_VENC_DTS_INFO \
+	(HFI_PROPERTY_PARAM_VENC_OX_START + 0x00C)
+
 #define HFI_PROPERTY_CONFIG_VENC_OX_START				\
 	(HFI_DOMAIN_BASE_VENC + HFI_ARCH_OX_OFFSET + 0x6000)
 #define HFI_PROPERTY_PARAM_VPE_OX_START					\
@@ -332,6 +333,14 @@ struct hfi_uncompressed_plane_actual_constraints_info {
 #define HFI_CMD_SESSION_CONTINUE	(HFI_CMD_SESSION_OX_START + 0x00D)
 #define HFI_CMD_SESSION_SYNC		(HFI_CMD_SESSION_OX_START + 0x00E)
 
+#define HFI_CMD_SESSION_CVP_START	\
+	(HFI_DOMAIN_BASE_CVP + HFI_ARCH_COMMON_OFFSET +	\
+	HFI_CMD_START_OFFSET + 0x1000)
+#define HFI_CMD_SESSION_REGISTER_BUFFERS	\
+	(HFI_CMD_SESSION_CVP_START + 0x0A0)
+#define HFI_CMD_SESSION_UNREGISTER_BUFFERS	\
+	(HFI_CMD_SESSION_CVP_START + 0x0A1)
+
 #define HFI_MSG_SYS_OX_START			\
 (HFI_DOMAIN_BASE_COMMON + HFI_ARCH_OX_OFFSET + HFI_MSG_START_OFFSET + 0x0000)
 #define HFI_MSG_SYS_PING_ACK	(HFI_MSG_SYS_OX_START + 0x2)
@@ -352,6 +361,14 @@ struct hfi_uncompressed_plane_actual_constraints_info {
 	(HFI_MSG_SESSION_OX_START + 0xA)
 #define  HFI_MSG_SESSION_RELEASE_BUFFERS_DONE			\
 	(HFI_MSG_SESSION_OX_START + 0xC)
+
+#define HFI_MSG_SESSION_CVP_START	\
+	(HFI_DOMAIN_BASE_CVP + HFI_ARCH_COMMON_OFFSET +	\
+	HFI_MSG_START_OFFSET + 0x1000)
+#define HFI_MSG_SESSION_REGISTER_BUFFERS_DONE	\
+	(HFI_MSG_SESSION_CVP_START + 0x0A0)
+#define HFI_MSG_SESSION_UNREGISTER_BUFFERS_DONE	\
+	(HFI_MSG_SESSION_CVP_START + 0x0A1)
 
 #define VIDC_IFACEQ_MAX_PKT_SIZE                        1024
 #define VIDC_IFACEQ_MED_PKT_SIZE                        768
@@ -510,11 +527,6 @@ struct hfi_msg_sys_session_abort_done_packet {
 	u32 packet_type;
 	u32 session_id;
 	u32 error_type;
-};
-
-struct hfi_msg_sys_idle_packet {
-	u32 size;
-	u32 packet_type;
 };
 
 struct hfi_msg_sys_ping_ack_packet {
@@ -697,6 +709,22 @@ struct hfi_msg_session_release_buffers_done_packet {
 	u32 rg_buffer_info[1];
 };
 
+struct hfi_msg_session_register_buffers_done_packet {
+	u32 size;
+	u32 packet_type;
+	u32 session_id;
+	u32 client_data;
+	u32 error_type;
+};
+
+struct hfi_msg_session_unregister_buffers_done_packet {
+	u32 size;
+	u32 packet_type;
+	u32 session_id;
+	u32 client_data;
+	u32 error_type;
+};
+
 struct hfi_extradata_mb_quantization_payload {
 	u8 rg_mb_qp[1];
 };
@@ -803,12 +831,17 @@ struct hfi_cmd_session_continue_packet {
 	u32 session_id;
 };
 
+enum session_flags {
+	SESSION_PAUSE = BIT(1),
+};
+
 struct hal_session {
 	struct list_head list;
 	void *session_id;
 	bool is_decoder;
 	enum hal_video_codec codec;
 	enum hal_domain domain;
+	u32 flags;
 	void *device;
 };
 

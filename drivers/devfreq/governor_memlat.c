@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -26,6 +26,7 @@
 #include <linux/mutex.h>
 #include <linux/interrupt.h>
 #include <linux/platform_device.h>
+#include <linux/device.h>
 #include <linux/of.h>
 #include <linux/devfreq.h>
 #include "governor.h"
@@ -43,6 +44,7 @@ struct memlat_node {
 	struct memlat_hwmon *hw;
 	struct devfreq_governor *gov;
 	struct attribute_group *attr_grp;
+	unsigned long resume_freq;
 };
 
 static LIST_HEAD(memlat_list);
@@ -194,7 +196,8 @@ static int gov_start(struct devfreq *df)
 	node->orig_data = df->data;
 	df->data = node;
 
-	if (start_monitor(df))
+	ret = start_monitor(df);
+	if (ret)
 		goto err_start;
 
 	ret = sysfs_create_group(&df->dev.kobj, node->attr_grp);
@@ -210,6 +213,39 @@ err_start:
 	node->orig_data = NULL;
 	hw->df = NULL;
 	return ret;
+}
+
+static int gov_suspend(struct devfreq *df)
+{
+	struct memlat_node *node = df->data;
+	unsigned long prev_freq = df->previous_freq;
+
+	node->mon_started = false;
+	devfreq_monitor_suspend(df);
+
+	mutex_lock(&df->lock);
+	update_devfreq(df);
+	mutex_unlock(&df->lock);
+
+	node->resume_freq = max(prev_freq, 1UL);
+
+	return 0;
+}
+
+static int gov_resume(struct devfreq *df)
+{
+	struct memlat_node *node = df->data;
+
+	mutex_lock(&df->lock);
+	update_devfreq(df);
+	mutex_unlock(&df->lock);
+
+	node->resume_freq = 0;
+
+	devfreq_monitor_resume(df);
+	node->mon_started = true;
+
+	return 0;
 }
 
 static void gov_stop(struct devfreq *df)
@@ -232,6 +268,18 @@ static int devfreq_memlat_get_freq(struct devfreq *df,
 	struct memlat_hwmon *hw = node->hw;
 	unsigned long max_freq = 0;
 	unsigned int ratio;
+
+	/*
+	 * node->resume_freq is set to 0 at the end of resume (after the update)
+	 * and is set to df->prev_freq at the end of suspend (after the update).
+	 * This function will be called as part of the update_devfreq call in
+	 * both scenarios. As a result, this block will cause a 0 vote during
+	 * suspend and a vote for df->prev_freq during resume.
+	 */
+	if (!node->mon_started) {
+		*freq = node->resume_freq;
+		return 0;
+	}
 
 	hw->get_cnt(hw);
 
@@ -331,6 +379,30 @@ static int devfreq_memlat_ev_handler(struct devfreq *df,
 			"Disabled Memory Latency governor\n");
 		break;
 
+	case DEVFREQ_GOV_SUSPEND:
+		ret = gov_suspend(df);
+		if (ret) {
+			dev_err(df->dev.parent,
+				"Unable to suspend memlat governor (%d)\n",
+				ret);
+			return ret;
+		}
+
+		dev_dbg(df->dev.parent, "Suspended memlat governor\n");
+		break;
+
+	case DEVFREQ_GOV_RESUME:
+		ret = gov_resume(df);
+		if (ret) {
+			dev_err(df->dev.parent,
+				"Unable to resume memlat governor (%d)\n",
+				ret);
+			return ret;
+		}
+
+		dev_dbg(df->dev.parent, "Resumed memlat governor\n");
+		break;
+
 	case DEVFREQ_GOV_INTERVAL:
 		sample_ms = *(unsigned int *)data;
 		sample_ms = max(MIN_MS, sample_ms);
@@ -356,14 +428,18 @@ static struct devfreq_governor devfreq_gov_compute = {
 
 #define NUM_COLS	2
 static struct core_dev_map *init_core_dev_map(struct device *dev,
-		char *prop_name)
+					struct device_node *of_node,
+					char *prop_name)
 {
 	int len, nf, i, j;
 	u32 data;
 	struct core_dev_map *tbl;
 	int ret;
 
-	if (!of_find_property(dev->of_node, prop_name, &len))
+	if (!of_node)
+		of_node = dev->of_node;
+
+	if (!of_find_property(of_node, prop_name, &len))
 		return NULL;
 	len /= sizeof(data);
 
@@ -377,13 +453,13 @@ static struct core_dev_map *init_core_dev_map(struct device *dev,
 		return NULL;
 
 	for (i = 0, j = 0; i < nf; i++, j += 2) {
-		ret = of_property_read_u32_index(dev->of_node, prop_name, j,
+		ret = of_property_read_u32_index(of_node, prop_name, j,
 				&data);
 		if (ret)
 			return NULL;
 		tbl[i].core_mhz = data / 1000;
 
-		ret = of_property_read_u32_index(dev->of_node, prop_name, j + 1,
+		ret = of_property_read_u32_index(of_node, prop_name, j + 1,
 				&data);
 		if (ret)
 			return NULL;
@@ -400,6 +476,7 @@ static struct memlat_node *register_common(struct device *dev,
 					   struct memlat_hwmon *hw)
 {
 	struct memlat_node *node;
+	struct device_node *of_child;
 
 	if (!hw->dev && !hw->of_node)
 		return ERR_PTR(-EINVAL);
@@ -411,7 +488,14 @@ static struct memlat_node *register_common(struct device *dev,
 	node->ratio_ceil = 10;
 	node->hw = hw;
 
-	hw->freq_map = init_core_dev_map(dev, "qcom,core-dev-table");
+	if (hw->get_child_of_node) {
+		of_child = hw->get_child_of_node(dev);
+		hw->freq_map = init_core_dev_map(dev, of_child,
+					"qcom,core-dev-table");
+	} else {
+		hw->freq_map = init_core_dev_map(dev, NULL,
+					"qcom,core-dev-table");
+	}
 	if (!hw->freq_map) {
 		dev_err(dev, "Couldn't find the core-dev freq table!\n");
 		return ERR_PTR(-EINVAL);

@@ -65,7 +65,7 @@ about the device register map, interrupt map, clocks, regulators.
   Usage: optional
   Value type: <u32>
   Definition: Offset of the register space compared to
-              to Camera base register space.
+		to Camera base register space.
 
 - interrupt-names
   Usage: optional
@@ -86,7 +86,7 @@ about the device register map, interrupt map, clocks, regulators.
   Usage: required
   Value type: <phandle>
   Definition: Regulator reference corresponding to the names listed
-              in "regulator-names".
+		in "regulator-names".
 
 - clock-names
   Usage: required
@@ -122,7 +122,7 @@ about the device register map, interrupt map, clocks, regulators.
 Examples:
 	cam_fd: qcom,fd@ac5a000 {
 		cell-index = <0>;
-		compatible = "qcom,fd41";
+		compatible = "qcom,fd501";
 		reg-names = "fd_core", "fd_wrapper";
 		reg = <0xac5a000 0x1000>,
 			<0xac5b000 0x400>;
@@ -151,4 +151,3 @@ Examples:
 		clock-cntl-level = "svs";
 		clock-rates = <0 0 0 0 0 400000000 0 0>;
 	};
-

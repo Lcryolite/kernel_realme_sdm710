@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2017, 2019 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -23,7 +23,7 @@
 #include "ep_pcie_phy.h"
 
 static struct dentry *dent_ep_pcie;
-static u8 link_speed;
+static struct dentry *dfile_case;
 static struct ep_pcie_dev_t *dev;
 
 static void ep_ep_pcie_phy_dump_pcs_debug_bus(struct ep_pcie_dev_t *dev,
@@ -37,7 +37,7 @@ static void ep_ep_pcie_phy_dump_pcs_debug_bus(struct ep_pcie_dev_t *dev,
 
 	if (!cntrl4 && !cntrl5 && !cntrl6 && !cntrl7) {
 		EP_PCIE_DUMP(dev,
-			"PCIe V%d: zero out test control registers.\n\n",
+			"PCIe V%d: zero out test control registers\n\n",
 			dev->rev);
 		return;
 	}
@@ -79,7 +79,7 @@ static void ep_ep_pcie_phy_dump_pcs_misc_debug_bus(struct ep_pcie_dev_t *dev,
 
 	if (!b0 && !b1 && !b2 && !b3) {
 		EP_PCIE_DUMP(dev,
-			"PCIe V%d: zero out misc debug bus byte index registers.\n\n",
+			"PCIe V%d: zero out misc debug bus byte index registers\n\n",
 			dev->rev);
 		return;
 	}
@@ -121,10 +121,10 @@ static void ep_pcie_phy_dump(struct ep_pcie_dev_t *dev)
 	int i;
 	u32 write_val;
 
-	EP_PCIE_DUMP(dev, "PCIe V%d: Beginning of PHY debug dump.\n\n",
+	EP_PCIE_DUMP(dev, "PCIe V%d: Beginning of PHY debug dump\n\n",
 			dev->rev);
 
-	EP_PCIE_DUMP(dev, "PCIe V%d: PCS Debug Signals.\n\n", dev->rev);
+	EP_PCIE_DUMP(dev, "PCIe V%d: PCS Debug Signals\n\n", dev->rev);
 
 	ep_ep_pcie_phy_dump_pcs_debug_bus(dev, 0x01, 0x02, 0x03, 0x0A);
 	ep_ep_pcie_phy_dump_pcs_debug_bus(dev, 0x0E, 0x0F, 0x12, 0x13);
@@ -133,13 +133,13 @@ static void ep_pcie_phy_dump(struct ep_pcie_dev_t *dev)
 	ep_ep_pcie_phy_dump_pcs_debug_bus(dev, 0x20, 0x21, 0x22, 0x23);
 	ep_ep_pcie_phy_dump_pcs_debug_bus(dev, 0, 0, 0, 0);
 
-	EP_PCIE_DUMP(dev, "PCIe V%d: PCS Misc Debug Signals.\n\n", dev->rev);
+	EP_PCIE_DUMP(dev, "PCIe V%d: PCS Misc Debug Signals\n\n", dev->rev);
 
 	ep_ep_pcie_phy_dump_pcs_misc_debug_bus(dev, 0x1, 0x2, 0x3, 0x4);
 	ep_ep_pcie_phy_dump_pcs_misc_debug_bus(dev, 0x5, 0x6, 0x7, 0x8);
 	ep_ep_pcie_phy_dump_pcs_misc_debug_bus(dev, 0, 0, 0, 0);
 
-	EP_PCIE_DUMP(dev, "PCIe V%d: QSERDES COM Debug Signals.\n\n", dev->rev);
+	EP_PCIE_DUMP(dev, "PCIe V%d: QSERDES COM Debug Signals\n\n", dev->rev);
 
 	for (i = 0; i < 2; i++) {
 		write_val = 0x2 + i;
@@ -171,7 +171,7 @@ static void ep_pcie_phy_dump(struct ep_pcie_dev_t *dev)
 
 	ep_pcie_write_reg(dev->phy, QSERDES_COM_DEBUG_BUS_SEL, 0);
 
-	EP_PCIE_DUMP(dev, "PCIe V%d: QSERDES LANE Debug Signals.\n\n",
+	EP_PCIE_DUMP(dev, "PCIe V%d: QSERDES LANE Debug Signals\n\n",
 			dev->rev);
 
 	for (i = 0; i < 3; i++) {
@@ -188,7 +188,7 @@ static void ep_pcie_phy_dump(struct ep_pcie_dev_t *dev)
 
 	ep_ep_pcie_phy_dump_pcs_debug_bus(dev, 0, 0, 0, 0);
 
-	EP_PCIE_DUMP(dev, "PCIe V%d: End of PHY debug dump.\n\n", dev->rev);
+	EP_PCIE_DUMP(dev, "PCIe V%d: End of PHY debug dump\n\n", dev->rev);
 
 }
 
@@ -199,19 +199,19 @@ void ep_pcie_reg_dump(struct ep_pcie_dev_t *dev, u32 sel, bool linkdown)
 	u32 size;
 
 	EP_PCIE_DBG(dev,
-		"PCIe V%d: Dump PCIe reg for 0x%x %s linkdown.\n",
+		"PCIe V%d: Dump PCIe reg for 0x%x %s linkdown\n",
 		dev->rev, sel, linkdown ? "with" : "without");
 
 	if (!dev->power_on) {
 		EP_PCIE_ERR(dev,
-			"PCIe V%d: the power is already down; can't dump registers.\n",
+			"PCIe V%d: the power is already down; can't dump registers\n",
 			dev->rev);
 		return;
 	}
 
 	if (linkdown) {
 		EP_PCIE_DUMP(dev,
-			"PCIe V%d: dump PARF registers for linkdown case.\n",
+			"PCIe V%d: dump PARF registers for linkdown case\n",
 			dev->rev);
 
 		original = readl_relaxed(dev->parf + PCIE20_PARF_SYS_CTRL);
@@ -237,7 +237,7 @@ void ep_pcie_reg_dump(struct ep_pcie_dev_t *dev, u32 sel, bool linkdown)
 
 		size = resource_size(dev->res[r].resource);
 		EP_PCIE_DUMP(dev,
-			"\nPCIe V%d: dump registers of %s.\n\n",
+			"\nPCIe V%d: dump registers of %s\n\n",
 			dev->rev, dev->res[r].name);
 
 		for (i = 0; i < size; i += 32) {
@@ -350,14 +350,14 @@ static ssize_t ep_pcie_cmd_debug(struct file *file,
 		ep_pcie_trigger_msi(phandle, 0);
 		break;
 	case 11: /* indicate the status of PCIe link */
-		EP_PCIE_DBG_FS("\nPCIe: link status is %d.\n\n",
+		EP_PCIE_DBG_FS("\nPCIe: link status is %d\n\n",
 			ep_pcie_get_linkstatus(phandle));
 		break;
 	case 12: /* configure outbound iATU */
 		ep_pcie_config_outbound_iatu(phandle, entries, 2);
 		break;
 	case 13: /* wake up the host */
-		ep_pcie_wakeup_host(phandle);
+		ep_pcie_wakeup_host(phandle, EP_PCIE_EVENT_PM_D3_HOT);
 		break;
 	case 14: /* Configure routing of doorbells */
 		ep_pcie_config_db_routing(phandle, chdb_cfg, erdb_cfg);
@@ -393,11 +393,11 @@ static ssize_t ep_pcie_cmd_debug(struct file *file,
 			1 - dev->gpio[EP_PCIE_GPIO_WAKE].on);
 		break;
 	case 25: /* output PERST# status */
-		EP_PCIE_DBG_FS("\nPCIe: PERST# is %d.\n\n",
+		EP_PCIE_DBG_FS("\nPCIe: PERST# is %d\n\n",
 			gpio_get_value(dev->gpio[EP_PCIE_GPIO_PERST].num));
 		break;
 	case 26: /* output WAKE# status */
-		EP_PCIE_DBG_FS("\nPCIe: WAKE# is %d.\n\n",
+		EP_PCIE_DBG_FS("\nPCIe: WAKE# is %d\n\n",
 			gpio_get_value(dev->gpio[EP_PCIE_GPIO_WAKE].num));
 		break;
 	case 31: /* output core registers when D3 hot is set by host*/
@@ -406,19 +406,11 @@ static ssize_t ep_pcie_cmd_debug(struct file *file,
 	case 32: /* do not output core registers when D3 hot is set by host*/
 		dev->dump_conf = false;
 		break;
-	case 33: /* Set link speed, takes effect upon next hlos link training */
-		if (link_speed > 0 && link_speed <= dev->max_link_speed) {
-			EP_PCIE_DBG_FS("Setting link speed to gen %d\n",
-					link_speed);
-			dev->curr_link_speed = link_speed;
-		} else {
-			EP_PCIE_DBG_FS(
-			"Invalid link speed %d, max supported speed %d\n",
-				link_speed, dev->max_link_speed);
-		}
+	case 33: /* output edma registers */
+		edma_dump();
 		break;
 	default:
-		EP_PCIE_DBG_FS("PCIe: Invalid testcase: %d.\n", testcase);
+		EP_PCIE_DBG_FS("PCIe: Invalid testcase: %d\n", testcase);
 		break;
 	}
 
@@ -434,47 +426,37 @@ const struct file_operations ep_pcie_cmd_debug_ops = {
 
 void ep_pcie_debugfs_init(struct ep_pcie_dev_t *ep_dev)
 {
-	struct dentry *dfile;
-
 	dev = ep_dev;
 	dent_ep_pcie = debugfs_create_dir("pcie-ep", 0);
 	if (IS_ERR(dent_ep_pcie)) {
 		EP_PCIE_ERR(dev,
-			"PCIe V%d: fail to create the folder for debug_fs.\n",
+			"PCIe V%d: fail to create the folder for debug_fs\n",
 			dev->rev);
 		return;
 	}
 
-	dfile = debugfs_create_file("case", 0664,
-				dent_ep_pcie, NULL,
-				&ep_pcie_cmd_debug_ops);
-	if (!dfile || IS_ERR(dfile)) {
+	dfile_case = debugfs_create_file("case", 0664,
+					dent_ep_pcie, 0,
+					&ep_pcie_cmd_debug_ops);
+	if (!dfile_case || IS_ERR(dfile_case)) {
 		EP_PCIE_ERR(dev,
-			"PCIe V%d: fail to create the file for case.\n",
+			"PCIe V%d: fail to create the file for case\n",
 			dev->rev);
-		goto file_error;
-	}
-
-	dfile = debugfs_create_u8("link_speed", 0664,
-				dent_ep_pcie, &link_speed);
-	if (!dfile || IS_ERR(dfile)) {
-		EP_PCIE_ERR(dev,
-			"PCIe V%d: fail to create the file for link speed.\n",
-			dev->rev);
-		goto file_error;
+		goto case_error;
 	}
 
 	EP_PCIE_DBG2(dev,
-		"PCIe V%d: debugfs is enabled.\n",
+		"PCIe V%d: debugfs is enabled\n",
 		dev->rev);
 
 	return;
 
-file_error:
-	debugfs_remove_recursive(dent_ep_pcie);
+case_error:
+	debugfs_remove(dent_ep_pcie);
 }
 
 void ep_pcie_debugfs_exit(void)
 {
-	debugfs_remove_recursive(dent_ep_pcie);
+	debugfs_remove(dfile_case);
+	debugfs_remove(dent_ep_pcie);
 }

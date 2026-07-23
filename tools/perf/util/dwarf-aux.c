@@ -17,10 +17,13 @@
  *
  */
 
+#include <errno.h>
+#include <inttypes.h>
 #include <stdbool.h>
 #include "util.h"
 #include "debug.h"
 #include "dwarf-aux.h"
+#include "string2.h"
 
 /**
  * cu_find_realpath - Find the realpath of the target file
@@ -1030,7 +1033,7 @@ int die_get_varname(Dwarf_Die *vr_die, struct strbuf *buf)
 	ret = die_get_typename(vr_die, buf);
 	if (ret < 0) {
 		pr_debug("Failed to get type, make it unknown.\n");
-		ret = strbuf_add(buf, " (unknown_type)", 14);
+		ret = strbuf_add(buf, "(unknown_type)", 14);
 	}
 
 	return ret < 0 ? ret : strbuf_addf(buf, "\t%s", dwarf_diename(vr_die));

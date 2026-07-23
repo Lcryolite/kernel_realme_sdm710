@@ -17,6 +17,8 @@
 #include <linux/version.h>
 #include <linux/of.h>
 #include <linux/of_gpio.h>
+#include <linux/regulator/consumer.h>
+#include <linux/of_gpio.h>
 #include <linux/cpu.h>
 
 #include <linux/platform_data/st_sensors_pdata.h>
@@ -25,6 +27,9 @@
 
 /**Turn on of sensor in ms*/
 #define ST_ASM330LHH_TURN_ON_TIME		35
+
+static int asm330_check_regulator;
+
 
 static const struct st_asm330lhh_odr_table_entry st_asm330lhh_odr_table[] = {
 	[ST_ASM330LHH_ID_ACC] = {
@@ -1321,12 +1326,116 @@ static int asm330_acc_gyro_early_buff_init(struct st_asm330lhh_hw *hw)
 #endif
 
 
+static void st_asm330lhh_regulator_power_down(struct st_asm330lhh_hw *hw)
+{
+	regulator_disable(hw->vdd);
+	regulator_set_voltage(hw->vdd, 0, INT_MAX);
+	regulator_set_load(hw->vdd, 0);
+	regulator_disable(hw->vio);
+	regulator_set_voltage(hw->vio, 0, INT_MAX);
+	regulator_set_load(hw->vio, 0);
+}
+
+static int st_asm330lhh_regulator_init(struct st_asm330lhh_hw *hw)
+{
+	int err = 0;
+
+	hw->vdd  = devm_regulator_get(hw->dev, "vdd");
+	if (IS_ERR(hw->vdd)) {
+		err = PTR_ERR(hw->vdd);
+		if (err != -EPROBE_DEFER)
+			dev_err(hw->dev, "Error %d to get vdd\n", err);
+		return err;
+	}
+
+	hw->vio = devm_regulator_get(hw->dev, "vio");
+	if (IS_ERR(hw->vio)) {
+		err = PTR_ERR(hw->vio);
+		if (err != -EPROBE_DEFER)
+			dev_err(hw->dev, "Error %d to get vio\n", err);
+		return err;
+	}
+	return err;
+}
+
+static int st_asm330lhh_regulator_power_up(struct st_asm330lhh_hw *hw)
+{
+	u32 vdd_voltage[2] = {3000000, 3600000};
+	u32 vio_voltage[2] = {1620000, 3600000};
+	u32 vdd_current = 30000;
+	u32 vio_current = 30000;
+	int err = 0;
+
+	/* Enable VDD for ASM330 */
+	if (vdd_voltage[0] > 0 && vdd_voltage[0] <= vdd_voltage[1]) {
+		err = regulator_set_voltage(hw->vdd, vdd_voltage[0],
+						vdd_voltage[1]);
+		if (err) {
+			pr_err("Error %d during vdd set_voltage\n", err);
+			return err;
+		}
+	}
+
+	if (vdd_current > 0) {
+		err = regulator_set_load(hw->vdd, vdd_current);
+		if (err < 0) {
+			pr_err("vdd regulator_set_load failed,err=%d\n", err);
+			goto remove_vdd_voltage;
+		}
+	}
+
+	err = regulator_enable(hw->vdd);
+	if (err) {
+		dev_err(hw->dev, "vdd enable failed with error %d\n", err);
+		goto remove_vdd_current;
+	}
+
+	/* Enable VIO for ASM330 */
+	if (vio_voltage[0] > 0 && vio_voltage[0] <= vio_voltage[1]) {
+		err = regulator_set_voltage(hw->vio, vio_voltage[0],
+						vio_voltage[1]);
+		if (err) {
+			pr_err("Error %d during vio set_voltage\n", err);
+			goto disable_vdd;
+		}
+	}
+
+	if (vio_current > 0) {
+		err = regulator_set_load(hw->vio, vio_current);
+		if (err < 0) {
+			pr_err("vio regulator_set_load failed,err=%d\n", err);
+			goto remove_vio_voltage;
+		}
+	}
+
+	err = regulator_enable(hw->vio);
+	if (err) {
+		dev_err(hw->dev, "vio enable failed with error %d\n", err);
+		goto remove_vio_current;
+	}
+
+	return 0;
+
+remove_vio_current:
+	regulator_set_load(hw->vio, 0);
+remove_vio_voltage:
+	regulator_set_voltage(hw->vio, 0, INT_MAX);
+disable_vdd:
+	regulator_disable(hw->vdd);
+remove_vdd_current:
+	regulator_set_load(hw->vdd, 0);
+remove_vdd_voltage:
+	regulator_set_voltage(hw->vdd, 0, INT_MAX);
+
+	return err;
+}
+
 int st_asm330lhh_probe(struct device *dev, int irq,
 		       const struct st_asm330lhh_transfer_function *tf_ops)
 {
 	struct st_asm330lhh_hw *hw;
 	struct device_node *np;
-	int i, err;
+	int i = 0, err = 0;
 
 	hw = devm_kzalloc(dev, sizeof(*hw), GFP_KERNEL);
 	if (!hw)
@@ -1357,13 +1466,38 @@ int st_asm330lhh_probe(struct device *dev, int irq,
 		msleep(ST_ASM330LHH_TURN_ON_TIME);
 	}
 
+	dev_info(hw->dev, "Ver: %s\n", ST_ASM330LHH_VERSION);
+
+	/* use qtimer if property is enabled */
+	if (of_property_read_u32(np, "qcom,regulator_check",
+				&asm330_check_regulator))
+		asm330_check_regulator = 1; //force to 1 if not in dt
+
+	/* if enabled, check regulator enabled or not */
+	if (asm330_check_regulator) {
+		err = st_asm330lhh_regulator_init(hw);
+		if (err < 0) {
+			dev_err(hw->dev, "regulator init failed\n");
+			return err;
+		}
+
+		err = st_asm330lhh_regulator_power_up(hw);
+		if (err < 0) {
+			dev_err(hw->dev, "regulator power up failed\n");
+			return err;
+		}
+
+		/* allow time for enabling regulators */
+		usleep_range(1000, 2000);
+	}
+
 	/* use hrtimer if property is enabled */
 	hw->asm330_hrtimer = of_property_read_bool(np, "qcom,asm330_hrtimer");
 
 	dev_info(hw->dev, "Ver: %s\n", ST_ASM330LHH_VERSION);
 	err = st_asm330lhh_check_whoami(hw);
 	if (err < 0)
-		return err;
+		goto regulator_shutdown;
 
 	err = st_asm330lhh_get_odr_calibration(hw);
 	if (err < 0)
@@ -1375,18 +1509,20 @@ int st_asm330lhh_probe(struct device *dev, int irq,
 
 	err = st_asm330lhh_init_device(hw);
 	if (err < 0)
-		return err;
+		goto regulator_shutdown;
 
 	for (i = 0; i < ST_ASM330LHH_ID_MAX; i++) {
 		hw->iio_devs[i] = st_asm330lhh_alloc_iiodev(hw, i);
-		if (!hw->iio_devs[i])
-			return -ENOMEM;
+		if (!hw->iio_devs[i]) {
+			err = -ENOMEM;
+			goto regulator_shutdown;
+		}
 	}
 
 	if (hw->irq > 0) {
 		err = st_asm330lhh_buffers_setup(hw);
 		if (err < 0)
-			return err;
+			goto regulator_shutdown;
 	}
 
 	for (i = 0; i < ST_ASM330LHH_ID_MAX; i++) {
@@ -1395,7 +1531,7 @@ int st_asm330lhh_probe(struct device *dev, int irq,
 
 		err = devm_iio_device_register(hw->dev, hw->iio_devs[i]);
 		if (err)
-			return err;
+			goto regulator_shutdown;
 	}
 
 	err = asm330_acc_gyro_early_buff_init(hw);
@@ -1416,8 +1552,13 @@ int st_asm330lhh_probe(struct device *dev, int irq,
 	dev_info(hw->dev, "probe ok\n");
 
 	return 0;
-}
 
+regulator_shutdown:
+	if (asm330_check_regulator)
+		st_asm330lhh_regulator_power_down(hw);
+
+	return err;
+}
 EXPORT_SYMBOL(st_asm330lhh_probe);
 
 static int __maybe_unused st_asm330lhh_suspend(struct device *dev)

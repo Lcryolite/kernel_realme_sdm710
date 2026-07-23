@@ -38,6 +38,16 @@
 
 static enum wcd9xxx_intf_status wcd9xxx_intf = -1;
 
+static struct mfd_cell pahu_devs[] = {
+	{
+		.name = "qcom-wcd-pinctrl",
+		.of_compatible = "qcom,wcd-pinctrl",
+	},
+	{
+		.name = "pahu_codec",
+	},
+};
+
 static struct mfd_cell tavil_devs[] = {
 	{
 		.name = "qcom-wcd-pinctrl",
@@ -325,8 +335,9 @@ struct wcd9xxx_pdata *wcd9xxx_populate_dt_data(struct device *dev)
 	msm_cdc_get_power_supplies(dev, &pdata->regulator,
 				   &pdata->num_supplies);
 	if (!pdata->regulator || (pdata->num_supplies <= 0)) {
-		dev_info(dev, "%s: no power supplies defined for codec\n",
+		dev_err(dev, "%s: no power supplies defined for codec\n",
 			__func__);
+		goto err_power_sup;
 	}
 
 	/* Parse micbias info */
@@ -349,6 +360,19 @@ struct wcd9xxx_pdata *wcd9xxx_populate_dt_data(struct device *dev)
 		if (!pdata->buck_vsel_ctl_np) {
 			dev_err(dev, "%s No entry for %s property in node %s\n",
 				__func__, "qcom,buck-vsel-gpio-node",
+				dev->of_node->full_name);
+			goto err_parse_dt_prop;
+		}
+	}
+
+	pdata->has_micb_supply_en_gpio = of_property_read_bool(dev->of_node,
+					   "qcom,has-micbias-supply-en-gpio");
+	if (pdata->has_micb_supply_en_gpio) {
+		pdata->micb_en_ctl = of_parse_phandle(dev->of_node,
+				"qcom,micbias-supply-en-gpio-node", 0);
+		if (!pdata->micb_en_ctl) {
+			dev_err(dev, "%s No entry for %s property in node %s\n",
+				__func__, "qcom,micbias-supply-en-gpio-node",
 				dev->of_node->full_name);
 			goto err_parse_dt_prop;
 		}
@@ -414,6 +438,7 @@ err_parse_dt_prop:
 	devm_kfree(dev, pdata->regulator);
 	pdata->regulator = NULL;
 	pdata->num_supplies = 0;
+err_power_sup:
 	devm_kfree(dev, pdata);
 	return NULL;
 }
@@ -465,7 +490,8 @@ int wcd9xxx_page_write(struct wcd9xxx *wcd9xxx, unsigned short *reg)
 	unsigned short c_reg, reg_addr;
 	u8 pg_num, prev_pg_num;
 
-	if (wcd9xxx->type != WCD9335 && wcd9xxx->type != WCD934X)
+	if (wcd9xxx->type != WCD9335 && wcd9xxx->type != WCD934X &&
+		wcd9xxx->type != WCD9360)
 		return ret;
 
 	c_reg = *reg;
@@ -862,6 +888,10 @@ int wcd9xxx_get_codec_info(struct device *dev)
 	}
 
 	switch (wcd9xxx->type) {
+	case WCD9360:
+		cinfo->dev = pahu_devs;
+		cinfo->size = ARRAY_SIZE(pahu_devs);
+		break;
 	case WCD934X:
 		cinfo->dev = tavil_devs;
 		cinfo->size = ARRAY_SIZE(tavil_devs);
@@ -965,7 +995,7 @@ int wcd9xxx_core_res_init(
 	wcd9xxx_core_res->num_irq_regs = num_irq_regs;
 	wcd9xxx_core_res->wcd_core_regmap = wcd_regmap;
 
-	pr_info("%s: num_irqs = %d, num_irq_regs = %d\n",
+	pr_debug("%s: num_irqs = %d, num_irq_regs = %d\n",
 			__func__, wcd9xxx_core_res->num_irqs,
 			wcd9xxx_core_res->num_irq_regs);
 

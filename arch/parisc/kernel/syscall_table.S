@@ -195,7 +195,7 @@
 	ENTRY_COMP(sysinfo)
 	ENTRY_SAME(shutdown)
 	ENTRY_SAME(fsync)
-	ENTRY_SAME(madvise)
+	ENTRY_OURS(madvise)
 	ENTRY_SAME(clone_wrapper)	/* 120 */
 	ENTRY_SAME(setdomainname)
 	ENTRY_COMP(sendfile)
@@ -444,6 +444,7 @@
 	ENTRY_SAME(copy_file_range)
 	ENTRY_COMP(preadv2)
 	ENTRY_COMP(pwritev2)
+	ENTRY_SAME(statx)
 
 
 .ifne (. - 90b) - (__NR_Linux_syscalls * (91b - 90b))

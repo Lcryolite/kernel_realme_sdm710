@@ -1,4 +1,4 @@
-/* Copyright (c) 2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2018-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -15,9 +15,9 @@
 
 #include "diagchar.h"
 #include "diag_mux.h"
-#include "../../platform/msm/mhi_dev/mhi.h"
+#include <linux/msm_mhi_dev.h>
 
-#define NUM_DIAG_PCIE_DEV	2
+#define NUM_DIAG_PCIE_DEV	1
 #define DIAG_PCIE_LOCAL	0
 #define DIAG_PCIE_NAME_SZ	24
 #define DIAG_PCIE_STRING_SZ	30
@@ -94,6 +94,8 @@ int diag_pcie_queue_read(int id);
 int diag_pcie_write(int id, unsigned char *buf, int len, int ctxt);
 void diag_pcie_connect_all(void);
 void diag_pcie_disconnect_all(void);
+void diag_pcie_connect_device(int id);
+void diag_pcie_disconnect_device(int id);
 void diag_pcie_exit(int id);
 void diag_pcie_write_complete_cb(void *req);
 void diag_pcie_read_work_fn(struct work_struct *work);

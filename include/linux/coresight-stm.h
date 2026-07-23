@@ -1,6 +1,6 @@
-#ifndef __LINUX_CORESIGHT_STM_H
-#define __LINUX_CORESIGHT_STM_H
-
+/* SPDX-License-Identifier: GPL-2.0 */
+#ifndef __LINUX_CORESIGHT_STM_H_
+#define __LINUX_CORESIGHT_STM_H_
 #include <asm/local.h>
 #include <linux/stm.h>
 #include <linux/bitmap.h>
@@ -80,6 +80,8 @@ struct stm_drvdata {
 	spinlock_t		spinlock;
 	struct channel_space	chs;
 	bool			enable;
+	struct channel_space	debug_status_chs;
+	bool			master_enable;
 	DECLARE_BITMAP(entities, OST_ENTITY_MAX);
 	struct stm_data		stm;
 	local_t			mode;

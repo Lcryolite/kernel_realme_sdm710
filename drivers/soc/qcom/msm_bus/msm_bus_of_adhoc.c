@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2016, 2018-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -72,11 +72,8 @@ static int *get_arr(struct platform_device *pdev,
 	}
 
 	arr = devm_kzalloc(&pdev->dev, size, GFP_KERNEL);
-	if ((size > 0) && ZERO_OR_NULL_PTR(arr)) {
-		dev_err(&pdev->dev, "Error: Failed to alloc mem for %s\n",
-				prop);
+	if ((size > 0) && ZERO_OR_NULL_PTR(arr))
 		return NULL;
-	}
 
 	ret = of_property_read_u32_array(node, prop, (u32 *)arr, *nports);
 	if (ret) {
@@ -102,11 +99,8 @@ static struct msm_bus_fab_device_type *get_fab_device_info(
 	fab_dev = devm_kzalloc(&pdev->dev,
 			sizeof(struct msm_bus_fab_device_type),
 			GFP_KERNEL);
-	if (!fab_dev) {
-		dev_err(&pdev->dev,
-			"Error: Unable to allocate memory for fab_dev\n");
+	if (!fab_dev)
 		return NULL;
-	}
 
 	ret = of_property_read_string(dev_node, "qcom,base-name", &base_name);
 	if (ret) {
@@ -196,6 +190,12 @@ static void get_qos_params(
 	of_property_read_u32(dev_node, "qcom,prio-wr",
 						&node_info->qos_params.prio_wr);
 
+	of_property_read_u32(dev_node, "qcom,prio",
+					&node_info->qos_params.prio_dflt);
+
+	node_info->qos_params.urg_fwd_en = of_property_read_bool(dev_node,
+						"qcom,forwarding");
+
 	of_property_read_u32(dev_node, "qcom,gp",
 						&node_info->qos_params.gp);
 
@@ -237,7 +237,6 @@ static int msm_bus_of_parse_clk_array(struct device_node *dev_node,
 			(clks * sizeof(struct nodeclk)), GFP_KERNEL);
 
 	if (!(*clk_arr)) {
-		dev_err(&pdev->dev, "Error allocating clk nodes for %d\n", id);
 		ret = -ENOMEM;
 		*num_clks = 0;
 		goto exit_of_parse_clk_array;
@@ -427,11 +426,11 @@ static struct msm_bus_node_info_type *get_node_info_data(
 
 	if (of_get_property(dev_node, "qcom,blacklist", &size)) {
 		node_info->num_blist = size/sizeof(u32);
-		node_info->black_listed_connections = devm_kzalloc(&pdev->dev,
+		node_info->bl_cons = devm_kzalloc(&pdev->dev,
 		size, GFP_KERNEL);
 	} else {
 		node_info->num_blist = 0;
-		node_info->black_listed_connections = 0;
+		node_info->bl_cons = 0;
 	}
 
 	for (i = 0; i < node_info->num_blist; i++) {
@@ -440,7 +439,7 @@ static struct msm_bus_node_info_type *get_node_info_data(
 			goto node_info_err;
 
 		if (of_property_read_u32(con_node, "cell-id",
-				&node_info->black_listed_connections[i]))
+				&node_info->bl_cons[i]))
 			goto node_info_err;
 		of_node_put(con_node);
 	}
@@ -663,6 +662,15 @@ static int get_bus_node_device_data(
 			of_node_put(qos_clk_node);
 		}
 
+		node_device->clk[ACTIVE_CTX].clk = of_clk_get_by_name(dev_node,
+							"node_a_clk");
+
+		if (IS_ERR_OR_NULL(node_device->clk[ACTIVE_CTX].clk))
+			dev_dbg(&pdev->dev,
+				 "%s:Failed to get bus clk for bus%d ctx%d",
+				__func__, node_device->node_info->id,
+								ACTIVE_CTX);
+
 		node_device->clk[DUAL_CTX].clk = of_clk_get_by_name(dev_node,
 							"node_clk");
 
@@ -701,11 +709,8 @@ struct msm_bus_device_node_registration
 	pdata = devm_kzalloc(&pdev->dev,
 			sizeof(struct msm_bus_device_node_registration),
 			GFP_KERNEL);
-	if (!pdata) {
-		dev_err(&pdev->dev,
-				"Error: Memory allocation for pdata failed\n");
+	if (!pdata)
 		return NULL;
-	}
 
 	pdata->num_devices = of_get_child_count(of_node);
 
@@ -713,11 +718,8 @@ struct msm_bus_device_node_registration
 			sizeof(struct msm_bus_node_device_type) *
 			pdata->num_devices, GFP_KERNEL);
 
-	if (!pdata->info) {
-		dev_err(&pdev->dev,
-			"Error: Memory allocation for pdata->info failed\n");
+	if (!pdata->info)
 		goto node_reg_err;
-	}
 
 	ret = 0;
 	for_each_child_of_node(of_node, child_node) {
@@ -748,13 +750,11 @@ struct msm_bus_device_node_registration
 		for (j = 0; j < pdata->info[i].node_info->num_blist;
 									 j++) {
 			dev_dbg(&pdev->dev, "black_listed_node[%d]: %d\n", j,
-				pdata->info[i].node_info->
-				black_listed_connections[j]);
+				pdata->info[i].node_info->bl_cons[j]);
 		}
 		if (pdata->info[i].fabdev)
 			dev_dbg(&pdev->dev, "base_addr %zu\nbus_type %d\n",
-					(size_t)pdata->info[i].
-						fabdev->pqos_base,
+				(size_t)pdata->info[i].fabdev->pqos_base,
 					pdata->info[i].fabdev->bus_type);
 	}
 	return pdata;

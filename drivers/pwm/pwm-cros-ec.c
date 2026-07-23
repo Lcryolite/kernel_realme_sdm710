@@ -75,8 +75,8 @@ static int __cros_ec_pwm_get_duty(struct cros_ec_device *ec, u8 index,
 
 	msg->version = 0;
 	msg->command = EC_CMD_PWM_GET_DUTY;
-	msg->insize = sizeof(*params);
-	msg->outsize = sizeof(*resp);
+	msg->insize = sizeof(*resp);
+	msg->outsize = sizeof(*params);
 
 	params->pwm_type = EC_PWM_TYPE_GENERIC;
 	params->index = index;
@@ -128,6 +128,7 @@ static void cros_ec_pwm_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
 
 	state->enabled = (ret > 0);
 	state->period = EC_PWM_MAX_DUTY;
+	state->polarity = PWM_POLARITY_NORMAL;
 
 	/* Note that "disabled" and "duty cycle == 0" are treated the same */
 	state->duty_cycle = ret;

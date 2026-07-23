@@ -72,7 +72,7 @@ static inline int atomic_add_return(int i, atomic_t *v)
 }
 
 /**
- * __atomic_add_unless - add unless the number is already a given value
+ * atomic_fetch_add_unless - add unless the number is already a given value
  * @v: pointer of type atomic_t
  * @a: the amount to add to v...
  * @u: ...unless v is equal to u.
@@ -80,7 +80,7 @@ static inline int atomic_add_return(int i, atomic_t *v)
  * Atomically adds @a to @v, so long as @v was not already @u.
  * Returns the old value of @v.
  */
-static inline int __atomic_add_unless(atomic_t *v, int a, int u)
+static inline int atomic_fetch_add_unless(atomic_t *v, int a, int u)
 {
 	smp_mb();  /* barrier for proper semantics */
 	return _atomic_xchg_add_unless(&v->counter, a, u);
@@ -100,6 +100,8 @@ static inline void atomic_set(atomic_t *v, int n)
 {
 	_atomic_xchg(&v->counter, n);
 }
+
+#define atomic_set_release(v, i)	atomic_set((v), (i))
 
 /* A 64bit atomic type */
 

@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2017, 2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -3451,7 +3451,7 @@ static int qpnp_ibb_dt_init(struct qpnp_labibb *labibb,
 		}
 		rc = labibb->ibb_ver_ops->set_clk_div(labibb, val);
 		if (rc < 0) {
-			pr_err("qpnp_ibb_dt_init write register %x failed rc = %d\n",
+			pr_err("write register %x failed rc = %d\n",
 				REG_IBB_CLK_DIV, rc);
 			return rc;
 		}
@@ -3512,7 +3512,7 @@ static int qpnp_ibb_dt_init(struct qpnp_labibb *labibb,
 					&val,
 					1);
 		if (rc < 0) {
-			pr_err("qpnp_ibb_dt_init write register %x failed rc = %d\n",
+			pr_err("write register %x failed rc = %d\n",
 				REG_IBB_RING_SUPPRESSION_CTL, rc);
 			return rc;
 		}
@@ -3521,14 +3521,13 @@ static int qpnp_ibb_dt_init(struct qpnp_labibb *labibb,
 	if (of_property_read_bool(of_node, "qcom,qpnp-ibb-ps-enable")) {
 		rc = qpnp_ibb_ps_config(labibb, true);
 		if (rc < 0) {
-			pr_err("qpnp_ibb_dt_init PS enable failed rc=%d\n", rc);
+			pr_err("PS enable failed rc=%d\n", rc);
 			return rc;
 		}
 	} else {
 		rc = qpnp_ibb_ps_config(labibb, false);
 		if (rc < 0) {
-			pr_err("qpnp_ibb_dt_init PS disable failed rc=%d\n",
-									rc);
+			pr_err("PS disable failed rc=%d\n", rc);
 			return rc;
 		}
 	}
@@ -3544,8 +3543,7 @@ static int qpnp_ibb_dt_init(struct qpnp_labibb *labibb,
 		rc = labibb->ibb_ver_ops->smart_ps_config(labibb, true,
 					labibb->ibb_vreg.num_swire_trans, tmp);
 		if (rc < 0) {
-			pr_err("qpnp_ibb_dt_init smart PS enable failed rc=%d\n",
-					 rc);
+			pr_err("smart PS enable failed rc=%d\n", rc);
 			return rc;
 		}
 
@@ -4037,9 +4035,9 @@ static int qpnp_labibb_check_ttw_supported(struct qpnp_labibb *labibb)
 	return rc;
 }
 
-static ssize_t qpnp_labibb_irq_control(struct class *c,
-				       struct class_attribute *attr,
-				       const char *buf, size_t count)
+static ssize_t secure_mode_store(struct class *c,
+					struct class_attribute *attr,
+					const char *buf, size_t count)
 {
 	struct qpnp_labibb *labibb = container_of(c, struct qpnp_labibb,
 						  labibb_class);
@@ -4074,11 +4072,14 @@ static ssize_t qpnp_labibb_irq_control(struct class *c,
 	return count;
 }
 
-static struct class_attribute labibb_attributes[] = {
-	[0] = __ATTR(secure_mode, 0664, NULL,
-			 qpnp_labibb_irq_control),
-	 __ATTR_NULL,
+static CLASS_ATTR_WO(secure_mode);
+
+static struct attribute *labibb_attrs[] = {
+	&class_attr_secure_mode.attr,
+	NULL,
 };
+ATTRIBUTE_GROUPS(labibb);
+
 
 static int qpnp_labibb_regulator_probe(struct platform_device *pdev)
 {
@@ -4275,7 +4276,7 @@ static int qpnp_labibb_regulator_probe(struct platform_device *pdev)
 
 	labibb->labibb_class.name = "lcd_bias";
 	labibb->labibb_class.owner = THIS_MODULE;
-	labibb->labibb_class.class_attrs = labibb_attributes;
+	labibb->labibb_class.class_groups = labibb_groups;
 
 	rc = class_register(&labibb->labibb_class);
 	if (rc < 0) {

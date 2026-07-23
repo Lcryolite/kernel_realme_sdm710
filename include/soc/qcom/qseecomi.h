@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -19,7 +19,6 @@
 #define QSEECOM_KEY_ID_SIZE   32
 
 #define QSEOS_RESULT_FAIL_SEND_CMD_NO_THREAD  -19   /*0xFFFFFFED*/
-#define QSEOS_RESULT_FAIL_APP_ALREADY_LOADED  -38   /*0xFFFFFFDA*/
 #define QSEOS_RESULT_FAIL_UNSUPPORTED_CE_PIPE -63
 #define QSEOS_RESULT_FAIL_KS_OP               -64
 #define QSEOS_RESULT_FAIL_KEY_ID_EXISTS       -65
@@ -70,6 +69,7 @@ enum qseecom_qceos_cmd_id {
 	QSEOS_TEE_OPEN_SESSION_WHITELIST = 0x1D,
 	QSEOS_TEE_INVOKE_COMMAND_WHITELIST = 0x1E,
 	QSEOS_LISTENER_DATA_RSP_COMMAND_WHITELIST = 0x1F,
+	QSEOS_SOTA_NOTIFICATION_CHECK_STATUS = 0x20,
 	QSEOS_FSM_LTEOTA_REQ_CMD = 0x109,
 	QSEOS_FSM_LTEOTA_REQ_RSP_CMD = 0x110,
 	QSEOS_FSM_IKE_REQ_CMD = 0x203,
@@ -350,6 +350,9 @@ struct qseecom_continue_blocked_request_ireq {
 #define TZ_SVC_ES                        16    /* Enterprise Security */
 #define TZ_SVC_MDTP                      18    /* Mobile Device Theft */
 
+/** SIP service call groups */
+#define TZ_SVC_FUSE                      8     /* Fuse services.      */
+
 /*----------------------------------------------------------------------------
  * Owning Entity IDs (defined by ARM SMC doc)
  * ---------------------------------------------------------------------------
@@ -588,6 +591,12 @@ struct qseecom_continue_blocked_request_ireq {
 #define TZ_OS_RPMB_CHECK_PROV_STATUS_ID_PARAM_ID \
 	TZ_SYSCALL_CREATE_PARAM_ID_0
 
+#define TZ_SOTA_UPDATE_NOTIFICATION_ID \
+	TZ_SYSCALL_CREATE_SMC_ID(TZ_OWNER_SIP, TZ_SVC_FUSE,  0x07)
+
+#define TZ_SOTA_UPDATE_NOTIFICATION_ID_PARAM_ID \
+	TZ_SYSCALL_CREATE_PARAM_ID_0
+
 #define TZ_OS_KS_GEN_KEY_ID \
 	TZ_SYSCALL_CREATE_SMC_ID(TZ_OWNER_QSEE_OS, TZ_SVC_KEYSTORE, 0x01)
 
@@ -728,5 +737,7 @@ struct qseecom_continue_blocked_request_ireq {
 	TZ_SYSCALL_CREATE_PARAM_ID_4( \
 	TZ_SYSCALL_PARAM_TYPE_VAL, TZ_SYSCALL_PARAM_TYPE_VAL, \
 	TZ_SYSCALL_PARAM_TYPE_BUF_RW, TZ_SYSCALL_PARAM_TYPE_VAL)
+
+
 
 #endif /* __QSEECOMI_H_ */

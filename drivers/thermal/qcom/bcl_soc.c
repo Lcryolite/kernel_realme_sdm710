@@ -100,11 +100,9 @@ static void bcl_evaluate_soc(struct work_struct *work)
 
 	bcl_perph->trip_val = battery_percentage;
 	mutex_unlock(&bcl_perph->state_trans_lock);
-
-	return; //return before thermal handle trips with percentage
-
 	of_thermal_handle_trip(bcl_perph->tz_dev);
 
+	return;
 eval_exit:
 	mutex_unlock(&bcl_perph->state_trans_lock);
 }
@@ -145,7 +143,6 @@ static int bcl_soc_probe(struct platform_device *pdev)
 	bcl_perph->ops.set_trips = bcl_set_soc;
 	INIT_WORK(&bcl_perph->soc_eval_work, bcl_evaluate_soc);
 	bcl_perph->psy_nb.notifier_call = battery_supply_callback;
-
 	ret = power_supply_reg_notifier(&bcl_perph->psy_nb);
 	if (ret < 0) {
 		pr_err("soc notifier registration error. defer. err:%d\n",

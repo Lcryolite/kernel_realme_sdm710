@@ -1,9 +1,9 @@
 # Android makefile for audio kernel modules
 MY_LOCAL_PATH := $(call my-dir)
 
+ifeq ($(call is-board-platform-in-list,msm8953 sdm845 sdm670 sdm660 qcs605 msmnile $(MSMSTEPPE) $(TRINKET)),true)
 UAPI_OUT := $(PRODUCT_OUT)/obj/vendor/qcom/opensource/audio-kernel/include
 
-ifeq ($(call is-board-platform-in-list,msm8909 msm8953 msm8937 sdm845 sdm710 qcs605),true)
 $(shell mkdir -p $(UAPI_OUT)/linux;)
 $(shell mkdir -p $(UAPI_OUT)/sound;)
 $(shell rm -rf $(PRODUCT_OUT)/obj/vendor/qcom/opensource/audio-kernel/ipc/Module.symvers)
@@ -24,34 +24,56 @@ include $(MY_LOCAL_PATH)/asoc/codecs/Android.mk
 include $(MY_LOCAL_PATH)/asoc/codecs/wcd934x/Android.mk
 endif
 
-ifeq ($(strip $(AUDIO_FEATURE_ENABLED_DLKM_8909W)),true)
-$(shell rm -rf $(PRODUCT_OUT)/obj/vendor/qcom/opensource/audio-kernel/asoc/codecs/msm_bg/Module.symvers)
-include $(MY_LOCAL_PATH)/asoc/codecs/msm_bg/Android.mk
+ifeq ($(call is-board-platform-in-list, atoll),true)
+UAPI_OUT := $(PRODUCT_OUT)/obj/vendor/qcom/opensource/audio-kernel/4.0/include
+
+$(shell mkdir -p $(UAPI_OUT)/linux;)
+$(shell mkdir -p $(UAPI_OUT)/sound;)
+$(shell rm -rf $(PRODUCT_OUT)/obj/vendor/qcom/opensource/audio-kernel/4.0/ipc/Module.symvers)
+$(shell rm -rf $(PRODUCT_OUT)/obj/vendor/qcom/opensource/audio-kernel/4.0/dsp/Module.symvers)
+$(shell rm -rf $(PRODUCT_OUT)/obj/vendor/qcom/opensource/audio-kernel/4.0/dsp/codecs/Module.symvers)
+$(shell rm -rf $(PRODUCT_OUT)/obj/vendor/qcom/opensource/audio-kernel/4.0/soc/Module.symvers)
+$(shell rm -rf $(PRODUCT_OUT)/obj/vendor/qcom/opensource/audio-kernel/4.0/asoc/Module.symvers)
+$(shell rm -rf $(PRODUCT_OUT)/obj/vendor/qcom/opensource/audio-kernel/4.0/asoc/codecs/Module.symvers)
+
+include $(MY_LOCAL_PATH)/4.0/include/uapi/Android.mk
+include $(MY_LOCAL_PATH)/4.0/ipc/Android.mk
+include $(MY_LOCAL_PATH)/4.0/dsp/Android.mk
+include $(MY_LOCAL_PATH)/4.0/dsp/codecs/Android.mk
+include $(MY_LOCAL_PATH)/4.0/soc/Android.mk
+include $(MY_LOCAL_PATH)/4.0/asoc/Android.mk
+include $(MY_LOCAL_PATH)/4.0/asoc/codecs/Android.mk
 endif
 
-ifeq ($(call is-board-platform-in-list,msm8953 msm8937 sdm710 qcs605 msm8909),true)
+ifeq ($(call is-board-platform-in-list,sdm670 msmnile),true)
+$(shell rm -rf $(PRODUCT_OUT)/obj/vendor/qcom/opensource/audio-kernel/asoc/codecs/aqt1000/Module.symvers)
+include $(MY_LOCAL_PATH)/asoc/codecs/aqt1000/Android.mk
+endif
+
+ifeq ($(call is-board-platform-in-list, $(MSMSTEPPE) $(TRINKET)),true)
+$(shell rm -rf $(PRODUCT_OUT)/obj/vendor/qcom/opensource/audio-kernel/asoc/codecs/bolero/Module.symvers)
+include $(MY_LOCAL_PATH)/asoc/codecs/bolero/Android.mk
+$(shell rm -rf $(PRODUCT_OUT)/obj/vendor/qcom/opensource/audio-kernel/asoc/codecs/wcd937x/Module.symvers)
+include $(MY_LOCAL_PATH)/asoc/codecs/wcd937x/Android.mk
+endif
+
+ifeq ($(call is-board-platform-in-list, atoll),true)
+$(shell rm -rf $(PRODUCT_OUT)/obj/vendor/qcom/opensource/audio-kernel/4.0/asoc/codecs/bolero/Module.symvers)
+include $(MY_LOCAL_PATH)/4.0/asoc/codecs/bolero/Android.mk
+$(shell rm -rf $(PRODUCT_OUT)/obj/vendor/qcom/opensource/audio-kernel/4.0/asoc/codecs/wcd937x/Module.symvers)
+include $(MY_LOCAL_PATH)/4.0/asoc/codecs/wcd937x/Android.mk
+$(shell rm -rf $(PRODUCT_OUT)/obj/vendor/qcom/opensource/audio-kernel/4.0/asoc/codecs/wcd938x/Module.symvers)
+include $(MY_LOCAL_PATH)/4.0/asoc/codecs/wcd938x/Android.mk
+endif
+
+ifeq ($(call is-board-platform-in-list,msm8953 sdm670 sdm660 qcs605),true)
 $(shell rm -rf $(PRODUCT_OUT)/obj/vendor/qcom/opensource/audio-kernel/asoc/codecs/sdm660_cdc/Module.symvers)
 $(shell rm -rf $(PRODUCT_OUT)/obj/vendor/qcom/opensource/audio-kernel/asoc/codecs/msm_sdw/Module.symvers)
 include $(MY_LOCAL_PATH)/asoc/codecs/sdm660_cdc/Android.mk
 include $(MY_LOCAL_PATH)/asoc/codecs/msm_sdw/Android.mk
 endif
 
-#ifdef OPLUS_ARCH_EXTENDS
-#Kaiqin.Huang@RM.MM.AudioDriver.Codec, 2019/10/12, Add for tfa9890 codec
-include $(MY_LOCAL_PATH)/asoc/codecs/tfa98xx/Android.mk
-#endif
-
-#ifdef OPLUS_ARCH_EXTENDS
-#Jianfeng.Qiu@PSW.MM.AudioDriver.Codec, 2021/03/19, add for tfa98xx driver build
-include $(MY_LOCAL_PATH)/asoc/codecs/tfa98xx-v6/Android.mk
-#endif
-
-
-#ifdef OPLUS_ARCH_EXTENDS
-#Jianfeng.Qiu@PSW.MM.AudioDriver.Codec, 2018/04/20, add for ak4376 driver build
-include $(MY_LOCAL_PATH)/asoc/codecs/ak4376/Android.mk
-#endif /* OPLUS_ARCH_EXTENDS */
-#ifdef OPLUS_ARCH_EXTENDS
-#xiang.fei@Multimedia.AudioDriver.Codec, 2018/10/29, Add for dbmdx
-include $(MY_LOCAL_PATH)/asoc/codecs/dbmdx/Android.mk
-#endif /* OPLUS_ARCH_EXTENDS */
+ifeq ($(call is-board-platform-in-list,msmnile),true)
+$(shell rm -rf $(PRODUCT_OUT)/obj/vendor/qcom/opensource/audio-kernel/asoc/codecs/wcd9360/Module.symvers)
+include $(MY_LOCAL_PATH)/asoc/codecs/wcd9360/Android.mk
+endif

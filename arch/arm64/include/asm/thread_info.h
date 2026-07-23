@@ -23,8 +23,6 @@
 
 #include <linux/compiler.h>
 
-#define THREAD_START_SP		(THREAD_SIZE - 16)
-
 #ifndef __ASSEMBLY__
 
 struct task_struct;
@@ -46,6 +44,9 @@ struct thread_info {
 	u64			ttbr0;		/* saved TTBR0_EL1 */
 #endif
 	int			preempt_count;	/* 0 => preemptable, <0 => bug */
+#ifdef CONFIG_SHADOW_CALL_STACK
+	void			*shadow_call_stack;
+#endif
 };
 
 #define INIT_THREAD_INFO(tsk)						\
@@ -54,14 +55,15 @@ struct thread_info {
 	.addr_limit	= KERNEL_DS,					\
 }
 
-#define init_stack		(init_thread_union.stack)
-
 #define thread_saved_pc(tsk)	\
 	((unsigned long)(tsk->thread.cpu_context.pc))
 #define thread_saved_sp(tsk)	\
 	((unsigned long)(tsk->thread.cpu_context.sp))
 #define thread_saved_fp(tsk)	\
 	((unsigned long)(tsk->thread.cpu_context.fp))
+
+void arch_setup_new_exec(void);
+#define arch_setup_new_exec     arch_setup_new_exec
 
 #endif
 
@@ -80,7 +82,8 @@ struct thread_info {
 #define TIF_NEED_RESCHED	1
 #define TIF_NOTIFY_RESUME	2	/* callback before returning to user */
 #define TIF_FOREIGN_FPSTATE	3	/* CPU's FP state is not current's */
-#define TIF_FSCHECK		4	/* Check FS is USER_DS on return */
+#define TIF_UPROBE		4	/* uprobe breakpoint or singlestep */
+#define TIF_FSCHECK		5	/* Check FS is USER_DS on return */
 #define TIF_NOHZ		7
 #define TIF_SYSCALL_TRACE	8
 #define TIF_SYSCALL_AUDIT	9
@@ -92,7 +95,8 @@ struct thread_info {
 #define TIF_SINGLESTEP		21
 #define TIF_32BIT		22	/* 32bit process */
 #define TIF_SSBD		23	/* Wants SSB mitigation */
-#define TIF_MM_RELEASED		24
+#define TIF_TAGGED_ADDR		24	/* Allow tagged user addresses */
+#define TIF_MM_RELEASED		25
 
 #define _TIF_SIGPENDING		(1 << TIF_SIGPENDING)
 #define _TIF_NEED_RESCHED	(1 << TIF_NEED_RESCHED)
@@ -103,12 +107,13 @@ struct thread_info {
 #define _TIF_SYSCALL_AUDIT	(1 << TIF_SYSCALL_AUDIT)
 #define _TIF_SYSCALL_TRACEPOINT	(1 << TIF_SYSCALL_TRACEPOINT)
 #define _TIF_SECCOMP		(1 << TIF_SECCOMP)
+#define _TIF_UPROBE		(1 << TIF_UPROBE)
 #define _TIF_FSCHECK		(1 << TIF_FSCHECK)
 #define _TIF_32BIT		(1 << TIF_32BIT)
 
 #define _TIF_WORK_MASK		(_TIF_NEED_RESCHED | _TIF_SIGPENDING | \
 				 _TIF_NOTIFY_RESUME | _TIF_FOREIGN_FPSTATE | \
-				 _TIF_FSCHECK)
+				 _TIF_UPROBE | _TIF_FSCHECK)
 
 #define _TIF_SYSCALL_WORK	(_TIF_SYSCALL_TRACE | _TIF_SYSCALL_AUDIT | \
 				 _TIF_SYSCALL_TRACEPOINT | _TIF_SECCOMP | \

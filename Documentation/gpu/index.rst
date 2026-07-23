@@ -12,10 +12,17 @@ Linux GPU Driver Developer's Guide
    drm-uapi
    drm-client
    i915
+   meson
+   pl111
+   tegra
+   tinydrm
+   vc4
    vga-switcheroo
    vgaarbiter
+   bridge/dw-hdmi
+   todo
 
-.. only::  subproject
+.. only::  subproject and html
 
    Indices
    =======

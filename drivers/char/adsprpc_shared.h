@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2019, 2021 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -52,8 +52,8 @@
 /* Fastrpc attribute for keeping the map persistent */
 #define FASTRPC_ATTR_KEEP_MAP	0x8
 
-/* Fastrpc attribute for no map */
-#define FASTRPC_ATTR_NOMAP   (16)
+/* Fastrpc attribute for no mapping of fd  */
+#define FASTRPC_ATTR_NOMAP (16)
 
 /* Driver should operate in parallel with the co-processor */
 #define FASTRPC_MODE_PARALLEL    0
@@ -126,9 +126,6 @@ do {\
 	} \
 } while (0)
 #endif
-
-/* Fall back to older APIS in case API is not supported */
-#define AEE_EUNSUPPORTED    20
 
 #define remote_arg64_t    union remote_arg64
 
@@ -218,7 +215,7 @@ struct fastrpc_ioctl_munmap_64 {
 };
 
 struct fastrpc_ioctl_mmap {
-	int fd;				/* ion fd */
+	int fd;					/* ion fd */
 	uint32_t flags;			/* flags for dsp to map with */
 	uintptr_t vaddrin;		/* optional virtual address */
 	size_t size;			/* size */
@@ -226,7 +223,7 @@ struct fastrpc_ioctl_mmap {
 };
 
 struct fastrpc_ioctl_mmap_64 {
-	int fd;					/* ion fd */
+	int fd;				/* ion fd */
 	uint32_t flags;			/* flags for dsp to map with */
 	uint64_t vaddrin;		/* optional virtual address */
 	size_t size;			/* size */
@@ -246,32 +243,36 @@ struct fastrpc_ioctl_perf {			/* kernel performance data */
 	uintptr_t keys;
 };
 
-#define FASTRPC_CONTROL_LATENCY (1)
+enum fastrpc_control_type {
+	FASTRPC_CONTROL_LATENCY		=	1,
+	FASTRPC_CONTROL_SMMU		=	2,
+	FASTRPC_CONTROL_KALLOC		=	3,
+	FASTRPC_CONTROL_WAKELOCK	=	4,
+};
+
 struct fastrpc_ctrl_latency {
-	uint32_t enable;		/* latency control enable */
-	uint32_t level;			/* level of control */
+	uint32_t enable;	/* latency control enable */
+	uint32_t level;		/* level of control */
 };
 
-#define FASTRPC_CONTROL_SMMU (2)
-struct fastrpc_ctrl_smmu {
-	uint32_t sharedcb;
-};
-
-#define FASTRPC_CONTROL_KALLOC (3)
 struct fastrpc_ctrl_kalloc {
-	uint32_t kalloc_support; /* Remote memory allocation from kernel */
+	uint32_t kalloc_support;  /* Remote memory allocation from kernel */
+};
+
+struct fastrpc_ctrl_wakelock {
+	uint32_t enable;	/* wakelock control enable */
 };
 
 struct fastrpc_ioctl_control {
 	uint32_t req;
 	union {
 		struct fastrpc_ctrl_latency lp;
-		struct fastrpc_ctrl_smmu smmu;
 		struct fastrpc_ctrl_kalloc kalloc;
+		struct fastrpc_ctrl_wakelock wp;
 	};
 };
 
-#define FASTRPC_MAX_DSP_ATTRIBUTES	(7)
+#define FASTRPC_MAX_DSP_ATTRIBUTES            (7)
 struct fastrpc_ioctl_dsp_capabilities {
 	uint32_t domain;	//! DSP domain to query capabilities
 	uint32_t dsp_attributes[FASTRPC_MAX_DSP_ATTRIBUTES];

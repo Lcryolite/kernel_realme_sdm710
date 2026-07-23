@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -19,7 +19,6 @@
 #include <linux/clk.h>
 #include <linux/regulator/consumer.h>
 #include <linux/interrupt.h>
-#include <linux/of_gpio.h>
 #include <linux/delay.h>
 
 #include <linux/msm-bus-board.h>
@@ -30,7 +29,8 @@
 #include <soc/qcom/ramdump.h>
 #include <soc/qcom/scm.h>
 
-#include <soc/qcom/smem.h>
+#include <linux/soc/qcom/smem.h>
+#include <linux/soc/qcom/smem_state.h>
 
 #include "peripheral-loader.h"
 
@@ -45,13 +45,6 @@
 
 #define desc_to_data(d) container_of(d, struct pil_tz_data, desc)
 #define subsys_to_data(d) container_of(d, struct pil_tz_data, subsys_desc)
-
-struct pil_map_fw_info {
-	void *region;
-	unsigned long attrs;
-	phys_addr_t base_addr;
-	struct device *dev;
-};
 
 /**
  * struct reg_info - regulator info
@@ -103,11 +96,15 @@ struct pil_tz_data {
 	int proxy_clk_count;
 	int smem_id;
 	void *ramdump_dev;
+#ifdef CONFIG_QCOM_MINIDUMP
+	void *minidump_dev;
+#endif
 	u32 pas_id;
 	u32 bus_client;
 	bool enable_bus_scaling;
 	bool keep_proxy_regs_on;
 	struct completion stop_ack;
+	struct completion shutdown_ack;
 	struct pil_desc desc;
 	struct subsys_device *subsys;
 	struct subsys_desc subsys_desc;
@@ -387,28 +384,29 @@ static int piltz_resc_init(struct platform_device *pdev, struct pil_tz_data *d)
 
 	count = of_read_clocks(dev, &d->clks, "qcom,active-clock-names");
 	if (count < 0) {
-		dev_err(dev, "Failed to setup clocks.\n");
+		dev_err(dev, "Failed to setup clocks(rc:%d).\n", count);
 		return count;
 	}
 	d->clk_count = count;
 
 	count = of_read_clocks(dev, &d->proxy_clks, "qcom,proxy-clock-names");
 	if (count < 0) {
-		dev_err(dev, "Failed to setup proxy clocks.\n");
+		dev_err(dev, "Failed to setup proxy clocks(rc:%d).\n", count);
 		return count;
 	}
 	d->proxy_clk_count = count;
 
 	count = of_read_regs(dev, &d->regs, "qcom,active-reg-names");
 	if (count < 0) {
-		dev_err(dev, "Failed to setup regulators.\n");
+		dev_err(dev, "Failed to setup regulators(rc:%d).\n", count);
 		return count;
 	}
 	d->reg_count = count;
 
 	count = of_read_regs(dev, &d->proxy_regs, "qcom,proxy-reg-names");
 	if (count < 0) {
-		dev_err(dev, "Failed to setup proxy regulators.\n");
+		dev_err(dev, "Failed to setup proxy regulators(rc:%d).\n",
+				count);
 		return count;
 	}
 	d->proxy_reg_count = count;
@@ -417,12 +415,19 @@ static int piltz_resc_init(struct platform_device *pdev, struct pil_tz_data *d)
 		d->enable_bus_scaling = true;
 		rc = of_read_bus_pdata(pdev, d);
 		if (rc) {
-			dev_err(dev, "Failed to setup bus scaling client.\n");
+			dev_err(dev, "Failed to setup bus scaling client(rc:%d).\n",
+				rc);
 			return rc;
 		}
 	}
 
 	return 0;
+}
+
+static void piltz_resc_destroy(struct pil_tz_data *d)
+{
+	if (d->bus_client)
+		msm_bus_scale_unregister_client(d->bus_client);
 }
 
 static int enable_regulators(struct pil_tz_data *d, struct device *dev,
@@ -591,8 +596,7 @@ static void pil_remove_proxy_vote(struct pil_desc *pil)
 }
 
 static int pil_init_image_trusted(struct pil_desc *pil,
-		const u8 *metadata, size_t size, phys_addr_t mdata_phys,
-		void *region)
+		const u8 *metadata, size_t size)
 {
 	struct pil_tz_data *d = desc_to_data(pil);
 	struct pas_init_image_req {
@@ -601,15 +605,11 @@ static int pil_init_image_trusted(struct pil_desc *pil,
 	} request;
 	u32 scm_ret = 0;
 	void *mdata_buf;
+	dma_addr_t mdata_phys;
 	int ret;
+	unsigned long attrs = 0;
+	struct device dev = {0};
 	struct scm_desc desc = {0};
-	struct pil_map_fw_info map_fw_info = {
-		.attrs = pil->attrs,
-		.region = region,
-		.base_addr = mdata_phys,
-		.dev = pil->dev,
-	};
-	void *map_data = pil->map_data ? pil->map_data : &map_fw_info;
 
 	if (d->subsys_desc.no_auth)
 		return 0;
@@ -617,22 +617,25 @@ static int pil_init_image_trusted(struct pil_desc *pil,
 	ret = scm_pas_enable_bw();
 	if (ret)
 		return ret;
+	arch_setup_dma_ops(&dev, 0, 0, NULL, 0);
 
-	mdata_buf = pil->map_fw_mem(mdata_phys, size, map_data);
+	dev.coherent_dma_mask =
+		DMA_BIT_MASK(sizeof(dma_addr_t) * 8);
+	attrs |= DMA_ATTR_STRONGLY_ORDERED;
+	mdata_buf = dma_alloc_attrs(&dev, size, &mdata_phys, GFP_KERNEL,
+					attrs);
 	if (!mdata_buf) {
-		dev_err(pil->dev, "Failed to map memory for metadata.\n");
+		pr_err("scm-pas: Allocation for metadata failed.\n");
 		scm_pas_disable_bw();
 		return -ENOMEM;
 	}
 
 	memcpy(mdata_buf, metadata, size);
-
-	request.proc = d->pas_id;
-	request.image_addr = mdata_phys;
-
 	if (!is_scm_armv8()) {
+		request.proc = d->pas_id;
+		request.image_addr = mdata_phys;
 		ret = scm_call(SCM_SVC_PIL, PAS_INIT_IMAGE_CMD, &request,
-				sizeof(request), &scm_ret, sizeof(scm_ret));
+			sizeof(request), &scm_ret, sizeof(scm_ret));
 	} else {
 		desc.args[0] = d->pas_id;
 		desc.args[1] = mdata_phys;
@@ -642,7 +645,7 @@ static int pil_init_image_trusted(struct pil_desc *pil,
 		scm_ret = desc.ret[0];
 	}
 
-	pil->unmap_fw_mem(mdata_buf, size, map_data);
+	dma_free_attrs(&dev, size, mdata_buf, mdata_phys, attrs);
 	scm_pas_disable_bw();
 	if (ret)
 		return ret;
@@ -665,11 +668,10 @@ static int pil_mem_setup_trusted(struct pil_desc *pil, phys_addr_t addr,
 	if (d->subsys_desc.no_auth)
 		return 0;
 
-	request.proc = d->pas_id;
-	request.start_addr = addr;
-	request.len = size;
-
 	if (!is_scm_armv8()) {
+		request.proc = d->pas_id;
+		request.start_addr = addr;
+		request.len = size;
 		ret = scm_call(SCM_SVC_PIL, PAS_MEM_SETUP_CMD, &request,
 				sizeof(request), &scm_ret, sizeof(scm_ret));
 	} else {
@@ -681,6 +683,8 @@ static int pil_mem_setup_trusted(struct pil_desc *pil, phys_addr_t addr,
 				&desc);
 		scm_ret = desc.ret[0];
 	}
+	scm_ret = desc.ret[0];
+
 	if (ret)
 		return ret;
 	return scm_ret;
@@ -711,14 +715,16 @@ static int pil_auth_and_reset(struct pil_desc *pil)
 	if (rc)
 		goto err_clks;
 
+
 	if (!is_scm_armv8()) {
 		rc = scm_call(SCM_SVC_PIL, PAS_AUTH_AND_RESET_CMD, &proc,
 				sizeof(proc), &scm_ret, sizeof(scm_ret));
 	} else {
 		rc = scm_call2(SCM_SIP_FNID(SCM_SVC_PIL,
-			       PAS_AUTH_AND_RESET_CMD), &desc);
+				PAS_AUTH_AND_RESET_CMD), &desc);
 		scm_ret = desc.ret[0];
 	}
+
 	scm_pas_disable_bw();
 	if (rc)
 		goto err_reset;
@@ -766,9 +772,10 @@ static int pil_shutdown_trusted(struct pil_desc *pil)
 	if (rc)
 		goto err_clks;
 
+
 	if (!is_scm_armv8()) {
 		rc = scm_call(SCM_SVC_PIL, PAS_SHUTDOWN_CMD, &proc,
-			      sizeof(proc), &scm_ret, sizeof(scm_ret));
+				sizeof(proc), &scm_ret, sizeof(scm_ret));
 	} else {
 		rc = scm_call2(SCM_SIP_FNID(SCM_SVC_PIL, PAS_SHUTDOWN_CMD),
 			       &desc);
@@ -820,7 +827,7 @@ static int pil_deinit_image_trusted(struct pil_desc *pil)
 			      sizeof(proc), &scm_ret, sizeof(scm_ret));
 	} else {
 		rc = scm_call2(SCM_SIP_FNID(SCM_SVC_PIL, PAS_SHUTDOWN_CMD),
-			       &desc);
+				&desc);
 		scm_ret = desc.ret[0];
 	}
 
@@ -841,17 +848,16 @@ static struct pil_reset_ops pil_ops_trusted = {
 
 static void log_failure_reason(const struct pil_tz_data *d)
 {
-	u32 size;
+	size_t size;
 	char *smem_reason, reason[MAX_SSR_REASON_LEN];
 	const char *name = d->subsys_desc.name;
 
 	if (d->smem_id == -1)
 		return;
 
-	smem_reason = smem_get_entry_no_rlock(d->smem_id, &size, 0,
-							SMEM_ANY_HOST_FLAG);
-	if (!smem_reason || !size) {
-		pr_err("%s SFR: (unknown, smem_get_entry_no_rlock failed).\n",
+	smem_reason = qcom_smem_get(QCOM_SMEM_HOST_ANY, d->smem_id, &size);
+	if (IS_ERR(smem_reason) || !size) {
+		pr_err("%s SFR: (unknown, qcom_smem_get failed).\n",
 									name);
 		return;
 	}
@@ -860,7 +866,7 @@ static void log_failure_reason(const struct pil_tz_data *d)
 		return;
 	}
 
-	strlcpy(reason, smem_reason, min(size, MAX_SSR_REASON_LEN));
+	strlcpy(reason, smem_reason, min(size, (size_t)MAX_SSR_REASON_LEN));
 	pr_err("%s subsystem failure reason: %s.\n", name, reason);
 }
 
@@ -870,14 +876,17 @@ static int subsys_shutdown(const struct subsys_desc *subsys, bool force_stop)
 	int ret;
 
 	if (!subsys_get_crash_status(d->subsys) && force_stop &&
-						subsys->force_stop_gpio) {
-		gpio_set_value(subsys->force_stop_gpio, 1);
+						subsys->state) {
+		qcom_smem_state_update_bits(subsys->state,
+				BIT(subsys->force_stop_bit),
+				BIT(subsys->force_stop_bit));
 		ret = wait_for_completion_timeout(&d->stop_ack,
 				msecs_to_jiffies(STOP_ACK_TIMEOUT_MS));
 		if (!ret)
 			pr_warn("Timed out on stop ack from %s.\n",
 							subsys->name);
-		gpio_set_value(subsys->force_stop_gpio, 0);
+		qcom_smem_state_update_bits(subsys->state,
+				BIT(subsys->force_stop_bit), 0);
 	}
 
 	pil_shutdown(&d->desc);
@@ -905,7 +914,11 @@ static int subsys_ramdump(int enable, const struct subsys_desc *subsys)
 	if (!enable)
 		return 0;
 
+#ifdef CONFIG_QCOM_MINIDUMP
+	return pil_do_ramdump(&d->desc, d->ramdump_dev, d->minidump_dev);
+#else
 	return pil_do_ramdump(&d->desc, d->ramdump_dev, NULL);
+#endif
 }
 
 static void subsys_free_memory(const struct subsys_desc *subsys)
@@ -919,9 +932,10 @@ static void subsys_crash_shutdown(const struct subsys_desc *subsys)
 {
 	struct pil_tz_data *d = subsys_to_data(subsys);
 
-	if (subsys->force_stop_gpio > 0 &&
-				!subsys_get_crash_status(d->subsys)) {
-		gpio_set_value(subsys->force_stop_gpio, 1);
+	if (subsys->state && !subsys_get_crash_status(d->subsys)) {
+		qcom_smem_state_update_bits(subsys->state,
+			BIT(subsys->force_stop_bit),
+			BIT(subsys->force_stop_bit));
 		mdelay(CRASH_STOP_ACK_TO_MS);
 	}
 }
@@ -951,8 +965,7 @@ static irqreturn_t subsys_wdog_bite_irq_handler(int irq, void *dev_id)
 		return IRQ_HANDLED;
 	pr_err("Watchdog bite received from %s!\n", d->subsys_desc.name);
 
-	if (d->subsys_desc.system_debug &&
-			!gpio_get_value(d->subsys_desc.err_fatal_gpio))
+	if (d->subsys_desc.system_debug)
 		panic("%s: System ramdump requested. Triggering device restart!\n",
 							__func__);
 	subsys_set_crash_status(d->subsys, CRASH_STATUS_WDOG_BITE);
@@ -968,6 +981,26 @@ static irqreturn_t subsys_stop_ack_intr_handler(int irq, void *dev_id)
 
 	pr_info("Received stop ack interrupt from %s\n", d->subsys_desc.name);
 	complete(&d->stop_ack);
+	return IRQ_HANDLED;
+}
+
+static irqreturn_t subsys_shutdown_ack_intr_handler(int irq, void *dev_id)
+{
+	struct pil_tz_data *d = subsys_to_data(dev_id);
+
+	pr_info("Received stop shutdown interrupt from %s\n",
+			d->subsys_desc.name);
+	complete_shutdown_ack(d->subsys);
+	return IRQ_HANDLED;
+}
+
+static irqreturn_t subsys_ramdump_disable_intr_handler(int irq, void *dev_id)
+{
+	struct pil_tz_data *d = subsys_to_data(dev_id);
+
+	pr_info("Received ramdump disable interrupt from %s\n",
+			d->subsys_desc.name);
+	d->subsys_desc.ramdump_disable = 1;
 	return IRQ_HANDLED;
 }
 
@@ -1055,6 +1088,9 @@ static int pil_tz_driver_probe(struct platform_device *pdev)
 	struct device_node *crypto_node;
 	u32 proxy_timeout, crypto_id;
 	int len, rc;
+#ifdef CONFIG_QCOM_MINIDUMP
+	char md_node[20];
+#endif
 
 	d = devm_kzalloc(&pdev->dev, sizeof(*d), GFP_KERNEL);
 	if (!d)
@@ -1116,15 +1152,14 @@ static int pil_tz_driver_probe(struct platform_device *pdev)
 		if (!IS_ERR_OR_NULL(crypto_node)) {
 			of_property_read_u32(crypto_node, "cell-id",
 				&crypto_id);
-			of_node_put(crypto_node);
 		}
-
+		of_node_put(crypto_node);
 		scm_pas_init((int)crypto_id);
 	}
 
 	rc = pil_desc_init(&d->desc);
 	if (rc)
-		return rc;
+		goto err_descinit;
 
 	init_completion(&d->stop_ack);
 
@@ -1188,7 +1223,9 @@ static int pil_tz_driver_probe(struct platform_device *pdev)
 		       "qcom,spss-scsr-bits", d->bits_arr, sizeof(d->bits_arr)/
 							sizeof(d->bits_arr[0]));
 		if (rc) {
-			dev_err(&pdev->dev, "Failed to read qcom,spss-scsr-bits");
+			dev_err(&pdev->dev,
+				"Failed to read qcom,spss-scsr-bits(rc:%d)",
+				rc);
 			goto err_ramdump;
 		}
 		mask_scsr_irqs(d);
@@ -1198,6 +1235,10 @@ static int pil_tz_driver_probe(struct platform_device *pdev)
 						subsys_err_fatal_intr_handler;
 		d->subsys_desc.wdog_bite_handler = subsys_wdog_bite_irq_handler;
 		d->subsys_desc.stop_ack_handler = subsys_stop_ack_intr_handler;
+		d->subsys_desc.shutdown_ack_handler =
+			subsys_shutdown_ack_intr_handler;
+		d->subsys_desc.ramdump_disable_handler =
+			subsys_ramdump_disable_intr_handler;
 	}
 	d->desc.signal_aop = of_property_read_bool(pdev->dev.of_node,
 						"qcom,signal-aop");
@@ -1222,6 +1263,17 @@ static int pil_tz_driver_probe(struct platform_device *pdev)
 		goto err_ramdump;
 	}
 
+#ifdef CONFIG_QCOM_MINIDUMP
+	scnprintf(md_node, sizeof(md_node), "md_%s", d->subsys_desc.name);
+
+	d->minidump_dev = create_ramdump_device(md_node, &pdev->dev);
+	if (!d->minidump_dev) {
+		pr_err("%s: Unable to create a %s minidump device.\n",
+				__func__, d->subsys_desc.name);
+		rc = -ENOMEM;
+		goto err_minidump;
+	}
+#endif
 	d->subsys = subsys_register(&d->subsys_desc);
 	if (IS_ERR(d->subsys)) {
 		rc = PTR_ERR(d->subsys);
@@ -1230,10 +1282,16 @@ static int pil_tz_driver_probe(struct platform_device *pdev)
 
 	return 0;
 err_subsys:
+#ifdef CONFIG_QCOM_MINIDUMP
+	destroy_ramdump_device(d->minidump_dev);
+err_minidump:
+#endif
 	destroy_ramdump_device(d->ramdump_dev);
 err_ramdump:
 	pil_desc_release(&d->desc);
 	platform_set_drvdata(pdev, NULL);
+err_descinit:
+	piltz_resc_destroy(d);
 
 	return rc;
 }
@@ -1244,6 +1302,9 @@ static int pil_tz_driver_exit(struct platform_device *pdev)
 
 	subsys_unregister(d->subsys);
 	destroy_ramdump_device(d->ramdump_dev);
+#ifdef CONFIG_QCOM_MINIDUMP
+	destroy_ramdump_device(d->minidump_dev);
+#endif
 	pil_desc_release(&d->desc);
 
 	return 0;

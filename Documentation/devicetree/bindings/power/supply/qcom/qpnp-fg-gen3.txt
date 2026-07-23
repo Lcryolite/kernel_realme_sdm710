@@ -1,4 +1,4 @@
-Qualcomm Techonologies, Inc. QPNP PMIC Fuel Gauge Gen3 Device
+Qualcomm Technologies, Inc. QPNP PMIC Fuel Gauge Gen3 Device
 
 QPNP PMIC FG Gen3 device provides interface to the clients to read properties
 related to the battery. Its main function is to retrieve the State of Charge
@@ -35,8 +35,6 @@ First Level Node - FG Gen3 device
 	Value type: <phandle>
 	Definition: For details about IIO bindings see:
 		    Documentation/devicetree/bindings/iio/iio-bindings.txt
-
-- #thermal-sensor-cells: Should be 0. See thermal.txt for a description.
 
 - qcom,rradc-base
 	Usage:      required
@@ -304,17 +302,6 @@ First Level Node - FG Gen3 device
 		    This should be defined in the ascending order and in the
 		    range of 0-100. Array limit is set to 3.
 
-- qcom,ki-coeff-low-dischg
-	Usage:      optional
-	Value type: <prop-encoded-array>
-	Definition: Array of ki coefficient values for low discharge current
-		    during discharge. These values will be applied when the
-		    monotonic SOC goes below the SOC threshold specified under
-		    qcom,ki-coeff-soc-dischg. Array limit is set to 3. This
-		    property should be specified if qcom,ki-coeff-soc-dischg
-		    is specified to make it fully functional. Value has no
-		    unit. Allowed range is 0 to 62200 in micro units.
-
 - qcom,ki-coeff-med-dischg
 	Usage:      optional
 	Value type: <prop-encoded-array>
@@ -343,13 +330,6 @@ First Level Node - FG Gen3 device
 	Definition: Ki coefficient full SOC value that will be applied during
 		    discharging. If not specified, a value of 0 will be set.
 		    Allowed range is from 245 to 62256.
-
-- qcom,ki-coeff-hi-chg
-	Usage:      optional
-	Value type: <u32>
-	Definition: Ki coefficient value for high charge current during
-		    charging. Value has no unit. Allowed range is 0-62200
-		    in micro units.
 
 - qcom,fg-rconn-mohms
 	Usage:      optional
@@ -476,7 +456,7 @@ First Level Node - FG Gen3 device
 	Usage:      optional
 	Value type: <empty>
 	Definition: A boolean property which disables ESR pull-down.
-		    This is to be used for debug purposes only.
+		This is to be used for debug purposes only.
 
 - qcom,fg-sync-sleep-threshold-ma
 	Usage:      optional
@@ -525,7 +505,6 @@ pmi8998_fg: qpnp,fg {
 	qcom,slope-limit-temp-threshold = <100>;
 	qcom,slope-limit-coeffs = <10 11 12 13>;
 	qcom,battery-thermal-coefficients = [9d 50 ff];
-	#thermal-sensor-cells = <0>;
 	status = "okay";
 
 	qcom,fg-batt-soc@4000 {
@@ -552,34 +531,5 @@ pmi8998_fg: qpnp,fg {
 	qcom,fg-memif@4400 {
 		status = "okay";
 		reg = <0x4400 0x100>;
-	};
-};
-
-======================================
-Example for thermal zone configuration
-======================================
-
-thermal_zones {
-	pmi8998_fg {
-		polling-delay-passive = <200>;
-		polling-delay = <200>;
-		thermal-governor = <userspace>;
-		thermal-sensors = <&pmi8998_fg>;
-
-		pmi8998_fg_trip1: pmi8998-fg-trip0 {
-			temperature = <45000>;
-			hysteresis = <0>;
-			type = "passive";
-		};
-		pmi8998_fg_trip2: pmi8998-fg-trip2 {
-			temperature = <50000>;
-			hysteresis = <0>;
-			type = "hot";
-		};
-		pmi8998_fg_trip3: pmi8998-fg-trip3 {
-			temperature = <60000>;
-			hysteresis = <0>;
-			type = "alert";
-		};
 	};
 };

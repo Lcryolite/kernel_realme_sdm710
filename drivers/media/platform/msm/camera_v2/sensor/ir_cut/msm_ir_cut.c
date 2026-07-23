@@ -128,23 +128,21 @@ static int32_t msm_ir_cut_off(struct msm_ir_cut_ctrl_t *ir_cut_ctrl,
 
 	CDBG("ERR:%s:gpio_conf->gpio_num_info->gpio_num[0] = %d",
 		__func__,
-		ir_cut_ctrl->gconf->gpio_num_info->
-			gpio_num[IR_CUT_FILTER_GPIO_P]);
+		ir_cut_ctrl->gconf->gpio_num_info->gpio_num[
+			IR_CUT_FILTER_GPIO_P]);
 
 	CDBG("ERR:%s:gpio_conf->gpio_num_info->gpio_num[1] = %d",
 		__func__,
-		ir_cut_ctrl->gconf->gpio_num_info->
-			gpio_num[IR_CUT_FILTER_GPIO_M]);
+		ir_cut_ctrl->gconf->gpio_num_info->gpio_num[
+			IR_CUT_FILTER_GPIO_M]);
 
 	gpio_set_value_cansleep(
-		ir_cut_ctrl->gconf->gpio_num_info->
-			gpio_num[IR_CUT_FILTER_GPIO_P],
-		0);
+		ir_cut_ctrl->gconf->gpio_num_info->gpio_num[
+			IR_CUT_FILTER_GPIO_P], 0);
 
 	gpio_set_value_cansleep(
-		ir_cut_ctrl->gconf->gpio_num_info->
-			gpio_num[IR_CUT_FILTER_GPIO_M],
-		1);
+		ir_cut_ctrl->gconf->gpio_num_info->gpio_num[
+			IR_CUT_FILTER_GPIO_M], 1);
 
 	if (ir_cut_ctrl->gconf) {
 		rc = msm_camera_request_gpio_table(
@@ -202,23 +200,21 @@ static int32_t msm_ir_cut_on(
 
 	CDBG("ERR:%s: gpio_conf->gpio_num_info->gpio_num[0] = %d",
 		__func__,
-		ir_cut_ctrl->gconf->gpio_num_info->
-			gpio_num[IR_CUT_FILTER_GPIO_P]);
+		ir_cut_ctrl->gconf->gpio_num_info->gpio_num[
+			IR_CUT_FILTER_GPIO_P]);
 
 	CDBG("ERR:%s: gpio_conf->gpio_num_info->gpio_num[1] = %d",
 		__func__,
-		ir_cut_ctrl->gconf->gpio_num_info->
-			gpio_num[IR_CUT_FILTER_GPIO_M]);
+		ir_cut_ctrl->gconf->gpio_num_info->gpio_num[
+			IR_CUT_FILTER_GPIO_M]);
 
 	gpio_set_value_cansleep(
-		ir_cut_ctrl->gconf->gpio_num_info->
-			gpio_num[IR_CUT_FILTER_GPIO_P],
-		1);
+		ir_cut_ctrl->gconf->gpio_num_info->gpio_num[
+			IR_CUT_FILTER_GPIO_P], 1);
 
 	gpio_set_value_cansleep(
-		ir_cut_ctrl->gconf->
-			gpio_num_info->gpio_num[IR_CUT_FILTER_GPIO_M],
-		1);
+		ir_cut_ctrl->gconf->gpio_num_info->gpio_num[
+			IR_CUT_FILTER_GPIO_M], 1);
 
 	if (ir_cut_ctrl->gconf) {
 		rc = msm_camera_request_gpio_table(
@@ -372,8 +368,8 @@ static struct v4l2_subdev_ops msm_ir_cut_subdev_ops = {
 	.core = &msm_ir_cut_subdev_core_ops,
 };
 static int msm_ir_cut_close(struct v4l2_subdev *sd,
-	struct v4l2_subdev_fh *fh) {
-
+	struct v4l2_subdev_fh *fh)
+{
 	int rc = 0;
 	struct msm_ir_cut_ctrl_t *ir_cut_ctrl = v4l2_get_subdevdata(sd);
 

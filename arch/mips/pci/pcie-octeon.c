@@ -232,10 +232,16 @@ static inline uint64_t __cvmx_pcie_build_config_addr(int pcie_port, int bus,
 {
 	union cvmx_pcie_address pcie_addr;
 	union cvmx_pciercx_cfg006 pciercx_cfg006;
+	union cvmx_pciercx_cfg032 pciercx_cfg032;
 
 	pciercx_cfg006.u32 =
 	    cvmx_pcie_cfgx_read(pcie_port, CVMX_PCIERCX_CFG006(pcie_port));
 	if ((bus <= pciercx_cfg006.s.pbnum) && (dev != 0))
+		return 0;
+
+	pciercx_cfg032.u32 =
+		cvmx_pcie_cfgx_read(pcie_port, CVMX_PCIERCX_CFG032(pcie_port));
+	if ((pciercx_cfg032.s.dlla == 0) || (pciercx_cfg032.s.lt == 1))
 		return 0;
 
 	pcie_addr.u64 = 0;
@@ -679,7 +685,7 @@ static void __cvmx_increment_ba(union cvmx_sli_mem_access_subidx *pmas)
 	if (OCTEON_IS_MODEL(OCTEON_CN68XX))
 		pmas->cn68xx.ba++;
 	else
-		pmas->cn63xx.ba++;
+		pmas->s.ba++;
 }
 
 /**
@@ -1351,7 +1357,7 @@ static int __cvmx_pcie_rc_initialize_gen2(int pcie_port)
 	if (OCTEON_IS_MODEL(OCTEON_CN68XX))
 		mem_access_subid.cn68xx.ba = 0;
 	else
-		mem_access_subid.cn63xx.ba = 0;
+		mem_access_subid.s.ba = 0;
 
 	/*
 	 * Setup mem access 12-15 for port 0, 16-19 for port 1,
@@ -1464,8 +1470,7 @@ static int cvmx_pcie_rc_initialize(int pcie_port)
  *		 as it goes through each bridge.
  * Returns Interrupt number for the device
  */
-int __init octeon_pcie_pcibios_map_irq(const struct pci_dev *dev,
-				       u8 slot, u8 pin)
+int octeon_pcie_pcibios_map_irq(const struct pci_dev *dev, u8 slot, u8 pin)
 {
 	/*
 	 * The EBH5600 board with the PCI to PCIe bridge mistakenly

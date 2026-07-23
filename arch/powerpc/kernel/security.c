@@ -6,13 +6,12 @@
 
 #include <linux/cpu.h>
 #include <linux/kernel.h>
-#include <linux/debugfs.h>
 #include <linux/device.h>
 #include <linux/seq_buf.h>
 
+#include <asm/debugfs.h>
 #include <asm/asm-prototypes.h>
 #include <asm/code-patching.h>
-#include <asm/debug.h>
 #include <asm/security_features.h>
 #include <asm/setup.h>
 
@@ -59,7 +58,7 @@ void setup_barrier_nospec(void)
 	enable = security_ftr_enabled(SEC_FTR_FAVOUR_SECURITY) &&
 		 security_ftr_enabled(SEC_FTR_BNDS_CHK_SPEC_BAR);
 
-	if (!no_nospec)
+	if (!no_nospec && !cpu_mitigations_off())
 		enable_barrier_nospec(enable);
 }
 
@@ -121,7 +120,7 @@ early_param("nospectre_v2", handle_nospectre_v2);
 #ifdef CONFIG_PPC_FSL_BOOK3E
 void setup_spectre_v2(void)
 {
-	if (no_spectrev2)
+	if (no_spectrev2 || cpu_mitigations_off())
 		do_btb_flush_fixups();
 	else
 		btb_flush_enabled = true;
@@ -314,7 +313,7 @@ void setup_stf_barrier(void)
 
 	stf_enabled_flush_types = type;
 
-	if (!no_stf_barrier)
+	if (!no_stf_barrier && !cpu_mitigations_off())
 		stf_barrier_enable(enable);
 }
 

@@ -115,32 +115,32 @@ config SERIAL_SB1250_DUART_CONSOLE
 	  If unsure, say Y.
 
 config SERIAL_ATMEL
-	bool "AT91 / AT32 on-chip serial port support"
+	bool "AT91 on-chip serial port support"
 	depends on HAS_DMA
-	depends on ARCH_AT91 || AVR32 || COMPILE_TEST
+	depends on ARCH_AT91 || COMPILE_TEST
 	select SERIAL_CORE
 	select SERIAL_MCTRL_GPIO if GPIOLIB
 	help
 	  This enables the driver for the on-chip UARTs of the Atmel
-	  AT91 and AT32 processors.
+	  AT91 processors.
 
 config SERIAL_ATMEL_CONSOLE
-	bool "Support for console on AT91 / AT32 serial port"
+	bool "Support for console on AT91 serial port"
 	depends on SERIAL_ATMEL=y
 	select SERIAL_CORE_CONSOLE
 	help
 	  Say Y here if you wish to use an on-chip UART on a Atmel
-	  AT91 or AT32 processor as the system console (the system
+	  AT91 processor as the system console (the system
 	  console is the device which receives all kernel messages and
 	  warnings and which allows logins in single user mode).
 
 config SERIAL_ATMEL_PDC
-	bool "Support DMA transfers on AT91 / AT32 serial port"
+	bool "Support DMA transfers on AT91 serial port"
 	depends on SERIAL_ATMEL
 	default y
 	help
 	  Say Y here if you wish to use the PDC to do DMA transfers to
-	  and from the Atmel AT91 / AT32 serial port. In order to
+	  and from the Atmel AT91 serial port. In order to
 	  actually use DMA transfers, make sure that the use_dma_tx
 	  and use_dma_rx members in the atmel_uart_data struct is set
 	  appropriately for each port.
@@ -153,7 +153,7 @@ config SERIAL_ATMEL_TTYAT
 	bool "Install as device ttyATn instead of ttySn"
 	depends on SERIAL_ATMEL=y
 	help
-	  Say Y here if you wish to have the internal AT91 / AT32 UARTs
+	  Say Y here if you wish to have the internal AT91 UARTs
 	  appear as /dev/ttyATn (major 204, minor starting at 154)
 	  instead of the normal /dev/ttySn (major 4, minor starting at
 	  64). This is necessary if you also want other UARTs, such as
@@ -439,17 +439,27 @@ config SERIAL_MPSC_CONSOLE
 	  Say Y here if you want to support a serial console on a Marvell MPSC.
 
 config SERIAL_PXA
-	bool "PXA serial port support"
+	bool "PXA serial port support (DEPRECATED)"
 	depends on ARCH_PXA || ARCH_MMP
 	select SERIAL_CORE
+	select SERIAL_8250_PXA if SERIAL_8250=y
+	select SERIAL_PXA_NON8250 if !SERIAL_8250=y
 	help
 	  If you have a machine based on an Intel XScale PXA2xx CPU you
 	  can enable its onboard serial ports by enabling this option.
 
+	  Unless you have a specific need, you should use SERIAL_8250_PXA
+	  instead of this.
+
+config SERIAL_PXA_NON8250
+	bool
+	depends on !SERIAL_8250
+
 config SERIAL_PXA_CONSOLE
-	bool "Console on PXA serial port"
+	bool "Console on PXA serial port (DEPRECATED)"
 	depends on SERIAL_PXA
 	select SERIAL_CORE_CONSOLE
+	select SERIAL_8250_CONSOLE if SERIAL_8250=y
 	help
 	  If you have enabled the serial port on the Intel XScale PXA
 	  CPU you can make it the console by answering Y to this option.
@@ -460,6 +470,9 @@ config SERIAL_PXA_CONSOLE
 	  "console=ttySA0". (Try "man bootparam" or see the documentation of
 	  your boot loader (lilo or loadlin) about how to pass options to the
 	  kernel at boot time.)
+
+	  Unless you have a specific need, you should use SERIAL_8250_PXA
+	  and SERIAL_8250_CONSOLE instead of this.
 
 config SERIAL_SA1100
 	bool "SA1100 serial port support"
@@ -617,6 +630,15 @@ config SERIAL_UARTLITE_CONSOLE
 	  Say Y here if you wish to use a Xilinx uartlite as the system
 	  console (the system console is the device which receives all kernel
 	  messages and warnings and which allows logins in single user mode).
+
+config SERIAL_UARTLITE_NR_UARTS
+	int "Maximum number of uartlite serial ports"
+	depends on SERIAL_UARTLITE
+	range 1 256
+	default 1
+	help
+	  Set this to the number of uartlites in your system, or the number
+	  you think you might implement.
 
 config SERIAL_SUNCORE
 	bool
@@ -1071,6 +1093,22 @@ config SERIAL_MSM
 	depends on ARCH_QCOM
 	select SERIAL_CORE
 
+config SERIAL_MSM_CONSOLE
+	bool "MSM serial console support"
+	depends on SERIAL_MSM=y
+	select SERIAL_CORE_CONSOLE
+	select SERIAL_EARLYCON
+
+config SERIAL_RX_CONSOLE_ONLY
+	bool "MSM serial rx only console support"
+	depends on SERIAL_MSM=y
+	select SERIAL_MSM_CONSOLE
+	help
+	 This enable RX i.e. input receive functionality only of
+	 generic serial driver while silencing TX i.e. kernel logging
+	 output to console functionality.
+	 If you want to enable RX only console say Y else say N.
+
 config SERIAL_MSM_GENI
 	tristate "MSM on-chip GENI HW based serial port support"
 	depends on ARCH_QCOM
@@ -1086,12 +1124,6 @@ config SERIAL_MSM_GENI_CONSOLE
 	select SERIAL_CORE_CONSOLE
 	select SERIAL_EARLYCON
 
-config SERIAL_MSM_CONSOLE
-	bool "MSM serial console support"
-	depends on SERIAL_MSM=y
-	select SERIAL_CORE_CONSOLE
-	select SERIAL_EARLYCON
-
 config SERIAL_MSM_HS
 	tristate "MSM UART High Speed: Serial Driver"
 	depends on ARCH_QCOM
@@ -1103,6 +1135,15 @@ config SERIAL_MSM_HS
 
 	  Choose M here to compile it as a module. The module will be
 	  called msm_serial_hs.
+
+config SERIAL_MSM_WITH_HALF_SAMPLING
+	bool "Changes clock divider which impacts sampling rate for QUP HW ver greater than 2.5.0"
+	depends on SERIAL_MSM_GENI
+	help
+	  Clock divider value should get double for QUP Hardware version
+	  greater than 2.5.0.
+	  As earlycon can't have HW version awareness,decision is taken
+	  based on the configuration.
 
 config SERIAL_VT8500
 	bool "VIA VT8500 on-chip serial port support"
@@ -1176,6 +1217,7 @@ config SERIAL_LANTIQ
 	depends on LANTIQ
 	select SERIAL_CORE
 	select SERIAL_CORE_CONSOLE
+	select SERIAL_EARLYCON
 	help
 	  Support for console and UART on Lantiq SoCs.
 
@@ -1357,6 +1399,7 @@ config SERIAL_ALTERA_JTAGUART_CONSOLE
 	bool "Altera JTAG UART console support"
 	depends on SERIAL_ALTERA_JTAGUART=y
 	select SERIAL_CORE_CONSOLE
+	select SERIAL_EARLYCON
 	help
 	  Enable a Altera JTAG UART port to be the system console.
 
@@ -1396,6 +1439,7 @@ config SERIAL_ALTERA_UART_CONSOLE
 	bool "Altera UART console support"
 	depends on SERIAL_ALTERA_UART=y
 	select SERIAL_CORE_CONSOLE
+	select SERIAL_EARLYCON
 	help
 	  Enable a Altera UART port to be the system console.
 
@@ -1654,7 +1698,7 @@ config SERIAL_STM32
 	tristate "STMicroelectronics STM32 serial port support"
 	select SERIAL_CORE
 	depends on HAS_DMA
-	depends on ARM || COMPILE_TEST
+	depends on ARCH_STM32 || COMPILE_TEST
 	help
 	  This driver is for the on-chip Serial Controller on
 	  STMicroelectronics STM32 MCUs.
@@ -1691,15 +1735,24 @@ config SERIAL_MVEBU_CONSOLE
 	  and warnings and which allows logins in single user mode)
 	  Otherwise, say 'N'.
 
-config SERIAL_MSM_SMD
-	bool "Enable tty device interface for some SMD ports"
-	default n
-	depends on MSM_SMD
+config SERIAL_OWL
+	tristate "Actions Semi Owl serial port support"
+	depends on ARCH_ACTIONS || COMPILE_TEST
+	select SERIAL_CORE
 	help
-	  This driver provides the interface for the userspace clients
-	  to communicate over smd via device nodes. This enable the
-	  usersapce clients to read and write to some streaming SMD ports
-	  via tty device interface for MSM chipset.
+	  This driver is for Actions Semiconductor S500/S900 SoC's UART.
+	  Say 'Y' here if you wish to use the on-board serial port.
+	  Otherwise, say 'N'.
+
+config SERIAL_OWL_CONSOLE
+	bool "Console on Actions Semi Owl serial port"
+	depends on SERIAL_OWL=y
+	select SERIAL_CORE_CONSOLE
+	select SERIAL_EARLYCON
+	default y
+	help
+	  Say 'Y' here if you wish to use Actions Semiconductor S500/S900 UART
+	  as the system console.
 
 endmenu
 

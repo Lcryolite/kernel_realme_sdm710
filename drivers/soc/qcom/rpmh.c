@@ -118,9 +118,8 @@ static void __free_msg_to_pool(struct rpmh_msg *rpm_msg)
 	struct rpmh_mbox *rpm = rpm_msg->rc->rpmh;
 
 	/* If we allocated the pool, set it as available */
-	if (rpm_msg->bit >= 0 && rpm_msg->bit != RPMH_MAX_FAST_RES) {
+	if (rpm_msg->bit >= 0 && rpm_msg->bit != RPMH_MAX_FAST_RES)
 		bitmap_clear(rpm->fast_req, rpm_msg->bit, 1);
-	}
 }
 
 static void free_msg_to_pool(struct rpmh_msg *rpm_msg)
@@ -196,7 +195,7 @@ static inline void wait_for_tx_done(struct rpmh_client *rc,
 		ret = wait_for_completion_timeout(compl, RPMH_TIMEOUT);
 		if (ret) {
 			if (count != 4)
-			dev_notice(rc->dev,
+				dev_notice(rc->dev,
 				"RPMH response received addr=0x%x data=0x%x\n",
 				addr, data);
 			return;
@@ -293,7 +292,8 @@ static int check_ctrlr_state(struct rpmh_client *rc, enum rpmh_state state)
 
 	/* Do not allow setting active votes when in solver mode */
 	spin_lock_irqsave(&rpm->lock, flags);
-	if (rpm->in_solver_mode && state == RPMH_AWAKE_STATE)
+	if (rpm->in_solver_mode &&
+	    (state == RPMH_AWAKE_STATE || state == RPMH_ACTIVE_ONLY_STATE))
 		ret = -EBUSY;
 	spin_unlock_irqrestore(&rpm->lock, flags);
 
@@ -570,7 +570,7 @@ static int flush_passthru(struct rpmh_client *rc)
 	spin_lock_irqsave(&rpm->lock, flags);
 	for (i = 0; rpm->passthru_cache[i]; i++) {
 		rpm_msg = rpm->passthru_cache[i];
-		ret = mbox_write_controller_data(rc->chan, &rpm_msg->msg);
+		ret = mbox_send_controller_data(rc->chan, &rpm_msg->msg);
 		if (ret)
 			goto fail;
 	}
@@ -769,7 +769,7 @@ int rpmh_write_control(struct rpmh_client *rc, struct tcs_cmd *cmd, int n)
 	rpm_msg.msg.is_control = true;
 	rpm_msg.msg.is_complete = false;
 
-	return mbox_write_controller_data(rc->chan, &rpm_msg.msg);
+	return mbox_send_controller_data(rc->chan, &rpm_msg.msg);
 }
 EXPORT_SYMBOL(rpmh_write_control);
 
@@ -804,7 +804,7 @@ int rpmh_invalidate(struct rpmh_client *rc)
 	rpm->dirty = true;
 	spin_unlock_irqrestore(&rpm->lock, flags);
 
-	return mbox_write_controller_data(rc->chan, &rpm_msg.msg);
+	return mbox_send_controller_data(rc->chan, &rpm_msg.msg);
 }
 EXPORT_SYMBOL(rpmh_invalidate);
 
@@ -892,7 +892,7 @@ int send_single(struct rpmh_client *rc, enum rpmh_state state, u32 addr,
 	rpm_msg.cmd[0].data = data;
 	rpm_msg.msg.num_payload = 1;
 
-	return mbox_write_controller_data(rc->chan, &rpm_msg.msg);
+	return mbox_send_controller_data(rc->chan, &rpm_msg.msg);
 }
 
 /**
@@ -934,7 +934,7 @@ int rpmh_flush(struct rpmh_client *rc)
 	/* Invalidate sleep and wake TCS */
 	rpm_msg.msg.invalidate = true;
 	rpm_msg.msg.is_complete = false;
-	ret = mbox_write_controller_data(rc->chan, &rpm_msg.msg);
+	ret = mbox_send_controller_data(rc->chan, &rpm_msg.msg);
 	if (ret)
 		return ret;
 
