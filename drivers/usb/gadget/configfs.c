@@ -313,6 +313,7 @@ static ssize_t gadget_dev_desc_UDC_store(struct config_item *item,
 		const char *page, size_t len)
 {
 	struct gadget_info *gi = to_gadget_info(item);
+	const char *existing;
 	char *name;
 	int ret;
 
@@ -326,6 +327,10 @@ static ssize_t gadget_dev_desc_UDC_store(struct config_item *item,
 		name[len - 1] = '\0';
 
 	mutex_lock(&gi->lock);
+	existing = gi->composite.gadget_driver.udc_name;
+	pr_info_ratelimited(
+		"RMX1901-R022-UDC: configfs request name=%s existing=%s\n",
+		name, existing ? existing : "<none>");
 
 	if (!strlen(name) || strcmp(name, "none") == 0) {
 		ret = unregister_gadget(gi);
@@ -340,6 +345,9 @@ static ssize_t gadget_dev_desc_UDC_store(struct config_item *item,
 		gi->composite.gadget_driver.udc_name = name;
 		ret = usb_gadget_probe_driver(&gi->composite.gadget_driver);
 		if (ret) {
+			pr_err_ratelimited(
+				"RMX1901-R022-UDC: configfs probe failed name=%s ret=%d\n",
+				name, ret);
 			gi->composite.gadget_driver.udc_name = NULL;
 			goto err;
 		}

@@ -21,7 +21,7 @@ The source of truth is split deliberately:
 | M0 UAPI oracle | PASS | All 35,664 measured 4.9 values match on arm64 and arm32; 2,745 candidate-only additions are permitted. |
 | M1 donor control | PASS | Clean Image/Image.gz/dtbs/modules build reproduced with pinned tools. |
 | M2 SDM670 static port | PASS | The current d13ec62 candidate passes two clean, byte-identical builds plus config, warning, certificate and DT gates. |
-| M3 device boot | R015 BOOT FAIL / AUTOMATIC RECOVERY PASS; R016 STATIC PASS | r014 proved that IRQ-bank indices 0–9 complete and execution stops at index 10, `MDSS_INTF_TEAR_1_INTR` clear offset `0x6e808`; it then entered 900e and did not return to Recovery. r015 removes the SDE 5.x interface-TE banks from the SDM670 SDE 4.1 catalog and bypasses the forced watchdog bite when panic automatic-Recovery is enabled. It did not boot, but avoided the prior 51-second 900e and returned unattended to stable OrangeFox after approximately 146 seconds. r016 preserves that baseline and adds a bounded 90-second diagnostic panic deadline; its two clean builds and A17 boot package pass static gates but have not yet been written or run. |
+| M3 device boot | M3 PASS; M4 PARTIAL / NO-GO | r014 proved that IRQ-bank indices 0–9 complete and execution stops at index 10, `MDSS_INTF_TEAR_1_INTR` clear offset `0x6e808`; it then entered 900e and did not return to Recovery. r015 removes the SDE 5.x interface-TE banks from the SDM670 SDE 4.1 catalog and bypasses the forced watchdog bite when panic automatic-Recovery is enabled. It did not boot, but avoided the prior 51-second 900e and returned unattended to stable OrangeFox after approximately 146 seconds. r016 preserves that baseline and adds a bounded 90-second diagnostic panic deadline; runtime evidence now proves first-stage init, second-stage init, the first DRM IRQ handler and the intentional panic-notifier Recovery path. On July 26, 2026, r017 completed two clean QUSB-only static builds plus two clean boot-image package builds with `CONFIG_MSM_QUSB_PHY=y`, then completed a boot-only write, full 64 MiB readback, and unattended return to Recovery. Its pstore exposed the first USB-side root cause directly: `msm-qusb-phy-v2` and `msm-dwc3` both failed with `invalid reg offset count`. Commit `48648fdefa63474a031b0cef38a1dda35d0928be` closed that exact DT compatibility gap, and r018 reproduced the same static gates plus another exact boot write/readback and unattended Recovery return. The r018 pstore no longer contains either invalid-reg-offset failure; the earliest remaining USB blocker became `usbpd_create failed: -517`. r019 then completed the SMB2/SMB5 charger-family swap end-to-end: host-side build, exact boot write/readback, unattended Recovery return, and fresh pstore. That pstore proved the SMB2 stack is alive (`PMI: smblib_*`), but it also exposed the next exact blocker earlier in boot: `ufshcd-qcom 1d84000.ufshc: invalid resource` → `ufshcd_crypto_qti_init_crypto: Unable to get ufs_crypto mmio base` → `crypto setup failed` → `ufshcd_pltfrm_init() failed -22`. r020 then closed that exact UFS ICE resource gap on device: boot-only write/readback matched, the phone returned unattended to Recovery after about 122 seconds, and fresh pstore no longer contains the UFS ICE error chain. r021 then tested the minimal DWC3 gadget vbus guard on top of that verified r020 baseline: boot-only write/readback again matched, the phone returned unattended to Recovery after about 125 seconds, the older `usb_gadget_vbus_connect+0x1c/0xec` NULL-dereference signature disappeared from fresh pstore, and the next exact USB blocker collapsed to repeated `write /config/usb_gadget/g1/UDC ${sys.usb.controller}` → `No such device`. |
 
 ## Reproduction
 
@@ -99,7 +99,8 @@ candidate-only interfaces where they do not mutate a baseline value.  IPA QMI
 keeps the legacy userspace layout and its required 16-bit wire encoding as
 separate concerns.  All 35,664 baseline values now match on both ABIs.
 
-The M3 boot candidates, results through r015 and the exact write policy are
+The M3 boot candidates, results through the r016 runtime observation and the
+exact write policy are
 recorded in `bringup/manifests/M3-boot-candidates-20260723.json`.  r010 is the
 previous diagnostic mapping checkpoint.  r011 was packaged, statically
 verified and device-tested.  Its fresh Recovery preflight, boot-only write,
@@ -311,13 +312,246 @@ six DTBs, passes AVB, unpack/repack, gzip and DTB gates, and has SHA-256
 `9c4e3063919f9675358977b32a525f1f3b75fcd6424971f2e95d6671dfd8f57e`.
 Its candidate SHA-list hash is
 `b10da03ad5bb057bd11d14d7a00c2acd9038bf8c992a8ca6e1a79b4bcd917959`.
-r016 is static-pass/not-tested.  A fresh read-only root-ADB Recovery preflight
-passed at 2026-07-24 07:34:39 +08:00 with Android 17, 100% battery, the exact
-r015 boot still installed, empty pstore, unchanged rawdump and frozen
-recovery/dtbo/vbmeta hashes.  Candidate SHA and AVB gates passed; the preflight
-evidence-list SHA-256 is
+r016 is runtime-observed, not merely static-pass.  A fresh read-only root-ADB
+Recovery preflight passed at 2026-07-24 07:34:39 +08:00 with Android 17, 100%
+battery, the exact r015 boot still installed, empty pstore, unchanged rawdump
+and frozen recovery/dtbo/vbmeta hashes.  Candidate SHA and AVB gates passed;
+the preflight evidence-list SHA-256 is
 `706f0deb95dbcde5e5a9d875dc0d097009a9928475a33b56ce56cb72be3f2bdb`.
-The preflight performed no device write and does not itself grant approval.
+At 2026-07-24 07:40:45 +08:00 the exact approved r016 image was written only to
+`/dev/block/sde10`; the pushed file, device partition SHA and complete 64 MiB
+host readback all remained
+`9c4e3063919f9675358977b32a525f1f3b75fcd6424971f2e95d6671dfd8f57e`.
+After reboot at 2026-07-24 07:43:39 +08:00 the host runtime monitor observed no
+ADB, fastboot or QDL for 115 seconds and then rediscovered stable 4.9
+OrangeFox Recovery ADB.  The runtime-monitor SHA-256 is
+`9c7c0c16f61a24c68fd29eb0ca11ce5e0847d46ff1ae61b8a6efc508f456e677`;
+the auto-Recovery evidence-list SHA-256 is
+`a62ee6c65352709eb3d3d8f62b8417602db10551abe862a187f254ea454c65d0`.
+The r016 pstore proves `usbpd_create failed: -517` at 6.978415 seconds,
+first-stage init at 7.747912 seconds, second-stage init at 10.125093 seconds,
+the `/dev/block/platform/soc/1d84000.ufshc` timeout at 16.836613 seconds,
+repeated UDC ENODEV at 17.532110 seconds, the first DRM IRQ entry/return at
+37.613671/37.647450 seconds, the display GDSC HW-control conflict at 47.407355
+seconds, and the intentional boot-guard panic at 95.208306 seconds followed by
+the panic-notifier Recovery path at 96.332258 seconds.  r016 therefore passes
+M3 and leaves M4 partial/no-go: USB UDC, UFS by-name and display power
+ownership remain open.  The post-runtime recovery/dtbo/vbmeta hashes were not
+re-read at the exact 2026-07-24 return; they are carried forward as inferred
+unchanged from the preflight and the no-write policy.
+
+On July 26, 2026, the host-side `scripts/bringup/build-r017-qusb-phy.sh`
+helper completed two clean non-device-writing static runs in
+`/home/lknife/android/out-r017-qusb-phy-clean1-20260726` and
+`/home/lknife/android/out-r017-qusb-phy-clean2-20260726`.  The tracked r017
+defconfig hash is
+`8037ef42727cc52d36a57cf06bd815278cc48ee4f094a40ab9ec14271637a180`; the
+resulting `.config` hash is
+`a4b60c32c4b670e829213fa422616b71b279a361165d46228b7cbfb1b84371e6`;
+`Module.symvers` is
+`e30b27014da214c92e6960a6bbfed67c2d68a8dcfb82ada357b4363aa8ff1906`; `vmlinux`
+is `bbd66b64a171d6664706acfea41d2599317047181edf7db8d9d57f488c61327c`;
+`System.map` is
+`62960eb0a049c3224fcf6874d61745d870a073a0287e1a98595de96eab2e98db`;
+`Image` is
+`caeba424ea995f0ffaa3f3fd96f306df62f35be71f1a94be844f6816fc09cf10`; and
+`Image.gz` is
+`f1c7e9c78575d22e70aa21b16c7320b99db0193560571a5bc5451783c437faf9`.  These
+runs prove that the single intended functional delta
+`CONFIG_MSM_QUSB_PHY=y` builds successfully and does not pull in
+`CONFIG_QPNP_SMB2=y` or `CONFIG_QPNP_FG_GEN3=y`.
+
+Using the exact r016 `boot.img` as the package base, the exact r016 six-DTB
+order and the frozen Android 17 AVB fingerprint, the r017 payload then passed
+two clean packaging runs in
+`/home/lknife/android/out-r017-package-clean1-20260726` and
+`/home/lknife/android/out-r017-package-clean2-20260726`.  The resulting
+`kernel-payload` SHA-256 is
+`1fee673a2289b9ed2aa5dc1feb09d678a4077528a791c3f290243ad0a77d7ae5`; the raw
+boot image SHA-256 is
+`3895440b8f8e851b9cd8179cf80a87b51354cd5fcfe04d33ec1caf3bc1eb67fe`; and the
+full 64 MiB `boot.img` SHA-256 is
+`095f1e7b11f112493d6c984c8bdbebf50d551bbe404f4ec99462b7b6565a6db8`.  AVB
+verification passed, the full partition image size remained 67108864 bytes,
+the appended six DTBs stayed byte-identical to r016, and the preserved OrangeFox
+ramdisk stayed byte-identical to r016.  The candidate is therefore
+`PASS_STATIC_NOT_TESTED`: host-side build and packaging gates are closed, but
+no device write is authorized yet.
+
+On July 26, 2026, a read-only Recovery preflight was re-run specifically for
+r017 after first archiving the stale device pstore into
+`/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260726/B14-M03-r017-pstore-stale-baseline`
+and clearing `/sys/fs/pstore` on the device.  The clean preflight confirms
+that the handset is still in Recovery with root ADB, `pstore=0`, the boot
+partition still reads back as the r016 baseline
+`9c4e3063919f9675358977b32a525f1f3b75fcd6424971f2e95d6671dfd8f57e`, and the
+frozen recovery/dtbo/vbmeta/rawdump hashes are unchanged.  That closes the
+device-side write prerequisites for r017 and leads directly into the single
+boot-only write/readback test that follows.  Candidate
+`095f1e7b11f112493d6c984c8bdbebf50d551bbe404f4ec99462b7b6565a6db8` wrote
+cleanly, read back byte-identically across the full 64 MiB boot partition, and
+left recovery/dtbo/vbmeta/rawdump unchanged.  At approximately 121 seconds the
+handset returned unattended to stable OrangeFox Recovery.  The fresh
+`dmesg-ramoops-0` proves that the QUSB-only config change did take effect, but
+also shows the next exact blockers: `msm-qusb-phy-v2 88e2000.qusb: invalid reg
+offset count` and `msm-dwc3 a600000.ssusb: invalid reg offset count`.  r017
+therefore passes as a root-cause discovery candidate, not as an ADB-enabling
+candidate.
+
+Commit `48648fdefa63474a031b0cef38a1dda35d0928be` then aligned the RMX1901 USB
+DT with the 4.14 parser gates by trimming the QUSB register-offset list back to
+the expected 12 entries and adding the missing six-cell
+`qcom,gsi-reg-offset` property for DWC3.  The new verifier gate in
+`scripts/bringup/verify-rmx1901-dtb.py` now rejects any future candidate that
+reintroduces either mismatch.  The resulting r018 candidate
+`6843739c31313db275ce617a1775fa766de653f78ab78c4381ab608a754dad2e` passed
+AVB verification, full SHA list verification, exact boot write/readback, and
+unattended Recovery return after roughly 122 seconds.  Its pstore no longer
+contains either invalid-reg-offset failure.  The earliest remaining USB-side
+blocker is now `usbpd_create failed: -517` first observed at 54.693473 seconds,
+which narrows the next candidate to SMB2 / `power_supply/usb` enablement rather
+than any further USB DT churn.
+
+The first r019 host-side probe then tested the obvious follow-up:
+`CONFIG_QPNP_SMB2=y`.  That failed before any packaging or device write, but
+the failure was precise and useful: the current `rmx1901_m2_defconfig` already
+carried `CONFIG_QPNP_SMB5=y`, so enabling SMB2 additively caused linker-time
+duplicate `smblib_*` symbols between `smb-lib.o` and `smb5-lib.o`.  In other
+words, the RMX1901 charger delta is not a pure additive config; it is a charger
+family swap.
+
+The refined r019 definition therefore enables `CONFIG_QPNP_SMB2=y` and
+explicitly disables `CONFIG_QPNP_SMB5`, while still keeping
+`# CONFIG_QPNP_FG_GEN3 is not set`.  The second probe in
+`/home/lknife/android/out-r019-smb2-probe2-20260726` passed the full static
+bring-up chain with `ALLOW_DIRTY_SOURCE=1`: the built `.config` contains
+`CONFIG_QPNP_SMB2=y`, `# CONFIG_QPNP_SMB5 is not set`,
+`# CONFIG_QPNP_FG_GEN3 is not set`, `CONFIG_MSM_QUSB_PHY=y`, and
+`CONFIG_QPNP_USB_PDPHY=y`; `Image.gz` is
+`19f50bdfa8c0f380aec4d361958239c9834d10df40922520c99b85f4c9d0f8d6`; the base
+RMX1901 DTB remains
+`039fc7a787398c3de32463fe32baa632bc66ceb24d41bad479f62b239fdbb884`; and
+`r019-gate-summary.txt` is
+`64a45b8ef8871e0b7c2bbf7058a94067b987d6ba1f70f7ea40cb8372b2940c2e`.  This
+promotes r019 from hypothesis to a packaging-ready host candidate.
+
+The packaged r019 candidate
+`/home/lknife/android/rmx1901-4.14-bringup-evidence/BOOT-CANDIDATES-20260726/B14-M03-r019-smb2-stack-swap-pack1`
+then completed boot-only write/readback and unattended Recovery return.  The
+boot image SHA-256 is
+`ccdc28115b894747f9bfb8d8033b11b6435b0ec7f9f015df37f5f4edd3ddb47e`, and the
+fresh pstore from
+`/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260726/B14-M03-r019-smb2-stack-swap-auto-recovery/pstore`
+shows two important facts at once.  First, the SMB2 charger stack is genuinely
+running: `PMI: smblib_check_ov_condition` and `smblib_set_icl_current` now
+appear in the log.  Second, the next exact blocker is no longer a generic
+UFS/by-name timeout but a concrete DT/crypto resource mismatch:
+`ufshcd-qcom 1d84000.ufshc: invalid resource`,
+`ufshcd_crypto_qti_init_crypto: Unable to get ufs_crypto mmio base`,
+`crypto setup failed`, and `ufshcd_pltfrm_init() failed -22`.  The residual
+`usbpd_create failed: -517` did not disappear, but it now follows the UFS
+failure instead of being the first unknown storage-side problem.
+
+That evidence defines r020.  In the RMX1901 4.14 tree, `ufshc_mem` still
+looked like the 4.9-era single-range node:
+
+- `reg = <0x1d84000 0x3000>;`
+- no `reg-names`
+
+But the 4.14 QTI crypto path calls `platform_get_resource_byname(...,
+"ufs_ice")`.  The minimal r020 fix therefore extends `ufshc_mem` to:
+
+- `reg = <0x1d84000 0x3000>, <0x1d90000 0x8000>;`
+- `reg-names = "ufs_mem", "ufs_ice";`
+
+and it upgrades `scripts/bringup/verify-rmx1901-dtb.py` so the DT gate now
+rejects any candidate that reintroduces the missing UFS ICE named resource.
+The old r019 DTB now fails that verifier exactly as expected with
+`ufshc reg: expected [30949376, 12288, 30998528, 32768], got [30949376, 12288]`.
+
+The repaired r020 host-side probe in
+`/home/lknife/android/out-r020-ufs-ice-probe-20260726` passed the full static
+chain with the new UFS gate enabled.  Its key hashes are:
+
+- `r020-gate-summary.txt`: `13321640f8c31feae0bf996418292dc56c0dc2d615b1b09f34839b92a206fbb1`
+- base DTB: `84159f4e104cf59d591c546fc0db3b82a7a028237d2b15daa8ed27a4610f433c`
+- merged DTB: `e12d021e0bf37f1d5f1cc04dadb6e8c3f8fa70a31a75e69eda9232d60ddbc8fb`
+
+That static result was then closed on device with the r020 candidate at
+`/home/lknife/android/rmx1901-4.14-bringup-evidence/BOOT-CANDIDATES-20260726/B14-M03-r020-ufs-ice-dt-pack1/boot.img`.
+Its boot-only write completed, and the clean 64 MiB readback in
+`/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260726/B14-M03-r020-ufs-ice-preboot/boot-readback-clean.img`
+matched the candidate exactly with SHA-256
+`deca12b285f7a56a684ab6dd90653ae753c6b11334bb98ec0f44c7fb7e62ae34`.
+Runtime observation in
+`/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260726/B14-M03-r020-ufs-ice-runtime-observation`
+showed no adb or fastboot until the device returned unattended to stable
+Recovery after roughly 122 seconds.  The recovery-state capture in
+`/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260726/B14-M03-r020-ufs-ice-auto-recovery`
+preserved fresh pstore files and proved that the entire UFS ICE failure chain
+from r019 is gone: there is no longer any `invalid resource`, no missing
+`ufs_crypto` MMIO base, and no `crypto setup failed` / `ufshcd_pltfrm_init()
+failed -22`.
+
+The earliest remaining fatal path in that same r020 pstore is now the older
+DWC3 gadget NULL dereference:
+
+- `Workqueue: k_sm_usb dwc3_otg_sm_work`
+- `pc : usb_gadget_vbus_connect+0x1c/0xec`
+- `lr : dwc3_otg_start_peripheral+0x44c/0x4f8`
+
+Display-side `sde-vdd` / power-resource warnings still remain, and the bounded
+diagnostic boot deadline still fires later at about 95.224 seconds.  That
+moves the next legal single-variable candidate to a DWC3 gadget guard rather
+than any further UFS or display change.
+
+The new r021 helper
+`/home/lknife/android/kernel_realme_sdm710-4.14-bringup/scripts/bringup/build-r021-usb-vbus-guard.sh`
+only adds a readiness guard around
+`usb_gadget_vbus_connect()` / `usb_gadget_vbus_disconnect()` inside
+`dwc3_otg_start_peripheral()`.  Its host-side build in
+`/home/lknife/android/out-r021-usb-vbus-guard-20260726` passed the full static
+chain.  Key hashes are:
+
+- `r021-gate-summary.txt`: `fb749a53b53b0e56b4ed2acb4418eef8a21a2be47d0641b3216ec6852189ae11`
+- `.config`: `769ca3c7650f62fde363b3af216111fe4d316db0827f5e16fc6764ec78735b52`
+- `Image.gz`: `584414d7c13e5a05fe9e9a738e25dc3db27c0ad6a434b2430053ac8f335a2bef`
+- merged DTB: `e12d021e0bf37f1d5f1cc04dadb6e8c3f8fa70a31a75e69eda9232d60ddbc8fb`
+
+That static result was then closed on device with the r021 candidate at
+`/home/lknife/android/rmx1901-4.14-bringup-evidence/BOOT-CANDIDATES-20260726/B14-M03-r021-usb-vbus-guard-pack1/boot.img`.
+Its boot-only write completed, and the clean 64 MiB readback in
+`/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260726/B14-M03-r021-usb-vbus-guard-preboot`
+matched the candidate exactly with SHA-256
+`7a927a22ed8a862d208903fe33193c419a4e90d9d5c9a1fbfd35a58cefdf5e5a`.
+Runtime observation in
+`/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260726/B14-M03-r021-usb-vbus-guard-runtime-observation`
+showed no adb or fastboot until the device returned unattended to stable
+Recovery after roughly 125 seconds.
+
+The fresh recovery capture in
+`/home/lknife/android/rmx1901-4.14-bringup-evidence/DEVICE-TESTS-20260726/B14-M03-r021-usb-vbus-guard-auto-recovery`
+proves that the older DWC3 gadget NULL-dereference signature is gone: there is
+no `usb_gadget_vbus_connect+0x1c/0xec`, no matching
+`dwc3_otg_start_peripheral+0x44c/0x4f8`, and no `Unable to handle kernel NULL
+pointer dereference` trace.  Instead, the earliest repeated USB failure is now
+configfs/UDC ENODEV beginning at 21.969358 seconds:
+
+- `write /config/usb_gadget/g1/UDC ${sys.usb.controller}`
+- `Unable to write file contents: No such device`
+
+Those write failures then repeat through 94.339335 seconds.  Display-side
+warnings also remain (`Invalid enable while mdss_core_gdsc is under HW
+control`, `sde-vdd enable failed`), and the bounded diagnostic panic still
+fires later at 95.215458 seconds.  That makes the next legal single-variable
+candidate a USB UDC registration / instrumentation slice rather than display or
+deeper UFS work.
+
+During r021 preflight, ramoops clear semantics were also revalidated on-device:
+truncating `/sys/fs/pstore/*` leaves misleading zero-length directory entries
+but does not actually erase the backing records here.  The correct clean-state
+step is to archive stale files first and then unlink them with
+`rm /sys/fs/pstore/*`.
 
 The public `A17-ResukiSU-4.14-bringup` branch uses exact-tree snapshot commits
 instead of importing the unrelated 810,594-commit upstream history into the

@@ -90,9 +90,11 @@ void dwc3_usb3_phy_suspend(struct dwc3 *dwc, int suspend)
 static int dwc3_get_dr_mode(struct dwc3 *dwc)
 {
 	enum usb_dr_mode mode;
+	enum usb_dr_mode requested_mode;
 	struct device *dev = dwc->dev;
 	unsigned int hw_mode;
 
+	requested_mode = dwc->dr_mode;
 	if (dwc->dr_mode == USB_DR_MODE_UNKNOWN)
 		dwc->dr_mode = USB_DR_MODE_OTG;
 
@@ -130,6 +132,10 @@ static int dwc3_get_dr_mode(struct dwc3 *dwc)
 
 		dwc->dr_mode = mode;
 	}
+
+	dev_info(dev,
+		"RMX1901-R023-CORE: dr_mode resolved dev=%s requested=%d hw_mode=%u final=%d\n",
+		dev_name(dev), requested_mode, hw_mode, dwc->dr_mode);
 
 	return 0;
 }
@@ -867,6 +873,11 @@ int dwc3_core_init(struct dwc3 *dwc)
 	u32			reg;
 	int			ret;
 
+	dev_info(dwc->dev,
+		"RMX1901-R023-CORE: core_init enter dev=%s dr_mode=%d max_speed=%d has_hibernation=%d nr_scratch=%d\n",
+		dev_name(dwc->dev), dwc->dr_mode, dwc->maximum_speed,
+		dwc->has_hibernation, dwc->nr_scratch);
+
 	if (!dwc3_core_is_valid(dwc)) {
 		dev_err(dwc->dev, "this is not a DesignWare USB3 DRD Core\n");
 		ret = -ENODEV;
@@ -880,6 +891,9 @@ int dwc3_core_init(struct dwc3 *dwc)
 		ret = -EINVAL;
 		goto err0;
 	}
+	dev_info(dwc->dev,
+		"RMX1901-R023-CORE: core_init post-dr_mode dev=%s dr_mode=%d max_speed=%d\n",
+		dev_name(dwc->dev), dwc->dr_mode, dwc->maximum_speed);
 
 	/*
 	 * Write Linux Version Code to our GUID register so it's easy to figure
@@ -895,12 +909,22 @@ int dwc3_core_init(struct dwc3 *dwc)
 	}
 
 	ret = dwc3_phy_setup(dwc);
-	if (ret)
+	if (ret) {
+		dev_err(dwc->dev,
+			"RMX1901-R023-CORE: phy_setup failed dev=%s ret=%d dr_mode=%d\n",
+			dev_name(dwc->dev), ret, dwc->dr_mode);
 		goto err0;
+	}
+	dev_info(dwc->dev,
+		"RMX1901-R023-CORE: phy_setup ok dev=%s dr_mode=%d\n",
+		dev_name(dwc->dev), dwc->dr_mode);
 
 	if (!dwc->ulpi_ready) {
 		ret = dwc3_core_ulpi_init(dwc);
 		if (ret) {
+			dev_err(dwc->dev,
+				"RMX1901-R023-CORE: ulpi_init failed dev=%s ret=%d\n",
+				dev_name(dwc->dev), ret);
 			if (ret == -ETIMEDOUT) {
 				dwc3_core_soft_reset(dwc);
 				ret = -EPROBE_DEFER;
@@ -912,21 +936,33 @@ int dwc3_core_init(struct dwc3 *dwc)
 
 	if (!dwc->phys_ready) {
 		ret = dwc3_core_get_phy(dwc);
-		if (ret)
+		if (ret) {
+			dev_err(dwc->dev,
+				"RMX1901-R023-CORE: get_phy failed dev=%s ret=%d\n",
+				dev_name(dwc->dev), ret);
 			goto err0a;
+		}
 		dwc->phys_ready = true;
 	}
 
 	ret = dwc3_core_soft_reset(dwc);
-	if (ret)
+	if (ret) {
+		dev_err(dwc->dev,
+			"RMX1901-R023-CORE: soft_reset failed dev=%s ret=%d\n",
+			dev_name(dwc->dev), ret);
 		goto err0a;
+	}
 
 	dwc3_core_setup_global_control(dwc);
 	dwc3_core_num_eps(dwc);
 
 	ret = dwc3_setup_scratch_buffers(dwc);
-	if (ret)
+	if (ret) {
+		dev_err(dwc->dev,
+			"RMX1901-R023-CORE: scratch_setup failed dev=%s ret=%d nr_scratch=%d\n",
+			dev_name(dwc->dev), ret, dwc->nr_scratch);
 		goto err1;
+	}
 
 	/* Adjust Frame Length */
 	dwc3_frame_length_adjustment(dwc);
@@ -1035,6 +1071,11 @@ int dwc3_core_init(struct dwc3 *dwc)
 		reg |= DWC3_GUCTL1_IP_GAP_ADD_ON(1);
 		dwc3_writel(dwc->regs, DWC3_GUCTL1, reg);
 	}
+
+	dev_info(dwc->dev,
+		"RMX1901-R023-CORE: core_init success dev=%s dr_mode=%d max_speed=%d phys_ready=%d ulpi_ready=%d\n",
+		dev_name(dwc->dev), dwc->dr_mode, dwc->maximum_speed,
+		dwc->phys_ready, dwc->ulpi_ready);
 
 	return 0;
 
@@ -1315,6 +1356,11 @@ static void dwc3_get_properties(struct dwc3 *dwc)
 		| (dwc->is_utmi_l1_suspend << 4);
 
 	dwc->imod_interval = 0;
+
+	dev_info(dev,
+		"RMX1901-R023-CORE: props dev=%s dr_mode=%d max_speed=%d hsphy_mode=%d core_id=%d num_gsi_eps=%u\n",
+		dev_name(dev), dwc->dr_mode, dwc->maximum_speed,
+		dwc->hsphy_mode, dwc->core_id, dwc->num_gsi_eps);
 }
 
 /* check whether the core supports IMOD */
@@ -1475,6 +1521,11 @@ static int dwc3_probe(struct platform_device *pdev)
 	if (ret)
 		goto err2;
 
+	dev_info(dwc->dev,
+		"RMX1901-R023-CORE: gadget gate dev=%s dr_mode=%d enter=%d\n",
+		dev_name(dwc->dev), dwc->dr_mode,
+		dwc->dr_mode == USB_DR_MODE_OTG ||
+		dwc->dr_mode == USB_DR_MODE_PERIPHERAL);
 	if (dwc->dr_mode == USB_DR_MODE_OTG ||
 		dwc->dr_mode == USB_DR_MODE_PERIPHERAL) {
 		ret = dwc3_gadget_init(dwc);

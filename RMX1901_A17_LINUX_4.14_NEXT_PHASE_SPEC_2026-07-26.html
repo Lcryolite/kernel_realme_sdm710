@@ -1,0 +1,810 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RMX1901 A17 Linux 4.14 下一阶段实施规范</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --paper: #ffffff;
+      --ink: #18212b;
+      --muted: #5f6c79;
+      --line: #dce2e8;
+      --navy: #183b56;
+      --blue: #2667a8;
+      --green: #1f7a55;
+      --amber: #a05c00;
+      --red: #b13c3c;
+      --soft-blue: #edf5fc;
+      --soft-green: #edf8f3;
+      --soft-amber: #fff6e8;
+      --soft-red: #fff0f0;
+      --shadow: 0 12px 34px rgba(24, 59, 86, .08);
+      --radius: 16px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font: 15px/1.72 system-ui, -apple-system, "Segoe UI", "PingFang SC",
+        "Microsoft YaHei", sans-serif;
+    }
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code {
+      padding: .1rem .35rem;
+      border-radius: 5px;
+      background: #edf1f4;
+      color: #253b4b;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      overflow-wrap: anywhere;
+    }
+    .layout { max-width: 1420px; margin: 0 auto; padding: 0 24px 80px; }
+    header {
+      margin: 0 -24px 24px;
+      padding: 54px max(24px, calc((100vw - 1372px) / 2)) 42px;
+      color: #fff;
+      background: linear-gradient(125deg, #102d43 0%, #1f5275 62%, #286b7e 100%);
+    }
+    .eyebrow { margin: 0 0 8px; opacity: .78; letter-spacing: .08em; }
+    h1 { margin: 0; font-size: clamp(30px, 5vw, 52px); line-height: 1.14; }
+    .lead { max-width: 980px; margin: 16px 0 0; font-size: 17px; opacity: .9; }
+    .hero-tags { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 24px; }
+    .hero-tags span {
+      padding: 6px 11px;
+      border: 1px solid rgba(255,255,255,.24);
+      border-radius: 999px;
+      background: rgba(255,255,255,.08);
+      font-size: 13px;
+    }
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      margin: 0 0 20px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255,255,255,.94);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(12px);
+    }
+    nav a { flex: 0 0 auto; padding: 7px 10px; border-radius: 8px; color: var(--navy); }
+    nav a:hover, nav a.active { background: var(--soft-blue); text-decoration: none; }
+    section {
+      scroll-margin-top: 82px;
+      margin: 20px 0;
+      padding: 28px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--paper);
+      box-shadow: var(--shadow);
+    }
+    h2 { margin: 0 0 16px; color: var(--navy); font-size: 26px; line-height: 1.25; }
+    h3 { margin: 24px 0 10px; color: #23475f; font-size: 19px; }
+    h4 { margin: 18px 0 8px; font-size: 16px; }
+    p { margin: 9px 0; }
+    ul, ol { margin: 8px 0 8px 1.25rem; padding: 0; }
+    li + li { margin-top: 5px; }
+    .grid { display: grid; gap: 14px; }
+    .grid.stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .card {
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: #fbfcfd;
+    }
+    .stat-value { display: block; color: var(--navy); font-size: 24px; font-weight: 750; }
+    .stat-label { color: var(--muted); font-size: 13px; }
+    .badge {
+      display: inline-block;
+      padding: 3px 9px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .ok { color: var(--green); background: var(--soft-green); }
+    .warn { color: var(--amber); background: var(--soft-amber); }
+    .danger { color: var(--red); background: var(--soft-red); }
+    .info { color: var(--blue); background: var(--soft-blue); }
+    .callout {
+      margin: 16px 0;
+      padding: 15px 17px;
+      border-left: 4px solid var(--blue);
+      border-radius: 8px;
+      background: var(--soft-blue);
+    }
+    .callout.warn { border-color: var(--amber); color: var(--ink); background: var(--soft-amber); }
+    .callout.danger { border-color: var(--red); color: var(--ink); background: var(--soft-red); }
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; }
+    th, td { padding: 11px 13px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: #355269; background: #f3f6f8; font-size: 13px; }
+    tr:last-child td { border-bottom: 0; }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(120px, 1fr));
+      gap: 22px;
+      margin: 18px 0;
+    }
+    .flow .node {
+      position: relative;
+      min-height: 92px;
+      padding: 14px;
+      border: 1px solid #c9d8e3;
+      border-radius: 12px;
+      background: #f7fafc;
+    }
+    .flow .node:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      right: -19px;
+      top: 32px;
+      color: #7890a1;
+      font-size: 22px;
+    }
+    .node strong { display: block; color: var(--navy); margin-bottom: 4px; }
+    .node small { color: var(--muted); }
+    .node.blocked { border-color: #e2b7b7; background: var(--soft-red); }
+    .node.partial { border-color: #e7c996; background: var(--soft-amber); }
+    .node.done { border-color: #abd5c2; background: var(--soft-green); }
+    details {
+      margin: 10px 0;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: #fbfcfd;
+    }
+    summary { cursor: pointer; padding: 13px 15px; color: #23475f; font-weight: 700; }
+    details > div { padding: 0 15px 15px; }
+    .phase {
+      position: relative;
+      margin: 14px 0;
+      padding: 18px 18px 18px 24px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+    }
+    .phase::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 6px;
+      border-radius: 13px 0 0 13px;
+      background: var(--blue);
+    }
+    .phase.p0::before { background: var(--red); }
+    .phase.p1::before { background: var(--amber); }
+    .phase.later::before { background: var(--green); }
+    .phase-head { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .phase-head h3 { margin: 0; }
+    .mono-block {
+      overflow-x: auto;
+      padding: 13px 15px;
+      border-radius: 10px;
+      background: #15232d;
+      color: #dce7ef;
+      font: 13px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace;
+      white-space: pre-wrap;
+    }
+    .filter-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+    button {
+      padding: 7px 11px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--navy);
+      background: #fff;
+      cursor: pointer;
+    }
+    button.on { border-color: #9abed8; background: var(--soft-blue); }
+    .muted { color: var(--muted); }
+    footer { padding: 28px 0; text-align: center; color: var(--muted); font-size: 13px; }
+    @media (max-width: 1050px) {
+      .grid.stats, .grid.three { grid-template-columns: repeat(2, minmax(0,1fr)); }
+      .flow { grid-template-columns: repeat(3, minmax(0,1fr)); }
+      .flow .node::after { display: none; }
+    }
+    @media (max-width: 680px) {
+      .layout { padding-left: 12px; padding-right: 12px; }
+      header { margin-left: -12px; margin-right: -12px; padding-left: 18px; padding-right: 18px; }
+      section { padding: 20px 16px; }
+      .grid.stats, .grid.two, .grid.three, .flow { grid-template-columns: 1fr; }
+    }
+    @media print {
+      nav, .filter-bar { display: none; }
+      body { background: #fff; }
+      section { break-inside: avoid; box-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <header>
+      <p class="eyebrow">实施规范 1.10 · 2026-07-26 · 已回填 r024 host/device/QDL 闭环，下一步 r025 display owner 单变量</p>
+      <h1>RMX1901 A17 Linux 4.14<br>下一阶段实施规范</h1>
+      <p class="lead">以 r024 host/device/QDL 闭环和只读 crashdump 证据为当前事实基线，规定从“USB 已越过 zero-UDC、当前首阻点转为 display owner/GDSC”推进到可交互 Recovery、Android 17、ReSukiSU、Clang 22 与可发布构建的顺序、门禁和失败预案。</p>
+      <div class="hero-tags">
+        <span>M3：PASS</span>
+        <span>M4：PARTIAL / NO-GO</span>
+        <span>r017 QUSB runtime → r018 USB DT gate → r019 charger-stack swap → r020 UFS ICE DT runtime → r021 USB gadget vbus guard runtime → r022 zero-UDC runtime evidence → r023 DWC3 core boundary → r024 USB OTG DTS probe（已闭环）→ r025 Display owner</span>
+        <span>当前状态：r024 已完成预检/写入/回读/QDL 取证；下一步只做 r025 display owner 单变量</span>
+      </div>
+    </header>
+
+    <nav aria-label="章节导航">
+      <a href="#summary">结论</a>
+      <a href="#facts">事实基线</a>
+      <a href="#map">系统图</a>
+      <a href="#audit">代码审查</a>
+      <a href="#blockers">阻塞项</a>
+      <a href="#roadmap">路线</a>
+      <a href="#gates">门禁</a>
+      <a href="#automation">无人值守</a>
+      <a href="#failure">失败预案</a>
+      <a href="#abi">ABI与后置项</a>
+      <a href="#risk">风险</a>
+      <a href="#schedule">工期</a>
+      <a href="#done">完成定义</a>
+    </nav>
+
+    <section id="summary">
+      <h2>1. 执行结论</h2>
+      <div class="grid stats">
+        <div class="card"><span class="stat-value">241 秒</span><span class="stat-label">r024 运行观察期内无 ADB/fastboot，随后确认 900e</span></div>
+        <div class="card"><span class="stat-value">17 次</span><span class="stat-label">QDL KMSG 中明确出现 bind success</span></div>
+        <div class="card"><span class="stat-value">10 次</span><span class="stat-label">QDL KMSG 中成功写入 UDC</span></div>
+        <div class="card"><span class="stat-value">1 个当前 P0</span><span class="stat-label">display owner / GDSC；USB 首阻点已后移</span></div>
+      </div>
+      <div class="callout">
+        <strong>当前不是“内核几秒就死”。</strong> r016 已进入 first-stage init、second-stage init 和 Recovery 进程，DRM 首次 IRQ 也成功进入并返回。到 r024 为止，旧的 <code>usb_gadget_vbus_connect+0x1c/0xec</code> 空指针签名继续缺席；新的硬事实已经不是 “configfs 绑定时 zero-UDC”，而是 QDL KMSG 明确显示 USB bind 与 UDC 写入都已成功发生，随后崩在显示 owner/GDSC 路径。Logo 黑屏主要对应显示供电失败；r024 这次不是走 95 秒诊断 panic，而是先进入 900e crashdump。
+      </div>
+      <p>工程已经越过早期 SError、SDE IRQ clear-all、USB parser gate、UFS ICE 命名资源和 zero-UDC 首阻点。下一阶段不得再围绕 Logo 时长猜测，也不得同时修改工具链、ramdisk、设备树、USB、UFS 和显示。当前应冻结 r024 的 USB baseline，优先处理 display owner，随后再回到更深的 USB BAM / UFS/by-name 路径。</p>
+      <p><strong>当前决策：</strong><span class="badge warn">GO r025 display owner single variable / NO-GO 不混入 USB、UFS、ramdisk、FG_GEN3 或工具链修改</span>。r024 只在 <code>dwc3@a600000</code> 节点显式补齐 <code>dr_mode = "otg"</code>，host-side summary SHA-256 为 <code>df0f7cb9a098baca2b23ee9f99c1554ebadb1f5cae9cb89aaae37cadce7893df</code>；boot 候选 <code>cd5eced761cab92c3489da7c552b94d5bb311d78be865d152ce5d1a5dfa11faa</code> 完成 clean Recovery 预检、boot-only 写入与 64 MiB 全量回读。运行期 241 秒内无 ADB/fastboot，随后主机确认设备进入 Qualcomm <code>05c6:900e</code>；只读 QDL 抓取的 <code>KMSG.txt</code> 明确记录 17 次 <code>bind success</code>、10 次成功写入 <code>/config/usb_gadget/g1/UDC</code>，同时出现 12 次 <code>sde_power_resource_enable</code> / <code>clk_core_disable</code>/<code>clk_core_unprepare</code> 警告，以及 <code>unbalanced disables for mdss_core_gdsc</code>。因此当前合法的下一变量不再是 USB role，而是 r025 的 display owner 单变量。</p>
+    </section>
+
+    <section id="facts">
+      <h2>2. 当前事实基线</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>项目</th><th>当前值</th><th>判定</th></tr></thead>
+          <tbody>
+            <tr><td>开发分支</td><td><code>A17-ResukiSU-4.14-bringup</code></td><td><span class="badge warn">工作树 dirty；r019–r022 串行 bring-up 变更未整理提交</span></td></tr>
+            <tr><td>本地 HEAD / tree</td><td><code>48648fdefa63</code> / <code>13d93fde33b8…</code></td><td>HEAD 为 USB DT gate 提交；r022 在其上以 dirty tree 复编译通过</td></tr>
+            <tr><td>公开快照 / tree</td><td><code>3cba3e903525</code> / <code>f9fe4e15da5d…</code></td><td><span class="badge ok">内容与本地一致</span></td></tr>
+            <tr><td>r016 功能提交</td><td><code>dbaf10527d515546628afb5adfbda2c2dc19467e</code></td><td>90 秒可解除诊断 guard</td></tr>
+            <tr><td>工具链</td><td>Android Clang 11.0.1 r383902 + LLD 11.0.1 + ThinLTO</td><td><span class="badge ok">双 clean 逐字节一致</span></td></tr>
+            <tr><td>r016 boot</td><td><code>9c4e3063919f9675358977b32a525f1f3b75fcd6424971f2e95d6671dfd8f57e</code></td><td>设备端和完整 64 MiB 回读一致</td></tr>
+            <tr><td>当前设备</td><td>root OrangeFox Recovery，运行 <code>4.9.337-BloodMoon</code>；boot 分区为 r024 候选 <code>cd5eced761cab92c3489da7c552b94d5bb311d78be865d152ce5d1a5dfa11faa</code></td><td><span class="badge ok">安全可取证</span></td></tr>
+            <tr><td>写授权</td><td>所有 candidate、partition 和 target 均为空</td><td><span class="badge danger">禁止写入</span></td></tr>
+            <tr><td>诊断 ramdisk</td><td>r006–r016 均为 OrangeFox ramdisk</td><td>不能宣称 Android 17 正常系统已启动</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>r016 可信时间线</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>内核时间</th><th>事件</th><th>工程含义</th></tr></thead>
+          <tbody>
+            <tr><td>7.692 s</td><td>释放 init 内存</td><td>内核初始化完成并准备进入用户空间</td></tr>
+            <tr><td>7.748 s</td><td>first-stage init</td><td>M3 已越过早期内核</td></tr>
+            <tr><td>10.125 s</td><td>second-stage init</td><td>Recovery 用户空间持续运行</td></tr>
+            <tr><td>11.428 s</td><td>ueventd coldboot 完成</td><td>设备枚举框架工作，但关键设备并未全部出现</td></tr>
+            <tr><td>16.837 s</td><td>等待 <code>1d84000.ufshc</code> 超时</td><td><span class="badge danger">UFS / by-name 阻塞</span></td></tr>
+            <tr><td>17.013 s</td><td>启动 <code>recovery</code> 服务</td><td>Recovery 进程已存在，不等于可交互</td></tr>
+            <tr><td>17.532 s 起</td><td>绑定 <code>a600000.dwc3</code> 返回 <code>No such device</code></td><td><span class="badge danger">UDC 未注册，ADB 无法枚举</span></td></tr>
+            <tr><td>37.614–37.647 s</td><td>首次 DRM IRQ handler 进入并返回</td><td>r014 的 IRQ clear-all 首阻点已跨过</td></tr>
+            <tr><td>37.702 s</td><td>splash handoff 并解除 identity map</td><td>旧 SMMU/splash 路径已不再是当前首阻点</td></tr>
+            <tr><td>47.407 s 起</td><td><code>mdss_core_gdsc</code> 处于 HW control，enable 返回 -16</td><td><span class="badge danger">显示供电/状态切换阻塞</span></td></tr>
+            <tr><td>95.208 s</td><td>r016 deadline 主动 panic</td><td>不是自然崩溃</td></tr>
+            <tr><td>97.494–97.503 s</td><td>Recovery reason、warm reset、PS_HOLD</td><td><span class="badge ok">设备侧无人值守路径已实证一次</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="muted">运行监控 SHA-256：<code>9c7c0c16f61a24c68fd29eb0ca11ce5e0847d46ff1ae61b8a6efc508f456e677</code>。自动 Recovery 证据清单 SHA-256：<code>a62ee6c65352709eb3d3d8f62b8417602db10551abe862a187f254ea454c65d0</code>，清单复算通过。</p>
+      <p class="muted">r021 runtime 观察在 2026-07-26 16:34:39 +08:00、即启动后约 125 秒重新发现独立 Recovery；fresh pstore 中最早的 UDC/configfs ENODEV 出现在 21.969358 秒，旧的 DWC3 gadget 空指针签名未再出现。随后同日 r022 取证包在 <code>/home/lknife/android/out-r022-usb-udc-instrumentation-20260726-rerun2</code> 完成 host-side PASS，summary SHA-256 为 <code>6268512de76282a460018d0492d9accfab3829410a225ac1191a166d8f57469d</code>；对应 boot 候选 <code>f7e745f8b468c407c4be898fcd48d1ea87f2336104b0e33a30ffca6f6f8ded71</code> 在 2026-07-26 17:29:06 +08:00、即启动后约 121 秒重新发现独立 Recovery，rawdump 未变，fresh pstore 首次明确给出 <code>ret=-19</code> 且 <code>udc_count=0</code> 的 bind 边界。此后 r023 取证包在 <code>/home/lknife/android/out-r023-usb-core-boundary-20260726</code> 完成 host-side PASS，summary SHA-256 为 <code>78c986383931fabfc2eec839bbed339e8ad7e053067236390687daeab81e9444</code>；对应 boot 候选 <code>77af5eaebaf859fb367479931f1c31e7dc8ad5ed6c7bdd13f1c4e84549c52e88</code> 在 2026-07-26 18:06:56 +08:00、即启动后约 121 秒重新发现独立 Recovery，rawdump 仍未变化，但 fresh pstore 中没有保留任何 <code>RMX1901-R023-CORE</code> 边界标记。r024 取证包在 <code>/home/lknife/android/out-r024-usb-otg-dts-20260726</code> 完成 host-side PASS，summary SHA-256 为 <code>df0f7cb9a098baca2b23ee9f99c1554ebadb1f5cae9cb89aaae37cadce7893df</code>；对应 boot 候选 <code>cd5eced761cab92c3489da7c552b94d5bb311d78be865d152ce5d1a5dfa11faa</code> 在 241 秒观察期内始终无 ADB/fastboot，随后主机确认 <code>05c6:900e</code>，并通过只读 QDL 成功抓取 KMSG。QDL KMSG 已明确证明 USB bind/UDC 写入成功，新的首阻点切到显示 owner/GDSC。</p>
+    </section>
+
+    <section id="map">
+      <h2>3. 系统与调用链地图</h2>
+      <h3>整体启动状态机</h3>
+      <div class="flow">
+        <div class="node done"><strong>Bootloader</strong><small>A17 AVB、六 DTB、DTBO 46</small></div>
+        <div class="node done"><strong>Linux 4.14</strong><small>平台、IRQ、调度已运行</small></div>
+        <div class="node done"><strong>Recovery init</strong><small>first/second stage、ueventd</small></div>
+        <div class="node partial"><strong>关键硬件</strong><small>USB / UFS / 显示未闭环</small></div>
+        <div class="node done"><strong>诊断 guard</strong><small>panic → reason → PS_HOLD</small></div>
+        <div class="node done"><strong>独立 Recovery</strong><small>4.9 OrangeFox ADB 自动出现</small></div>
+      </div>
+
+      <h3>USB / ADB 链</h3>
+      <div class="flow">
+        <div class="node done"><strong>最终 merged FDT</strong><small>QUSB2 + nop PHY、high-speed、vbus supply</small></div>
+        <div class="node done"><strong>QUSB2 PHY</strong><small><code>qcom,qusb2phy-v2</code> 已进入；r018 已关闭 parser gate</small></div>
+        <div class="node partial"><strong>MSM wrapper</strong><small><code>dwc3_msm_probe()</code> / child populate</small></div>
+        <div class="node partial"><strong>DWC3 core</strong><small>PHY init → gadget init</small></div>
+        <div class="node blocked"><strong>UDC class</strong><small><code>usb_add_gadget_udc()</code> 未形成 <code>a600000.dwc3</code></small></div>
+        <div class="node blocked"><strong>configfs / adbd</strong><small>写 UDC 返回 ENODEV，主机不可见</small></div>
+      </div>
+
+      <h3>显示链</h3>
+      <div class="flow">
+        <div class="node done"><strong>DT / panel</strong><small>legacy direct DSI 与 DTBO panel 已解析</small></div>
+        <div class="node done"><strong>SDE catalog</strong><small>SDM670 SDE 4.1 IRQ topology 已纠正</small></div>
+        <div class="node done"><strong>DRM IRQ</strong><small>首次 handler 成功返回</small></div>
+        <div class="node blocked"><strong>RSC / GDSC</strong><small>RSC 已接管 HW control，MDP 又持有同一 GDSC 的 SW 票</small></div>
+        <div class="node blocked"><strong>SDE / DSI power</strong><small>重复 owner 使 <code>sde-vdd</code> enable 返回 -16</small></div>
+        <div class="node blocked"><strong>Recovery UI</strong><small>atomic commit/plane 反复失败，视觉黑屏</small></div>
+      </div>
+    </section>
+
+    <section id="audit">
+      <h2>4. 当前代码与流程审查</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>独立审查面</th><th>检查范围</th><th>收敛结论</th></tr></thead>
+          <tbody>
+            <tr><td>启动 / A17 / ABI</td><td>r016 config、4.9 oracle、DT compatible、DWC3 调用链、工具链和尺寸门禁</td><td>QUSB driver 缺失是可证伪的首阻点；r017 对 Android UAPI 风险低，仍需实测 ABI/符号/尺寸门禁。</td></tr>
+            <tr><td>代码 / DT / 显示</td><td>最终 merged FDT、USB PHY/charger、DWC3、GDSC/RSC、树内同类平台提交</td><td>确认 USB 的 QUSB→SMB2 两层依赖，以及 Display RSC/MDP 对同一 GDSC 的重复 owner。</td></tr>
+            <tr><td>流程 / 证据 / 无人值守</td><td>r001–r016 日志、manifest、远端 tree、构建复现、写入和 Recovery 路径</td><td>M3 PASS、M4 PARTIAL；代码有进展，主要流程债务是状态漂移、运行证据未绑定和主机自动化未产品化。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="grid two">
+        <div class="card">
+          <h3 style="margin-top:0">代码规模与可复现性</h3>
+          <ul>
+            <li>相对固定 4.14 donor：165 个文件、约 41,763 行新增、810 行删除。</li>
+            <li>主要改动覆盖 RMX1901 DTS、时钟/中断、SDE/DSI、SMMU、pstore、重启、安全门禁及 vendor UAPI。</li>
+            <li>r016 的 config、Module.symvers、vmlinux、System.map、Image、Image.gz、base/merged DTB 在两次 clean 构建中逐字节一致。</li>
+            <li>20 个 shell 脚本、8 个 JSON manifest、2 个 Python 工具通过语法检查。</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3 style="margin-top:0">审查发现</h3>
+          <ul>
+            <li><code>git diff --check</code> 有两处非功能格式债务：一个 DTS 行尾空格、r016 脚本末尾多空行。</li>
+            <li>M3 manifest、README、旧 HTML 均停在 r016 运行前，与 pstore 事实脱节。</li>
+            <li>运行监控没有独立 SHA 清单，也未绑定到 manifest；运行后未再次冻结 recovery/dtbo/vbmeta 哈希。</li>
+            <li>主机侧刷写与监控仍依赖临时命令，尚无候选 SHA/序列号/次数约束的统一自动化。</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3>r001–r016 的有效推进链</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>阶段</th><th>解决或证明的事项</th><th>当前结论</th></tr></thead>
+          <tbody>
+            <tr><td>r001–r007</td><td>隔离 boot/ramdisk/压缩问题，恢复 RMX1901 ramoops 布局</td><td>建立可信失败日志</td></tr>
+            <tr><td>r008–r011</td><td>pinctrl 兼容、SMMU rewrite、splash map 与 legacy direct DSI</td><td>DSI 绑定和有效映射得到实机证据</td></tr>
+            <tr><td>r012</td><td>修复 legacy CTL_TOP 接口字段解码</td><td>continuous-splash validation 通过</td></tr>
+            <tr><td>r013–r014</td><td>将 SError 精确压缩到错误的 interface-TE IRQ bank</td><td>找到 index 10 / <code>0x6e808</code></td></tr>
+            <tr><td>r015</td><td>按 SDM670 SDE 4.1 能力删除两个 SDE 5.x TE bank；修正 panic Recovery PS_HOLD</td><td>不再复现 51 秒 900e，自动 Recovery operational PASS</td></tr>
+            <tr><td>r016</td><td>增加 90 秒可解除 deadline</td><td>证明 4.14 已到 Recovery 用户空间，并获得完整持久日志</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout warn">
+        <strong>诊断债务必须在发布前清理。</strong> r013/r014 标记、r016 guard、panic 自动 Recovery、splash 兼容保护都服务于 bring-up；它们不是默认生产功能。每项必须在 M8 前选择“删除、默认关闭或有正式理由保留”。
+      </div>
+    </section>
+
+    <section id="blockers">
+      <h2>5. 当前阻塞项、根因与待验证项</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>ID</th><th>优先级</th><th>已证实事实</th><th>首要假设</th><th>下一证据</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>USB-01</td><td><span class="badge danger">P0</span></td>
+              <td>r017 pstore 首次出现 <code>msm-qusb-phy-v2</code> 与 <code>msm-dwc3</code> 的 <code>invalid reg offset count</code>；r018 通过 <code>48648fdefa63</code> 把 QUSB reg-offset 收敛到 12 项并补齐 DWC3 的 6 项 <code>qcom,gsi-reg-offset</code> 后，该错误完全消失。</td>
+              <td><strong>已闭合根因：</strong>RMX1901 USB DT 与 4.14 QUSB/DWC3 parser 的寄存器偏移 gate 不兼容，而不是 QUSB driver 本身缺失。</td>
+              <td>冻结 r018 的 USB DT 修复作为后续基线；除非新 pstore 再出现 parser 类错误，否则不再继续修改 USB DT 结构。</td>
+            </tr>
+            <tr>
+              <td>USB-02</td><td><span class="badge warn">P1</span></td>
+              <td>r024 QDL KMSG 已明确出现 17 次 <code>bind success</code>、10 次成功写入 <code>/config/usb_gadget/g1/UDC</code>，且 <code>android_work</code> 已发出 <code>USB_STATE=CONNECTED</code> / <code>CONFIGURED</code>；旧的 r022/r023 <code>udc_count=0</code> 首阻点已被越过。</td>
+              <td><strong>当前不是首阻点：</strong>显式 <code>dr_mode = "otg"</code> 已足以让 USB 路径继续前进，USB 不再停在 zero-UDC。邻近的 <code>usb_bam_init: register bam error -11</code> / <code>usb_bam ... failed with error -14</code> 仍可作为次级旁证，但必须等显示 owner 修复后再判断其是否仍然致命。</td>
+              <td>冻结 r024 的 USB role 基线；r025 之前不再继续改 USB role、<code>maximum-speed</code>、USB BAM 或 defconfig。</td>
+            </tr>
+            <tr>
+              <td>UFS-01</td><td><span class="badge ok">DONE</span></td>
+              <td>r019 fresh pstore 中的 <code>ufshcd-qcom 1d84000.ufshc: invalid resource</code>、<code>ufshcd_crypto_qti_init_crypto: Unable to get ufs_crypto mmio base</code>、<code>crypto setup failed</code> 与 <code>ufshcd_pltfrm_init() failed -22</code>，在 r020 fresh pstore 中已全部消失。</td>
+              <td><strong>已闭合因果链：</strong>RMX1901 的 <code>ufshc_mem</code> 需要两段 <code>reg</code> 与 <code>reg-names = "ufs_mem", "ufs_ice"</code> 才能满足 4.14 QTI crypto 路径的命名资源查找。</td>
+              <td>保留 r020 的 DTS 修复作为基线；只有在移除更早 USB gadget 崩溃后，才继续观察更深层 UFS host / LUN / by-name 依赖。</td>
+            </tr>
+            <tr>
+              <td>DISP-01</td><td><span class="badge danger">P0</span></td>
+              <td>r024 只读 QDL KMSG 中持续出现 <code>sde_power_resource_enable</code>、<code>clk_core_disable</code>/<code>clk_core_unprepare</code> WARN，共计 12 次，并出现 <code>unbalanced disables for mdss_core_gdsc</code>。</td>
+              <td><strong>高置信当前阻塞：</strong><code>sde_rscc</code> 已让 RSC 控制 GDSC，<code>mdss_mdp</code> 又通过 <code>sde-vdd</code> 执行软件 enable/disable，导致 owner 冲突；这与更早的 <code>Invalid enable while mdss_core_gdsc is under HW control</code>、<code>sde-vdd enable failed</code>、<code>failed to enable vregs rc=-16</code> 证据一致。</td>
+              <td>r025 只移除 MDP 的 <code>sde-vdd-supply</code> 与对应 platform-supply 条目，保留 RSC owner；不改 USB、UFS、ramdisk 或工具链。</td>
+            </tr>
+            <tr>
+              <td>STATE-01</td><td><span class="badge ok">DONE</span></td>
+              <td>manifest/README/HTML 对 r016 运行状态的漂移已收口。</td>
+              <td>多份手写状态源曾导致漂移。</td>
+              <td>后续继续把新状态优先回填 manifest/README/spec，避免再次分叉。</td>
+            </tr>
+            <tr>
+              <td>AUTO-01</td><td><span class="badge warn">P1</span></td>
+              <td>设备侧 guard 已实证；主机侧仍是临时脚本。</td>
+              <td>重复测试时可能用错候选、设备或授权。</td>
+              <td>实现序列号 allowlist、候选哈希和一次性授权状态机。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout">
+        <strong>关于 USB DT 的纠偏：</strong>r017 已证明 QUSB2 驱动内建后会继续撞上 DT parser gate；r018 则进一步证明真正的 DT 缺口是 QUSB 14 项 reg-offset 与缺失的 DWC3 <code>qcom,gsi-reg-offset</code>。这两处 gate 已在 <code>48648fdefa63</code> 闭合；r020 又进一步闭合了 UFS ICE 命名资源缺口；r021 再把更早的 DWC3 gadget 空指针签名从 fresh pstore 中清掉。因此 USB DT 不再是当前主线；眼下的最小新阻塞已经换成 UDC/configfs ENODEV。
+      </div>
+      <div class="callout warn">
+        <strong>关于显示的代码先例：</strong>本 4.14 树已有 <code>68e1cdb413b8</code>、<code>a90b500f0923</code>、<code>d5e7d9d8eb9b</code> 三个同类平台先例：启用 Display RSC 时移除 MDP 对 display GDSC 的重复供电项。RMX1901 的目标不是规避 <code>-EBUSY</code>，而是恢复单一 owner。
+      </div>
+    </section>
+
+    <section id="roadmap">
+      <h2>6. 分阶段实施路线</h2>
+
+      <article class="phase p0">
+        <div class="phase-head"><span class="badge ok">F0 · 已完成</span><h3>同步 r016 事实与证据</h3></div>
+        <p><strong>结果：</strong>r016 runtime/pstore、M3 PASS、M4 PARTIAL 已写回 manifest；runtime SHA 清单与 post-runtime 分区哈希说明已补齐；README 和旧 HTML 已纠偏。</p>
+        <p><strong>完成判定：</strong>manifest 现为权威状态；README/HTML 已与之对齐；不再保留“r016 未运行”的陈旧表述。</p>
+        <p><strong>后续要求：</strong>今后每个新候选都先回填状态，再讨论刷写或授权。</p>
+      </article>
+
+      <article class="phase p0">
+        <div class="phase-head"><span class="badge danger">r017</span><h3>USB2 PHY 配置单变量</h3></div>
+        <p><strong>唯一功能变量：</strong>在 RMX1901 defconfig 中设置 <code>CONFIG_MSM_QUSB_PHY=y</code>。不改 DT、ramdisk、DWC3 源码、UFS、显示、Clang 或 guard 逻辑。</p>
+        <p><strong>当前静态状态：</strong>2026-07-26 已完成两次 clean host-side 构建，helper 为 <code>scripts/bringup/build-r017-qusb-phy.sh</code>，输出目录为 <code>/home/lknife/android/out-r017-qusb-phy-clean1-20260726</code> 与 <code>/home/lknife/android/out-r017-qusb-phy-clean2-20260726</code>。两次产物对 <code>.config</code>、<code>Module.symvers</code>、<code>vmlinux</code>、<code>System.map</code>、<code>Image</code>、<code>Image.gz</code>、base DTB 与 merged DTB 全部逐字节一致。</p>
+        <p><strong>已记录哈希：</strong>defconfig <code>8037ef42727cc52d36a57cf06bd815278cc48ee4f094a40ab9ec14271637a180</code>，<code>.config</code> <code>a4b60c32c4b670e829213fa422616b71b279a361165d46228b7cbfb1b84371e6</code>，<code>Module.symvers</code> <code>e30b27014da214c92e6960a6bbfed67c2d68a8dcfb82ada357b4363aa8ff1906</code>，<code>vmlinux</code> <code>bbd66b64a171d6664706acfea41d2599317047181edf7db8d9d57f488c61327c</code>，<code>System.map</code> <code>62960eb0a049c3224fcf6874d61745d870a073a0287e1a98595de96eab2e98db</code>，<code>Image</code> <code>caeba424ea995f0ffaa3f3fd96f306df62f35be71f1a94be844f6816fc09cf10</code>，<code>Image.gz</code> <code>f1c7e9c78575d22e70aa21b16c7320b99db0193560571a5bc5451783c437faf9</code>。</p>
+        <p><strong>打包门禁：</strong>以 r016 <code>boot.img</code> 为 base、保留 r016 OrangeFox ramdisk 与六 DTB 顺序，r017 已完成两次 clean boot 打包。<code>kernel-payload</code> SHA-256 为 <code>1fee673a2289b9ed2aa5dc1feb09d678a4077528a791c3f290243ad0a77d7ae5</code>，raw boot 为 <code>3895440b8f8e851b9cd8179cf80a87b51354cd5fcfe04d33ec1caf3bc1eb67fe</code>，完整 64 MiB <code>boot.img</code> 为 <code>095f1e7b11f112493d6c984c8bdbebf50d551bbe404f4ec99462b7b6565a6db8</code>；AVB verify PASS，DTB 与 ramdisk 均保持 byte-identical。</p>
+        <p><strong>分阶段成功：</strong>首先出现 <code>msm-qusb-phy-v2</code> / <code>qusb_phy_init</code>，即证明 USB-01 修复有效；若随后仍停在 <code>usbpd_create -517</code>，r017 仍可判为“USB-01 PASS、整体 UDC PARTIAL”。完整成功才要求 <code>/sys/class/udc/a600000.dwc3</code>、4.14 Recovery ADB、10 分钟稳定和一次 USB 断开重连。</p>
+        <p><strong>运行结果：</strong>r017 已完成 boot-only 写入、64 MiB 全量回读和自动 Recovery 取证。候选 <code>boot.img</code> SHA-256 为 <code>095f1e7b11f112493d6c984c8bdbebf50d551bbe404f4ec99462b7b6565a6db8</code>；约 121 秒后自动回到 4.9 OrangeFox Recovery。fresh pstore 首次明确出现 <code>msm-qusb-phy-v2</code> 与 <code>msm-dwc3</code> 的 <code>invalid reg offset count</code>，说明 QUSB driver 已进入，但 RMX1901 USB DT 仍不满足 4.14 parser gate。</p>
+        <p><strong>判定：</strong>r017 不是终点候选，而是把 USB 首阻点精确推进到 DT gate 的证据候选；其价值在于为 r018 的 DT 单变量修复提供了直接根因。</p>
+      </article>
+
+      <article class="phase p0">
+        <div class="phase-head"><span class="badge danger">r018</span><h3>USB DT 兼容单变量</h3></div>
+        <p><strong>唯一功能变量：</strong>在 <code>arch/arm64/boot/dts/rmx1901/sdm845-670-usb-common.dtsi</code> 中把 <code>qusb_phy0</code> 的 <code>qcom,qusb-phy-reg-offset</code> 收敛到 12 项，并在 <code>usb0</code> 补齐 6 项 <code>qcom,gsi-reg-offset</code> 与 <code>qcom,gsi-disable-io-coherency</code>。不改 ramdisk、显示、UFS、SMB2 或 guard 逻辑。</p>
+        <p><strong>静态门禁：</strong>提交 <code>48648fdefa63474a031b0cef38a1dda35d0928be</code> 已把 USB DT compatibility gate 加入 <code>scripts/bringup/verify-rmx1901-dtb.py</code>；r018 候选 <code>boot.img</code> SHA-256 为 <code>6843739c31313db275ce617a1775fa766de653f78ab78c4381ab608a754dad2e</code>，SHA 列表复核 PASS，boot-only 写入与 64 MiB 全量回读 PASS。</p>
+        <p><strong>运行结果：</strong>约 122 秒后自动回到 4.9 OrangeFox Recovery。fresh pstore 中 <code>msm-qusb-phy-v2</code> / <code>msm-dwc3</code> 的 <code>invalid reg offset count</code> 已全部消失；新的最早 USB 故障是 54.693473 秒起持续出现的 <code>usbpd_create failed: -517</code>。</p>
+        <p><strong>判定：</strong>r018 已闭合 USB DT parser 根因。下一步不再改 USB DT，而是进入 r019 的 SMB2 单变量。</p>
+      </article>
+
+      <article class="phase p0">
+        <div class="phase-head"><span class="badge danger">r019</span><h3>SMB2 / SMB5 charger-stack swap</h3></div>
+        <p><strong>唯一功能变量：</strong>在 r018 基线上启用 <code>CONFIG_QPNP_SMB2=y</code>，同时显式关闭 <code>CONFIG_QPNP_SMB5</code>；<code># CONFIG_QPNP_FG_GEN3 is not set</code> 先保持不变，不修改 USB DT、显示或 UFS。</p>
+        <p><strong>host-side 结果：</strong>第一次“只开 SMB2”会在链接阶段因 <code>CONFIG_QPNP_SMB5=y</code> 产生大量 <code>smblib_*</code> duplicate symbols；修正为 charger-stack swap 后，<code>/home/lknife/android/out-r019-smb2-probe2-20260726</code> 已通过完整静态链路。关键摘要为：<code>.config</code> SHA-256 <code>769ca3c7650f62fde363b3af216111fe4d316db0827f5e16fc6764ec78735b52</code>，<code>Image.gz</code> <code>19f50bdfa8c0f380aec4d361958239c9834d10df40922520c99b85f4c9d0f8d6</code>，base DTB 仍为 <code>039fc7a787398c3de32463fe32baa632bc66ceb24d41bad479f62b239fdbb884</code>，summary <code>64a45b8ef8871e0b7c2bbf7058a94067b987d6ba1f70f7ea40cb8372b2940c2e</code>。</p>
+        <p><strong>运行结果：</strong>r019 候选 <code>ccdc28115b894747f9bfb8d8033b11b6435b0ec7f9f015df37f5f4edd3ddb47e</code> 已完成 boot-only 写入、64 MiB 全量回读和自动 Recovery 取证。fresh pstore 首次出现 <code>PMI: smblib_check_ov_condition</code> / <code>smblib_set_icl_current</code>，证明 SMB2 栈已进入；但 <code>usbpd_create failed: -517</code> 仍保留且提前到 5.861559 秒，同时更早暴露 <code>ufshcd-qcom 1d84000.ufshc: invalid resource</code>、<code>Unable to get ufs_crypto mmio base</code>、<code>crypto setup failed</code> 与 <code>ufshcd_pltfrm_init() failed -22</code>。</p>
+        <p><strong>判定：</strong>r019 已完成 charger-stack 的 host/device 闭环，并把下一处最早硬阻塞精确收敛到 UFS ICE 命名资源，而不是再停留在泛化的 by-name 超时。</p>
+      </article>
+
+      <article class="phase p0">
+        <div class="phase-head"><span class="badge danger">r020</span><h3>UFS ICE DT 命名资源</h3></div>
+        <p><strong>唯一功能变量：</strong>在 <code>arch/arm64/boot/dts/rmx1901/sdm670.dtsi</code> 的 <code>ufshc_mem</code> 节点中，把 <code>reg</code> 从单段 <code>&lt;0x1d84000 0x3000&gt;</code> 扩成两段 <code>&lt;0x1d84000 0x3000&gt;, &lt;0x1d90000 0x8000&gt;</code>，并补齐 <code>reg-names = "ufs_mem", "ufs_ice"</code>。不改 defconfig、USB DT、显示、ramdisk 或 FG_GEN3。</p>
+        <p><strong>host/device 结果：</strong>更新后的 <code>verify-rmx1901-dtb.py</code> 会对旧 r019 DTB 直接报 <code>ufshc reg</code> 缺第二段资源；修复后，<code>/home/lknife/android/out-r020-ufs-ice-probe-20260726</code> 完整静态链路 PASS。随后 r020 候选完成 boot-only 写入、64 MiB 全量回读、约 122 秒自动回 Recovery 与 fresh pstore 归档。关键摘要为：summary <code>13321640f8c31feae0bf996418292dc56c0dc2d615b1b09f34839b92a206fbb1</code>，base DTB <code>84159f4e104cf59d591c546fc0db3b82a7a028237d2b15daa8ed27a4610f433c</code>，merged DTB <code>e12d021e0bf37f1d5f1cc04dadb6e8c3f8fa70a31a75e69eda9232d60ddbc8fb</code>，实机 boot SHA-256 <code>deca12b285f7a56a684ab6dd90653ae753c6b11334bb98ec0f44c7fb7e62ae34</code>。</p>
+        <p><strong>判定：</strong>fresh pstore 中已不再出现 <code>ufshcd-qcom 1d84000.ufshc: invalid resource</code> / <code>Unable to get ufs_crypto mmio base</code> / <code>crypto setup failed</code>；UFS ICE 命名资源根因已闭合，当前不再需要继续做“只为了验证 ICE 资源”的候选。</p>
+        <p><strong>后续要求：</strong>保留该 DTS 修复不回退；后续只在移除更早 USB gadget 崩溃后，再继续观察更深层 UFS host / LUN / by-name 路径。</p>
+      </article>
+
+      <article class="phase p0">
+        <div class="phase-head"><span class="badge danger">r021</span><h3>USB gadget vbus 空指针 guard</h3></div>
+        <p><strong>唯一功能变量：</strong>只在 <code>drivers/usb/dwc3/dwc3-msm.c</code> 的 <code>dwc3_otg_start_peripheral()</code> 中，当 <code>dwc-&gt;gadget.ops</code> 或 <code>dwc-&gt;gadget.ops-&gt;vbus_session</code> 尚未就绪时跳过 <code>usb_gadget_vbus_connect()</code> / <code>usb_gadget_vbus_disconnect()</code>，并打印 guard 日志。不改 DT、defconfig、显示、ramdisk、UFS 或 FG_GEN3。</p>
+        <p><strong>host-side 结果：</strong><code>/home/lknife/android/out-r021-usb-vbus-guard-20260726</code> 已完整静态链路 PASS。关键摘要为：summary <code>fb749a53b53b0e56b4ed2acb4418eef8a21a2be47d0641b3216ec6852189ae11</code>，<code>Image.gz</code> <code>584414d7c13e5a05fe9e9a738e25dc3db27c0ad6a434b2430053ac8f335a2bef</code>，merged DTB <code>e12d021e0bf37f1d5f1cc04dadb6e8c3f8fa70a31a75e69eda9232d60ddbc8fb</code>。</p>
+        <p><strong>device 结果：</strong>r021 候选 <code>7a927a22ed8a862d208903fe33193c419a4e90d9d5c9a1fbfd35a58cefdf5e5a</code> 已完成 boot-only 写入、64 MiB 全量回读和自动 Recovery 取证。runtime 观察在约 125 秒重新发现 4.9 OrangeFox Recovery；fresh pstore 不再包含 r020 的 <code>usb_gadget_vbus_connect+0x1c/0xec</code> / <code>dwc3_otg_start_peripheral+0x44c/0x4f8</code> 空指针签名，但自 21.969358 秒起持续到 94.339335 秒反复出现 <code>write /config/usb_gadget/g1/UDC ${sys.usb.controller}</code> → <code>No such device</code>。</p>
+        <p><strong>判定：</strong>r021 已完成 host/device 闭环，并把最早可见 USB 阻塞从旧的 gadget NULL deref 推进到 UDC/configfs ENODEV。显示侧 <code>Invalid enable while mdss_core_gdsc is under HW control</code> 与 <code>sde-vdd enable failed</code> 仍保留；95.215 秒诊断 panic 仍执行。</p>
+        <p><strong>NO-GO：</strong>不把显示、FG_GEN3、UFS deeper probe 或任何 DT 修改混进同一包。</p>
+      </article>
+
+      <article class="phase p0">
+        <div class="phase-head"><span class="badge danger">r022</span><h3>USB UDC 注册 / configfs 取证</h3></div>
+        <p><strong>唯一功能变量：</strong>只在 <code>dwc3_msm_probe()</code>、child populate、<code>dwc3_gadget_init()</code>、<code>usb_add_gadget_udc()</code> 与 <code>sys.usb.controller</code> 相关命名路径增加最小仪表；必要时只补充不会改变行为的 return-code / controller-name 日志。不改 DT、defconfig、显示、ramdisk、UFS 或 FG_GEN3。</p>
+        <p><strong>host-side 结果：</strong><code>/home/lknife/android/out-r022-usb-udc-instrumentation-20260726-rerun2</code> 已完整静态链路 PASS。首次构建暴露两处仅属于插桩本身的树兼容问题：<code>gadget.c</code> 不能解引用前置声明的 <code>struct usb_udc</code>，<code>dwc3-msm.c</code> 不能访问本树不存在的 <code>dwc-&gt;is_drd</code>；去除这两处非功能性日志后，summary SHA-256 为 <code>6268512de76282a460018d0492d9accfab3829410a225ac1191a166d8f57469d</code>，<code>Image.gz</code> 为 <code>3ba43559344bb5354ef3a00867e4acdb3c1e898b7ba6490cf63c4b07c0cb55c2</code>，merged DTB 仍为 <code>e12d021e0bf37f1d5f1cc04dadb6e8c3f8fa70a31a75e69eda9232d60ddbc8fb</code>。</p>
+        <p><strong>device 结果：</strong>候选 <code>f7e745f8b468c407c4be898fcd48d1ea87f2336104b0e33a30ffca6f6f8ded71</code> 已完成 clean Recovery 预检、boot-only 写入、64 MiB 全量回读和自动 Recovery 取证；主机在 2026-07-26 17:29:06 +08:00、即约 121 秒后重新发现独立 Recovery，rawdump 未变。</p>
+        <p><strong>runtime 判定：</strong>fresh pstore 已明确给出 <code>configfs request name=a600000.dwc3 existing=&lt;none&gt;</code>、<code>probe request driver=g1 want=a600000.dwc3 ret=-19 udc_count=0 first_udc=&lt;none&gt;</code> 与 <code>configfs probe failed name=a600000.dwc3 ret=-19</code>；同时 <code>msm probe</code> / child populate / <code>core-ready child-dev=a600000.dwc3</code> 已出现，但没有任何 <code>gadget init</code>、<code>udc register attempt</code> 或 parent register 日志。由此可以排除“纯粹名字写死错了”的宽泛假设，当前故障已收敛到“bind 时没有任何已注册 UDC”。</p>
+        <p><strong>下一步 GO：</strong>r022 的运行边界已经由 r023 进一步闭环；下一步不再重刷旧候选，而是进入 r024 的显式 <code>dr_mode = "otg"</code> DTS probe。</p>
+        <p><strong>NO-GO：</strong>r022 之后不再重复测试旧候选，也不借机混入显示 owner、PD/charger、FG_GEN3、UFS deeper probe 或行为性 DTS 修改。</p>
+      </article>
+
+      <article class="phase p0">
+        <div class="phase-head"><span class="badge danger">r023</span><h3>DWC3 core / gadget 边界取证</h3></div>
+        <p><strong>唯一功能变量：</strong>只在 <code>dwc3_probe()</code> / <code>dwc3_core_init()</code>、<code>dwc3_get_dr_mode()</code>、<code>dwc3_phy_setup()</code>、<code>dwc3_gadget_init()</code> 及相关早退分支增加最小 return-code 仪表；不改 DT、defconfig、显示、ramdisk、UFS、charger 或 FG_GEN3。</p>
+        <p><strong>host-side 结果：</strong><code>/home/lknife/android/out-r023-usb-core-boundary-20260726</code> 已完整 static PASS；summary SHA-256 为 <code>78c986383931fabfc2eec839bbed339e8ad7e053067236390687daeab81e9444</code>，<code>Image.gz</code> 为 <code>d007a3ab7414f9821b345ab27dc43c8c021c2cc95c878e108d913ae6a883c9d4</code>，merged DTB 仍为 <code>e12d021e0bf37f1d5f1cc04dadb6e8c3f8fa70a31a75e69eda9232d60ddbc8fb</code>。</p>
+        <p><strong>device 结果：</strong>候选 <code>77af5eaebaf859fb367479931f1c31e7dc8ad5ed6c7bdd13f1c4e84549c52e88</code> 已完成 clean Recovery 预检、boot-only 写入、64 MiB 全量回读和自动 Recovery 取证；主机在 2026-07-26 18:06:56 +08:00、即约 121 秒后重新发现独立 Recovery，recovery/dtbo/vbmeta/rawdump 哈希均未变化。</p>
+        <p><strong>runtime 判定：</strong>fresh pstore 中没有保留任何 <code>RMX1901-R023-CORE</code> 标记；r022 的 <code>configfs request name=a600000.dwc3 existing=&lt;none&gt;</code>、<code>ret=-19</code>、<code>udc_count=0</code> 链保持不变。这说明 r023 虽然完成了 host/device 闭环，但没有留下新的可持久 early-core 运行证据。</p>
+        <p><strong>判定：</strong>r023 已完成“是否能靠最小 core 边界插桩进一步压缩证据”的验证，结果是否定的；下一步应切到更有信息增益的 r024 单变量，而不是继续叠加早期日志。</p>
+        <p><strong>NO-GO：</strong>不在同一包里顺手改 <code>maximum-speed</code>、display owner 或 USB BAM 行为。</p>
+      </article>
+
+      <article class="phase p0">
+        <div class="phase-head"><span class="badge ok">r024 已闭环</span><h3>USB DWC3 OTG role DTS probe</h3></div>
+        <p><strong>唯一功能变量：</strong>在 RMX1901 的 <code>dwc3@a600000</code> 节点显式补齐 <code>dr_mode = "otg"</code>。本轮不引入 <code>maximum-speed</code>，也不改任何 USB BAM、显示、UFS 或 ramdisk 行为。</p>
+        <p><strong>host/device/QDL 结果：</strong><code>/home/lknife/android/out-r024-usb-otg-dts-20260726</code> host-side PASS，summary SHA-256 为 <code>df0f7cb9a098baca2b23ee9f99c1554ebadb1f5cae9cb89aaae37cadce7893df</code>；boot 候选 <code>cd5eced761cab92c3489da7c552b94d5bb311d78be865d152ce5d1a5dfa11faa</code> 完成 clean Recovery 预检、boot-only 写入与 64 MiB 全量回读。运行期 241 秒内无 ADB/fastboot，随后主机确认 <code>05c6:900e</code>，并通过只读 QDL 成功抓取 KMSG。</p>
+        <p><strong>判定：</strong>QDL KMSG 已明确记录 17 次 <code>bind success</code>、10 次成功写入 <code>/config/usb_gadget/g1/UDC</code>，所以“显式 OTG role 也无效”的假设被否定；USB 已越过 zero-UDC 边界。新的第一阻塞变成显示 owner/GDSC，因此 r024 到此闭环结束。</p>
+      </article>
+
+      <article class="phase p0">
+        <div class="phase-head"><span class="badge danger">r025</span><h3>显示 GDSC 单一 owner</h3></div>
+        <p><strong>唯一功能变量：</strong>从 <code>sdm670-sde.dtsi</code> 的 <code>mdss_mdp</code> 删除 <code>sde-vdd-supply</code> 及名为 <code>sde-vdd</code> 的 platform-supply 条目；保留 <code>sde_rscc</code> 的 <code>vdd-supply=&amp;mdss_core_gdsc</code>。不改 GDSC driver，不清 HW_CONTROL bit，不删除 <code>qcom,support-hw-trigger</code>，不将 supply 重命名为 <code>gdsc</code>。</p>
+        <p><strong>GO：</strong>不再出现 GDSC HW-control 非法 enable、<code>sde-vdd -16</code> 与 plane WARN；首次 atomic commit 完成，Recovery UI 连续显示和交互 10 分钟。</p>
+      </article>
+
+      <article class="phase p0">
+        <div class="phase-head"><span class="badge danger">r026+</span><h3>UFS 与 by-name</h3></div>
+        <p>在 USB/显示首阻点继续后移后，从完整 dmesg 对照 4.9 的 UFS host、UFS PHY、ICE/crypto、clocks、regulators、SMMU 与 async probe。一次只修一个失败依赖；data 先只读。</p>
+        <p><strong>GO：</strong><code>1d84000.ufshc</code>、SCSI LUN、全部 by-name 出现；连续三次冷启动无 UFS fatal、ICE timeout 或数据写入。</p>
+        <p><strong>NO-GO：</strong>需要格式化 data、修改 userdata、或无法证明只读。</p>
+      </article>
+
+      <article class="phase p1">
+        <div class="phase-head"><span class="badge warn">M4 完成</span><h3>可交互诊断 Recovery</h3></div>
+        <p>USB、UFS、显示分别通过后做三次冷启动回归。此时才允许把 M4 从 PARTIAL 改为 PASS。</p>
+        <p><strong>统一验收：</strong>4.14 ADB 每次稳定 10 分钟、guard 可解除、USB 重连、全部 by-name、UI 可交互；无 900e、panic、RPMh timeout、UFS fatal、SMMU fault。</p>
+      </article>
+
+      <article class="phase later">
+        <div class="phase-head"><span class="badge ok">M5–M8</span><h3>Android 17 正常 ramdisk 与硬件闭环</h3></div>
+        <p>换回 A17 正常 ramdisk，依次验证 binder/binderfs、SELinux/VINTF、FBE、SurfaceFlinger/HWC、KGSL、Wi-Fi/BT、音频、传感器、相机、视频、充电与休眠。每个子系统保留 4.9 ABI oracle 和独立回滚点。</p>
+      </article>
+
+      <article class="phase later">
+        <div class="phase-head"><span class="badge ok">M9–M10</span><h3>ReSukiSU、Clang 22、CI 与发布</h3></div>
+        <p>先集成 ReSukiSU 核心并独立回归，再以同源码/同配置做 Clang 11 与 Clang 22 A/B。最后移除诊断债务、固定 CI 输入并生成与本机一致的 Image/boot 工件。AnyKernel 只作为最后的分发层，不参与 bring-up 根因判断。</p>
+      </article>
+    </section>
+
+    <section id="gates">
+      <h2>7. 每个候选的强制门禁</h2>
+      <div class="grid three">
+        <div class="card">
+          <h3 style="margin-top:0">源码</h3>
+          <ul>
+            <li>唯一、已提交的功能变量</li>
+            <li>工作树 clean</li>
+            <li>记录 commit 和 tree hash</li>
+            <li><code>git diff --check</code> 无新增问题</li>
+            <li>不得混入文档之外的隐性修改</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3 style="margin-top:0">构建与打包</h3>
+          <ul>
+            <li>固定 Clang 11/LLD/ThinLTO 与签名输入</li>
+            <li>两个全新输出目录完整构建</li>
+            <li>关键产物逐字节一致</li>
+            <li>gzip、DTB、DTBO merge、AVB、unpack/repack PASS</li>
+            <li>记录所有输入/输出 SHA-256</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3 style="margin-top:0">设备测试</h3>
+          <ul>
+            <li>序列号固定为目标 RMX1901</li>
+            <li>root Recovery、电量与模式通过</li>
+            <li>刷前 pstore 新鲜度可证明</li>
+            <li>boot 与受保护分区哈希冻结</li>
+            <li>一次性 boot-only 授权与完整回读</li>
+          </ul>
+        </div>
+      </div>
+      <div class="callout danger">
+        <strong>绝对停止条件：</strong>设备序列号、当前 boot SHA、候选 SHA、目标块设备、受保护分区哈希、pstore 归属或授权任一不符，立即停止；不得“先刷了再确认”。Recovery、dtbo、vbmeta 和 userdata 默认禁止写入。
+      </div>
+      <h3>r017 预期差异白名单</h3>
+      <div class="mono-block">允许变化：
+  arch/arm64/configs/vendor/rmx1901_m2_defconfig
+  .config（仅 CONFIG_MSM_QUSB_PHY=y 及其确定依赖）
+  vmlinux / System.map / Image / Image.gz / kernel payload / boot SHA
+
+必须不变：
+  Module.symvers（该 PHY driver 无 EXPORT_SYMBOL；若变化即停止）
+  RMX1901 base DTB 与 DTBO 46 merged 语义
+  六个 appended DTB 的内容和顺序
+  OrangeFox ramdisk、boot header、cmdline、AVB Android 17 属性
+  recovery / dtbo / vbmeta / userdata 分区</div>
+    </section>
+
+    <section id="automation">
+      <h2>8. 无人值守测试规范</h2>
+      <div class="flow">
+        <div class="node done"><strong>只读预检</strong><small>设备/模式/哈希/pstore/电量</small></div>
+        <div class="node partial"><strong>一次性批准</strong><small>绑定 serial + candidate + target + expiry</small></div>
+        <div class="node partial"><strong>boot-only 写入</strong><small>推送 SHA、设备 SHA、64 MiB 回读</small></div>
+        <div class="node partial"><strong>一次性重启</strong><small>批准消费后立即清空</small></div>
+        <div class="node partial"><strong>多协议监控</strong><small>ADB / fastboot / 900e / timeout</small></div>
+        <div class="node done"><strong>自动 Recovery</strong><small>pstore 优先捕获，禁止后续自动写</small></div>
+      </div>
+      <h3>主机自动化必须具备</h3>
+      <ul>
+        <li>设备序列号 allowlist；出现第二台设备或 transport 变化立即停止。</li>
+        <li>候选目录、boot SHA、manifest commit/tree 和目标块设备的精确绑定。</li>
+        <li>写入次数为 1，重启次数为 1；授权带生成时间和到期时间，使用后不可复用。</li>
+        <li>完整 64 MiB 回读比较通过后才能重启。</li>
+        <li>每 5 秒记录 ADB、fastboot、900e；180 秒无枚举即停止自动动作，等待人工 Recovery。</li>
+        <li>4.14 ADB 出现时自动解除 guard，并读回参数确认；随后只读采集，不自动刷下一包。</li>
+        <li>4.9 Recovery 出现时先采 pstore、bootreason、power reason、boot 与全部受保护分区哈希。</li>
+      </ul>
+      <div class="callout warn"><strong>边界：</strong>当前机制是“自动进入独立 Recovery”，不是“自动恢复原厂 boot”。boot 分区仍保留被测候选；任何回滚 boot 都必须是新的、明确授权的写入。</div>
+    </section>
+
+    <section id="failure">
+      <h2>9. 失败预案与下一动作</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>现场</th><th>立即动作</th><th>禁止动作</th><th>下一候选依据</th></tr></thead>
+          <tbody>
+            <tr><td>4.14 ADB 出现</td><td>解除 guard；保存 uname、完整 dmesg、UDC、UFS/by-name、boot SHA；稳定观察</td><td>不要马上刷下一包</td><td>第一条真实运行时错误</td></tr>
+            <tr><td>90 秒 guard 后自动 Recovery</td><td>先采 pstore 和全部分区哈希</td><td>不要先 reboot 或覆盖 pstore</td><td>最早可信失败 return code</td></tr>
+            <tr><td>进入 900e</td><td>只读 Sahara/KMSG；采完后人工回 Recovery</td><td>不上传 Firehose，不访问/写 UFS</td><td>可信 KMSG 最后一条完整 marker</td></tr>
+            <tr><td>进入 fastboot</td><td>记录真实 USB VID/PID、时间与 bootreason，人工回 Recovery</td><td>不在 fastboot 临时刷包</td><td>区分内核重启目标和 bootloader fallback</td></tr>
+            <tr><td>180 秒无任何枚举</td><td>人工回 Recovery，保存 power reason 和当前 boot SHA</td><td>不能标为 guard PASS</td><td>补 scheduler/PS_HOLD/固件路径证据</td></tr>
+            <tr><td>pstore 为空</td><td>停止，检查 ramoops 新鲜度与归属</td><td>不能宣称 Linux panic 或 PS_HOLD 成功</td><td>缩短 guard 或调整诊断日志预算</td></tr>
+            <tr><td>分区哈希不符</td><td>立即停止，保存现场</td><td>禁止制作或刷写新候选</td><td>先恢复安全基线并找出写入来源</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="abi">
+      <h2>10. ABI、Android 17 与后置功能</h2>
+      <h3>已经关闭的 ABI 门禁</h3>
+      <p>4.9 vendor UAPI oracle 已覆盖 arm64/arm32，35,664 个基线测量值无删除和无布局/数值变化；候选新增接口被单独标记。r017 只启用 built-in USB PHY driver，该驱动没有 <code>EXPORT_SYMBOL</code>，理论上不改变 Android UAPI 或 <code>Module.symvers</code>；理论结论不能替代实际比较。Image 仍必须小于 50 MiB，完整 boot 必须落在 64 MiB 分区预算内。</p>
+
+      <h3>Android 17 正常 ramdisk 前置条件</h3>
+      <div class="grid two">
+        <div class="card">
+          <h4>必须先有</h4>
+          <ul>
+            <li>M4 三次冷启动 PASS</li>
+            <li>稳定 4.14 ADB、UFS/by-name、显示</li>
+            <li>binder/binderfs、dm/verity、fscrypt/FBE 静态门禁</li>
+            <li>data 首次只读策略与可验证回滚</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h4>仍需实机验证</h4>
+          <ul>
+            <li>SELinux、VINTF 与 vendor service</li>
+            <li>ION/dma-buf、KGSL、HWC/SurfaceFlinger</li>
+            <li>IPA/RMNET、音频、VIDC、相机 ABI</li>
+            <li>Wi-Fi/BT、充电、热管理、休眠/唤醒</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3>严格后置项</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>项目</th><th>最早进入时点</th><th>原因与门禁</th></tr></thead>
+          <tbody>
+            <tr><td>ReSukiSU</td><td>M8 基础系统稳定后</td><td>先核心、再 hook、再权限/卸载回归；不得掩盖基础内核错误</td></tr>
+            <tr><td>Clang 22</td><td>M9</td><td>同源码/同配置 Clang 11 对照；启动、功能、功耗、稳定性 A/B</td></tr>
+            <tr><td>AnyKernel</td><td>M10</td><td>仅分发；最终 boot 内容须与本机可复现产物一致</td></tr>
+            <tr><td>BORE/调度与性能改动</td><td>M9 后单独候选</td><td>每项独立基准与回归，不与工具链升级合并</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h3>Clang 22 迁移门禁</h3>
+      <p>bring-up 阶段继续固定 Clang 11，不是因为 Clang 22 不能编译，而是为了保留当前已复现的控制变量。只有 M8 稳定后，才从同一源码 tree、同一 defconfig 和同一打包输入制作 Clang 11/22 两组候选；先消除新增 warning/error 与 LTO/汇编兼容差异，再比较 kernel release、config、符号、Image/boot 尺寸、启动日志、20 次重启、4 小时待机和功能回归。工具链升级不得与 ReSukiSU 或功能补丁放在同一候选。</p>
+    </section>
+
+    <section id="risk">
+      <h2>11. 风险登记表</h2>
+      <div class="filter-bar" aria-label="风险筛选">
+        <button class="on" data-filter="all">全部</button>
+        <button data-filter="critical">严重</button>
+        <button data-filter="high">高</button>
+        <button data-filter="medium">中</button>
+      </div>
+      <div class="table-wrap">
+        <table id="risk-table">
+          <thead><tr><th>风险</th><th>等级</th><th>检测</th><th>预防</th><th>回滚</th></tr></thead>
+          <tbody>
+            <tr data-risk="critical"><td>UFS/ICE/FBE 误操作导致数据损坏</td><td><span class="badge danger">严重</span></td><td>UFS/ICE/dm 日志、只读挂载</td><td>M4 前不写 data，不格式化</td><td>立即回 4.9 Recovery 验证数据</td></tr>
+            <tr data-risk="critical"><td>写错分区或候选</td><td><span class="badge danger">严重</span></td><td>serial/target/SHA/全量回读</td><td>一次性 boot-only 状态机</td><td>停止所有自动动作，保存现场</td></tr>
+            <tr data-risk="high"><td>QUSB config 修复被其他变量污染</td><td><span class="badge danger">高</span></td><td>config/DT/ramdisk 差异白名单</td><td>r017 只允许一个功能变量</td><td>回到 r016 tree 重建</td></tr>
+            <tr data-risk="high"><td>QUSB 与 SMB2 同包导致无法判定收益</td><td><span class="badge danger">高</span></td><td>r017/r018 独立 commit、config diff 与 pstore marker</td><td>先以 QUSB probe 验收 r017，再进入 r018</td><td>分别回到上一 immutable candidate</td></tr>
+            <tr data-risk="high"><td>无条件清 HW_CONTROL 造成显示电源竞态</td><td><span class="badge danger">高</span></td><td>GDSCR mode/调用者/RSC 日志</td><td>先仪表，禁止隐藏 -EBUSY</td><td>恢复未改 GDSC 的候选</td></tr>
+            <tr data-risk="high"><td>自动 Recovery 被误称自动回滚</td><td><span class="badge danger">高</span></td><td>Recovery 后 boot SHA</td><td>文档与 UI 明确区分</td><td>仅经新授权恢复 boot</td></tr>
+            <tr data-risk="medium"><td>pstore 被重复错误刷屏挤掉早期日志</td><td><span class="badge warn">中</span></td><td>pstore 起始时间/容量</td><td>短 guard、ratelimit、精确 marker</td><td>重做仅诊断候选</td></tr>
+            <tr data-risk="medium"><td>commit 历史与 exact-tree 快照混淆</td><td><span class="badge warn">中</span></td><td>tree hash 比较</td><td>CI 以 tree/content 为准</td><td>重新生成公开 exact-tree snapshot</td></tr>
+            <tr data-risk="medium"><td>Clang 22 与 bring-up 问题混合</td><td><span class="badge warn">中</span></td><td>Clang 11/22 同源码 A/B</td><td>后置到 M9</td><td>退回固定 Clang 11</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="schedule">
+      <h2>12. 预期工期与不确定性</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>目标</th><th>乐观</th><th>现实区间</th><th>主要不确定性</th></tr></thead>
+          <tbody>
+            <tr><td>F0 文档/证据闭环</td><td>0.5 天</td><td>0.5–1 天</td><td>manifest 自动生成与历史清理</td></tr>
+            <tr><td>r017 QUSB 首层验证</td><td>0.5 天</td><td>0.5–2 天</td><td>QUSB probe 后暴露的 DT parser gate</td></tr>
+            <tr><td>r018 USB DT gate</td><td>0.5 天</td><td>0.5–1 天</td><td>QUSB/DWC3 parser 根因是否可用单变量闭合</td></tr>
+            <tr><td>r021 USB gadget vbus guard → 更深 USB/UDC 证据</td><td>0.5 天</td><td>1–2 天</td><td>空指针被规避后，是否会继续暴露 extcon / gadget / PD / UDC 更深 return code</td></tr>
+            <tr><td>UFS/by-name</td><td>1 天</td><td>2–7 天</td><td>PHY、ICE、clock、SMMU 或 vendor driver 差异</td></tr>
+            <tr><td>显示 GDSC/Recovery UI</td><td>1–2 天</td><td>3–10 天</td><td>RSC/GDSC 状态机与 splash 时序</td></tr>
+            <tr><td>M4 三次冷启动 PASS</td><td>3–5 天</td><td>1–3 周</td><td>三个 P0 是否相互独立</td></tr>
+            <tr><td>Android 17 首次正常启动</td><td>1 周</td><td>2–6 周</td><td>FBE、binder、SELinux/VINTF、vendor services</td></tr>
+            <tr><td>日用硬件与稳定性</td><td>3–4 周</td><td>1–3 个月以上</td><td>老 vendor 驱动、相机、GPU、休眠与功耗</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="muted">工期按连续可测试、设备可进入 Recovery、每个候选一次构建与一次真机循环估计。它不是承诺；任何 UFS 数据风险、900e 无日志或无法恢复的显示电源竞态都会扩大区间。</p>
+    </section>
+
+    <section id="done">
+      <h2>13. 完成定义</h2>
+      <details open>
+        <summary>M4：可交互诊断 Recovery</summary>
+        <div><ul>
+          <li>三次冷启动均出现 4.14 Recovery ADB，保持至少 10 分钟。</li>
+          <li>guard 被显式解除并读回；USB 断开重连一次成功。</li>
+          <li>UFS host、全部 LUN 与 by-name 存在；不写 data。</li>
+          <li>Recovery UI 可交互；无 GDSC -16、commit storm、SMMU fault、panic 或 900e。</li>
+        </ul></div>
+      </details>
+      <details>
+        <summary>M8：Android 17 基础系统</summary>
+        <div><ul>
+          <li>正常 A17 ramdisk 启动，<code>sys.boot_completed=1</code>。</li>
+          <li>ADB、显示/触控、UFS/FBE、binder、SELinux/VINTF、KGSL 基础路径稳定。</li>
+          <li>连续 20 次重启、4 小时待机与基本压力测试无 panic、数据损坏或随机 900e。</li>
+        </ul></div>
+      </details>
+      <details>
+        <summary>M10：可发布源码与 CI</summary>
+        <div><ul>
+          <li>诊断债务已删除或默认关闭并文档化。</li>
+          <li>ReSukiSU 和 Clang 22 各有独立提交与 A/B 证据。</li>
+          <li>CI 固定工具链、DTBO 输入、签名策略和 artifact 哈希；与本机构建内容一致。</li>
+          <li>AnyKernel/boot 发布包仅从通过门禁的 immutable candidate 生成。</li>
+        </ul></div>
+      </details>
+
+      <div class="callout">
+        <strong>下一步唯一建议：</strong>r024 的运行闭环已经完成。下一步只在当前 r024 实机基线上构建并测试 r025 的 display owner 单变量；不回退去重刷旧 USB 候选，不再继续改 USB role/USB BAM，不提前混入 UFS deeper probe、FG_GEN3、ramdisk 或工具链切换。
+      </div>
+    </section>
+
+    <footer>
+      RMX1901 A17 Linux 4.14 下一阶段实施规范 1.10 · 2026-07-26<br>
+      本文件是本地工程规划文档，不是发布说明，也不构成任何分区写入授权。
+    </footer>
+  </div>
+
+  <script>
+    const links = [...document.querySelectorAll('nav a')];
+    const sections = links.map(a => document.querySelector(a.getAttribute('href'))).filter(Boolean);
+    const observer = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (!entry.isIntersecting) return;
+        links.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + entry.target.id));
+      });
+    }, { rootMargin: '-20% 0px -70% 0px' });
+    sections.forEach(section => observer.observe(section));
+
+    const buttons = document.querySelectorAll('[data-filter]');
+    buttons.forEach(button => button.addEventListener('click', () => {
+      const filter = button.dataset.filter;
+      buttons.forEach(item => item.classList.toggle('on', item === button));
+      document.querySelectorAll('#risk-table tbody tr').forEach(row => {
+        row.hidden = filter !== 'all' && row.dataset.risk !== filter;
+      });
+    }));
+  </script>
+</body>
+</html>

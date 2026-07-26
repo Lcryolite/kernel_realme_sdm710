@@ -169,6 +169,54 @@ def verify_platform_nodes(dtb: pathlib.Path) -> None:
                  ["arm,armv8-timer"], "architected timer compatible")
 
 
+def verify_usb_nodes(dtb: pathlib.Path) -> None:
+    qusb_path = symbol_path(dtb, "qusb_phy0")
+    expect_equal(strings(dtb, qusb_path, "compatible"),
+                 ["qcom,qusb2phy-v2"], "qusb compatible")
+    expect_equal(
+        cells(dtb, qusb_path, "qcom,qusb-phy-reg-offset"),
+        [0x240, 0x1A0, 0x210, 0x230, 0x0A8, 0x254,
+         0x198, 0x27C, 0x280, 0x284, 0x288, 0x2A0],
+        "qusb reg offsets",
+    )
+
+    usb0_path = symbol_path(dtb, "usb0")
+    if "qcom,num-gsi-evt-buffs" in properties(dtb, usb0_path):
+        expect_equal(
+            cells(dtb, usb0_path, "qcom,gsi-reg-offset"),
+            [0x0FC, 0x110, 0x120, 0x130, 0x144, 0x1A4],
+            "usb0 gsi reg offsets",
+        )
+    primary_dwc3_path = f"{usb0_path}/dwc3@a600000"
+    expect_equal(text(dtb, primary_dwc3_path, "dr_mode"),
+                 "otg", "primary dwc3 dr_mode")
+    expect_equal(text(dtb, primary_dwc3_path, "maximum-speed"),
+                 "high-speed", "primary dwc3 maximum-speed")
+
+
+def verify_ufs_nodes(dtb: pathlib.Path) -> None:
+    ufshc_path = symbol_path(dtb, "ufshc_mem")
+    expect_equal(
+        cells(dtb, ufshc_path, "reg"),
+        [0x1D84000, 0x3000, 0x1D90000, 0x8000],
+        "ufshc reg",
+    )
+    expect_equal(
+        strings(dtb, ufshc_path, "reg-names"),
+        ["ufs_mem", "ufs_ice"],
+        "ufshc reg-names",
+    )
+    if "ufs-qcom-crypto" not in properties(dtb, ufshc_path):
+        raise GateError(f"ufshc_mem ({ufshc_path}) is missing ufs-qcom-crypto")
+
+    ufs_ice_path = symbol_path(dtb, "ufs_ice")
+    if "qcom,ice" not in strings(dtb, ufs_ice_path, "compatible"):
+        raise GateError(f"ufs_ice ({ufs_ice_path}) lacks qcom,ice")
+    expect_equal(cells(dtb, ufs_ice_path, "reg"), [0x1D90000, 0x8000],
+                 "ufs_ice reg")
+    status_is_enabled(dtb, "ufs_ice")
+
+
 def round_trip(dtb: pathlib.Path, directory: pathlib.Path) -> None:
     dts = directory / "roundtrip.dts"
     rebuilt = directory / "roundtrip.dtb"
@@ -198,12 +246,16 @@ def main() -> int:
             str(args.overlay_dtbo))
         merged_regions = verify_reserved_memory(merged, "merged")
         verify_platform_nodes(merged)
+        verify_usb_nodes(merged)
+        verify_ufs_nodes(merged)
         round_trip(merged, directory)
 
     print("RMX1901 DTB gate: PASS")
     print(f"overlay fixups satisfied: {fixup_count}")
     print(f"reserved-memory regions: base={base_regions}, merged={merged_regions}")
     print("GIC/timer/RPMh/PDC/pinctrl/SPMI/UFS nodes: PASS")
+    print("USB DT compatibility gate: PASS")
+    print("UFS ICE DT compatibility gate: PASS")
     return 0
 
 

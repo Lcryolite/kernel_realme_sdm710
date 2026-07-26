@@ -4092,6 +4092,9 @@ int dwc3_gadget_init(struct dwc3 *dwc)
 		ret = irq;
 		goto err0;
 	}
+	dev_info(dwc->dev,
+		"RMX1901-R022-UDC: gadget init dev=%s irq=%d dr_mode=%d max_speed=%d\n",
+		dev_name(dwc->dev), irq, dwc->dr_mode, dwc->maximum_speed);
 
 	dwc->irq_gadget = irq;
 
@@ -4157,14 +4160,28 @@ int dwc3_gadget_init(struct dwc3 *dwc)
 
 	dwc->num_eps = DWC3_ENDPOINTS_NUM;
 	ret = dwc3_gadget_init_endpoints(dwc, dwc->num_eps);
-	if (ret)
+	if (ret) {
+		dev_err(dwc->dev,
+			"RMX1901-R022-UDC: endpoint init failed dev=%s ret=%d num_eps=%d\n",
+			dev_name(dwc->dev), ret, dwc->num_eps);
 		goto err3;
+	}
 
+	dev_info(dwc->dev,
+		"RMX1901-R022-UDC: udc register attempt dev=%s gadget=%s parent=%s\n",
+		dev_name(dwc->dev), dwc->gadget.name,
+		kobject_name(&dwc->dev->kobj));
 	ret = usb_add_gadget_udc(dwc->dev, &dwc->gadget);
 	if (ret) {
-		dev_err(dwc->dev, "failed to register udc\n");
+		dev_err(dwc->dev,
+			"RMX1901-R022-UDC: failed to register udc dev=%s gadget=%s ret=%d\n",
+			dev_name(dwc->dev), dwc->gadget.name, ret);
 		goto err4;
 	}
+	dev_info(dwc->dev,
+		"RMX1901-R022-UDC: udc register success dev=%s gadget=%s parent=%s\n",
+		dev_name(dwc->dev), dwc->gadget.name,
+		kobject_name(&dwc->dev->kobj));
 
 	return 0;
 

@@ -35,6 +35,14 @@
 		qcom,usb-dbm = <&dbm_1p5>;
 		qcom,dwc-usb3-msm-tx-fifo-size = <21288>;
 		qcom,num-gsi-evt-buffs = <0x3>;
+		qcom,gsi-reg-offset =
+			<0x0fc /* GSI_GENERAL_CFG */
+			 0x110 /* GSI_DBL_ADDR_L */
+			 0x120 /* GSI_DBL_ADDR_H */
+			 0x130 /* GSI_RING_BASE_ADDR_L */
+			 0x144 /* GSI_RING_BASE_ADDR_H */
+			 0x1a4>; /* GSI_IF_STS */
+		qcom,gsi-disable-io-coherency;
 		qcom,use-pdc-interrupts;
 		qcom,pm-qos-latency = <44>;
 		extcon = <0>, <0>, <&eud>, <0>, <0>;
@@ -74,6 +82,7 @@
 			reg = <0x0a600000 0xcd00>;
 			interrupts = <0 133 0>;
 			usb-phy = <&qusb_phy0>, <&usb_qmp_dp_phy>;
+			dr_mode = "otg";
 			tx-fifo-resize;
 			linux,sysdev_is_parent;
 			snps,disable-clk-gating;
@@ -139,8 +148,6 @@
 			 0x0a8 /* QUSB2PHY_PLL_CORE_INPUT_OVERRIDE */
 			 0x254 /* QUSB2PHY_TEST1 */
 			 0x198 /* PLL_BIAS_CONTROL_2 */
-			 0x228 /* QUSB2PHY_SQ_CTRL1 */
-			 0x22c /* QUSB2PHY_SQ_CTRL2 */
 			 0x27c /* QUSB2PHY_DEBUG_CTRL1 */
 			 0x280 /* QUSB2PHY_DEBUG_CTRL2 */
 			 0x284 /* QUSB2PHY_DEBUG_CTRL3 */

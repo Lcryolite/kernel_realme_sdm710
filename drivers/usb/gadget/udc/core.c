@@ -1220,6 +1220,10 @@ int usb_add_gadget_udc_release(struct device *parent, struct usb_gadget *gadget,
 	if (ret)
 		goto err_put_udc;
 
+	dev_info(parent,
+		"RMX1901-R022-UDC: register parent=%s gadget=%s udc=%s\n",
+		dev_name(parent), gadget->name, dev_name(&udc->dev));
+
 	ret = device_add(&gadget->dev);
 	if (ret)
 		goto err_put_udc;
@@ -1233,6 +1237,10 @@ int usb_add_gadget_udc_release(struct device *parent, struct usb_gadget *gadget,
 	ret = device_add(&udc->dev);
 	if (ret)
 		goto err_unlist_udc;
+
+	dev_info(parent,
+		"RMX1901-R022-UDC: device_add parent=%s gadget=%s udc=%s\n",
+		dev_name(parent), gadget->name, dev_name(&udc->dev));
 
 	usb_gadget_set_state(gadget, USB_STATE_NOTATTACHED);
 	udc->vbus = true;
@@ -1367,6 +1375,9 @@ static int udc_bind_to_driver(struct usb_udc *udc, struct usb_gadget_driver *dri
 
 	dev_dbg(&udc->dev, "registering UDC driver [%s]\n",
 			driver->function);
+	dev_info_ratelimited(&udc->dev,
+		"RMX1901-R022-UDC: bind attempt driver=%s gadget=%s udc=%s\n",
+		driver->function, udc->gadget->name, dev_name(&udc->dev));
 
 	udc->driver = driver;
 	udc->gadget->dev.driver = &driver->driver;
@@ -1374,14 +1385,26 @@ static int udc_bind_to_driver(struct usb_udc *udc, struct usb_gadget_driver *dri
 	usb_gadget_udc_set_speed(udc, driver->max_speed);
 
 	ret = driver->bind(udc->gadget, driver);
-	if (ret)
+	if (ret) {
+		dev_err_ratelimited(&udc->dev,
+			"RMX1901-R022-UDC: driver->bind failed driver=%s gadget=%s udc=%s ret=%d\n",
+			driver->function, udc->gadget->name, dev_name(&udc->dev),
+			ret);
 		goto err1;
+	}
 	ret = usb_gadget_udc_start(udc);
 	if (ret) {
+		dev_err_ratelimited(&udc->dev,
+			"RMX1901-R022-UDC: udc_start failed driver=%s gadget=%s udc=%s ret=%d\n",
+			driver->function, udc->gadget->name, dev_name(&udc->dev),
+			ret);
 		driver->unbind(udc->gadget);
 		goto err1;
 	}
 	usb_udc_connect_control(udc);
+	dev_info_ratelimited(&udc->dev,
+		"RMX1901-R022-UDC: bind success driver=%s gadget=%s udc=%s\n",
+		driver->function, udc->gadget->name, dev_name(&udc->dev));
 
 	kobject_uevent(&udc->dev.kobj, KOBJ_CHANGE);
 	return 0;
@@ -1397,6 +1420,8 @@ err1:
 int usb_gadget_probe_driver(struct usb_gadget_driver *driver)
 {
 	struct usb_udc		*udc = NULL;
+	const char		*first_udc = NULL;
+	int			udc_count = 0;
 	int			ret = -ENODEV;
 
 	if (!driver || !driver->bind || !driver->setup)
@@ -1405,6 +1430,9 @@ int usb_gadget_probe_driver(struct usb_gadget_driver *driver)
 	mutex_lock(&udc_lock);
 	if (driver->udc_name) {
 		list_for_each_entry(udc, &udc_list, list) {
+			udc_count++;
+			if (!first_udc)
+				first_udc = dev_name(&udc->dev);
 			ret = strcmp(driver->udc_name, dev_name(&udc->dev));
 			if (!ret)
 				break;
@@ -1415,6 +1443,10 @@ int usb_gadget_probe_driver(struct usb_gadget_driver *driver)
 			ret = -EBUSY;
 		else
 			goto found;
+		pr_err_ratelimited(
+			"RMX1901-R022-UDC: probe request driver=%s want=%s ret=%d udc_count=%d first_udc=%s\n",
+			driver->function, driver->udc_name, ret, udc_count,
+			first_udc ? first_udc : "<none>");
 	} else {
 		list_for_each_entry(udc, &udc_list, list) {
 			/* For now we take the first one */
@@ -1433,6 +1465,10 @@ int usb_gadget_probe_driver(struct usb_gadget_driver *driver)
 	mutex_unlock(&udc_lock);
 	return ret;
 found:
+	pr_info_ratelimited(
+		"RMX1901-R022-UDC: probe match driver=%s want=%s have=%s\n",
+		driver->function, driver->udc_name ? driver->udc_name : "<auto>",
+		dev_name(&udc->dev));
 	ret = udc_bind_to_driver(udc, driver);
 	mutex_unlock(&udc_lock);
 	return ret;

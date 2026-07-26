@@ -4151,6 +4151,9 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 		ret = -ENODEV;
 		goto uninit_iommu;
 	}
+	dev_info(&pdev->dev,
+		"RMX1901-R022-UDC: msm probe parent=%s child-node=%s\n",
+		dev_name(&pdev->dev), dwc3_node->full_name);
 
 	if (mdwc->num_gsi_eps) {
 		mdwc->dwc3_node = dwc3_node;
@@ -4166,7 +4169,8 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 	ret = of_platform_populate(node, NULL, NULL, &pdev->dev);
 	if (ret) {
 		dev_err(&pdev->dev,
-				"failed to add create dwc3 core\n");
+			"RMX1901-R022-UDC: populate failed child-node=%s ret=%d\n",
+			dwc3_node->full_name, ret);
 		if (mdwc->num_gsi_eps)
 			of_remove_property(dwc3_node, mdwc->num_gsi_eps);
 		of_node_put(dwc3_node);
@@ -4176,9 +4180,13 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 	mdwc->dwc3 = of_find_device_by_node(dwc3_node);
 	of_node_put(dwc3_node);
 	if (!mdwc->dwc3) {
-		dev_err(&pdev->dev, "failed to get dwc3 platform device\n");
+		dev_err(&pdev->dev,
+			"RMX1901-R022-UDC: failed to get dwc3 platform device\n");
 		goto put_dwc3;
 	}
+	dev_info(&pdev->dev,
+		"RMX1901-R022-UDC: populated child-dev=%s\n",
+		dev_name(&mdwc->dwc3->dev));
 
 	mdwc->hs_phy = devm_usb_get_phy_by_phandle(&mdwc->dwc3->dev,
 							"usb-phy", 0);
@@ -4231,9 +4239,13 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 
 	dwc = platform_get_drvdata(mdwc->dwc3);
 	if (!dwc) {
-		dev_err(&pdev->dev, "Failed to get dwc3 device\n");
+		dev_err(&pdev->dev,
+			"RMX1901-R022-UDC: failed to get dwc3 drvdata\n");
 		goto put_dwc3;
 	}
+	dev_info(&pdev->dev,
+		"RMX1901-R022-UDC: core-ready child-dev=%s dr_mode=%d max_speed=%d\n",
+		dev_name(dwc->dev), dwc->dr_mode, dwc->maximum_speed);
 
 	/*
 	 * On platforms with SS PHY that do not support ss_phy_irq for wakeup
@@ -4827,7 +4839,15 @@ static int dwc3_otg_start_peripheral(struct dwc3_msm *mdwc, int on)
 					DWC31_LINK_LU3LFPSRXTIM(0)));
 		}
 
-		usb_gadget_vbus_connect(&dwc->gadget);
+		if (!dwc->gadget.ops || !dwc->gadget.ops->vbus_session) {
+			dev_warn(mdwc->dev,
+				"%s: skip gadget vbus connect, ops=%p vbus_session=%p\n",
+				__func__, dwc->gadget.ops,
+				dwc->gadget.ops ?
+				dwc->gadget.ops->vbus_session : NULL);
+		} else {
+			usb_gadget_vbus_connect(&dwc->gadget);
+		}
 #ifdef CONFIG_SMP
 		mdwc->pm_qos_req_dma.type = PM_QOS_REQ_AFFINE_IRQ;
 		mdwc->pm_qos_req_dma.irq = dwc->irq;
@@ -4846,7 +4866,15 @@ static int dwc3_otg_start_peripheral(struct dwc3_msm *mdwc, int on)
 		pm_qos_remove_request(&mdwc->pm_qos_req_dma);
 
 		mdwc->in_device_mode = false;
-		usb_gadget_vbus_disconnect(&dwc->gadget);
+		if (!dwc->gadget.ops || !dwc->gadget.ops->vbus_session) {
+			dev_warn(mdwc->dev,
+				"%s: skip gadget vbus disconnect, ops=%p vbus_session=%p\n",
+				__func__, dwc->gadget.ops,
+				dwc->gadget.ops ?
+				dwc->gadget.ops->vbus_session : NULL);
+		} else {
+			usb_gadget_vbus_disconnect(&dwc->gadget);
+		}
 		usb_phy_notify_disconnect(mdwc->hs_phy, USB_SPEED_HIGH);
 		usb_phy_notify_disconnect(mdwc->ss_phy, USB_SPEED_SUPER);
 		dwc3_override_vbus_status(mdwc, false);
