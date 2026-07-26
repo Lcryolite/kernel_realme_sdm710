@@ -791,19 +791,6 @@ else
 KBUILD_CFLAGS   += -O3
 endif
 
-ifeq ($(cc-name),gcc)
-    KBUILD_CFLAGS += -march=armv8.2-a -mcpu=cortex-a76.cortex-a55+crc+crypto \
-                     -mtune=cortex-a76.cortex-a55 \
-                     -funroll-loops -funswitch-loops -fpeel-loops
-    KBUILD_AFLAGS += -march=armv8.2-a -mcpu=cortex-a76.cortex-a55+crc+crypto \
-                     -mtune=cortex-a76.cortex-a55
-endif
-ifeq ($(cc-name),clang)
-    KBUILD_CFLAGS += -march=armv8.2-a+crypto+rcpc -mcpu=cortex-a76 -mtune=cortex-a76 \
-                     -funroll-loops -mllvm -enable-load-pre
-    KBUILD_AFLAGS += -march=armv8.2-a+crypto+rcpc -mcpu=cortex-a76 -mtune=cortex-a76
-endif
-
 # Initialize all stack variables to zero for security
 KBUILD_CFLAGS  += $(call cc-option, -ftrivial-auto-var-init=zero)
 KBUILD_CFLAGS  += $(call cc-option, -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang)
