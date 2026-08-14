@@ -714,6 +714,14 @@ int f2fs_recover_orphan_inodes(struct f2fs_sb_info *sbi)
 		}
 
 		orphan_blk = (struct f2fs_orphan_block *)page_address(page);
+		if (le32_to_cpu(orphan_blk->entry_count) > F2FS_ORPHANS_PER_BLOCK) {
+			f2fs_warn(sbi, "invalid orphan inode entry count: %u",
+				le32_to_cpu(orphan_blk->entry_count));
+			set_sbi_flag(sbi, SBI_NEED_FSCK);
+			err = -EFSCORRUPTED;
+			f2fs_put_page(page, 1);
+			goto out;
+		}
 		for (j = 0; j < le32_to_cpu(orphan_blk->entry_count); j++) {
 			nid_t ino = le32_to_cpu(orphan_blk->ino[j]);
 			err = recover_orphan_inode(sbi, ino);

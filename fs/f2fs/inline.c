@@ -348,6 +348,11 @@ struct f2fs_dir_entry *f2fs_find_in_inline_dir(struct inode *dir,
 	make_dentry_ptr_inline(dir, &d, inline_dentry);
 	de = f2fs_find_target_dentry(fname, namehash, NULL, &d);
 	unlock_page(ipage);
+	if (IS_ERR(de)) {
+		f2fs_put_page(ipage, 0);
+		*res_page = ERR_PTR(PTR_ERR(de));
+		return NULL;
+	}
 	if (de)
 		*res_page = ipage;
 	else
@@ -476,6 +481,13 @@ static int f2fs_add_inline_entries(struct inode *dir, void *inline_dentry)
 		if (unlikely(!de->name_len)) {
 			bit_pos++;
 			continue;
+		}
+
+		if (unlikely(le16_to_cpu(de->name_len) > F2FS_NAME_LEN ||
+				bit_pos + GET_DENTRY_SLOTS(le16_to_cpu(de->name_len)) >
+				d.max)) {
+			err = -EFSCORRUPTED;
+			goto punch_dentry_pages;
 		}
 
 		new_name.name = d.filename[bit_pos];
