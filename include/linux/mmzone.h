@@ -236,6 +236,8 @@ struct zone_reclaim_stat {
 };
 
 /* Minimal MGLRU state. The page flags hold generation + 1. */
+struct lruvec;
+
 #ifdef CONFIG_LRU_GEN
 #define MGLRU_MIN_NR_GENS 2U
 #define MGLRU_MAX_NR_GENS 4U
@@ -254,7 +256,6 @@ struct lru_gen_struct {
 	bool enabled;
 };
 
-struct lruvec;
 void lru_gen_init_lruvec(struct lruvec *lruvec);
 void lru_gen_age(struct lruvec *lruvec, int type);
 void lru_gen_scan(struct lruvec *lruvec, int type,
