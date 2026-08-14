@@ -707,9 +707,9 @@ int __close_fd(struct files_struct *files, unsigned fd)
  * Variant of __close_fd() that keeps a reference on the file for a
  * deferred fput().
  */
-int __close_fd_get_file(unsigned int fd, struct file **res)
+int __close_fd_get_file(struct files_struct *files, unsigned int fd,
+			struct file **res)
 {
-	struct files_struct *files = current->files;
 	struct file *file;
 	struct fdtable *fdt;
 
