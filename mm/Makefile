@@ -43,6 +43,8 @@ obj-y			:= filemap.o mempool.o oom_kill.o \
 
 obj-y += init-mm.o
 
+obj-$(CONFIG_LRU_GEN) += multigenerational_lru.o
+
 ifdef CONFIG_NO_BOOTMEM
 	obj-y		+= nobootmem.o
 else

@@ -278,6 +278,12 @@ unsigned long lruvec_lru_size(struct lruvec *lruvec, enum lru_list lru, int zone
 	unsigned long lru_size;
 	int zid;
 
+#ifdef CONFIG_LRU_GEN
+	if (lru_gen_enabled(lruvec) && lru != LRU_UNEVICTABLE)
+		return lru_gen_size(lruvec, is_file_lru(lru),
+					is_active_lru(lru), zone_idx);
+#endif
+
 	if (!mem_cgroup_disabled())
 		lru_size = mem_cgroup_get_lru_size(lruvec, lru);
 	else
@@ -1565,9 +1571,20 @@ static unsigned long isolate_lru_pages(unsigned long nr_to_scan,
 
 	scan = 0;
 	for (total_scan = 0;
-	     scan < nr_to_scan && nr_taken < nr_to_scan && !list_empty(src);
+	     scan < nr_to_scan && nr_taken < nr_to_scan;
 	     total_scan++) {
 		struct page *page;
+
+#ifdef CONFIG_LRU_GEN
+		if (lru_gen_enabled(lruvec)) {
+			src = lru_gen_get_list(lruvec, is_file_lru(lru),
+						is_active_lru(lru), sc->reclaim_idx);
+			if (!src)
+				break;
+		}
+#endif
+		if (list_empty(src))
+			break;
 
 		page = lru_to_page(src);
 		prefetchw_prev_lru_page(page, src, flags);
@@ -1592,7 +1609,10 @@ static unsigned long isolate_lru_pages(unsigned long nr_to_scan,
 			nr_pages = hpage_nr_pages(page);
 			nr_taken += nr_pages;
 			nr_zone_taken[page_zonenum(page)] += nr_pages;
-			list_move(&page->lru, dst);
+			if (lru_gen_del_page(lruvec, page, true))
+				list_add(&page->lru, dst);
+			else
+				list_move(&page->lru, dst);
 			break;
 
 		case -EBUSY:
@@ -1628,7 +1648,8 @@ static unsigned long isolate_lru_pages(unsigned long nr_to_scan,
 	trace_mm_vmscan_lru_isolate(sc->reclaim_idx, sc->order, nr_to_scan,
 					total_scan, skipped, nr_taken, mode,
 					is_file_lru(lru));
-	update_lru_sizes(lruvec, lru, nr_zone_taken);
+	if (!lru_gen_enabled(lruvec))
+		update_lru_sizes(lruvec, lru, nr_zone_taken);
 	return nr_taken;
 }
 
@@ -1885,6 +1906,15 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 
 	spin_lock_irq(&pgdat->lru_lock);
 
+#ifdef CONFIG_LRU_GEN
+	/* Move the epoch forward when the next generation slot is reusable. */
+	if (lru_gen_enabled(lruvec))
+		lru_gen_age(lruvec, file);
+	if (lru_gen_enabled(lruvec))
+		lru_gen_scan(lruvec, file, sc->target_mem_cgroup,
+				sc->reclaim_idx);
+#endif
+
 	nr_taken = isolate_lru_pages(nr_to_scan, lruvec, &page_list,
 				     &nr_scanned, sc, isolate_mode, lru);
 
@@ -2033,8 +2063,13 @@ static void move_active_pages_to_lru(struct lruvec *lruvec,
 		SetPageLRU(page);
 
 		nr_pages = hpage_nr_pages(page);
-		update_lru_size(lruvec, lru, page_zonenum(page), nr_pages);
-		list_move(&page->lru, &lruvec->lists[lru]);
+		if (lru_gen_enabled(lruvec)) {
+			list_del(&page->lru);
+			add_page_to_lru_list(page, lruvec, lru);
+		} else {
+			update_lru_size(lruvec, lru, page_zonenum(page), nr_pages);
+			list_move(&page->lru, &lruvec->lists[lru]);
+		}
 		pgmoved += nr_pages;
 
 		if (put_page_testzero(page)) {

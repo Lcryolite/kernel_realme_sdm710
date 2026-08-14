@@ -102,6 +102,7 @@ struct free_area {
 };
 
 struct pglist_data;
+struct mem_cgroup;
 
 /*
  * zone->lock and the zone lru_lock are two of the hottest locks in the kernel.
@@ -234,11 +235,71 @@ struct zone_reclaim_stat {
 	unsigned long		recent_scanned[2];
 };
 
+/* Minimal MGLRU state. The page flags hold generation + 1. */
+struct lruvec;
+
+#ifdef CONFIG_LRU_GEN
+#define MGLRU_MIN_NR_GENS 2U
+#define MGLRU_MAX_NR_GENS 4U
+#define MGLRU_NR_TYPES 2U
+
+enum mglru_type {
+	MGLRU_ANON,
+	MGLRU_FILE,
+};
+
+struct lru_gen_struct {
+	unsigned long max_seq;
+	unsigned long min_seq[MGLRU_NR_TYPES];
+	struct list_head lists[MGLRU_MAX_NR_GENS][MGLRU_NR_TYPES][MAX_NR_ZONES];
+	long nr_pages[MGLRU_MAX_NR_GENS][MGLRU_NR_TYPES][MAX_NR_ZONES];
+	bool enabled;
+};
+
+void lru_gen_init_lruvec(struct lruvec *lruvec);
+void lru_gen_age(struct lruvec *lruvec, int type);
+void lru_gen_scan(struct lruvec *lruvec, int type,
+			  struct mem_cgroup *memcg, int zone_idx);
+struct list_head *lru_gen_get_list(struct lruvec *lruvec, int type,
+					bool active, int zone_idx);
+unsigned long lru_gen_size(struct lruvec *lruvec, int type,
+				   bool active, int zone_idx);
+bool lru_gen_enabled(struct lruvec *lruvec);
+#else
+static inline void lru_gen_init_lruvec(struct lruvec *lruvec)
+{
+}
+static inline void lru_gen_age(struct lruvec *lruvec, int type)
+{
+}
+static inline void lru_gen_scan(struct lruvec *lruvec, int type,
+				struct mem_cgroup *memcg, int zone_idx)
+{
+}
+static inline struct list_head *lru_gen_get_list(struct lruvec *lruvec,
+						 int type, bool active, int zone_idx)
+{
+	return NULL;
+}
+static inline unsigned long lru_gen_size(struct lruvec *lruvec, int type,
+						 bool active, int zone_idx)
+{
+	return 0;
+}
+static inline bool lru_gen_enabled(struct lruvec *lruvec)
+{
+	return false;
+}
+#endif /* CONFIG_LRU_GEN */
+
 struct lruvec {
 	struct list_head		lists[NR_LRU_LISTS];
 	struct zone_reclaim_stat	reclaim_stat;
 	/* Evictions & activations on the inactive file list */
 	atomic_long_t			inactive_age;
+#ifdef CONFIG_LRU_GEN
+	struct lru_gen_struct lrugen;
+#endif
 #ifdef CONFIG_MEMCG
 	struct pglist_data *pgdat;
 #endif
