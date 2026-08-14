@@ -2474,17 +2474,47 @@ static void binder_do_fd_close(struct callback_head *twork)
 static void binder_deferred_fd_close(int fd)
 {
 	struct binder_task_work_cb *twcb;
+	struct files_struct *files;
+	struct file *file = NULL;
+	int ret;
 
-	twcb = kzalloc(sizeof(*twcb), GFP_KERNEL);
-	if (!twcb)
+	/*
+	 * Keep the file table alive while the descriptor is removed.  The
+	 * binder proc's files pointer can outlive the task's current files
+	 * pointer, and task exit can clear current->files concurrently.
+	 */
+	files = get_files_struct(current);
+	if (!files)
 		return;
 
+	twcb = kzalloc(sizeof(*twcb), GFP_KERNEL);
+	if (!twcb) {
+		/*
+		 * fput() supplies its own task-work fallback for the extra
+		 * reference returned by __close_fd_get_file().  This keeps the
+		 * descriptor close semantics intact even under memory pressure.
+		 */
+		__close_fd_get_file(files, fd, &file);
+		if (file)
+			fput(file);
+		put_files_struct(files);
+		return;
+	}
+
 	init_task_work(&twcb->twork, binder_do_fd_close);
-	__close_fd_get_file(fd, &twcb->file);
-	if (twcb->file)
-		task_work_add(current, &twcb->twork, true);
-	else
+	__close_fd_get_file(files, fd, &twcb->file);
+	put_files_struct(files);
+	if (!twcb->file) {
 		kfree(twcb);
+		return;
+	}
+
+	ret = task_work_add(current, &twcb->twork, true);
+	if (ret) {
+		/* task_work_add() returns -ESRCH for an exiting task. */
+		fput(twcb->file);
+		kfree(twcb);
+	}
 }
 
 static void binder_transaction_buffer_release(struct binder_proc *proc,
