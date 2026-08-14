@@ -95,6 +95,11 @@ static struct f2fs_dir_entry *find_in_block(struct page *dentry_page,
 
 	make_dentry_ptr_block(NULL, &d, dentry_blk);
 	de = f2fs_find_target_dentry(fname, namehash, max_slots, &d);
+	if (IS_ERR(de)) {
+		f2fs_put_page(dentry_page, 0);
+		*res_page = ERR_PTR(PTR_ERR(de));
+		return NULL;
+	}
 	if (de)
 		*res_page = dentry_page;
 
@@ -124,6 +129,11 @@ struct f2fs_dir_entry *f2fs_find_target_dentry(struct fscrypt_name *fname,
 			bit_pos++;
 			continue;
 		}
+
+		if (unlikely(le16_to_cpu(de->name_len) > F2FS_NAME_LEN ||
+				bit_pos + GET_DENTRY_SLOTS(le16_to_cpu(de->name_len)) >
+				d->max))
+			return ERR_PTR(-EFSCORRUPTED);
 
 		if (de->hash_code == namehash &&
 		    fscrypt_match_name(fname, d->filename[bit_pos],
@@ -181,6 +191,8 @@ static struct f2fs_dir_entry *find_in_level(struct inode *dir,
 
 		de = find_in_block(dentry_page, fname, namehash, &max_slots,
 								res_page);
+		if (IS_ERR(*res_page))
+			break;
 		if (de)
 			break;
 

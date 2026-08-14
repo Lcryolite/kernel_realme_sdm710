@@ -2158,9 +2158,13 @@ static struct binder_thread *binder_get_txn_from_and_acq_inner(
 static void binder_free_transaction(struct binder_transaction *t)
 {
 	struct binder_proc *target_proc;
+	struct binder_thread *target_thread;
 
 	spin_lock(&t->lock);
 	target_proc = t->to_proc;
+	target_thread = t->to_thread;
+	if (target_thread)
+		atomic_inc(&target_thread->tmp_ref);
 	if (target_proc) {
 		atomic_inc(&target_proc->tmp_ref);
 		spin_unlock(&t->lock);
@@ -2177,6 +2181,8 @@ static void binder_free_transaction(struct binder_transaction *t)
 		 */
 		spin_unlock(&t->lock);
 	}
+	if (target_thread)
+		binder_thread_dec_tmpref(target_thread);
 	kfree(t);
 	binder_stats_deleted(BINDER_STAT_TRANSACTION);
 }

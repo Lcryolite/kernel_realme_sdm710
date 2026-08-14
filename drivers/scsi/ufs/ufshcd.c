@@ -6451,6 +6451,21 @@ static void ufshcd_err_handler(struct work_struct *work)
 	if (hba->ufshcd_state == UFSHCD_STATE_RESET)
 		goto out;
 
+	if (hba->sdev_ufs_device) {
+		/*
+		 * Avoid waiting for runtime resume from the error handler when a
+		 * runtime PM callback is already in progress.  Recover the link
+		 * directly in that case so runtime suspend/resume cannot deadlock.
+		 */
+		pm_runtime_get_noresume(&hba->sdev_ufs_device->sdev_gendev);
+		if (hba->pm_op_in_progress) {
+			ufshcd_link_recovery(hba);
+			pm_runtime_put(&hba->sdev_ufs_device->sdev_gendev);
+			return;
+		}
+		pm_runtime_put(&hba->sdev_ufs_device->sdev_gendev);
+	}
+
 	/*
 	 * Make sure the clocks are ON before we proceed with err
 	 * handling. For the majority of cases err handler would be
@@ -7685,13 +7700,6 @@ static int ufshcd_scsi_add_wlus(struct ufs_hba *hba)
 		goto out;
 	}
 	scsi_device_put(hba->sdev_ufs_device);
-#ifdef VENDOR_EDIT
-	strncpy(temp_version, hba->sdev_ufs_device->rev, 4);
-	strncpy(vendor, hba->sdev_ufs_device->vendor, 8);
-	strncpy(model, hba->sdev_ufs_device->model, 16);
-	register_device_proc("ufs_version", temp_version, vendor);
-	register_device_proc("ufs", model, vendor);
-#endif
 
 	if (is_bootable_dev) {
 		sdev_boot = __scsi_add_device(hba->host, 0, 0,
@@ -7728,11 +7736,13 @@ remove_sdev_ufs_device:
 	scsi_remove_device(hba->sdev_ufs_device);
 out:
 #ifdef VENDOR_EDIT
-	strncpy(temp_version, hba->sdev_ufs_device->rev, 4);
-	strncpy(vendor, hba->sdev_ufs_device->vendor, 8);
-	strncpy(model, hba->sdev_ufs_device->model, 16);
-	register_device_proc("ufs_version", temp_version, vendor);
-	register_device_proc("ufs", model, vendor);
+	if (!ret && hba->sdev_ufs_device) {
+		strncpy(temp_version, hba->sdev_ufs_device->rev, 4);
+		strncpy(vendor, hba->sdev_ufs_device->vendor, 8);
+		strncpy(model, hba->sdev_ufs_device->model, 16);
+		register_device_proc("ufs_version", temp_version, vendor);
+		register_device_proc("ufs", model, vendor);
+	}
 #endif
 	return ret;
 }
