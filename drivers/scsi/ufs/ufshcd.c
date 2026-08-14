@@ -4784,9 +4784,10 @@ int ufshcd_uic_hibern8_enter(struct ufs_hba *hba)
 		ret = __ufshcd_uic_hibern8_enter(hba);
 		if (!ret)
 			goto out;
-		else if (ret != -EAGAIN)
+		else if (ret != -EAGAIN) {
 			/* Unable to recover the link, so no point proceeding */
-			BUG();
+			goto out;
+		}
 	}
 out:
 	return ret;
@@ -4811,7 +4812,7 @@ int ufshcd_uic_hibern8_exit(struct ufs_hba *hba)
 		ret = ufshcd_link_recovery(hba);
 		/* Unable to recover the link, so no point proceeding */
 		if (ret)
-			BUG();
+			return ret;
 	} else {
 		dev_dbg(hba->dev, "%s: Hibern8 Exit at %lld us", __func__,
 			ktime_to_us(ktime_get()));
@@ -6453,16 +6454,11 @@ static void ufshcd_err_handler(struct work_struct *work)
 
 	if (hba->sdev_ufs_device) {
 		/*
-		 * Avoid waiting for runtime resume from the error handler when a
-		 * runtime PM callback is already in progress.  Recover the link
-		 * directly in that case so runtime suspend/resume cannot deadlock.
+		 * Balance runtime-PM usage without waiting.
+		 * Error handler owns recovery; link recovery would reacquire
+		 * host_lock and recurse.
 		 */
 		pm_runtime_get_noresume(&hba->sdev_ufs_device->sdev_gendev);
-		if (hba->pm_op_in_progress) {
-			ufshcd_link_recovery(hba);
-			pm_runtime_put(&hba->sdev_ufs_device->sdev_gendev);
-			return;
-		}
 		pm_runtime_put(&hba->sdev_ufs_device->sdev_gendev);
 	}
 
@@ -7430,7 +7426,8 @@ static int ufshcd_reset_and_restore(struct ufs_hba *hba)
 	 * to recover after multiple retries.
 	 */
 	if (err && ufshcd_is_embedded_dev(hba))
-		BUG();
+		dev_err(hba->dev, "%s: unable to recover embedded UFS device, err %d\n",
+			__func__, err);
 	/*
 	 * After reset the door-bell might be cleared, complete
 	 * outstanding requests in s/w here.
