@@ -70,6 +70,7 @@
 #include <linux/pid_namespace.h>
 #include <linux/security.h>
 #include <linux/spinlock.h>
+#include <linux/task_work.h>
 #include "binder_alloc.h"
 #include "binder_trace.h"
 #ifdef OPLUS_FEATURE_UIFIRST
@@ -2447,7 +2448,47 @@ static bool binder_validate_fixup(struct binder_proc *proc,
 	return (fixup_offset >= last_min_offset);
 }
 
+/**
+ * struct binder_task_work_cb - deferred file release
+ * @twork: task-work callback
+ * @file: file whose descriptor was removed
+ *
+ * Binder may release a file descriptor while the binder ioctl is still
+ * protected by fdget()'s light reference.  Keep the file alive until the
+ * ioctl has returned to userspace.
+ */
+struct binder_task_work_cb {
+	struct callback_head twork;
+	struct file *file;
+};
+
+static void binder_do_fd_close(struct callback_head *twork)
+{
+	struct binder_task_work_cb *twcb = container_of(twork,
+			struct binder_task_work_cb, twork);
+
+	fput(twcb->file);
+	kfree(twcb);
+}
+
+static void binder_deferred_fd_close(int fd)
+{
+	struct binder_task_work_cb *twcb;
+
+	twcb = kzalloc(sizeof(*twcb), GFP_KERNEL);
+	if (!twcb)
+		return;
+
+	init_task_work(&twcb->twork, binder_do_fd_close);
+	__close_fd_get_file(fd, &twcb->file);
+	if (twcb->file)
+		task_work_add(current, &twcb->twork, true);
+	else
+		kfree(twcb);
+}
+
 static void binder_transaction_buffer_release(struct binder_proc *proc,
+					      struct binder_thread *thread,
 					      struct binder_buffer *buffer,
 					      binder_size_t failed_at,
 					      bool is_failure)
@@ -2595,7 +2636,12 @@ static void binder_transaction_buffer_release(struct binder_proc *proc,
 							      buffer,
 							      offset,
 							      sizeof(fd));
-				task_close_fd(proc, fd);
+				if (thread) {
+					binder_deferred_fd_close(fd);
+					thread->looper_need_return = true;
+				} else {
+					task_close_fd(proc, fd);
+				}
 			}
 		} break;
 		default:
@@ -3676,7 +3722,7 @@ err_bad_offset:
 err_bad_parent:
 err_copy_data_failed:
 	trace_binder_transaction_failed_buffer_release(t->buffer);
-	binder_transaction_buffer_release(target_proc, t->buffer,
+	binder_transaction_buffer_release(target_proc, NULL, t->buffer,
 					  buffer_offset, true);
 	if (target_node)
 		binder_dec_node_tmpref(target_node);
@@ -3959,7 +4005,7 @@ static int binder_thread_write(struct binder_proc *proc,
 				binder_node_inner_unlock(buf_node);
 			}
 			trace_binder_transaction_buffer_release(buffer);
-			binder_transaction_buffer_release(proc, buffer, 0, false);
+			binder_transaction_buffer_release(proc, thread, buffer, 0, false);
 			binder_alloc_free_buf(&proc->alloc, buffer);
 			break;
 		}
