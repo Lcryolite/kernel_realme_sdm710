@@ -123,6 +123,7 @@ kernel/configs/android-*.cfg
 #Ignoring Android.bp link file
 #
 Android.bp
+drivers/kernelsu
 
 # Out-of-tree Clang/LLVM build directories
 /out*/

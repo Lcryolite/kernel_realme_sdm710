@@ -4,7 +4,7 @@
 ### AnyKernel setup
 # global properties
 properties() { '
-kernel.string=RMX1901 Halium kernel
+kernel.string=RMX1901 A17 ReSukiSU
 do.devicecheck=1
 do.modules=0
 do.systemless=1
