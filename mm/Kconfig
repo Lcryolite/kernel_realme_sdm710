@@ -821,6 +821,18 @@ config PROCESS_RECLAIM
 
 	 Any other vaule is ignored.
 
+config LRU_GEN
+	bool "Multi-generational LRU (experimental)"
+	depends on MMU
+	default n
+	help
+	  Track evictable pages in four generations. Existing 4.9 reclaim is
+	  retained for writeback, unmapping, swap and final freeing, while page
+	  aging selects referenced pages for newer generations and reclaim starts
+	  from the oldest generation.
+
+	  If unsure, say "n".
+
 config ARCH_SUPPORTS_SPECULATIVE_PAGE_FAULT
        def_bool n
 
