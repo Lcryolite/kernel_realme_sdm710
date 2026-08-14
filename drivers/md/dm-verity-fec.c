@@ -752,6 +752,10 @@ int verity_fec_ctr(struct dm_verity *v)
 	 * hash device after the hash blocks.
 	 */
 
+	if (v->hash_start > v->hash_blocks) {
+		ti->error = "Invalid hash start";
+		return -EINVAL;
+	}
 	hash_blocks = v->hash_blocks - v->hash_start;
 
 	/*
@@ -782,7 +786,8 @@ int verity_fec_ctr(struct dm_verity *v)
 	 * Due to optional metadata, f->blocks can be larger than
 	 * data_blocks and hash_blocks combined.
 	 */
-	if (f->blocks < v->data_blocks + hash_blocks || !f->rounds) {
+	if (v->data_blocks > f->blocks ||
+	    hash_blocks > f->blocks - v->data_blocks || !f->rounds) {
 		ti->error = "Invalid " DM_VERITY_OPT_FEC_BLOCKS;
 		return -EINVAL;
 	}
@@ -792,8 +797,9 @@ int verity_fec_ctr(struct dm_verity *v)
 	 * it to be large enough.
 	 */
 	f->hash_blocks = f->blocks - v->data_blocks;
-	if (dm_bufio_get_device_size(v->bufio) <
-		v->hash_start + f->hash_blocks) {
+	device_size = dm_bufio_get_device_size(v->bufio);
+	if (v->hash_start > device_size ||
+	    f->hash_blocks > device_size - v->hash_start) {
 		ti->error = "Hash device is too small for "
 			DM_VERITY_OPT_FEC_BLOCKS;
 		return -E2BIG;

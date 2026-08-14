@@ -84,9 +84,11 @@ static void quota2_work(struct work_struct *work)
 	char *envp[QUOTA2_SYSFS_NUM_ENVP] = {alert_msg, iface_name,  NULL};
 	struct xt_quota_counter *counter = to_quota_counter(work);
 
+	spin_lock_bh(&counter->lock);
 	snprintf(alert_msg, sizeof(alert_msg), "ALERT_NAME=%s", counter->name);
 	snprintf(iface_name, sizeof(iface_name), "INTERFACE=%s",
 		 counter->last_iface);
+	spin_unlock_bh(&counter->lock);
 
 	kobject_uevent_env(quota_kobj, KOBJ_CHANGE, envp);
 }
@@ -96,7 +98,7 @@ static void quota2_log(const struct net_device *in,
 		       struct  xt_quota_counter *q,
 		       const char *prefix)
 {
-	if (!prefix)
+	if (!prefix || !*prefix)
 		return;
 
 	strlcpy(q->last_prefix, prefix, QUOTA2_SYSFS_WORK_MAX_SIZE);
@@ -258,6 +260,14 @@ static int quota_mt2_check(const struct xt_mtchk_param *par)
 	return 0;
 }
 
+static void quota2_free_counter(struct xt_quota_counter *e)
+{
+	cancel_work_sync(&e->work);
+	if (e->procfs_entry)
+		remove_proc_entry(e->name, proc_xt_quota);
+	kfree(e);
+}
+
 static void quota_mt2_destroy(const struct xt_mtdtor_param *par)
 {
 	struct xt_quota_mtinfo2 *q = par->matchinfo;
@@ -276,8 +286,7 @@ static void quota_mt2_destroy(const struct xt_mtdtor_param *par)
 
 	list_del(&e->list);
 	spin_unlock_bh(&counter_list_lock);
-	remove_proc_entry(e->name, proc_xt_quota);
-	kfree(e);
+	quota2_free_counter(e);
 }
 
 static bool
@@ -376,7 +385,24 @@ static int __init quota_mt2_init(void)
 
 static void __exit quota_mt2_exit(void)
 {
+	struct xt_quota_counter *e;
+
 	xt_unregister_matches(quota_mt2_reg, ARRAY_SIZE(quota_mt2_reg));
+
+	/* All rule-owned counters should be gone; clean up defensively. */
+	for (;;) {
+		spin_lock_bh(&counter_list_lock);
+		e = list_first_entry_or_null(&counter_list,
+					     struct xt_quota_counter, list);
+		if (e)
+			list_del_init(&e->list);
+		spin_unlock_bh(&counter_list_lock);
+
+		if (!e)
+			break;
+		quota2_free_counter(e);
+	}
+
 	remove_proc_entry("xt_quota", init_net.proc_net);
 	device_destroy(quota_class, MKDEV(0, 0));
 	class_destroy(quota_class);
