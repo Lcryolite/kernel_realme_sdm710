@@ -513,8 +513,9 @@ static int synaptics_rmi4_i2c_probe(struct i2c_client *client,
 {
 	int retval;
 	struct device_node *dt = client->dev.of_node;
+	bool legacy_s3706 = of_device_is_compatible(dt, "synaptics-s3706");
 
-	if (synaptics_check_assigned_tp(dt, "compatible",
+	if (!legacy_s3706 && synaptics_check_assigned_tp(dt, "compatible",
 		"qcom,i2c-touch-active") < 0)
 		goto err_dt_not_match;
 	if (!i2c_check_functionality(client->adapter,
