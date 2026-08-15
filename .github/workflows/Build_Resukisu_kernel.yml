@@ -55,15 +55,15 @@ jobs:
 
       - name: Verify pinned ReSukiSU
         run: |
-          test "$(git -C KernelSU rev-parse HEAD)" = "97163bdc8ad2ee59b523e9e34edeb4c286eceb04"
-          test "$(readlink drivers/kernelsu)" = "../KernelSU/kernel"
+          test "$(git -C ReSukiSU rev-parse HEAD)" = "faccf4c5edc7be37776216e7d43dd3dca0239331"
+          test "$(readlink drivers/kernelsu)" = "../ReSukiSU/kernel"
 
       - name: Compile kernel with Clang 22
         run: |
           OUT_DIR=out ./build-clang22.sh
           test -s out/arch/arm64/boot/Image.gz
           grep -aFq 'clang version 22.1.8' out/vmlinux
-          grep -aFq 'v4.1.0-97163bdc@ReSukiSU' out/vmlinux
+          grep -aFq 'v4.2.0-rc1-faccf4c5@ReSukiSU' out/vmlinux
           test "$(cat out/include/config/kernel.release)" = "4.9.337+67-RMX1901-A17-ReSukiSU"
 
       - name: Package with AnyKernel3
