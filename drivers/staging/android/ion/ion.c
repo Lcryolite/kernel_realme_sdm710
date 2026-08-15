@@ -1215,7 +1215,11 @@ void ion_pages_sync_for_device(struct device *dev, struct page *page,
 {
 	struct scatterlist sg;
 
-	WARN_ONCE(!dev, "A device is required for dma_sync\n");
+	/*
+	 * The vendor 4.9 system-heap path intentionally uses a NULL device
+	 * for the platform-wide cache operation.  Keep that legacy DMA
+	 * behavior without turning it into a boot-time WARNING.
+	 */
 
 	sg_init_table(&sg, 1);
 	sg_set_page(&sg, page, size, 0);

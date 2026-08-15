@@ -1576,6 +1576,10 @@ static unsigned long isolate_lru_pages(unsigned long nr_to_scan,
 		struct page *page;
 
 #ifdef CONFIG_LRU_GEN
+		/* Let the suspend freezer interrupt generation reclaim. */
+		if (unlikely(lru_gen_enabled(lruvec) && freezing(current)))
+			break;
+
 		if (lru_gen_enabled(lruvec)) {
 			src = lru_gen_get_list(lruvec, is_file_lru(lru),
 						is_active_lru(lru), sc->reclaim_idx);

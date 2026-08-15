@@ -34,8 +34,9 @@
 /**
  * struct usb_udc - describes one usb device controller
  * @driver - the gadget driver pointer. For use by the class code
- * @dev - the child device to the actual controller
  * @gadget - the gadget. For use by the class code
+ * @gadget_release - the gadget's release routine
+ * @dev - the child device to the actual controller
  * @list - for use by the udc class driver
  * @vbus - for udcs who care about vbus status, this value is real vbus status;
  * for udcs who do not care about vbus status, this value is always true
@@ -46,6 +47,7 @@
 struct usb_udc {
 	struct usb_gadget_driver	*driver;
 	struct usb_gadget		*gadget;
+	void				(*gadget_release)(struct device *dev);
 	struct device			dev;
 	struct list_head		list;
 	bool				vbus;
@@ -1144,6 +1146,17 @@ static void usb_udc_nop_release(struct device *dev)
 	dev_vdbg(dev, "%s\n", __func__);
 }
 
+static void usb_gadget_release(struct device *dev)
+{
+	struct usb_gadget *gadget = dev_to_usb_gadget(dev);
+	struct usb_udc *udc = gadget->udc;
+	void (*release)(struct device *dev) = udc->gadget_release;
+
+	/* Keep the UDC alive until the gadget's embedded device is released. */
+	put_device(&udc->dev);
+	release(dev);
+}
+
 /* should be called with udc_lock held */
 static int check_pending_gadget_drivers(struct usb_udc *udc)
 {
@@ -1209,6 +1222,14 @@ int usb_add_gadget_udc_release(struct device *parent, struct usb_gadget *gadget,
 
 	udc->gadget = gadget;
 	gadget->udc = udc;
+	/*
+	 * The UDC and gadget devices have independent lifetimes.  Hold an
+	 * additional UDC reference and drop it from the gadget release path so
+	 * usb_del_gadget_udc() cannot free the UDC while the gadget is released.
+	 */
+	udc->gadget_release = gadget->dev.release;
+	gadget->dev.release = usb_gadget_release;
+	get_device(&udc->dev);
 
 	mutex_lock(&udc_lock);
 	list_add_tail(&udc->list, &udc_list);
@@ -1237,6 +1258,8 @@ err4:
 	mutex_unlock(&udc_lock);
 
 err3:
+	gadget->dev.release = udc->gadget_release;
+	put_device(&udc->dev);
 	put_device(&udc->dev);
 	device_del(&gadget->dev);
 

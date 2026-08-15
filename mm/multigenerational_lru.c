@@ -17,6 +17,7 @@
 #include <linux/memcontrol.h>
 #include <linux/rmap.h>
 #include <linux/swap.h>
+#include <linux/freezer.h>
 
 #ifdef CONFIG_LRU_GEN
 
@@ -136,6 +137,14 @@ void lru_gen_scan(struct lruvec *lruvec, int type,
 		struct list_head *src;
 		struct page *page;
 		int gen, aging_gen, zone;
+
+		/*
+		 * The 4.9 MGLRU has no modern proactive-reclaim control bit.
+		 * Keep its bounded generation scan interruptible so the suspend
+		 * freezer does not wait behind a full aging batch.
+		 */
+		if (unlikely(freezing(current)))
+			break;
 
 		/*
 		 * Age the oldest generation before eviction.  Pages that have
