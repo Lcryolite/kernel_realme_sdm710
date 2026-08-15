@@ -22,7 +22,7 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -35,7 +35,7 @@ jobs:
             ccache curl xz-utils zip
 
       - name: Setup ccache
-        uses: hendrikmuhs/ccache-action@v1.2
+        uses: hendrikmuhs/ccache-action@v1.2.23
         with:
           max-size: 2G
           key: ${{ runner.os }}-clang22-kernel-ccache
@@ -79,7 +79,7 @@ jobs:
           echo "RELEASE_TAG=a17-clang22-${TIME}" >> "$GITHUB_ENV"
 
       - name: Upload Artifact (Fallback)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ env.ZIP_NAME }}
           path: ${{ env.ZIP_NAME }}
