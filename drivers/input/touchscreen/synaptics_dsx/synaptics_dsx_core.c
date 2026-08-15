@@ -3624,30 +3624,32 @@ static int synaptics_dsx_pinctrl_init(struct synaptics_rmi4_data *rmi4_data)
 	rmi4_data->pinctrl_state_active
 		= pinctrl_lookup_state(rmi4_data->ts_pinctrl, "pmx_ts_active");
 	if (IS_ERR_OR_NULL(rmi4_data->pinctrl_state_active)) {
-		retval = PTR_ERR(rmi4_data->pinctrl_state_active);
-		dev_err(rmi4_data->pdev->dev.parent,
-			"Can not lookup %s pinstate %d\n",
-			PINCTRL_STATE_ACTIVE, retval);
-		goto err_pinctrl_lookup;
+		/* The stock RMX1901 S3706 node exposes a single default state. */
+		rmi4_data->pinctrl_state_active
+			= pinctrl_lookup_state(rmi4_data->ts_pinctrl, "default");
+		if (IS_ERR_OR_NULL(rmi4_data->pinctrl_state_active)) {
+			retval = PTR_ERR(rmi4_data->pinctrl_state_active);
+			dev_err(rmi4_data->pdev->dev.parent,
+				"Can not lookup %s/default pinstate %d\n",
+				PINCTRL_STATE_ACTIVE, retval);
+			goto err_pinctrl_lookup;
+		}
 	}
 
 	rmi4_data->pinctrl_state_suspend
 		= pinctrl_lookup_state(rmi4_data->ts_pinctrl, "pmx_ts_suspend");
 	if (IS_ERR_OR_NULL(rmi4_data->pinctrl_state_suspend)) {
-		retval = PTR_ERR(rmi4_data->pinctrl_state_suspend);
-		dev_err(rmi4_data->pdev->dev.parent,
-			"Can not lookup %s pinstate %d\n",
-			PINCTRL_STATE_SUSPEND, retval);
-		goto err_pinctrl_lookup;
+		/* Keep the already-applied default state for suspend as well. */
+		rmi4_data->pinctrl_state_suspend =
+			rmi4_data->pinctrl_state_active;
 	}
 
 	rmi4_data->pinctrl_state_release
 		= pinctrl_lookup_state(rmi4_data->ts_pinctrl, "pmx_ts_release");
 	if (IS_ERR_OR_NULL(rmi4_data->pinctrl_state_release)) {
-		retval = PTR_ERR(rmi4_data->pinctrl_state_release);
-		dev_err(rmi4_data->pdev->dev.parent,
-			"Can not lookup %s pinstate %d\n",
-			PINCTRL_STATE_RELEASE, retval);
+		/* No release state is present in the stock S3706 node. */
+		rmi4_data->pinctrl_state_release =
+			rmi4_data->pinctrl_state_active;
 	}
 
 	return 0;
@@ -3684,23 +3686,23 @@ static int synaptics_rmi4_get_reg(struct synaptics_rmi4_data *rmi4_data,
 		}
 	}
 
-	retval = regulator_set_load(rmi4_data->pwr_reg,
-		20000);
-	if (retval < 0) {
-		dev_err(rmi4_data->pdev->dev.parent,
-			"%s: Failed to set regulator current avdd\n",
-				__func__);
-		goto regulator_put;
-	}
+	if (rmi4_data->pwr_reg) {
+		retval = regulator_set_load(rmi4_data->pwr_reg, 20000);
+		if (retval < 0) {
+			dev_err(rmi4_data->pdev->dev.parent,
+				"%s: Failed to set regulator current avdd\n",
+					__func__);
+			goto regulator_put;
+		}
 
-	retval = regulator_set_voltage(rmi4_data->pwr_reg,
-			3000000,
-			3000000);
-	if (retval < 0) {
-		dev_err(rmi4_data->pdev->dev.parent,
-				"%s: Failed to set regulator voltage avdd\n",
-				__func__);
-		goto regulator_put;
+		retval = regulator_set_voltage(rmi4_data->pwr_reg,
+				3000000, 3000000);
+		if (retval < 0) {
+			dev_err(rmi4_data->pdev->dev.parent,
+					"%s: Failed to set regulator voltage avdd\n",
+					__func__);
+			goto regulator_put;
+		}
 	}
 
 	if ((bdata->bus_reg_name != NULL) && (*bdata->bus_reg_name != 0)) {
@@ -3715,23 +3717,23 @@ static int synaptics_rmi4_get_reg(struct synaptics_rmi4_data *rmi4_data,
 		}
 	}
 
-	retval = regulator_set_load(rmi4_data->bus_reg,
-		62000);
-	if (retval < 0) {
-		dev_err(rmi4_data->pdev->dev.parent,
-				"%s: Failed to set regulator current vdd\n",
-				__func__);
-		goto regulator_put;
-	}
+	if (rmi4_data->bus_reg) {
+		retval = regulator_set_load(rmi4_data->bus_reg, 62000);
+		if (retval < 0) {
+			dev_err(rmi4_data->pdev->dev.parent,
+					"%s: Failed to set regulator current vdd\n",
+					__func__);
+			goto regulator_put;
+		}
 
-	retval = regulator_set_voltage(rmi4_data->bus_reg,
-			1800000,
-			1800000);
-	if (retval < 0) {
-		dev_err(rmi4_data->pdev->dev.parent,
-				"%s: Failed to set regulator voltage avdd\n",
-				__func__);
-		goto regulator_put;
+		retval = regulator_set_voltage(rmi4_data->bus_reg,
+				1800000, 1800000);
+		if (retval < 0) {
+			dev_err(rmi4_data->pdev->dev.parent,
+					"%s: Failed to set regulator voltage avdd\n",
+					__func__);
+			goto regulator_put;
+		}
 	}
 
 	return 0;

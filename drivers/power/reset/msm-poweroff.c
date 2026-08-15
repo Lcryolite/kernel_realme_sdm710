@@ -83,13 +83,14 @@ MODULE_PARM_DESC(bringup_panic_recovery,
 	"route a kernel panic to Recovery instead of Qualcomm download mode");
 
 /*
- * A register-access hang does not necessarily reach the panic path.  Keep a
- * diagnostic-only deadline armed while the 4.14 Recovery bring-up is under
- * test so a still-schedulable kernel first takes the normal panic/kmsg_dump
- * path and then uses the Recovery reset policy above.  Root Recovery ADB can
- * disarm the deadline after a successful boot by writing Y to the parameter.
+ * A register-access hang does not necessarily reach the panic path.  The
+ * original bring-up candidate armed a diagnostic-only deadline here, but a
+ * desktop candidate must not reboot a kernel that is still making progress
+ * through Android userspace.  Keep the deadline available for explicit
+ * diagnostics through rmx1901.boot_guard_seconds or the runtime parameter,
+ * while leaving it disabled by default.
  */
-#define RMX1901_BOOT_GUARD_DEFAULT_SECONDS	90
+#define RMX1901_BOOT_GUARD_DEFAULT_SECONDS	0
 #define RMX1901_BOOT_GUARD_MAX_SECONDS		600
 
 static unsigned int bringup_boot_guard_seconds =
