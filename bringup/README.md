@@ -23,6 +23,36 @@ The source of truth is split deliberately:
 | M2 SDM670 static port | PASS | The current d13ec62 candidate passes two clean, byte-identical builds plus config, warning, certificate and DT gates. |
 | M3 device boot | M3 PASS; M4 PARTIAL / NO-GO | r014 proved that IRQ-bank indices 0–9 complete and execution stops at index 10, `MDSS_INTF_TEAR_1_INTR` clear offset `0x6e808`; it then entered 900e and did not return to Recovery. r015 removes the SDE 5.x interface-TE banks from the SDM670 SDE 4.1 catalog and bypasses the forced watchdog bite when panic automatic-Recovery is enabled. It did not boot, but avoided the prior 51-second 900e and returned unattended to stable OrangeFox after approximately 146 seconds. r016 preserves that baseline and adds a bounded 90-second diagnostic panic deadline; runtime evidence now proves first-stage init, second-stage init, the first DRM IRQ handler and the intentional panic-notifier Recovery path. On July 26, 2026, r017 completed two clean QUSB-only static builds plus two clean boot-image package builds with `CONFIG_MSM_QUSB_PHY=y`, then completed a boot-only write, full 64 MiB readback, and unattended return to Recovery. Its pstore exposed the first USB-side root cause directly: `msm-qusb-phy-v2` and `msm-dwc3` both failed with `invalid reg offset count`. Commit `48648fdefa63474a031b0cef38a1dda35d0928be` closed that exact DT compatibility gap, and r018 reproduced the same static gates plus another exact boot write/readback and unattended Recovery return. The r018 pstore no longer contains either invalid-reg-offset failure; the earliest remaining USB blocker became `usbpd_create failed: -517`. r019 then completed the SMB2/SMB5 charger-family swap end-to-end: host-side build, exact boot write/readback, unattended Recovery return, and fresh pstore. That pstore proved the SMB2 stack is alive (`PMI: smblib_*`), but it also exposed the next exact blocker earlier in boot: `ufshcd-qcom 1d84000.ufshc: invalid resource` → `ufshcd_crypto_qti_init_crypto: Unable to get ufs_crypto mmio base` → `crypto setup failed` → `ufshcd_pltfrm_init() failed -22`. r020 then closed that exact UFS ICE resource gap on device: boot-only write/readback matched, the phone returned unattended to Recovery after about 122 seconds, and fresh pstore no longer contains the UFS ICE error chain. r021 then tested the minimal DWC3 gadget vbus guard on top of that verified r020 baseline: boot-only write/readback again matched, the phone returned unattended to Recovery after about 125 seconds, the older `usb_gadget_vbus_connect+0x1c/0xec` NULL-dereference signature disappeared from fresh pstore, and the next exact USB blocker collapsed to repeated `write /config/usb_gadget/g1/UDC ${sys.usb.controller}` → `No such device`. |
 
+## Desktop-first candidates
+
+The desktop-first path is intentionally separate from the single-variable
+diagnostic series. The r025/r043 baseline removes the duplicate `mdss_mdp`
+`sde-vdd` owner, keeps `sde_rscc` as the `mdss_core_gdsc` owner, enables the
+generic Synaptics DSX path for the legacy S3706 node, and disables the
+diagnostic boot deadline by default so progressing Android userspace is not
+forced into a panic. The panic-to-Recovery safety path remains available.
+
+The current r045 candidate adds only two diagnostic changes on top of that
+baseline: it permits the legacy `synaptics-s3706` node through the DSX I2C
+probe gate and logs the exact missing DRM atomic object/property that produces
+the observed `-ENOENT` boundary. r045 is not a desktop success claim: the
+device has not reached `sys.boot_completed=1`, Launcher, or a verified touch
+event, and the final HWC/DRM fix is still pending.
+
+The source candidate is recorded in
+`manifests/desktop-first-r025.json`. Build it twice in separate empty output
+directories with `scripts/bringup/verify-desktop-first-repro.sh`; package only
+the resulting kernel payload with the existing boot-image helper, preserving
+the supplied Android 17 ramdisk and six appended DTBs. Device-side evidence is
+collected without writes by `scripts/bringup/collect-desktop-first.sh`.
+
+The hosted build path reuses the A17 ReSukiSU LLVM 22 setup and adds Ubuntu's
+`device-tree-compiler` package for `dtc`, `fdtget`, and `fdtoverlay`. The full
+reproducibility build also needs the existing private DTBO entry 46 and module
+signing key supplied as the `RMX1901_DTBO_ENTRY_46_B64` and
+`REPRO_SIGNING_KEY_PEM_B64` Actions secrets; without them the workflow performs
+toolchain and script preflight only.
+
 ## Reproduction
 
 Fetch and verify the pinned toolchain:

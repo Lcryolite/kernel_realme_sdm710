@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "candidate": "desktop-first-r043-realfix",
+  "source_commit": "60d26498c",
+  "baseline": "a17-resukisu-linux-4.14-unfinished",
+  "changes": [
+    "single mdss_core_gdsc owner in SDE DT",
+    "restore UFS crypto/GPU reserved-memory/PIL baseline",
+    "enable generic Synaptics DSX and match synaptics-s3706",
+    "disable diagnostic boot deadline"
+  ],
+  "build": {
+    "toolchain": "LLVM 22.1.8 + dtc/fdtget",
+    "config_sha256": "ee42cc25831b95402efad089678ba230a7cee556c3faf96c36392ab4a4136f57",
+    "vmlinux_sha256": "b0cf8a84935971e9824c5375d19865f1d313dfdb6588dc25feea889f39195945",
+    "image_gz_sha256": "2f60b16bd77824b8c05dd86d6b41c42f22348eccc96fc0a19ecd02b589e87e10",
+    "sdm710_dtb_sha256": "815d7ba03a58aa88c546869288b63fe38eac72e39409a95e516bb442817bd4e3",
+    "overlay46_merged_dtb_sha256": "23e9c584832527dd3a6254f85c27b9d9acae8b1f9ff64564c3bf1a1000bf2bcd"
+  },
+  "boot_image": {
+    "sha256": "5262ad8581e3285a858141370e50327716f0cf45f71db85549a7cca92c4c5876",
+    "partition": "boot",
+    "write_scope": "boot_only",
+    "ramdisk_sha256": "6a21d152171c0083bd0b114df43596645bc854bf37b42d3ae319c3efc0af0426",
+    "avb_fingerprint": "realme/lineage_RMX1901/RMX1901:17/CP2A.260605.016/eng.androi:userdebug/release-keys",
+    "dtb_set": "r041-verified-six-entry-set",
+    "dtb_sha256": [
+      "bf7c2ad8d81ca6dc13d601a43285ff7b068ac1829049071d3b0098cc53d323b6",
+      "e2adf16bb8096d7ed6d08e2e9d04ce6e83961963e8458442a263aa38c313cbf2",
+      "67338fe7877910c796066d9c05b4b485ee4f64c575e1e8d7358547f40b3dcc56",
+      "72391fca4c0e279b4bbd1a030fea346f037fdef411cf59f59b7e5d6c12f735b1",
+      "31eca241af06eedafe53227371628c35541c06f68083200ce9806bae5b6e1050",
+      "704277a134556e8519509814ffdea7f68e5bb3f9268017b8cf0280cc7ab32b56"
+    ]
+  },
+  "device_acceptance": {
+    "adb_online": null,
+    "sys_boot_completed": null,
+    "launcher_visible": null,
+    "touch_input": null,
+    "note": "Not yet tested; previous desktop claims were invalid and are intentionally not carried forward."
+  }
+}

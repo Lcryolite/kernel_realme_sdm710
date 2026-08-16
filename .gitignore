@@ -78,6 +78,7 @@ __pycache__/
 !.gitignore
 !.mailmap
 !.cocciconfig
+!.github
 
 #
 # Generated include files

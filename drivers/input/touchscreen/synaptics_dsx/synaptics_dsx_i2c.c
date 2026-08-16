@@ -64,10 +64,18 @@ static int parse_dt(struct device *dev, struct synaptics_dsx_board_data *bdata)
 	const char *name;
 	struct property *prop;
 	struct device_node *np = dev->of_node;
+	bool legacy_s3706 = of_device_is_compatible(np, "synaptics-s3706");
 
-	bdata->irq_gpio = of_get_named_gpio_flags(np,
-			"synaptics,irq-gpio", 0,
-			(enum of_gpio_flags *)&bdata->irq_flags);
+	if (legacy_s3706) {
+		/* The legacy property carries TLMM electrical configuration, not
+		 * Linux IRQ trigger bits. The DT interrupt spec supplies the type. */
+		bdata->irq_gpio = of_get_named_gpio_flags(np, "irq-gpio", 0, NULL);
+		bdata->irq_flags = 0;
+	} else {
+		bdata->irq_gpio = of_get_named_gpio_flags(np,
+				"synaptics,irq-gpio", 0,
+				(enum of_gpio_flags *)&bdata->irq_flags);
+	}
 
 	retval = of_property_read_u32(np, "synaptics,irq-on-state",
 			&value);
@@ -76,30 +84,47 @@ static int parse_dt(struct device *dev, struct synaptics_dsx_board_data *bdata)
 	else
 		bdata->irq_on_state = value;
 
-	retval = of_property_read_string(np, "synaptics,pwr-reg-name", &name);
-	if (retval < 0)
+	if (legacy_s3706) {
+		/* S3706 drives the 2.8 V rail with enable2v8_gpio and
+		 * exposes only the 1.8 V I2C rail as vcc_1v8-supply. */
 		bdata->pwr_reg_name = NULL;
-	else
-		bdata->pwr_reg_name = name;
+		bdata->bus_reg_name = "vcc_1v8";
+	} else {
+		retval = of_property_read_string(np, "synaptics,pwr-reg-name",
+				&name);
+		if (retval < 0)
+			bdata->pwr_reg_name = NULL;
+		else
+			bdata->pwr_reg_name = name;
 
-	retval = of_property_read_string(np, "synaptics,bus-reg-name", &name);
-	if (retval < 0)
-		bdata->bus_reg_name = NULL;
-	else
-		bdata->bus_reg_name = name;
+		retval = of_property_read_string(np, "synaptics,bus-reg-name",
+				&name);
+		if (retval < 0)
+			bdata->bus_reg_name = NULL;
+		else
+			bdata->bus_reg_name = name;
+	}
 
 	prop = of_find_property(np, "synaptics,power-gpio", NULL);
+	if ((!prop || !prop->length) && legacy_s3706)
+		prop = of_find_property(np, "enable2v8_gpio", NULL);
 	if (prop && prop->length) {
-		bdata->power_gpio = of_get_named_gpio_flags(np,
-				"synaptics,power-gpio", 0, NULL);
-		retval = of_property_read_u32(np, "synaptics,power-on-state",
-				&value);
-		if (retval < 0) {
-			dev_err(dev, "%s: Unable to read synaptics,power-on-state property\n",
-					__func__);
-			return retval;
+		if (legacy_s3706) {
+			bdata->power_gpio = of_get_named_gpio_flags(np,
+					"enable2v8_gpio", 0, NULL);
+			bdata->power_on_state = 1;
 		} else {
-			bdata->power_on_state = value;
+			bdata->power_gpio = of_get_named_gpio_flags(np,
+					"synaptics,power-gpio", 0, NULL);
+			retval = of_property_read_u32(np, "synaptics,power-on-state",
+					&value);
+			if (retval < 0) {
+				dev_err(dev, "%s: Unable to read synaptics,power-on-state property\n",
+						__func__);
+				return retval;
+			} else {
+				bdata->power_on_state = value;
+			}
 		}
 	} else {
 		bdata->power_gpio = -1;
@@ -117,30 +142,39 @@ static int parse_dt(struct device *dev, struct synaptics_dsx_board_data *bdata)
 			bdata->power_delay_ms = value;
 		}
 	} else {
-		bdata->power_delay_ms = 0;
+		bdata->power_delay_ms = legacy_s3706 ? 10 : 0;
 	}
 
 	prop = of_find_property(np, "synaptics,reset-gpio", NULL);
+	if ((!prop || !prop->length) && legacy_s3706)
+		prop = of_find_property(np, "reset-gpio", NULL);
 	if (prop && prop->length) {
-		bdata->reset_gpio = of_get_named_gpio_flags(np,
-				"synaptics,reset-gpio", 0, NULL);
-		retval = of_property_read_u32(np, "synaptics,reset-on-state",
-				&value);
-		if (retval < 0) {
-			dev_err(dev, "%s: Unable to read synaptics,reset-on-state property\n",
-					__func__);
-			return retval;
+		if (legacy_s3706) {
+			bdata->reset_gpio = of_get_named_gpio_flags(np,
+					"reset-gpio", 0, NULL);
+			bdata->reset_on_state = 0;
+			bdata->reset_active_ms = 10;
 		} else {
-			bdata->reset_on_state = value;
-		}
-		retval = of_property_read_u32(np, "synaptics,reset-active-ms",
-				&value);
-		if (retval < 0) {
-			dev_err(dev, "%s: Unable to read synaptics,reset-active-ms property\n",
-					__func__);
-			return retval;
-		} else {
-			bdata->reset_active_ms = value;
+			bdata->reset_gpio = of_get_named_gpio_flags(np,
+					"synaptics,reset-gpio", 0, NULL);
+			retval = of_property_read_u32(np, "synaptics,reset-on-state",
+					&value);
+			if (retval < 0) {
+				dev_err(dev, "%s: Unable to read synaptics,reset-on-state property\n",
+						__func__);
+				return retval;
+			} else {
+				bdata->reset_on_state = value;
+			}
+			retval = of_property_read_u32(np, "synaptics,reset-active-ms",
+					&value);
+			if (retval < 0) {
+				dev_err(dev, "%s: Unable to read synaptics,reset-active-ms property\n",
+						__func__);
+				return retval;
+			} else {
+				bdata->reset_active_ms = value;
+			}
 		}
 	} else {
 		bdata->reset_gpio = -1;
@@ -158,7 +192,7 @@ static int parse_dt(struct device *dev, struct synaptics_dsx_board_data *bdata)
 			bdata->reset_delay_ms = value;
 		}
 	} else {
-		bdata->reset_delay_ms = 0;
+		bdata->reset_delay_ms = legacy_s3706 ? 80 : 0;
 	}
 
 	prop = of_find_property(np, "synaptics,max-y-for-2d", NULL);
@@ -479,8 +513,9 @@ static int synaptics_rmi4_i2c_probe(struct i2c_client *client,
 {
 	int retval;
 	struct device_node *dt = client->dev.of_node;
+	bool legacy_s3706 = of_device_is_compatible(dt, "synaptics-s3706");
 
-	if (synaptics_check_assigned_tp(dt, "compatible",
+	if (!legacy_s3706 && synaptics_check_assigned_tp(dt, "compatible",
 		"qcom,i2c-touch-active") < 0)
 		goto err_dt_not_match;
 	if (!i2c_check_functionality(client->adapter,
@@ -577,6 +612,9 @@ MODULE_DEVICE_TABLE(i2c, synaptics_rmi4_id_table);
 static struct of_device_id synaptics_rmi4_of_match_table[] = {
 	{
 		.compatible = "synaptics,dsx-i2c",
+	},
+	{
+		.compatible = "synaptics-s3706",
 	},
 	{},
 };

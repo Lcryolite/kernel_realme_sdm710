@@ -1,0 +1,111 @@
+name: Build RMX1901 A17 desktop-first candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      ARCH: arm64
+      SUBARCH: arm64
+      CROSS_COMPILE: aarch64-linux-gnu-
+      CROSS_COMPILE_ARM32: arm-linux-gnueabi-
+      KBUILD_BUILD_USER: Lcryolite
+      KBUILD_BUILD_HOST: desktop-first-ci
+      LLVM_VERSION: 22.1.8
+      LLVM_ARCHIVE_SHA256: 8d5d1e52a06e1c10e457fd36489047053ac451ddad9c88017b0d0fc6b8e5d4c0
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison ccache device-tree-compiler flex \
+            libelf-dev libssl-dev \
+            binutils-aarch64-linux-gnu \
+            binutils-arm-linux-gnueabi \
+            curl python3 unzip xz-utils zip
+
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          max-size: 2G
+          key: ${{ runner.os }}-desktop-first-clang22
+
+      - name: Install pinned LLVM 22 toolchain
+        run: |
+          LLVM_ARCHIVE="llvm-${LLVM_VERSION}-x86_64.tar.xz"
+          LLVM_URL="https://www.kernel.org/pub/tools/llvm/files/${LLVM_ARCHIVE}"
+          LLVM_DIR="${RUNNER_TEMP}/llvm-${LLVM_VERSION}"
+          curl -fL --retry 3 -o "${RUNNER_TEMP}/${LLVM_ARCHIVE}" "${LLVM_URL}"
+          echo "${LLVM_ARCHIVE_SHA256}  ${RUNNER_TEMP}/${LLVM_ARCHIVE}" | sha256sum -c -
+          mkdir -p "${LLVM_DIR}"
+          tar -xJf "${RUNNER_TEMP}/${LLVM_ARCHIVE}" -C "${LLVM_DIR}" --strip-components=1
+          "${LLVM_DIR}/bin/clang" --version | head -n 1 | grep -F "clang version ${LLVM_VERSION}"
+          "${LLVM_DIR}/bin/ld.lld" --version | head -n 1 | grep -F "LLD ${LLVM_VERSION}"
+          echo "LLVM_BIN_DIR=${LLVM_DIR}/bin" >> "$GITHUB_ENV"
+          echo "${LLVM_DIR}/bin" >> "$GITHUB_PATH"
+
+      - name: Verify reusable toolchain and DT tools
+        run: |
+          clang --version | head -n 1
+          ld.lld --version | head -n 1
+          dtc --version
+          fdtget -h >/dev/null
+          fdtoverlay -h >/dev/null
+          aarch64-linux-gnu-elfedit --version | head -n 1
+          arm-linux-gnueabi-ld --version | head -n 1
+          bash -n scripts/bringup/build-desktop-first.sh
+          bash -n scripts/bringup/verify-desktop-first-repro.sh
+          bash -n scripts/bringup/collect-desktop-first.sh
+          python3 -m json.tool bringup/manifests/desktop-first-r025.json >/dev/null
+
+      - name: Prepare private reproducibility inputs when configured
+        id: bringup_inputs
+        env:
+          RMX1901_DTBO_ENTRY_46_B64: ${{ secrets.RMX1901_DTBO_ENTRY_46_B64 }}
+          REPRO_SIGNING_KEY_PEM_B64: ${{ secrets.REPRO_SIGNING_KEY_PEM_B64 }}
+        run: |
+          if [[ -z "${RMX1901_DTBO_ENTRY_46_B64}" || -z "${REPRO_SIGNING_KEY_PEM_B64}" ]]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Full reproducibility build skipped: RMX1901_DTBO_ENTRY_46_B64 and REPRO_SIGNING_KEY_PEM_B64 are not configured."
+            exit 0
+          fi
+          input_dir="$RUNNER_TEMP/rmx1901-desktop-first-inputs"
+          mkdir -p "$input_dir"
+          printf '%s' "$RMX1901_DTBO_ENTRY_46_B64" | base64 --decode > "$input_dir/dtbo-entry-46.dtb"
+          printf '%s' "$REPRO_SIGNING_KEY_PEM_B64" | base64 --decode > "$input_dir/signing_key.pem"
+          chmod 600 "$input_dir/signing_key.pem"
+          echo "RMX1901_DTBO_ENTRY_46=$input_dir/dtbo-entry-46.dtb" >> "$GITHUB_ENV"
+          echo "REPRO_SIGNING_KEY_PEM=$input_dir/signing_key.pem" >> "$GITHUB_ENV"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build two clean desktop-first outputs
+        if: steps.bringup_inputs.outputs.ready == 'true'
+        env:
+          DTC_BIN: /usr/bin/dtc
+          FDTGET_BIN: /usr/bin/fdtget
+          FDTOVERLAY_BIN: /usr/bin/fdtoverlay
+          FIRST_OUT_DIR: out-desktop-first-clean1
+          SECOND_OUT_DIR: out-desktop-first-clean2
+        run: scripts/bringup/verify-desktop-first-repro.sh
+
+      - name: Upload desktop-first build evidence
+        if: steps.bringup_inputs.outputs.ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rmx1901-desktop-first-build-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            out-desktop-first-clean1
+            out-desktop-first-clean2
+            desktop-first-repro-summary.txt
