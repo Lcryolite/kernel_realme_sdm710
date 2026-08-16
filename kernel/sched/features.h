@@ -110,3 +110,13 @@ SCHED_FEAT(FBT_STRICT_ORDER, false)
  * OFF: schedtune.prefer_idle is honored as is.
  */
 SCHED_FEAT(EAS_USE_NEED_IDLE, true)
+
+/* EEVDF selection and placement controls. */
+SCHED_FEAT(PICK_BUDDY, false)
+SCHED_FEAT(PREEMPT_SHORT, true)
+SCHED_FEAT(RUN_TO_PARITY, true)
+SCHED_FEAT(PLACE_LAG, true)
+SCHED_FEAT(PLACE_REL_DEADLINE, true)
+SCHED_FEAT(PLACE_DEADLINE_INITIAL, true)
+SCHED_FEAT(DELAY_DEQUEUE, false)
+SCHED_FEAT(DELAY_ZERO, true)

@@ -89,6 +89,8 @@
 #include <asm/paravirt.h>
 #endif
 
+#include <linux/sched/proxy_exec.h>
+#include <linux/sched/ext.h>
 #include "sched.h"
 #include "walt.h"
 #include "../workqueue_internal.h"
@@ -785,6 +787,18 @@ static inline void dequeue_task(struct rq *rq, struct task_struct *p, int flags)
 	p->sched_class->dequeue_task(rq, p, flags);
 	trace_sched_enq_deq_task(p, 0, cpumask_bits(&p->cpus_allowed)[0]);
 }
+
+#ifdef CONFIG_SCHED_PROXY_EXEC
+void sched_proxy_tag_curr(struct rq *rq, struct task_struct *owner)
+{
+	if (!rq || !owner || !sched_proxy_enabled() || !task_on_rq_queued(owner))
+		return;
+	/* Keep the owner out of push/pull while it represents rq->donor. */
+	dequeue_task(rq, owner, DEQUEUE_SAVE);
+	enqueue_task(rq, owner, ENQUEUE_RESTORE);
+}
+EXPORT_SYMBOL_GPL(sched_proxy_tag_curr);
+#endif
 
 void activate_task(struct rq *rq, struct task_struct *p, int flags)
 {
@@ -2317,137 +2331,6 @@ void __dl_clear_params(struct task_struct *p)
 	dl_se->dl_yielded = 0;
 }
 
-#ifdef CONFIG_SCHED_BORE
-extern u8   sched_burst_fork_atavistic;
-extern uint sched_burst_cache_lifetime;
-
-static void __init sched_init_bore(void) {
-	init_task.se.burst_time = 0;
-	init_task.se.prev_burst_penalty = 0;
-	init_task.se.curr_burst_penalty = 0;
-	init_task.se.burst_penalty = 0;
-	init_task.se.burst_score = 0;
-	init_task.se.child_burst_last_cached = 0;
-}
-
-void inline sched_fork_bore(struct task_struct *p) {
-	p->se.burst_time = 0;
-	p->se.curr_burst_penalty = 0;
-	p->se.burst_score = 0;
-	p->se.child_burst_last_cached = 0;
-}
-
-static u32 count_child_tasks(struct task_struct *p) {
-	struct task_struct *child;
-	u32 cnt = 0;
-	list_for_each_entry(child, &p->children, sibling) {cnt++;}
-	return cnt;
-}
-
-static inline bool task_is_inheritable(struct task_struct *p) {
-	return (p->sched_class == &fair_sched_class);
-}
-
-static inline bool child_burst_cache_expired(struct task_struct *p, u64 now) {
-	u64 expiration_time =
-		p->se.child_burst_last_cached + sched_burst_cache_lifetime;
-	return ((s64)(expiration_time - now) < 0);
-}
-
-static void __update_child_burst_cache(
-	struct task_struct *p, u32 cnt, u32 sum, u64 now) {
-	u8 avg = 0;
-	if (cnt) avg = sum / cnt;
-	p->se.child_burst = max(avg, p->se.burst_penalty);
-	p->se.child_burst_cnt = cnt;
-	p->se.child_burst_last_cached = now;
-}
-
-static inline void update_child_burst_direct(struct task_struct *p, u64 now) {
-	struct task_struct *child;
-	u32 cnt = 0;
-	u32 sum = 0;
-
-	list_for_each_entry(child, &p->children, sibling) {
-		if (!task_is_inheritable(child)) continue;
-		cnt++;
-		sum += child->se.burst_penalty;
-	}
-
-	__update_child_burst_cache(p, cnt, sum, now);
-}
-
-static inline u8 __inherit_burst_direct(struct task_struct *p, u64 now) {
-	struct task_struct *parent = p->real_parent;
-	if (child_burst_cache_expired(parent, now))
-		update_child_burst_direct(parent, now);
-
-	return parent->se.child_burst;
-}
-
-static void update_child_burst_topological(
-	struct task_struct *p, u64 now, u32 depth, u32 *acnt, u32 *asum) {
-	struct task_struct *child, *dec;
-	u32 cnt = 0, dcnt = 0;
-	u32 sum = 0;
-
-	list_for_each_entry(child, &p->children, sibling) {
-		dec = child;
-		while ((dcnt = count_child_tasks(dec)) == 1)
-			dec = list_first_entry(&dec->children, struct task_struct, sibling);
-		
-		if (!dcnt || !depth) {
-			if (!task_is_inheritable(dec)) continue;
-			cnt++;
-			sum += dec->se.burst_penalty;
-			continue;
-		}
-		if (!child_burst_cache_expired(dec, now)) {
-			cnt += dec->se.child_burst_cnt;
-			sum += (u32)dec->se.child_burst * dec->se.child_burst_cnt;
-			continue;
-		}
-		update_child_burst_topological(dec, now, depth - 1, &cnt, &sum);
-	}
-
-	__update_child_burst_cache(p, cnt, sum, now);
-	*acnt += cnt;
-	*asum += sum;
-}
-
-static inline u8 __inherit_burst_topological(struct task_struct *p, u64 now) {
-	struct task_struct *anc = p->real_parent;
-	u32 cnt = 0, sum = 0;
-
-	while (anc->real_parent != anc && count_child_tasks(anc) == 1)
-		anc = anc->real_parent;
-
-	if (child_burst_cache_expired(anc, now))
-		update_child_burst_topological(
-			anc, now, sched_burst_fork_atavistic - 1, &cnt, &sum);
-
-	return anc->se.child_burst;
-}
-
-static inline void inherit_burst(struct task_struct *p) {
-	u8 burst_cache;
-	u64 now = ktime_get_ns();
-
-	read_lock(&tasklist_lock);
-	burst_cache = likely(sched_burst_fork_atavistic)?
-		__inherit_burst_topological(p, now):
-		__inherit_burst_direct(p, now);
-	read_unlock(&tasklist_lock);
-
-	p->se.prev_burst_penalty = max(p->se.prev_burst_penalty, burst_cache);
-}
-
-static void sched_post_fork_bore(struct task_struct *p) {
-	if (p->sched_class == &fair_sched_class)
-		inherit_burst(p);
-	p->se.burst_penalty = p->se.prev_burst_penalty;
-}
-#endif // CONFIG_SCHED_BORE
 
 /*
  * Perform scheduler related setup for a newly forked process p.
@@ -2459,18 +2342,27 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
 {
 	p->on_rq			= 0;
 
+#ifdef CONFIG_SCHED_PROXY_EXEC
+	p->sched_proxy_blocked_on	= NULL;
+#endif
+
 	p->se.on_rq			= 0;
 	p->se.exec_start		= 0;
 	p->se.sum_exec_runtime		= 0;
 	p->se.prev_sum_exec_runtime	= 0;
 	p->se.nr_migrations		= 0;
 	p->se.vruntime			= 0;
+	p->se.deadline			= 0;
+	p->se.min_vruntime		= 0;
+	p->se.min_slice			= 0;
+	p->se.max_slice			= 0;
+	p->se.sched_delayed		= 0;
+	p->se.rel_deadline		= 0;
+	p->se.custom_slice		= 0;
+	p->se.vlag			= 0;
+	p->se.slice			= 0;
 	p->last_sleep_ts		= 0;
 	p->last_cpu_selected_ts		= 0;
-
-#ifdef CONFIG_SCHED_BORE
-	sched_fork_bore(p);
-#endif // CONFIG_SCHED_BORE
 
 	INIT_LIST_HEAD(&p->se.group_node);
 
@@ -2724,9 +2616,6 @@ int sched_fork(unsigned long clone_flags, struct task_struct *p)
 
 void sched_post_fork(struct task_struct *p)
 {
-#ifdef CONFIG_SCHED_BORE
-	sched_post_fork_bore(p);
-#endif // CONFIG_SCHED_BORE
 }
 
 unsigned long to_ratio(u64 period, u64 runtime)
@@ -3783,6 +3672,7 @@ static void __sched notrace __schedule(bool preempt)
 	struct rq *rq;
 	int cpu;
 	u64 wallclock;
+	struct sched_ext_context ext_ctx;
 
 	cpu = smp_processor_id();
 	rq = cpu_rq(cpu);
@@ -3811,7 +3701,7 @@ static void __sched notrace __schedule(bool preempt)
 	if (!preempt && prev->state) {
 		if (unlikely(signal_pending_state(prev->state, prev))) {
 			prev->state = TASK_RUNNING;
-		} else {
+		} else if (!sched_proxy_task_blocked(prev)) {
 			deactivate_task(rq, prev, DEQUEUE_SLEEP);
 			prev->on_rq = 0;
 
@@ -3838,8 +3728,30 @@ static void __sched notrace __schedule(bool preempt)
 	prev->enqueue_time = rq->clock;
 #endif /* OPLUS_FEATURE_UIFIRST */
 
+#ifdef CONFIG_SCHED_PROXY_EXEC
+	if (sched_proxy_enabled()) {
+	pick_again:
+		next = pick_next_task(rq, READ_ONCE(rq->donor) ?: prev, &rf);
+		sched_proxy_set_donor(rq, next);
+		if (sched_proxy_task_blocked(next)) {
+			next = sched_proxy_find(rq, next);
+			if (!next)
+				goto pick_again;
+		}
+	} else {
+		next = pick_next_task(rq, prev, &rf);
+	}
+#else
 	next = pick_next_task(rq, prev, &rf);
+#endif
 	wallclock = sched_ktime_clock();
+	if (sched_ext_is_active()) {
+		ext_ctx.now = wallclock;
+		ext_ctx.cpu = cpu;
+		ext_ctx.pid = next->pid;
+		ext_ctx.nr_running = rq->nr_running;
+		sched_ext_run_hook(&ext_ctx);
+	}
 	clear_tsk_need_resched(prev);
 	clear_preempt_need_resched();
 	rq->clock_skip_update = 0;
@@ -3852,6 +3764,10 @@ static void __sched notrace __schedule(bool preempt)
 		update_task_ravg(next, rq, PICK_NEXT_TASK, wallclock, 0);
 		rq->nr_switches++;
 		rq->curr = next;
+#ifdef CONFIG_SCHED_PROXY_EXEC
+		if (sched_proxy_enabled() && READ_ONCE(rq->donor) != next)
+			sched_proxy_tag_curr(rq, next);
+#endif
 		++*switch_count;
 
 		psi_sched_switch(prev, next, !task_on_rq_queued(prev));
@@ -4413,7 +4329,7 @@ static void __setscheduler_params(struct task_struct *p,
 	if (dl_policy(policy))
 		__setparam_dl(p, attr);
 	else if (fair_policy(policy))
-		p->static_prio = NICE_TO_PRIO(attr->sched_nice);
+		__setparam_fair(p, attr);
 
 	/*
 	 * __sched_setscheduler() ensures attr->sched_priority == 0 when
@@ -5761,6 +5677,9 @@ void init_idle(struct task_struct *idle, int cpu)
 	raw_spin_lock_irqsave(&idle->pi_lock, flags);
 	raw_spin_lock(&rq->lock);
 
+#ifdef CONFIG_SCHED_PROXY_EXEC
+	rq->donor = NULL;
+#endif
 	idle->state = TASK_RUNNING;
 	idle->se.exec_start = sched_clock();
 
@@ -8453,10 +8372,6 @@ void __init sched_init(void)
 		init_waitqueue_head(bit_wait_table + i);
 
 	sched_boost_parse_dt();
-#ifdef CONFIG_SCHED_BORE
-	sched_init_bore();
-	printk(KERN_INFO "BORE (Burst-Oriented Response Enhancer) CPU Scheduler modification 5.1.0 by Masahito Suzuki");
-#endif // CONFIG_SCHED_BORE
 	init_clusters();
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
