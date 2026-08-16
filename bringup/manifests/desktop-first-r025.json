@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "candidate_kind": "DESKTOP_FIRST",
+  "candidate_name": "RMX1901-A17-desktop-first-r025",
+  "baseline_ref": "a17-resukisu-linux-4.14-unfinished",
+  "baseline_commit": "2ab35b6bade07303b0096c6a6cc9a511d7a5eca9",
+  "status": "SOURCE_READY_LLVM22_CI_READY_HOST_BUILD_PENDING",
+  "functional_changes": [
+    "remove duplicate mdss_mdp sde-vdd owner",
+    "disable diagnostic boot deadline by default"
+  ],
+  "preserved_baseline": [
+    "USB_OTG_DTS",
+    "UFS_ICE",
+    "SMB2",
+    "panic_recovery",
+    "Android17_ramdisk"
+  ],
+  "forbidden_changes": [
+    "vendor",
+    "system",
+    "ramdisk",
+    "userdata",
+    "recovery",
+    "dtbo",
+    "vbmeta",
+    "public_uapi",
+    "ioctl",
+    "toolchain"
+  ],
+  "boot_guard_default_seconds": 0,
+  "toolchain": "LLVM 22.1.8 + device-tree-compiler",
+  "ci_workflow": ".github/workflows/Build_desktop_first.yml",
+  "device_write_scope": "boot_only",
+  "device_acceptance": {
+    "adb_online": null,
+    "sys_boot_completed": null,
+    "launcher_visible": null,
+    "touch_input": null
+  },
+  "host_build": {
+    "clean_build_1": null,
+    "clean_build_2": null,
+    "image_hash_match": null,
+    "dtb_gate": null,
+    "avb_gate": null
+  },
+  "evidence_collection": "scripts/bringup/collect-desktop-first.sh"
+}

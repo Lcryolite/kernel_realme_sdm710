@@ -1,0 +1,28 @@
+{
+  "candidate": "desktop-first-r029-pilfix-aligned",
+  "base": "a17-resukisu-linux-4.14-unfinished",
+  "boot_image_sha256": "46d174cab68d906d8a5a0d08e45697d15e15e0181a502be18f9c5a1187e3b55d",
+  "write_scope": "boot_only",
+  "changed_kernel_path": "drivers/soc/qcom/peripheral-loader.c",
+  "change": "match A17 relocatable PIL allocation alignment while preserving mdt_size",
+  "preserved": [
+    "vendor",
+    "system",
+    "ramdisk",
+    "recovery",
+    "dtbo",
+    "vbmeta",
+    "userdata"
+  ],
+  "device": {
+    "serial": "7b0c1c49",
+    "kernel": "4.14.357-openela-RMX1901-A17-M2+ #5",
+    "adb_online": true,
+    "sys_boot_completed": false,
+    "launcher_visible": false,
+    "touch_input": false,
+    "surfaceflinger": "running; display enumerated, HWC PrepareLayerStack returns EINVAL",
+    "gpu_pil": "a615_zap relocatable-region allocation error absent after fix",
+    "first_userspace_blocker": "/data/misc/apexdata/com.android.permission/access.abx has invalid binary magic dcde08c0; userdata was not modified"
+  }
+}

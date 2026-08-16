@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "candidate": "desktop-first-r045-touch-drm",
+  "source_commit": "aa70d6e20044",
+  "baseline": "a17-resukisu-linux-4.14-unfinished",
+  "changes": [
+    "allow legacy synaptics-s3706 through the DSX I2C probe gate",
+    "log missing DRM atomic objects/properties at the kernel ioctl boundary"
+  ],
+  "preserved": [
+    "r043 SDE DT and six-entry appended DTB set",
+    "r043 ramdisk",
+    "r043 AVB fingerprint and salt",
+    "boot-only write scope"
+  ],
+  "build": {
+    "toolchain": "LLVM 22.1.8 + dtc/fdtget",
+    "config_sha256": "ee42cc25831b95402efad089678ba230a7cee556c3faf96c36392ab4a4136f57",
+    "vmlinux_sha256": "18f446cd0ab5d74da35134733d917903527deab9df5fc9b9ead038fb99a2fd66",
+    "image_gz_sha256": "6a069c0cebe585e589de3dfa1e8752bc4dc77d5de0781271e42e0c836e5b3be3",
+    "sdm710_dtb_sha256": "93a1b2aa2cd1a749b87a048388334d103183960dc7636d3376e9643c154e8c36",
+    "overlay46_merged_dtb_sha256": "23e9c584832527dd3a6254f85c27b9d9acae8b1f9ff64564c3bf1a1000bf2bcd",
+    "kernel_payload_sha256": "538579b88bc79593792e0cbde74ecc3764986a847a239b548143a8f7e2cc9130",
+    "boot_image_sha256": "8849db28c2ae2ad079699d9c2aa4ef5d4613076492115251553f289a943ac779"
+  },
+  "boot_image": {
+    "partition": "boot",
+    "write_scope": "boot_only",
+    "ramdisk_sha256": "6a21d152171c0083bd0b114df43596645bc854bf37b42d3ae319c3efc0af0426",
+    "avb_fingerprint": "realme/lineage_RMX1901/RMX1901:17/CP2A.260605.016/eng.androi:userdebug/release-keys",
+    "dtb_set": "r041-verified-six-entry-set"
+  },
+  "device_acceptance": {
+    "adb_online": null,
+    "sys_boot_completed": null,
+    "launcher_visible": null,
+    "touch_input": null,
+    "note": "Diagnostic candidate; no desktop claim. Requires device-side DRM marker and S3706 event-node evidence."
+  }
+}
