@@ -2274,11 +2274,15 @@ retry:
 
 		obj = drm_mode_object_find(dev, file_priv, obj_id, DRM_MODE_OBJECT_ANY);
 		if (!obj) {
+			DRM_ERROR("RMX1901-DRM-ATOMIC: missing object id=%u flags=0x%x\n",
+				  obj_id, arg->flags);
 			ret = -ENOENT;
 			goto out;
 		}
 
 		if (!obj->properties) {
+			DRM_ERROR("RMX1901-DRM-ATOMIC: object id=%u type=%u has no properties flags=0x%x\n",
+				  obj_id, obj->type, arg->flags);
 			drm_mode_object_put(obj);
 			ret = -ENOENT;
 			goto out;
@@ -2305,6 +2309,8 @@ retry:
 
 			prop = drm_mode_obj_find_prop_id(obj, prop_id);
 			if (!prop) {
+				DRM_ERROR("RMX1901-DRM-ATOMIC: missing property obj=%u type=%u prop=%u flags=0x%x\n",
+					  obj_id, obj->type, prop_id, arg->flags);
 				drm_mode_object_put(obj);
 				ret = -ENOENT;
 				goto out;
@@ -2321,6 +2327,8 @@ retry:
 			ret = drm_atomic_set_property(state, obj, prop,
 						      prop_value);
 			if (ret) {
+				DRM_ERROR("RMX1901-DRM-ATOMIC: set property failed obj=%u type=%u prop=%u ret=%d flags=0x%x\n",
+					  obj_id, obj->type, prop_id, ret, arg->flags);
 				drm_mode_object_put(obj);
 				goto out;
 			}
