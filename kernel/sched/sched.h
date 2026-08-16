@@ -187,6 +187,8 @@ static inline int idle_policy(int policy)
 {
 	return policy == SCHED_IDLE;
 }
+void __setparam_fair(struct task_struct *p, const struct sched_attr *attr);
+
 static inline int fair_policy(int policy)
 {
 	return policy == SCHED_NORMAL || policy == SCHED_BATCH;
@@ -463,7 +465,12 @@ struct cfs_bandwidth { };
 /* CFS-related fields in a runqueue */
 struct cfs_rq {
 	struct load_weight load;
-	unsigned int nr_running, h_nr_running;
+	unsigned int nr_running, nr_queued, h_nr_running;
+
+	/* EEVDF weighted virtual time and its zero point. */
+	s64 sum_w_vruntime;
+	unsigned long sum_weight;
+	u64 zero_vruntime;
 
 	u64 exec_clock;
 	u64 min_vruntime;
@@ -471,8 +478,7 @@ struct cfs_rq {
 	u64 min_vruntime_copy;
 #endif
 
-	struct rb_root tasks_timeline;
-	struct rb_node *rb_leftmost;
+	struct rb_root_cached tasks_timeline;
 
 	/*
 	 * 'curr' points to currently running entity on this cfs_rq.
@@ -764,6 +770,9 @@ struct rq {
 	unsigned long nr_uninterruptible;
 
 	struct task_struct *curr, *idle, *stop;
+#ifdef CONFIG_SCHED_PROXY_EXEC
+	struct task_struct *donor;
+#endif
 	unsigned long next_balance;
 	struct mm_struct *prev_mm;
 
@@ -1508,6 +1517,11 @@ extern const u32 sched_prio_to_wmult[40];
 #define ENQUEUE_MIGRATED	0x00
 #endif
 #define ENQUEUE_WAKEUP_NEW	0x40
+
+#define ENQUEUE_DELAYED		0x80
+#define DEQUEUE_DELAYED		0x100
+#define DEQUEUE_SPECIAL		0x200
+#define DEQUEUE_THROTTLE	0x400
 
 #define RETRY_TASK		((void *)-1UL)
 

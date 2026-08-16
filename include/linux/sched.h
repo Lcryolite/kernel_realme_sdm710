@@ -1558,24 +1558,30 @@ struct ravg {
 struct sched_entity {
 	struct load_weight	load;		/* for load-balancing */
 	struct rb_node		run_node;
+
+	/* EEVDF virtual deadline and augmented-tree state. */
+	u64			deadline;
+	u64			min_vruntime;
+	u64			min_slice;
+	u64			max_slice;
+
 	struct list_head	group_node;
 	unsigned int		on_rq;
+	unsigned char		sched_delayed;
+	unsigned char		rel_deadline;
+	unsigned char		custom_slice;
 
 	u64			exec_start;
 	u64			sum_exec_runtime;
 	u64			vruntime;
 	u64			prev_sum_exec_runtime;
-#ifdef CONFIG_SCHED_BORE
-	u64				burst_time;
-	u8				prev_burst_penalty;
-	u8				curr_burst_penalty;
-	u8				burst_penalty;
-	u8				burst_score;
-	u8				child_burst;
-	u32				child_burst_cnt;
-	u64				child_burst_last_cached;
-#endif // CONFIG_SCHED_BORE
- 
+	/* Virtual lag while dequeued; protection point while current. */
+	union {
+		s64			vlag;
+		u64			vprot;
+	};
+	u64			slice;
+
 	u64			nr_migrations;
 
 #ifdef CONFIG_SCHEDSTATS
@@ -1993,6 +1999,9 @@ struct task_struct {
 #ifdef CONFIG_DEBUG_MUTEXES
 	/* mutex deadlock detection */
 	struct mutex_waiter *blocked_on;
+#endif
+#ifdef CONFIG_SCHED_PROXY_EXEC
+	struct mutex *sched_proxy_blocked_on;
 #endif
 #ifdef CONFIG_TRACE_IRQFLAGS
 	unsigned int irq_events;
