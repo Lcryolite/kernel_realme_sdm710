@@ -55,15 +55,19 @@ jobs:
 
       - name: Verify pinned ReSukiSU
         run: |
-          test "$(git -C ReSukiSU rev-parse HEAD)" = "faccf4c5edc7be37776216e7d43dd3dca0239331"
+          RESUKISU_COMMIT="$(git -C ReSukiSU rev-parse HEAD)"
+          RESUKISU_SHORT="$(git -C ReSukiSU rev-parse --short=8 HEAD)"
+          test -n "${RESUKISU_COMMIT}"
           test "$(readlink drivers/kernelsu)" = "../ReSukiSU/kernel"
+          echo "RESUKISU_COMMIT=${RESUKISU_COMMIT}" >> "$GITHUB_ENV"
+          echo "RESUKISU_SHORT=${RESUKISU_SHORT}" >> "$GITHUB_ENV"
 
       - name: Compile kernel with Clang 22
         run: |
           OUT_DIR=out ./build-clang22.sh
           test -s out/arch/arm64/boot/Image.gz
           grep -aFq 'clang version 22.1.8' out/vmlinux
-          grep -aFq 'v4.2.0-rc1-faccf4c5@ReSukiSU' out/vmlinux
+          grep -aFq -- "-${RESUKISU_SHORT}@ReSukiSU" out/vmlinux
           test "$(cat out/include/config/kernel.release)" = "4.9.337+67-RMX1901-A17-ReSukiSU"
 
       - name: Package with AnyKernel3

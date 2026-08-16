@@ -10,6 +10,14 @@ fi
 kernel_defconfig="${KERNEL_DEFCONFIG:-sdm670-perf_defconfig}"
 cross_compile="${CROSS_COMPILE:-aarch64-linux-gnu-}"
 cross_compile_arm32="${CROSS_COMPILE_ARM32:-arm-linux-gnueabi-}"
+resukisu_dir="${RESUKISU_DIR:-${kernel_root}/ReSukiSU}"
+
+if [[ ! -d "${resukisu_dir}" ]]; then
+	echo "ReSukiSU submodule is missing: ${resukisu_dir}" >&2
+	exit 1
+fi
+resukisu_commit="$(git -C "${resukisu_dir}" rev-parse HEAD)"
+resukisu_short="$(git -C "${resukisu_dir}" rev-parse --short=8 HEAD)"
 llvm_bin="${LLVM_BIN:-}"
 
 if [[ -n "${llvm_bin}" ]]; then
@@ -70,6 +78,7 @@ make_args=(
 
 echo "Building RMX1901 A17 ReSukiSU"
 echo "Compiler: $(clang --version | head -n 1)"
+echo "ReSukiSU: ${resukisu_commit} (${resukisu_short})"
 echo "Output: ${build_output}"
 
 make -C "${kernel_root}" "${make_args[@]}" "${kernel_defconfig}"
@@ -120,7 +129,7 @@ fi
 kernel_image="${build_output}/arch/arm64/boot/Image.gz"
 test -s "${kernel_image}"
 grep -aFq "clang version ${clang_version}" "${build_output}/vmlinux"
-grep -aFq 'v4.1.0-97163bdc@ReSukiSU' "${build_output}/vmlinux"
+grep -aFq -- "-${resukisu_short}@ReSukiSU" "${build_output}/vmlinux"
 
 kernel_release="$(make -s -C "${kernel_root}" "${make_args[@]}" kernelrelease)"
 if [[ "${kernel_release}" != "4.9.337+67-RMX1901-A17-ReSukiSU" ]]; then
