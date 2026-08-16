@@ -138,7 +138,252 @@ split_boot() {
   if [ $? != 0 -o "$splitfail" ]; then
     abort "Splitting image failed. Aborting...";
   fi;
+  record_dtb_fingerprint;
   cd $AKHOME;
+}
+
+# ak3_hash (return the SHA-256 of a file)
+ak3_hash() {
+  if [ -x "$BIN/busybox" ]; then
+    "$BIN/busybox" sha256sum "$1" | cut -d' ' -f1;
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1;
+  else
+    abort "No SHA-256 utility is available. Aborting...";
+  fi;
+}
+
+# dtb_group_info (validate a concatenated FDT group and return count|boot_device)
+#
+# Do not use strings(1) here.  RMX1901 stores several complete FDTs back to
+# back in kernel_dtb, and a string search cannot tell which FDT owns a match.
+# magiskboot already contains the libfdt parser used by the target recovery,
+# so use its structured printer as the single parser for both source and
+# repacked images.
+dtb_group_info() {
+  local file=$1 label=$2 report count first line;
+
+  [ -s "$file" ] || abort "$label DTB group is missing or empty. Aborting...";
+  [ -x "$BIN/magiskboot" ] || abort "magiskboot is required to validate the $label DTB group. Aborting...";
+
+  report="$DTB_VERIFY_DIR/$label.dtb-print";
+  "$BIN/magiskboot" dtb "$file" print > "$report" 2>&1;
+  [ $? = 0 ] || abort "Unable to parse the $label DTB group. Aborting...";
+
+  count=$(grep -c '^Printing dtb\.' "$report");
+  [ "$count" -gt 0 ] || abort "The $label DTB group contains no complete FDT. Aborting...";
+
+  first=$(awk '
+    /^Printing dtb\.0000$/ { in_first=1; next }
+    /^Printing dtb\.[0-9][0-9][0-9][0-9]$/ && in_first { exit }
+    in_first && index($0, "[boot_devices]: [\"") {
+      line=$0;
+      sub(/^.*\[boot_devices\]: \["/, "", line);
+      sub(/"\].*$/, "", line);
+      print line;
+      found=1;
+      exit;
+    }
+    END { if (!found) exit 1 }
+  ' "$report");
+  [ "$first" ] || abort "The first $label DTB has no boot_devices property. Aborting...";
+
+  printf '%s|%s\n' "$count" "$first";
+}
+
+# record_dtb_fingerprint (save the DTB payload from the original boot image)
+record_dtb_fingerprint() {
+  local name file size hash found=0;
+
+  # A DTB supplied by the zip would defeat per-device preservation.
+  for name in dt dtb dt.img recovery_dtbo recovery_dtbo.img; do
+    if [ -f "$AKHOME/$name" ]; then
+      abort "The package contains $name; refusing to replace the device DTB.";
+    fi;
+  done;
+
+  DTB_VERIFY_DIR="$AKHOME/.ak3-dtb-verify";
+  rm -rf "$DTB_VERIFY_DIR";
+  mkdir -p "$DTB_VERIFY_DIR";
+  : > "$DTB_VERIFY_DIR/original.manifest";
+
+  # RMX1901 legacy images contain several board DTBs concatenated in
+  # kernel_dtb.  The DTB group is device-owned: always source it from the
+  # currently installed Recovery image instead of trusting a stale boot image
+  # or a DTB bundled in the GitHub package.  This removes the old-order trap
+  # permanently, while still failing closed on unsupported layouts.
+  if [ -f "$SPLITIMG/kernel_dtb" ]; then
+    local runtime_boot_device current_info recovery_info current_count recovery_count;
+    local current_boot_device recovery_boot_device recovery_block recovery_img recovery_split;
+    local recovery_dtb recovery_hash;
+
+    [ -r /proc/device-tree/firmware/android/boot_devices ] || \
+      abort "Cannot identify the running boot storage from device-tree. Aborting...";
+    runtime_boot_device=$(tr -d '\000' < /proc/device-tree/firmware/android/boot_devices 2>/dev/null);
+    [ "$runtime_boot_device" ] || abort "The running boot storage is empty. Aborting...";
+
+    current_info=$(dtb_group_info "$SPLITIMG/kernel_dtb" current) || \
+      abort "Unable to validate the boot DTB group. Aborting...";
+    current_count=${current_info%%|*};
+    current_boot_device=${current_info#*|};
+
+    recovery_block=;
+    for file in /dev/block/bootdevice/by-name/recovery /dev/block/by-name/recovery /dev/block/mapper/recovery; do
+      if [ -e "$file" ]; then
+        recovery_block=$file;
+        break;
+      fi;
+    done;
+    [ "$recovery_block" ] || abort "The current Recovery partition cannot be found; refusing to guess a DTB. Aborting...";
+
+    recovery_img="$DTB_VERIFY_DIR/recovery.img";
+    recovery_split="$DTB_VERIFY_DIR/recovery-split";
+    mkdir -p "$recovery_split";
+    dd if="$recovery_block" of="$recovery_img" bs=1048576 2>/dev/null || \
+      abort "Unable to read the current Recovery image. Aborting...";
+    [ -s "$recovery_img" ] || abort "The current Recovery image is empty. Aborting...";
+    (cd "$recovery_split" && "$BIN/magiskboot" unpack -h "$recovery_img" >/dev/null 2>&1);
+    [ $? = 0 ] || abort "Unable to unpack the current Recovery image. Aborting...";
+    recovery_dtb="$recovery_split/kernel_dtb";
+    [ -s "$recovery_dtb" ] || abort "The current Recovery image has no kernel_dtb. Aborting...";
+
+    recovery_info=$(dtb_group_info "$recovery_dtb" recovery) || \
+      abort "Unable to validate the Recovery DTB group. Aborting...";
+    recovery_count=${recovery_info%%|*};
+    recovery_boot_device=${recovery_info#*|};
+    [ "$recovery_count" = "$current_count" ] || \
+      abort "Recovery DTB count differs from boot ($recovery_count != $current_count); refusing to flash. Aborting...";
+    [ "$recovery_boot_device" = "$runtime_boot_device" ] || \
+      abort "Recovery DTB storage differs from the running device ($recovery_boot_device != $runtime_boot_device); refusing to flash. Aborting...";
+
+    cp -f "$recovery_dtb" "$SPLITIMG/kernel_dtb" || \
+      abort "Unable to install the validated Recovery DTB group. Aborting...";
+    recovery_hash=$(ak3_hash "$SPLITIMG/kernel_dtb") || abort "Unable to hash the Recovery DTB group. Aborting...";
+    current_info=$(dtb_group_info "$SPLITIMG/kernel_dtb" selected) || \
+      abort "Unable to validate the selected DTB group. Aborting...";
+    [ "${current_info%%|*}" = "$recovery_count" ] && [ "${current_info#*|}" = "$runtime_boot_device" ] || \
+      abort "The selected DTB group failed post-copy validation. Aborting...";
+
+    printf 'source=recovery\nruntime_boot_device=%s\ndtb_count=%s\ndtb_size=%s\ndtb_sha256=%s\n' \
+      "$runtime_boot_device" "$recovery_count" "$(wc -c < "$SPLITIMG/kernel_dtb" | tr -d '[:space:]')" "$recovery_hash" \
+      > "$DTB_VERIFY_DIR/source.manifest";
+    ui_print " " "Using validated Recovery DTB group for $runtime_boot_device";
+  fi;
+
+  # magiskboot exposes the RMX1901 legacy appended DTB as kernel_dtb.  The
+  # other names cover standard Android boot images without weakening the
+  # invariant: every DTB-like payload present before repack must survive.
+  for name in kernel_dtb dtb dt recovery_dtbo; do
+    file="$SPLITIMG/$name";
+    if [ -f "$file" ]; then
+      size=$(wc -c < "$file" | tr -d '[:space:]');
+      hash=$(ak3_hash "$file") || abort "Unable to hash $name. Aborting...";
+      echo "$name|$size|$hash" >> "$DTB_VERIFY_DIR/original.manifest";
+      found=1;
+    fi;
+  done;
+
+  if [ "$found" != 1 ]; then
+    abort "No DTB payload was extracted from the original boot image. Aborting...";
+  fi;
+}
+
+# verify_dtb_fingerprint (prove repacking did not alter the original DTB)
+verify_dtb_fingerprint() {
+  local name expected_size expected_hash file actual_size actual_hash source_key source_value;
+  local output_dir="$AKHOME/.ak3-dtb-verify/output";
+
+  [ -f "$DTB_VERIFY_DIR/original.manifest" ] || abort "Missing original DTB fingerprint. Aborting...";
+  [ -x "$BIN/magiskboot" ] || abort "magiskboot is required for DTB verification. Aborting...";
+  [ -f "$AKHOME/boot-new.img" ] || abort "No repacked boot image to verify. Aborting...";
+
+  rm -rf "$output_dir";
+  mkdir -p "$output_dir";
+  cd "$output_dir" || abort "Unable to create DTB verification directory. Aborting...";
+  "$BIN/magiskboot" unpack -h "$AKHOME/boot-new.img" > unpack.log 2>&1;
+  if [ $? != 0 ]; then
+    abort "Unable to unpack the repacked boot image for DTB verification. Aborting...";
+  fi;
+
+  while IFS='|' read name expected_size expected_hash; do
+    [ "$name" ] || continue;
+    file="$output_dir/$name";
+    [ -f "$file" ] || abort "Repacked boot lost $name. Aborting...";
+    actual_size=$(wc -c < "$file" | tr -d '[:space:]');
+    actual_hash=$(ak3_hash "$file");
+    if [ "$actual_size" != "$expected_size" -o "$actual_hash" != "$expected_hash" ]; then
+      abort "Repacked boot changed $name. Aborting...";
+    fi;
+  done < "$DTB_VERIFY_DIR/original.manifest";
+
+  # Do not silently accept an extra DTB representation created by the packer.
+  for name in kernel_dtb dtb dt recovery_dtbo; do
+    if [ -f "$output_dir/$name" ] && ! grep -q "^$name|" "$DTB_VERIFY_DIR/original.manifest"; then
+      abort "Repacked boot added an unexpected $name. Aborting...";
+    fi;
+  done;
+
+  if [ -f "$DTB_VERIFY_DIR/source.manifest" ]; then
+    while IFS='=' read source_key source_value; do
+      case "$source_key" in
+        runtime_boot_device) DTB_EXPECTED_BOOT_DEVICE=$source_value;;
+        dtb_count) DTB_EXPECTED_COUNT=$source_value;;
+        dtb_sha256) DTB_EXPECTED_HASH=$source_value;;
+      esac;
+    done < "$DTB_VERIFY_DIR/source.manifest";
+    file="$output_dir/kernel_dtb";
+    [ -s "$file" ] || abort "Repacked boot lost kernel_dtb. Aborting...";
+    actual_hash=$(ak3_hash "$file");
+    [ "$actual_hash" = "$DTB_EXPECTED_HASH" ] || \
+      abort "Repacked boot changed the selected Recovery DTB group. Aborting...";
+    local selected_info selected_count selected_boot_device;
+    selected_info=$(dtb_group_info "$file" output) || \
+      abort "Unable to validate the repacked DTB group. Aborting...";
+    selected_count=${selected_info%%|*};
+    selected_boot_device=${selected_info#*|};
+    [ "$selected_count" = "$DTB_EXPECTED_COUNT" ] || \
+      abort "Repacked boot changed the DTB count. Aborting...";
+    [ "$selected_boot_device" = "$DTB_EXPECTED_BOOT_DEVICE" ] || \
+      abort "Repacked boot selected $selected_boot_device instead of $DTB_EXPECTED_BOOT_DEVICE. Aborting...";
+  fi;
+
+  cd "$AKHOME" || abort "Unable to leave DTB verification directory. Aborting...";
+  ui_print " " "DTB preservation check passed";
+}
+
+# verify_boot_readback (prove the bytes written to the boot partition match)
+#
+# A successful write(2) is not enough on old recovery environments: a wrong
+# block path, short write, or stale mapped device can leave a different image
+# on disk.  Read back exactly boot-new.img before allowing the installer to
+# finish.  This is the last guard before reboot.
+verify_boot_readback() {
+  local expected_size block_size full_blocks tail raw readback expected_hash actual_hash;
+
+  [ -f "$AKHOME/boot-new.img" ] || abort "No boot image is available for readback verification. Aborting...";
+  [ -e "$BLOCK" ] || abort "The boot partition disappeared after flashing. Aborting...";
+
+  expected_size=$(wc -c < "$AKHOME/boot-new.img" | tr -d '[:space:]');
+  block_size=4096;
+  full_blocks=$((expected_size / block_size));
+  tail=$((expected_size % block_size));
+  raw="$DTB_VERIFY_DIR/boot-readback.raw";
+  readback="$DTB_VERIFY_DIR/boot-readback.img";
+
+  rm -f "$raw" "$readback";
+  dd if="$BLOCK" of="$raw" bs="$block_size" count="$full_blocks" 2>/dev/null || \
+    abort "Unable to read back the boot partition. Aborting...";
+  if [ "$tail" -gt 0 ]; then
+    dd if="$BLOCK" bs="$block_size" skip="$full_blocks" count=1 2>/dev/null | \
+      head -c "$tail" >> "$raw" || abort "Unable to read the final boot block. Aborting...";
+  fi;
+  mv -f "$raw" "$readback";
+
+  expected_hash=$(ak3_hash "$AKHOME/boot-new.img");
+  actual_hash=$(ak3_hash "$readback");
+  [ "$actual_hash" = "$expected_hash" ] || \
+    abort "Boot readback hash mismatch; refusing to report success. Aborting...";
+  ui_print " " "Boot readback verification passed";
 }
 
 # unpack_ramdisk (extract ramdisk only)
@@ -403,6 +648,7 @@ flash_boot() {
   if [ $? != 0 ]; then
     abort "Repacking image failed. Aborting...";
   fi;
+  verify_dtb_fingerprint;
   [ "$PATCHVBMETAFLAG" ] && unset PATCHVBMETAFLAG;
   [ -f .magisk ] && touch $AKHOME/magisk_patched;
 
@@ -456,6 +702,7 @@ flash_boot() {
   if [ $? != 0 ]; then
     abort "Flashing image failed. Aborting...";
   fi;
+  verify_boot_readback;
 }
 
 # flash_generic <name>
@@ -799,7 +1046,7 @@ reset_ak() {
     done;
   fi;
   [ -d $SPLITIMG ] && rm -rf $RAMDISK;
-  rm -rf $BOOTIMG $SPLITIMG $AKHOME/*-new* $AKHOME/*-files/current;
+  rm -rf $BOOTIMG $SPLITIMG $AKHOME/*-new* $AKHOME/*-files/current $AKHOME/.ak3-dtb-verify;
 
   if [ "$1" == "keep" ]; then
     [ -d $AKHOME/rdtmp ] && mv -f $AKHOME/rdtmp $RAMDISK;

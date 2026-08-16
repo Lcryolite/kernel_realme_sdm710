@@ -36,8 +36,11 @@ no_magisk_check=1;
 # import functions/variables and setup patching - see for reference (DO NOT REMOVE)
 . tools/ak3-core.sh;
 
-# Preserve the known-good Android 17 ramdisk and detached kernel_dtb exactly.
-# Image.gz replaces only the kernel payload; dtbo is never touched.
+# RMX1901 legacy boot images carry a board-DTB group in kernel_dtb.  ak3-core
+# always sources that group from the installed Recovery image, validates its
+# FDT count and first boot_devices entry against the running device, and reads
+# the written boot partition back before reporting success.  Image.gz replaces
+# only the kernel payload; dtbo is never touched.
 split_boot;
 flash_boot;
 ## end boot install
