@@ -18,6 +18,7 @@
  * Also see Documentation/locking/mutex-design.txt.
  */
 #include <linux/mutex.h>
+#include <linux/sched/proxy_exec.h>
 #include <linux/ww_mutex.h>
 #include <linux/sched.h>
 #include <linux/sched/rt.h>
@@ -557,6 +558,7 @@ __mutex_lock_common(struct mutex *lock, long state, unsigned int subclass,
 	/* add waiting tasks to the end of the waitqueue (FIFO): */
 	list_add_tail(&waiter.list, &lock->wait_list);
 	waiter.task = task;
+	sched_proxy_set_blocked_on(task, lock);
 
 	lock_contended(&lock->dep_map, ip);
 
@@ -604,6 +606,7 @@ __mutex_lock_common(struct mutex *lock, long state, unsigned int subclass,
 	__set_task_state(task, TASK_RUNNING);
 
 	mutex_remove_waiter(lock, &waiter, task);
+	sched_proxy_clear_blocked_on(task, lock);
 	/* set it to 0 if there are no waiters left: */
 	if (likely(list_empty(&lock->wait_list)))
 		atomic_set(&lock->count, 0);
@@ -625,6 +628,7 @@ skip_wait:
 
 err:
 	mutex_remove_waiter(lock, &waiter, task);
+	sched_proxy_clear_blocked_on(task, lock);
 	spin_unlock_mutex(&lock->wait_lock, flags);
 	debug_mutex_free_waiter(&waiter);
 	mutex_release(&lock->dep_map, 1, ip);
