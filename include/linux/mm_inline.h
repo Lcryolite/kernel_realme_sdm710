@@ -51,9 +51,23 @@ static __always_inline int page_lru_gen(struct page *page)
 	return ((flags & LRU_GEN_MASK) >> LRU_GEN_PGOFF) - 1;
 }
 
+static __always_inline unsigned long page_lru_seq(struct page *page)
+{
+	unsigned long flags = READ_ONCE(page->flags);
+
+	return ((flags & LRU_GEN_MASK) >> LRU_GEN_PGOFF) - 1;
+}
+
+static __always_inline int page_lru_refs(struct page *page)
+{
+	unsigned long flags = READ_ONCE(page->flags);
+
+	return (flags & LRU_REFS_MASK) >> LRU_REFS_PGOFF;
+}
+
 static __always_inline int lru_gen_from_seq(unsigned long seq)
 {
-	return seq % MGLRU_MAX_NR_GENS;
+	return seq % MAX_NR_GENS;
 }
 
 static __always_inline bool lru_gen_is_active(struct lruvec *lruvec, int gen)
@@ -92,6 +106,55 @@ static __always_inline void lru_gen_update_size(struct lruvec *lruvec,
 	}
 }
 
+/* Increment the generation on eviction; clear the reference history. */
+static __always_inline int page_inc_gen(struct lruvec *lruvec,
+					struct page *page, bool reclaiming)
+{
+	int type = page_is_file_cache(page);
+	int old_gen, new_gen;
+	unsigned long new_flags, old_flags = READ_ONCE(page->flags);
+
+	VM_BUG_ON_PAGE(!(old_flags & LRU_GEN_MASK), page);
+
+	old_gen = ((old_flags & LRU_GEN_MASK) >> LRU_GEN_PGOFF) - 1;
+	new_gen = (old_gen + 1) % MAX_NR_GENS;
+
+	new_flags = old_flags & ~(LRU_GEN_MASK | LRU_REFS_MASK);
+	new_flags |= (new_gen + 1UL) << LRU_GEN_PGOFF;
+	if (reclaiming)
+		new_flags |= BIT(PG_reclaim);
+	WRITE_ONCE(page->flags, new_flags);
+
+	lru_gen_update_size(lruvec, page, old_gen, new_gen);
+	return new_gen;
+}
+
+/* Promote on aging; keep the reference history for the tier. */
+static __always_inline int page_update_gen(struct lruvec *lruvec,
+						struct page *page)
+{
+	int new_gen, old_gen = page_lru_gen(page);
+	unsigned long new_flags, old_flags = READ_ONCE(page->flags);
+
+	VM_BUG_ON_PAGE(old_gen >= MAX_NR_GENS, page);
+
+	if (!PageReferenced(page) && !PageWorkingset(page)) {
+		SetPageReferenced(page);
+		return -1;
+	}
+
+	if (!(old_flags & LRU_GEN_MASK))
+		return -1;
+
+	new_gen = (old_gen + 1) % MAX_NR_GENS;
+	new_flags = old_flags & ~(LRU_GEN_MASK | LRU_REFS_MASK);
+	new_flags |= ((new_gen + 1UL) << LRU_GEN_PGOFF) | BIT(PG_workingset);
+	WRITE_ONCE(page->flags, new_flags);
+
+	lru_gen_update_size(lruvec, page, old_gen, new_gen);
+	return new_gen;
+}
+
 static __always_inline bool lru_gen_add_page_gen(struct lruvec *lruvec,
 						struct page *page, int gen,
 						bool reclaiming)
@@ -99,7 +162,7 @@ static __always_inline bool lru_gen_add_page_gen(struct lruvec *lruvec,
 	int type, zone;
 
 	if (PageUnevictable(page) || !lru_gen_enabled(lruvec) ||
-	    gen < 0 || gen >= MGLRU_MAX_NR_GENS)
+	    gen < 0 || gen >= MAX_NR_GENS)
 		return false;
 
 	type = page_is_file_cache(page);

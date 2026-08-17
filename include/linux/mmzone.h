@@ -235,24 +235,44 @@ struct zone_reclaim_stat {
 	unsigned long		recent_scanned[2];
 };
 
-/* Minimal MGLRU state. The page flags hold generation + 1. */
+/* Multi-generational LRU state.  The page flags hold generation + 1. */
 struct lruvec;
 
 #ifdef CONFIG_LRU_GEN
-#define MGLRU_MIN_NR_GENS 2U
-#define MGLRU_MAX_NR_GENS 4U
-#define MGLRU_NR_TYPES 2U
+#define ANON_AND_FILE	2
+#define MIN_NR_GENS		2U
+#define MAX_NR_GENS		4U
+#define MAX_NR_TIERS		4U
+#define MIN_LRU_BATCH		BITS_PER_LONG
+/* single-generation history: no CONFIG_LRU_GEN_STATS on 4.9 */
+#define NR_HIST_GENS		1U
 
-enum mglru_type {
-	MGLRU_ANON,
-	MGLRU_FILE,
+enum {
+	LRU_GEN_ANON,
+	LRU_GEN_FILE,
 };
 
 struct lru_gen_struct {
+	/* the aging increments the youngest generation number */
 	unsigned long max_seq;
-	unsigned long min_seq[MGLRU_NR_TYPES];
-	struct list_head lists[MGLRU_MAX_NR_GENS][MGLRU_NR_TYPES][MAX_NR_ZONES];
-	long nr_pages[MGLRU_MAX_NR_GENS][MGLRU_NR_TYPES][MAX_NR_ZONES];
+	/* the eviction increments the oldest generation numbers */
+	unsigned long min_seq[ANON_AND_FILE];
+	/* the birth time of each generation in jiffies */
+	unsigned long timestamps[MAX_NR_GENS];
+	/* the multi-gen LRU lists, lazily sorted on eviction */
+	struct list_head lists[MAX_NR_GENS][ANON_AND_FILE][MAX_NR_ZONES];
+	/* the multi-gen LRU sizes, eventually consistent */
+	long nr_pages[MAX_NR_GENS][ANON_AND_FILE][MAX_NR_ZONES];
+	/* the exponential moving average of refaulted */
+	unsigned long avg_refaulted[ANON_AND_FILE][MAX_NR_TIERS];
+	/* the exponential moving average of evicted+protected */
+	unsigned long avg_total[ANON_AND_FILE][MAX_NR_TIERS];
+	/* can only be modified under the LRU lock */
+	unsigned long protected[NR_HIST_GENS][ANON_AND_FILE][MAX_NR_TIERS];
+	/* can be modified without holding the LRU lock */
+	atomic_long_t evicted[NR_HIST_GENS][ANON_AND_FILE][MAX_NR_TIERS];
+	atomic_long_t refaulted[NR_HIST_GENS][ANON_AND_FILE][MAX_NR_TIERS];
+	/* whether the multi-gen LRU is enabled */
 	bool enabled;
 };
 
@@ -265,6 +285,10 @@ struct list_head *lru_gen_get_list(struct lruvec *lruvec, int type,
 unsigned long lru_gen_size(struct lruvec *lruvec, int type,
 				   bool active, int zone_idx);
 bool lru_gen_enabled(struct lruvec *lruvec);
+bool lru_gen_is_enabled(void);
+void lru_gen_online_memcg(struct mem_cgroup *memcg);
+void lru_gen_offline_memcg(struct mem_cgroup *memcg);
+bool lru_gen_soft_reclaim(struct mem_cgroup *memcg, int nid);
 #else
 static inline void lru_gen_init_lruvec(struct lruvec *lruvec)
 {
@@ -272,6 +296,7 @@ static inline void lru_gen_init_lruvec(struct lruvec *lruvec)
 static inline void lru_gen_age(struct lruvec *lruvec, int type)
 {
 }
+static inline void lru_gen_age(struct lruvec *lruvec, int type) { }
 static inline void lru_gen_scan(struct lruvec *lruvec, int type,
 				struct mem_cgroup *memcg, int zone_idx)
 {
@@ -287,6 +312,10 @@ static inline unsigned long lru_gen_size(struct lruvec *lruvec, int type,
 	return 0;
 }
 static inline bool lru_gen_enabled(struct lruvec *lruvec)
+{
+	return false;
+}
+static inline bool lru_gen_is_enabled(void)
 {
 	return false;
 }

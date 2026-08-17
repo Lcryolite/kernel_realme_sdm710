@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Minimal multi-generational LRU for the 4.9 VM.
+ * Multi-generational LRU for the 4.9 VM, ported from AOSP 6.18.
  *
- * This is intentionally scoped to the core page aging/reclaim machinery:
- * pages are placed in generation lists, the active generations are aged by
- * the existing rmap reference scanner, and reclaim isolates the oldest
- * generation.  The classic shrink_page_list() path remains responsible for
- * writeback, unmapping, swap and final freeing.
+ * Struct-page based port (no folio).  Aging uses the existing rmap
+ * reference scanner because 4.9 arm64 has no ARCH_HAS_HW_PTE_YOUNG
+ * page-table walker; eviction reuses the classic shrink_page_list()
+ * path for writeback, unmapping, swap and final freeing.
+ *
+ * Runtime state is disabled by default: /sys/kernel/mm/lru_gen/enabled
+ * must be written to enable it.
  */
 
 #include <linux/init.h>
@@ -18,8 +20,43 @@
 #include <linux/rmap.h>
 #include <linux/swap.h>
 #include <linux/freezer.h>
+#include <linux/kobject.h>
+#include <linux/sysfs.h>
+#include <linux/seq_file.h>
 
 #ifdef CONFIG_LRU_GEN
+
+static bool lru_gen_global_enabled = IS_ENABLED(CONFIG_LRU_GEN_ENABLED);
+static unsigned long lru_gen_min_ttl __read_mostly;
+
+bool lru_gen_enabled(struct lruvec *lruvec)
+{
+	return lru_gen_global_enabled && lruvec->lrugen.enabled;
+}
+
+bool lru_gen_is_enabled(void)
+{
+	return lru_gen_global_enabled;
+}
+EXPORT_SYMBOL_GPL(lru_gen_is_enabled);
+
+static int get_nr_gens(struct lruvec *lruvec, int type)
+{
+	return lruvec->lrugen.max_seq - lruvec->lrugen.min_seq[type] + 1;
+}
+
+static bool seq_is_valid(struct lruvec *lruvec)
+{
+	int type;
+
+	for (type = 0; type < ANON_AND_FILE; type++) {
+		int n = get_nr_gens(lruvec, type);
+
+		if (n < MIN_NR_GENS || n > MAX_NR_GENS)
+			return false;
+	}
+	return true;
+}
 
 static bool lru_gen_empty(struct lruvec *lruvec, int gen, int type)
 {
@@ -39,7 +76,7 @@ static void lru_gen_refresh_vmstats(struct lruvec *lruvec, int old_max,
 	if (old_max == new_max)
 		return;
 
-	for (gen = 0; gen < MGLRU_MAX_NR_GENS; gen++) {
+	for (gen = 0; gen < MAX_NR_GENS; gen++) {
 		bool old_active = gen == lru_gen_from_seq(old_max) ||
 				  gen == lru_gen_from_seq(old_max - 1);
 		bool new_active = gen == lru_gen_from_seq(new_max) ||
@@ -51,7 +88,7 @@ static void lru_gen_refresh_vmstats(struct lruvec *lruvec, int old_max,
 		for (zone = 0; zone < MAX_NR_ZONES; zone++) {
 			long nr = lruvec->lrugen.nr_pages[gen][type][zone];
 			enum lru_list lru = type ? LRU_INACTIVE_FILE :
-							 LRU_INACTIVE_ANON;
+						 LRU_INACTIVE_ANON;
 
 			if (!nr)
 				continue;
@@ -67,12 +104,13 @@ static void lru_gen_refresh_vmstats(struct lruvec *lruvec, int old_max,
 	}
 }
 
-static void lru_gen_advance_min_seq(struct lruvec *lruvec, int type)
+/* Advance the oldest generation; the slot about to be evicted is empty. */
+static void inc_min_seq(struct lruvec *lruvec, int type)
 {
 	unsigned long min_seq = lruvec->lrugen.min_seq[type];
 	unsigned long max_seq = lruvec->lrugen.max_seq;
 
-	while (min_seq + MGLRU_MIN_NR_GENS <= max_seq &&
+	while (min_seq + MIN_NR_GENS <= max_seq &&
 	       lru_gen_empty(lruvec, lru_gen_from_seq(min_seq), type))
 		min_seq++;
 
@@ -84,25 +122,22 @@ void lru_gen_init_lruvec(struct lruvec *lruvec)
 	unsigned int gen, type, zone;
 	struct lru_gen_struct *lrugen = &lruvec->lrugen;
 
-	BUILD_BUG_ON(MGLRU_MIN_NR_GENS < 2U);
-	BUILD_BUG_ON(MGLRU_MIN_NR_GENS >= MGLRU_MAX_NR_GENS);
+	BUILD_BUG_ON(MIN_NR_GENS < 2U);
+	BUILD_BUG_ON(MIN_NR_GENS >= MAX_NR_GENS);
 
-	lrugen->max_seq = MGLRU_MIN_NR_GENS - 1;
-	lrugen->min_seq[MGLRU_ANON] = 0;
-	lrugen->min_seq[MGLRU_FILE] = 0;
+	lrugen->max_seq = MIN_NR_GENS - 1;
+	lrugen->min_seq[LRU_GEN_ANON] = 0;
+	lrugen->min_seq[LRU_GEN_FILE] = 0;
 	lrugen->enabled = true;
 
-	for (gen = 0; gen < MGLRU_MAX_NR_GENS; gen++)
-		for (type = 0; type < MGLRU_NR_TYPES; type++)
+	for (gen = 0; gen < MAX_NR_GENS; gen++) {
+		lrugen->timestamps[gen] = jiffies;
+		for (type = 0; type < ANON_AND_FILE; type++)
 			for (zone = 0; zone < MAX_NR_ZONES; zone++) {
 				INIT_LIST_HEAD(&lrugen->lists[gen][type][zone]);
 				lrugen->nr_pages[gen][type][zone] = 0;
 			}
-}
-
-bool lru_gen_enabled(struct lruvec *lruvec)
-{
-	return lruvec->lrugen.enabled;
+	}
 }
 
 struct lru_gen_scan_page {
@@ -115,13 +150,30 @@ struct lru_gen_scan_page {
 };
 
 /*
- * Scan a bounded batch of active generations for young PTEs.
+ * Scan a bounded batch of the oldest generation for young pages.
  *
  * A generation list is the LRU list while CONFIG_LRU_GEN is enabled: the
  * page->lru entry must never be linked into a classic list and a generation
- * list at the same time.  Therefore pages are fully isolated (including
- * PageLRU and generation accounting) before dropping lru_lock for rmap.
+ * list at the same time.  Pages are fully isolated (including PageLRU and
+ * generation accounting) before dropping lru_lock for the rmap walk.
  */
+/* Advance the epoch when the slot about to be reused is empty. */
+void lru_gen_age(struct lruvec *lruvec, int type)
+{
+	unsigned long next = lruvec->lrugen.max_seq + 1;
+	int old_max, gen;
+
+	gen = lru_gen_from_seq(next);
+	if (!lru_gen_empty(lruvec, gen, type))
+		return;
+
+	old_max = lruvec->lrugen.max_seq;
+	lruvec->lrugen.max_seq = next;
+	lruvec->lrugen.timestamps[lru_gen_from_seq(next)] = jiffies;
+	lru_gen_refresh_vmstats(lruvec, old_max, next, type);
+	inc_min_seq(lruvec, type);
+}
+
 void lru_gen_scan(struct lruvec *lruvec, int type,
 			  struct mem_cgroup *memcg, int zone_idx)
 {
@@ -138,21 +190,10 @@ void lru_gen_scan(struct lruvec *lruvec, int type,
 		struct page *page;
 		int gen, aging_gen, zone;
 
-		/*
-		 * The 4.9 MGLRU has no modern proactive-reclaim control bit.
-		 * Keep its bounded generation scan interruptible so the suspend
-		 * freezer does not wait behind a full aging batch.
-		 */
+		/* Keep the aging interruptible for the suspend freezer. */
 		if (unlikely(freezing(current)))
 			break;
 
-		/*
-		 * Age the oldest generation before eviction.  Pages that have
-		 * become young since they were inserted are promoted to the
-		 * youngest generation; untouched pages remain eligible for the
-		 * eviction pass below.  Scanning max_seq - 1 would miss newly
-		 * allocated cold pages, which normally start at min_seq.
-		 */
 		aging_gen = lru_gen_from_seq(lruvec->lrugen.min_seq[type]);
 		src = NULL;
 		for (zone = 0; zone <= zone_idx && zone < MAX_NR_ZONES; zone++)
@@ -229,7 +270,7 @@ void lru_gen_scan(struct lruvec *lruvec, int type,
 			if (dst == lruvec &&
 			    page_is_file_cache(page) == type &&
 			    lru_gen_add_page_gen(dst, page, gen, true)) {
-				/* Reinserted in the exact generation after the scan. */
+				/* Reinserted in the exact generation. */
 			} else {
 				add_page_to_lru_list_tail(page, dst,
 							  page_lru_base_type(page));
@@ -239,22 +280,6 @@ void lru_gen_scan(struct lruvec *lruvec, int type,
 				      -item->nr_pages);
 		put_page(page);
 	}
-}
-
-/* Advance the epoch only when the slot about to be reused is empty. */
-void lru_gen_age(struct lruvec *lruvec, int type)
-{
-	unsigned long next = lruvec->lrugen.max_seq + 1;
-	int old_max, gen;
-
-	gen = lru_gen_from_seq(next);
-	if (!lru_gen_empty(lruvec, gen, type))
-		return;
-
-	old_max = lruvec->lrugen.max_seq;
-	lruvec->lrugen.max_seq = next;
-	lru_gen_refresh_vmstats(lruvec, old_max, next, type);
-	lru_gen_advance_min_seq(lruvec, type);
 }
 
 struct list_head *lru_gen_get_list(struct lruvec *lruvec, int type,
@@ -285,7 +310,7 @@ unsigned long lru_gen_size(struct lruvec *lruvec, int type,
 	unsigned long nr = 0;
 	int gen, zone;
 
-	for (gen = 0; gen < MGLRU_MAX_NR_GENS; gen++) {
+	for (gen = 0; gen < MAX_NR_GENS; gen++) {
 		if (lru_gen_is_active(lruvec, gen) != active)
 			continue;
 		for (zone = 0; zone <= zone_idx && zone < MAX_NR_ZONES; zone++)
@@ -293,5 +318,118 @@ unsigned long lru_gen_size(struct lruvec *lruvec, int type,
 	}
 	return nr;
 }
+
+void lru_gen_online_memcg(struct mem_cgroup *memcg)
+{
+}
+
+void lru_gen_offline_memcg(struct mem_cgroup *memcg)
+{
+}
+
+bool lru_gen_soft_reclaim(struct mem_cgroup *memcg, int nid)
+{
+	return false;
+}
+
+/******************************************************************************
+ *                          sysfs interface
+ ******************************************************************************/
+
+static ssize_t enabled_show(struct kobject *kobj, struct kobj_attribute *attr,
+			    char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", lru_gen_global_enabled);
+}
+
+static ssize_t enabled_store(struct kobject *kobj, struct kobj_attribute *attr,
+			     const char *buf, size_t count)
+{
+	bool enable;
+	int nid;
+
+	if (kstrtobool(buf, &enable))
+		return -EINVAL;
+
+	lru_gen_global_enabled = enable;
+	for_each_node(nid) {
+		struct lruvec *lruvec = mem_cgroup_lruvec(NODE_DATA(nid), NULL);
+
+		WRITE_ONCE(lruvec->lrugen.enabled, enable);
+	}
+	return count;
+}
+
+static ssize_t min_ttl_ms_show(struct kobject *kobj, struct kobj_attribute *attr,
+			       char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%lu\n", lru_gen_min_ttl);
+}
+
+static ssize_t min_ttl_ms_store(struct kobject *kobj,
+				struct kobj_attribute *attr,
+				const char *buf, size_t count)
+{
+	unsigned long msecs;
+
+	if (kstrtoul(buf, 0, &msecs))
+		return -EINVAL;
+
+	lru_gen_min_ttl = msecs;
+	return count;
+}
+
+static ssize_t stats_show(struct kobject *kobj, struct kobj_attribute *attr,
+			  char *buf)
+{
+	int nid, type, gen, zone;
+	unsigned long total = 0;
+	ssize_t len = 0;
+
+	for_each_node(nid) {
+		struct lruvec *lruvec = mem_cgroup_lruvec(NODE_DATA(nid), NULL);
+
+		for (type = 0; type < ANON_AND_FILE; type++)
+			for (gen = 0; gen < MAX_NR_GENS; gen++)
+				for (zone = 0; zone < MAX_NR_ZONES; zone++)
+					total += max_t(long, 0,
+						lruvec->lrugen.nr_pages[gen][type][zone]);
+	}
+	len += snprintf(buf + len, PAGE_SIZE - len,
+			"total %lu\n", total);
+	return len;
+}
+
+static struct kobj_attribute lru_gen_enabled_attr =
+	__ATTR(enabled, 0644, enabled_show, enabled_store);
+static struct kobj_attribute lru_gen_min_ttl_attr =
+	__ATTR(min_ttl_ms, 0644, min_ttl_ms_show, min_ttl_ms_store);
+static struct kobj_attribute lru_gen_stats_attr =
+	__ATTR_RO(stats);
+
+static struct attribute *lru_gen_attrs[] = {
+	&lru_gen_enabled_attr.attr,
+	&lru_gen_min_ttl_attr.attr,
+	&lru_gen_stats_attr.attr,
+	NULL,
+};
+
+static const struct attribute_group lru_gen_attr_group = {
+	.attrs = lru_gen_attrs,
+};
+
+static int __init lru_gen_init(void)
+{
+	struct kobject *lru_gen_kobj;
+
+	/* mm_kobj is created by mm_sysfs_init(); reuse it. */
+	lru_gen_kobj = kobject_create_and_add("lru_gen", mm_kobj);
+	if (!lru_gen_kobj)
+		return -ENOMEM;
+
+	return sysfs_create_group(lru_gen_kobj, &lru_gen_attr_group);
+}
+/* mm_kobj is created by mm_sysfs_init() (__initcall); run after it. */
+late_initcall(lru_gen_init);
 
 #endif /* CONFIG_LRU_GEN */
