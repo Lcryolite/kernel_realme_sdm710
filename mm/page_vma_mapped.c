@@ -1,0 +1,208 @@
+// SPDX-License-Identifier: GPL-2.0
+#include <linux/mm.h>
+#include <linux/rmap.h>
+#include <linux/hugetlb.h>
+#include <linux/swap.h>
+#include <linux/swapops.h>
+
+#include "internal.h"
+
+static inline bool not_found(struct page_vma_mapped_walk *pvmw)
+{
+	page_vma_mapped_walk_done(pvmw);
+	return false;
+}
+
+static bool map_pte(struct page_vma_mapped_walk *pvmw)
+{
+	pvmw->pte = pte_offset_map(pvmw->pmd, pvmw->address);
+	if (!(pvmw->flags & PVMW_SYNC)) {
+		if (pvmw->flags & PVMW_MIGRATION) {
+			if (!is_swap_pte(*pvmw->pte))
+				return false;
+		} else {
+			if (!pte_present(*pvmw->pte))
+				return false;
+		}
+	}
+	pvmw->ptl = pte_lockptr(pvmw->vma->vm_mm, pvmw->pmd);
+	spin_lock(pvmw->ptl);
+	return true;
+}
+
+static inline bool pfn_in_hpage(struct page *hpage, unsigned long pfn)
+{
+	unsigned long hpage_pfn = page_to_pfn(hpage);
+
+	/* THP can be referenced by any subpage */
+	return pfn >= hpage_pfn && pfn - hpage_pfn < hpage_nr_pages(hpage);
+}
+
+/**
+ * check_pte - check if @pvmw->page is mapped at the @pvmw->pte
+ *
+ * page_vma_mapped_walk() found a place where @pvmw->page is *potentially*
+ * mapped. check_pte() has to validate this.
+ *
+ * @pvmw->pte may point to empty PTE, swap PTE or PTE pointing to arbitrary
+ * page.
+ *
+ * If PVMW_MIGRATION flag is set, returns true if @pvmw->pte contains migration
+ * entry that points to @pvmw->page or any subpage in case of THP.
+ *
+ * If PVMW_MIGRATION flag is not set, returns true if @pvmw->pte points to
+ * @pvmw->page or any subpage in case of THP.
+ *
+ * Otherwise, return false.
+ *
+ */
+static bool check_pte(struct page_vma_mapped_walk *pvmw)
+{
+	unsigned long pfn;
+
+	if (pvmw->flags & PVMW_MIGRATION) {
+		swp_entry_t entry;
+		struct page *mpage;
+
+		if (!is_swap_pte(*pvmw->pte))
+			return false;
+		entry = pte_to_swp_entry(*pvmw->pte);
+
+		if (!is_migration_entry(entry))
+			return false;
+
+		mpage = migration_entry_to_page(entry);
+		pfn = page_to_pfn(mpage);
+	} else if (is_swap_pte(*pvmw->pte)) {
+		/* 4.9 has no ZONE_DEVICE private entries in swap PTEs. */
+		return false;
+	} else {
+		if (!pte_present(*pvmw->pte))
+			return false;
+
+		pfn = pte_pfn(*pvmw->pte);
+	}
+
+	return pfn_in_hpage(pvmw->page, pfn);
+}
+
+/**
+ * page_vma_mapped_walk - check if @pvmw->page is mapped in @pvmw->vma at
+ * @pvmw->address
+ * @pvmw: pointer to struct page_vma_mapped_walk. page, vma, address and flags
+ * must be set. pmd, pte and ptl must be NULL.
+ *
+ * Returns true if the page is mapped in the vma. @pvmw->pmd and @pvmw->pte point
+ * to relevant page table entries. @pvmw->ptl is locked. @pvmw->address is
+ * adjusted if needed (for PTE-mapped THPs).
+ *
+ * If @pvmw->pmd is set but @pvmw->pte is not, you have found PMD-mapped page
+ * (usually THP). For PTE-mapped THP, you should run page_vma_mapped_walk() in
+ * a loop to find all PTEs that map the THP.
+ *
+ * For HugeTLB pages, @pvmw->pte is set to the relevant page table entry
+ * regardless of which page table level the page is mapped at. @pvmw->pmd is
+ * NULL.
+ *
+ * Retruns false if there are no more page table entries for the page in
+ * the vma. @pvmw->ptl is unlocked and @pvmw->pte is unmapped.
+ *
+ * If you need to stop the walk before page_vma_mapped_walk() returned false,
+ * use page_vma_mapped_walk_done(). It will do the housekeeping.
+ */
+bool page_vma_mapped_walk(struct page_vma_mapped_walk *pvmw)
+{
+	struct mm_struct *mm = pvmw->vma->vm_mm;
+	struct page *page = pvmw->page;
+	pgd_t *pgd;
+	pud_t *pud;
+	pmd_t pmde;
+
+	/* The only possible pmd mapping has been handled on last iteration */
+	if (pvmw->pmd && !pvmw->pte)
+		return not_found(pvmw);
+
+	if (pvmw->pte)
+		goto next_pte;
+
+	if (unlikely(PageHuge(pvmw->page))) {
+		/* when pud is not present, pte will be NULL */
+		pvmw->pte = huge_pte_offset(mm, pvmw->address);
+		if (!pvmw->pte)
+			return false;
+
+		pvmw->ptl = huge_pte_lockptr(page_hstate(page), mm, pvmw->pte);
+		spin_lock(pvmw->ptl);
+		if (!check_pte(pvmw))
+			return not_found(pvmw);
+		return true;
+	}
+restart:
+	pgd = pgd_offset(mm, pvmw->address);
+	if (!pgd_present(*pgd))
+		return false;
+	pud = pud_offset(pgd, pvmw->address);
+	if (!pud_present(*pud))
+		return false;
+	pvmw->pmd = pmd_offset(pud, pvmw->address);
+	/*
+	 * Make sure the pmd value isn't cached in a register by the
+	 * compiler and used as a stale value after we've observed a
+	 * subsequent update.
+	 */
+	pmde = READ_ONCE(*pvmw->pmd);
+	if (pmd_trans_huge(pmde)) {
+		pvmw->ptl = pmd_lock(mm, pvmw->pmd);
+		if (likely(pmd_trans_huge(*pvmw->pmd))) {
+			if (pvmw->flags & PVMW_MIGRATION)
+				return not_found(pvmw);
+			if (pmd_page(*pvmw->pmd) != page)
+				return not_found(pvmw);
+			return true;
+		} else if (!pmd_present(*pvmw->pmd)) {
+			/* 4.9 has no PMD migration entries. */
+			return not_found(pvmw);
+		} else {
+			/* THP pmd was split under us: handle on pte level */
+			spin_unlock(pvmw->ptl);
+			pvmw->ptl = NULL;
+		}
+	} else if (!pmd_present(pmde)) {
+		return false;
+	}
+	if (!map_pte(pvmw))
+		goto next_pte;
+	while (1) {
+		if (check_pte(pvmw))
+			return true;
+next_pte:
+		/* Seek to next pte only makes sense for THP */
+		if (!PageTransHuge(pvmw->page) || PageHuge(pvmw->page))
+			return not_found(pvmw);
+		do {
+			pvmw->address += PAGE_SIZE;
+			if (pvmw->address >= pvmw->vma->vm_end ||
+			    pvmw->address >=
+					__vma_address(pvmw->page, pvmw->vma) +
+					hpage_nr_pages(pvmw->page) * PAGE_SIZE)
+				return not_found(pvmw);
+			/* Did we cross page table boundary? */
+			if (pvmw->address % PMD_SIZE == 0) {
+				pte_unmap(pvmw->pte);
+				if (pvmw->ptl) {
+					spin_unlock(pvmw->ptl);
+					pvmw->ptl = NULL;
+				}
+				goto restart;
+			} else {
+				pvmw->pte++;
+			}
+		} while (pte_none(*pvmw->pte));
+
+		if (!pvmw->ptl) {
+			pvmw->ptl = pte_lockptr(mm, pvmw->pmd);
+			spin_lock(pvmw->ptl);
+		}
+	}
+}
+

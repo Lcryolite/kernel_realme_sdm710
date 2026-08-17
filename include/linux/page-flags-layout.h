@@ -57,11 +57,14 @@
 /* MGLRU generation + 1 is stored in the spare page->flags field bits. */
 #ifdef CONFIG_LRU_GEN
 #define LRU_GEN_WIDTH		3
+/* Disabled: 4.9 arm64 has no spare bits for a second field below the gen. */
+#define LRU_REFS_WIDTH		0
 #else
 #define LRU_GEN_WIDTH		0
+#define LRU_REFS_WIDTH		0
 #endif
 
-#if SECTIONS_WIDTH+ZONES_WIDTH+NODES_SHIFT+LRU_GEN_WIDTH <= BITS_PER_LONG - NR_PAGEFLAGS
+#if SECTIONS_WIDTH+ZONES_WIDTH+NODES_SHIFT+LRU_GEN_WIDTH+LRU_REFS_WIDTH <= BITS_PER_LONG - NR_PAGEFLAGS
 #define NODES_WIDTH		NODES_SHIFT
 #else
 #ifdef CONFIG_SPARSEMEM_VMEMMAP
@@ -82,7 +85,7 @@
 #define LAST_CPUPID_SHIFT 0
 #endif
 
-#if SECTIONS_WIDTH+ZONES_WIDTH+NODES_SHIFT+LRU_GEN_WIDTH+LAST_CPUPID_SHIFT <= BITS_PER_LONG - NR_PAGEFLAGS
+#if SECTIONS_WIDTH+ZONES_WIDTH+NODES_SHIFT+LRU_GEN_WIDTH+LRU_REFS_WIDTH+LAST_CPUPID_SHIFT <= BITS_PER_LONG - NR_PAGEFLAGS
 #define LAST_CPUPID_WIDTH LAST_CPUPID_SHIFT
 #else
 #define LAST_CPUPID_WIDTH 0
@@ -90,8 +93,14 @@
 
 /* Generation bits live immediately below the node/zone/cpupid fields. */
 #define LRU_GEN_PGOFF		(BITS_PER_LONG - SECTIONS_WIDTH - NODES_WIDTH - \
-					 ZONES_WIDTH - LAST_CPUPID_WIDTH - LRU_GEN_WIDTH)
+					 ZONES_WIDTH - LAST_CPUPID_WIDTH - LRU_GEN_WIDTH - \
+					 LRU_REFS_WIDTH)
 #define LRU_GEN_MASK		(((1UL << LRU_GEN_WIDTH) - 1) << LRU_GEN_PGOFF)
+
+/* Tier (reference history) bits live below the generation bits. */
+#define LRU_REFS_PGOFF		(LRU_GEN_PGOFF - LRU_REFS_WIDTH)
+#define LRU_REFS_MASK		(((1UL << LRU_REFS_WIDTH) - 1) << LRU_REFS_PGOFF)
+#define LRU_REFS_FLAGS		(BIT(PG_referenced) | BIT(PG_workingset))
 
 /*
  * We are going to use the flags for the page to node mapping if its in

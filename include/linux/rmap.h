@@ -223,7 +223,32 @@ static inline pte_t *page_check_address(struct page *page, struct mm_struct *mm,
  * Used by idle page tracking to check if a page was referenced via page
  * tables.
  */
+/* Look for migration entries rather than present PTEs */
+#define PVMW_SYNC		(1 << 0)
+#define PVMW_MIGRATION		(1 << 1)
+
+struct page_vma_mapped_walk {
+	struct page *page;
+	struct vm_area_struct *vma;
+	unsigned long address;
+	pmd_t *pmd;
+	pte_t *pte;
+	spinlock_t *ptl;
+	unsigned int flags;
+};
+
+static inline void page_vma_mapped_walk_done(struct page_vma_mapped_walk *pvmw)
+{
+	if (pvmw->pte)
+		pte_unmap(pvmw->pte);
+	if (pvmw->ptl)
+		spin_unlock(pvmw->ptl);
+}
+
+bool page_vma_mapped_walk(struct page_vma_mapped_walk *pvmw);
+
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
+
 bool page_check_address_transhuge(struct page *page, struct mm_struct *mm,
 				  unsigned long address, pmd_t **pmdp,
 				  pte_t **ptep, spinlock_t **ptlp);

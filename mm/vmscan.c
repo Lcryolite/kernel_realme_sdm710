@@ -1913,9 +1913,9 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 #ifdef CONFIG_LRU_GEN
 	/* Move the epoch forward when the next generation slot is reusable. */
 	if (lru_gen_enabled(lruvec))
-		lru_gen_age(lruvec, file);
+		lru_gen_age(lruvec, is_file_lru(lru));
 	if (lru_gen_enabled(lruvec))
-		lru_gen_scan(lruvec, file, sc->target_mem_cgroup,
+		lru_gen_scan(lruvec, is_file_lru(lru), sc->target_mem_cgroup,
 				sc->reclaim_idx);
 #endif
 
@@ -2764,6 +2764,7 @@ static bool shrink_node(pg_data_t *pgdat, struct scan_control *sc)
 	struct reclaim_state *reclaim_state = current->reclaim_state;
 	unsigned long nr_reclaimed, nr_scanned;
 	bool reclaimable = false;
+
 
 	do {
 		struct mem_cgroup *root = sc->target_mem_cgroup;
