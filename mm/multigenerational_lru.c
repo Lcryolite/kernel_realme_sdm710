@@ -234,7 +234,7 @@ void lru_gen_scan(struct lruvec *lruvec, int type,
 			}
 		}
 		__mod_node_page_state(pgdat, NR_ISOLATED_ANON + item->type,
-				      -item->nr_pages);
+				      -(long)item->nr_pages);
 		put_page(page);
 	}
 }
