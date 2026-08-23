@@ -40,11 +40,10 @@
  * The last is when there is insufficient space in page->flags and a separate
  * lookup is necessary.
  *
- * No sparsemem or sparsemem vmemmap: |       NODE     | ZONE |             ... | FLAGS |
- *      " plus space for last_cpupid: |       NODE     | ZONE | LAST_CPUPID ... | FLAGS |
- * classic sparse with space for node:| SECTION | NODE | ZONE |             ... | FLAGS |
- *      " plus space for last_cpupid: | SECTION | NODE | ZONE | LAST_CPUPID ... | FLAGS |
- * classic sparse no space for node:  | SECTION |     ZONE    | ... | FLAGS |
+ * No sparsemem or sparsemem vmemmap: |       NODE     | ZONE | [FIELDS] ... | FLAGS |
+ * classic sparse with space for node:| SECTION | NODE | ZONE | [FIELDS] ... | FLAGS |
+ * classic sparse no space for node:  | SECTION |     ZONE    | [FIELDS] ... | FLAGS |
+ * Optional fields contain LAST_CPUPID followed by LRU_GEN.
  */
 #if defined(CONFIG_SPARSEMEM) && !defined(CONFIG_SPARSEMEM_VMEMMAP)
 #define SECTIONS_WIDTH		SECTIONS_SHIFT
@@ -54,7 +53,13 @@
 
 #define ZONES_WIDTH		ZONES_SHIFT
 
-#if SECTIONS_WIDTH+ZONES_WIDTH+NODES_SHIFT <= BITS_PER_LONG - NR_PAGEFLAGS
+#ifdef CONFIG_LRU_GEN
+#define LRU_GEN_WIDTH		3
+#else
+#define LRU_GEN_WIDTH		0
+#endif
+
+#if SECTIONS_WIDTH+ZONES_WIDTH+NODES_SHIFT+LRU_GEN_WIDTH <= BITS_PER_LONG - NR_PAGEFLAGS
 #define NODES_WIDTH		NODES_SHIFT
 #else
 #ifdef CONFIG_SPARSEMEM_VMEMMAP
@@ -75,10 +80,19 @@
 #define LAST_CPUPID_SHIFT 0
 #endif
 
-#if SECTIONS_WIDTH+ZONES_WIDTH+NODES_SHIFT+LAST_CPUPID_SHIFT <= BITS_PER_LONG - NR_PAGEFLAGS
+#if SECTIONS_WIDTH+ZONES_WIDTH+NODES_SHIFT+LRU_GEN_WIDTH+LAST_CPUPID_SHIFT <= BITS_PER_LONG - NR_PAGEFLAGS
 #define LAST_CPUPID_WIDTH LAST_CPUPID_SHIFT
 #else
 #define LAST_CPUPID_WIDTH 0
+#endif
+
+#ifdef CONFIG_LRU_GEN
+#define LRU_GEN_PGOFF		(BITS_PER_LONG - SECTIONS_WIDTH - NODES_WIDTH - \
+				 ZONES_WIDTH - LAST_CPUPID_WIDTH - LRU_GEN_WIDTH)
+#define LRU_GEN_MASK		(((1UL << LRU_GEN_WIDTH) - 1) << LRU_GEN_PGOFF)
+#else
+#define LRU_GEN_PGOFF		0
+#define LRU_GEN_MASK		0UL
 #endif
 
 /*

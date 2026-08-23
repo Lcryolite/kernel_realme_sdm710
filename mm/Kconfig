@@ -758,6 +758,17 @@ config PROCESS_RECLAIM
 
 	 Any other vaule is ignored.
 
+config LRU_GEN
+	bool "Multi-generational LRU (experimental)"
+	depends on MMU && !MEMCG && !TRANSPARENT_HUGEPAGE
+	default n
+	help
+	  Track evictable pages in four generations while retaining the 4.9
+	  writeback, unmapping, swap and final reclaim paths. This first stage
+	  intentionally excludes memory cgroups and transparent huge pages.
+
+	  If unsure, say "n".
+
 config ARCH_SUPPORTS_SPECULATIVE_PAGE_FAULT
        def_bool n
 
