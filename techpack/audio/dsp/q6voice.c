@@ -7848,12 +7848,14 @@ static int32_t qdsp_cvs_callback(struct apr_client_data *data, void *priv)
 
 		cvs_voc_pkt = v->shmem_info.sh_buf.buf[1].data;
 
-		if (__builtin_add_overflow(cvs_voc_pkt[2], 3 * sizeof(uint32_t), &tot_buf_sz)) {
-			 pr_err("%s: integer overflow detected\n", __func__);
-			 return -EINVAL;
-		}
+		if (cvs_voc_pkt != NULL && common.mvs_info.ul_cb != NULL) {
+			if (__builtin_add_overflow(cvs_voc_pkt[2],
+						   3 * sizeof(uint32_t),
+						   &tot_buf_sz)) {
+				pr_err("%s: integer overflow detected\n", __func__);
+				return -EINVAL;
+			}
 
-		if (cvs_voc_pkt != NULL &&  common.mvs_info.ul_cb != NULL) {
 			if (v->shmem_info.sh_buf.buf[1].size < tot_buf_sz) {
 				pr_err("%s: invalid voc pkt size\n", __func__);
 				return -EINVAL;
