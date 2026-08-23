@@ -37,7 +37,8 @@ no_magisk_check=1;
 # stock-next candidate changes only Image.gz.
 RMX1901_DTB_COUNT=4;
 RMX1901_DTB_SHA256=1170aacc42eb0bf27abb14d66753324faaaf94edcf9461677c06b0ac6403fb7b;
-export RMX1901_DTB_COUNT RMX1901_DTB_SHA256;
+RMX1901_BOOT_DEVICE=soc/1d84000.ufshc;
+export RMX1901_DTB_COUNT RMX1901_DTB_SHA256 RMX1901_BOOT_DEVICE;
 
 # import functions/variables and setup patching - see for reference (DO NOT REMOVE)
 . tools/ak3-core.sh;

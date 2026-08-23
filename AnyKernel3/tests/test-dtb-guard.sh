@@ -24,26 +24,21 @@ case "$(basename "$2")" in
     cat <<'REPORT'
 Loading dtbs from [good]
 Printing dtb.0000
-│  │  [boot_devices]: ["soc/1d84000.ufshc"]
+│  [compatible]: ["qcom,sdm670"]
 Printing dtb.0001
-│  │  [boot_devices]: ["soc/7c4000.sdhci"]
+│  [compatible]: ["qcom,sdm670"]
 Printing dtb.0002
-│  │  [boot_devices]: ["soc/1d84000.ufshc"]
+│  [compatible]: ["qcom,sdm670"]
 Printing dtb.0003
-│  │  [boot_devices]: ["soc/1d84000.ufshc"]
+│  [compatible]: ["qcom,sdm670"]
 REPORT
     ;;
-  wrong-order)
+  wrong-count)
     cat <<'REPORT'
-Loading dtbs from [wrong-order]
+Loading dtbs from [wrong-count]
 Printing dtb.0000
-│  │  [boot_devices]: ["soc/7c4000.sdhci"]
 Printing dtb.0001
-│  │  [boot_devices]: ["soc/1d84000.ufshc"]
 Printing dtb.0002
-│  │  [boot_devices]: ["soc/1d84000.ufshc"]
-Printing dtb.0003
-│  │  [boot_devices]: ["soc/1d84000.ufshc"]
 REPORT
     ;;
   malformed)
@@ -57,7 +52,7 @@ esac
 EOF
 chmod 755 "$TMP/bin/magiskboot"
 
-touch "$TMP/good" "$TMP/wrong-order" "$TMP/malformed"
+touch "$TMP/good" "$TMP/wrong-count" "$TMP/malformed"
 
 OUTFD=1
 AKHOME="$TMP"
@@ -74,11 +69,10 @@ set -u
 ui_print() { :; }
 
 good=$(dtb_group_info "$TMP/good" good)
-[[ "$good" == '4|soc/1d84000.ufshc' ]]
+[[ "$good" == '4' ]]
 
-wrong=$(dtb_group_info "$TMP/wrong-order" wrong-order)
-[[ "$wrong" == '4|soc/7c4000.sdhci' ]]
-[[ "${wrong#*|}" != 'soc/1d84000.ufshc' ]]
+wrong=$(dtb_group_info "$TMP/wrong-count" wrong-count)
+[[ "$wrong" == '3' ]]
 
 if (dtb_group_info "$TMP/malformed" malformed); then
   echo "malformed DTB unexpectedly accepted" >&2
@@ -97,5 +91,6 @@ if grep -q 'Using validated Recovery DTB group' "$ROOT/tools/ak3-core.sh"; then
 fi
 grep -q '1170aacc42eb0bf27abb14d66753324faaaf94edcf9461677c06b0ac6403fb7b' \
   "$ROOT/anykernel.sh"
+grep -q 'RMX1901_BOOT_DEVICE=soc/1d84000.ufshc' "$ROOT/anykernel.sh"
 
 echo "DTB guard tests passed"

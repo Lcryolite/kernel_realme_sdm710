@@ -153,7 +153,7 @@ ak3_hash() {
   fi;
 }
 
-# dtb_group_info (validate a concatenated FDT group and return count|boot_device)
+# dtb_group_info (validate a concatenated FDT group and return its count)
 #
 # Do not use strings(1) here.  RMX1901 stores several complete FDTs back to
 # back in kernel_dtb, and a string search cannot tell which FDT owns a match.
@@ -161,7 +161,7 @@ ak3_hash() {
 # so use its structured printer as the single parser for both source and
 # repacked images.
 dtb_group_info() {
-  local file=$1 label=$2 report count first line;
+  local file=$1 label=$2 report count;
 
   [ -s "$file" ] || abort "$label DTB group is missing or empty. Aborting...";
   [ -x "$BIN/magiskboot" ] || abort "magiskboot is required to validate the $label DTB group. Aborting...";
@@ -173,22 +173,7 @@ dtb_group_info() {
   count=$(grep -c '^Printing dtb\.' "$report");
   [ "$count" -gt 0 ] || abort "The $label DTB group contains no complete FDT. Aborting...";
 
-  first=$(awk '
-    /^Printing dtb\.0000$/ { in_first=1; next }
-    /^Printing dtb\.[0-9][0-9][0-9][0-9]$/ && in_first { exit }
-    in_first && index($0, "[boot_devices]: [\"") {
-      line=$0;
-      sub(/^.*\[boot_devices\]: \["/, "", line);
-      sub(/"\].*$/, "", line);
-      print line;
-      found=1;
-      exit;
-    }
-    END { if (!found) exit 1 }
-  ' "$report");
-  [ "$first" ] || abort "The first $label DTB has no boot_devices property. Aborting...";
-
-  printf '%s|%s\n' "$count" "$first";
+  printf '%s\n' "$count";
 }
 
 # record_dtb_fingerprint (save the DTB payload from the original boot image)
@@ -212,20 +197,18 @@ record_dtb_fingerprint() {
   # may carry a diagnostic DTB with a different Android fstab contract, so it
   # must never replace the vendor boot DTB here.
   if [ -f "$SPLITIMG/kernel_dtb" ]; then
-    local runtime_boot_device current_info current_count current_boot_device current_hash;
+    local runtime_boot_device current_count current_hash;
 
     [ -r /proc/device-tree/firmware/android/boot_devices ] || \
       abort "Cannot identify the running boot storage from device-tree. Aborting...";
     runtime_boot_device=$(tr -d '\000' < /proc/device-tree/firmware/android/boot_devices 2>/dev/null);
     [ "$runtime_boot_device" ] || abort "The running boot storage is empty. Aborting...";
+    [ "$RMX1901_BOOT_DEVICE" ] || abort "The expected RMX1901 boot storage is missing. Aborting...";
+    [ "$runtime_boot_device" = "$RMX1901_BOOT_DEVICE" ] || \
+      abort "The running boot storage differs from RMX1901 ($runtime_boot_device != $RMX1901_BOOT_DEVICE). Aborting...";
 
-    current_info=$(dtb_group_info "$SPLITIMG/kernel_dtb" current) || \
+    current_count=$(dtb_group_info "$SPLITIMG/kernel_dtb" current) || \
       abort "Unable to validate the boot DTB group. Aborting...";
-    current_count=${current_info%%|*};
-    current_boot_device=${current_info#*|};
-
-    [ "$current_boot_device" = "$runtime_boot_device" ] || \
-      abort "Boot DTB storage differs from the running device ($current_boot_device != $runtime_boot_device). Aborting...";
     [ "$RMX1901_DTB_COUNT" ] || abort "The expected RMX1901 DTB count is missing. Aborting...";
     [ "$current_count" = "$RMX1901_DTB_COUNT" ] || \
       abort "Boot DTB count differs from the validated group ($current_count != $RMX1901_DTB_COUNT). Aborting...";
@@ -297,7 +280,6 @@ verify_dtb_fingerprint() {
   if [ -f "$DTB_VERIFY_DIR/source.manifest" ]; then
     while IFS='=' read source_key source_value; do
       case "$source_key" in
-        runtime_boot_device) DTB_EXPECTED_BOOT_DEVICE=$source_value;;
         dtb_count) DTB_EXPECTED_COUNT=$source_value;;
         dtb_sha256) DTB_EXPECTED_HASH=$source_value;;
       esac;
@@ -307,15 +289,11 @@ verify_dtb_fingerprint() {
     actual_hash=$(ak3_hash "$file");
     [ "$actual_hash" = "$DTB_EXPECTED_HASH" ] || \
       abort "Repacked boot changed the validated boot DTB group. Aborting...";
-    local selected_info selected_count selected_boot_device;
-    selected_info=$(dtb_group_info "$file" output) || \
+    local selected_count;
+    selected_count=$(dtb_group_info "$file" output) || \
       abort "Unable to validate the repacked DTB group. Aborting...";
-    selected_count=${selected_info%%|*};
-    selected_boot_device=${selected_info#*|};
     [ "$selected_count" = "$DTB_EXPECTED_COUNT" ] || \
       abort "Repacked boot changed the DTB count. Aborting...";
-    [ "$selected_boot_device" = "$DTB_EXPECTED_BOOT_DEVICE" ] || \
-      abort "Repacked boot selected $selected_boot_device instead of $DTB_EXPECTED_BOOT_DEVICE. Aborting...";
   fi;
 
   cd "$AKHOME" || abort "Unable to leave DTB verification directory. Aborting...";
