@@ -32,6 +32,14 @@ struct chacha_ctx {
 	int nrounds;
 };
 
+static inline void chacha_init_consts(u32 *state)
+{
+	state[0] = 0x61707865;
+	state[1] = 0x3320646e;
+	state[2] = 0x79622d32;
+	state[3] = 0x6b206574;
+}
+
 void chacha_block(u32 *state, u8 *stream, int nrounds);
 static inline void chacha20_block(u32 *state, u8 *stream)
 {

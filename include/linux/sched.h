@@ -3790,6 +3790,12 @@ static inline int hung_long_and_fatal_signal_pending(struct task_struct *p)
 	return 0;
 #endif
 }
+#else
+/* The waitqueue implementation is shared by all product configurations. */
+static inline int hung_long_and_fatal_signal_pending(struct task_struct *p)
+{
+	return 0;
+}
 #endif
 
 static inline int signal_pending_state(long state, struct task_struct *p)

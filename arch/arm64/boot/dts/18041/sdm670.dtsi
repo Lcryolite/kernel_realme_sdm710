@@ -456,7 +456,7 @@
 				compatible = "android,vbmeta";
 				// #Wanghao@BSP.Bootloader.Bootflow, 2018/04/26, add to disable A/B partition
 				//add recovery
-				parts = "vbmeta,boot,system,vendor,dtbo,recovery";
+				parts = "vbmeta,boot,system,vendor,dtbo,recovery,odm";
 				// #endif
 			};
 
@@ -475,6 +475,14 @@
 					// #Wanghao@BSP.Bootloader.Bootflow, 2018/04/26, add to disable A/B partition
 					fsmgr_flags = "wait";
 					// #endif
+				};
+				odm {
+					compatible = "android,odm";
+					dev = "/dev/block/platform/soc/1d84000.ufshc/by-name/odm";
+					type = "ext4";
+					mnt_flags = "ro,barrier=1,discard";
+					fsmgr_flags = "wait";
+					status = "ok";
 				};
 			};
 #endif
@@ -740,6 +748,17 @@
 			compatible = "shared-dma-pool";
 			reusable;
 			size = <0 0x2400000>;
+		};
+
+		ramoops@b7e00000 {
+			compatible = "ramoops";
+			reg = <0 0xb7e00000 0 0x00400000>;
+			record-size = <0x40000>;
+			console-size = <0x40000>;
+			ftrace-size = <0x40000>;
+			pmsg-size = <0x200000>;
+			devinfo-size = <0x01000>;
+			ecc-size = <0x0>;
 		};
 
 		/* global autoconfigured region for contiguous allocations */

@@ -274,6 +274,7 @@ static void sdio_release_func(struct device *dev)
 	 */
 	if (!func->card->host->embedded_sdio_data.funcs)
 #endif
+	if (!(func->card->quirks & MMC_QUIRK_NONSTD_SDIO))
 		sdio_free_func_cis(func);
 
 	kfree(func->info);
@@ -365,4 +366,3 @@ void sdio_remove_func(struct sdio_func *func)
 	of_node_put(func->dev.of_node);
 	put_device(&func->dev);
 }
-

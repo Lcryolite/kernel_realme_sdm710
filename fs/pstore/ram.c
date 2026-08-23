@@ -96,6 +96,7 @@ struct ramoops_context {
 	size_t console_size;
 	size_t ftrace_size;
 	size_t pmsg_size;
+	size_t device_info_size;
 	int dump_oops;
 	struct persistent_ram_ecc_info ecc_info;
 	unsigned int max_dump_cnt;
@@ -554,6 +555,7 @@ static int ramoops_parse_dt(struct platform_device *pdev,
 	parse_size("console-size", pdata->console_size);
 	parse_size("ftrace-size", pdata->ftrace_size);
 	parse_size("pmsg-size", pdata->pmsg_size);
+	parse_size("devinfo-size", pdata->device_info_size);
 	parse_size("ecc-size", pdata->ecc_info.ecc_size);
 
 #undef parse_size
@@ -609,6 +611,10 @@ static int ramoops_probe(struct platform_device *pdev)
 		pdata->ftrace_size = rounddown_pow_of_two(pdata->ftrace_size);
 	if (pdata->pmsg_size && !is_power_of_2(pdata->pmsg_size))
 		pdata->pmsg_size = rounddown_pow_of_two(pdata->pmsg_size);
+	if (pdata->device_info_size &&
+	    !is_power_of_2(pdata->device_info_size))
+		pdata->device_info_size =
+			rounddown_pow_of_two(pdata->device_info_size);
 
 	cxt->size = pdata->mem_size;
 	cxt->phys_addr = pdata->mem_address;
@@ -617,13 +623,20 @@ static int ramoops_probe(struct platform_device *pdev)
 	cxt->console_size = pdata->console_size;
 	cxt->ftrace_size = pdata->ftrace_size;
 	cxt->pmsg_size = pdata->pmsg_size;
+	cxt->device_info_size = pdata->device_info_size;
 	cxt->dump_oops = pdata->dump_oops;
 	cxt->ecc_info = pdata->ecc_info;
 
 	paddr = cxt->phys_addr;
 
-	dump_mem_sz = cxt->size - cxt->console_size - cxt->ftrace_size
-			- cxt->pmsg_size;
+	/* Keep the subregion offsets compatible with the recovery kernel. */
+	dump_mem_sz = cxt->console_size + cxt->ftrace_size +
+			cxt->pmsg_size + cxt->device_info_size;
+	if (dump_mem_sz > cxt->size) {
+		dev_err(dev, "reserved subregions exceed ramoops size\n");
+		goto fail_out;
+	}
+	dump_mem_sz = cxt->size - dump_mem_sz;
 	err = ramoops_init_przs(dev, cxt, &paddr, dump_mem_sz);
 	if (err)
 		goto fail_out;

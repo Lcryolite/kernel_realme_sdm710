@@ -29,7 +29,11 @@ endif
 ifeq ($(CONFIG_ARCH_MSM8917), y)
 	TARGET_KERNEL_VERSION := 4.9
 endif
-KDIR := $(TOP)/kernel/msm-$(TARGET_KERNEL_VERSION)
+ifeq ($(KERNEL_BUILD), 1)
+	KDIR := $(srctree)
+else
+	KDIR := $(TOP)/kernel/msm-$(TARGET_KERNEL_VERSION)
+endif
 
 ifeq ($(KERNEL_BUILD), 1)
 	AUDIO_ROOT := $(KDIR)/techpack/audio

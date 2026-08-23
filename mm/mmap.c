@@ -1855,8 +1855,12 @@ int vma_wants_writenotify(struct vm_area_struct *vma, pgprot_t vm_page_prot)
 	    pgprot_val(vm_pgprot_modify(vm_page_prot, vm_flags)))
 		return 0;
 
-	/* Do we need to track softdirty? */
-	if (IS_ENABLED(CONFIG_MEM_SOFT_DIRTY) && !(vm_flags & VM_SOFTDIRTY))
+	/*
+	 * Do we need to track softdirty? hugetlb does not support softdirty
+	 * tracking yet.
+	 */
+	if (IS_ENABLED(CONFIG_MEM_SOFT_DIRTY) && !(vm_flags & VM_SOFTDIRTY) &&
+	    !is_vm_hugetlb_page(vma))
 		return 1;
 
 	/* Specialty mapping? */
@@ -2772,7 +2776,7 @@ static int __init cmdline_parse_stack_guard_gap(char *p)
 	if (!*endptr)
 		stack_guard_gap = val << PAGE_SHIFT;
 
-	return 0;
+	return 1;
 }
 __setup("stack_guard_gap=", cmdline_parse_stack_guard_gap);
 
@@ -2873,6 +2877,7 @@ static void unmap_region(struct mm_struct *mm,
 	struct vm_area_struct *next = prev ? prev->vm_next : mm->mmap;
 #endif
 	struct mmu_gather tlb;
+	struct vm_area_struct *cur_vma;
 
 #if defined(CONFIG_PRODUCT_REALME_SDM710) && defined(CONFIG_VIRTUAL_RESERVE_MEMORY)
 	if (BACKUP_ALLOC_FLAG(vma->vm_flags)) {
@@ -2887,6 +2892,22 @@ static void unmap_region(struct mm_struct *mm,
 	tlb_gather_mmu(&tlb, mm, start, end);
 	update_hiwater_rss(mm);
 	unmap_vmas(&tlb, vma, start, end);
+
+	/*
+	 * Ensure we have no stale TLB entries by the time this mapping is
+	 * removed from the rmap.
+	 * Note that we don't have to worry about nested flushes here because
+	 * we're holding the mm semaphore for removing the mapping - so any
+	 * concurrent flush in this region has to be coming through the rmap,
+	 * and we synchronize against that using the rmap lock.
+	 */
+	for (cur_vma = vma; cur_vma; cur_vma = cur_vma->vm_next) {
+		if ((cur_vma->vm_flags & (VM_PFNMAP|VM_MIXEDMAP)) != 0) {
+			tlb_flush_mmu(&tlb);
+			break;
+		}
+	}
+
 #if defined(CONFIG_PRODUCT_REALME_SDM710) && defined(CONFIG_VIRTUAL_RESERVE_MEMORY)
 	free_pgtables(&tlb, vma, prev ? prev->vm_end : free_flooring_addr,
 			next ? next->vm_start : free_ceiling_addr);
