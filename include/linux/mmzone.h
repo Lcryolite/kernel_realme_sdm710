@@ -263,8 +263,6 @@ struct lru_gen_struct {
 
 void lru_gen_init_lruvec(struct lruvec *lruvec);
 void lru_gen_age(struct lruvec *lruvec);
-void lru_gen_scan(struct lruvec *lruvec, int type,
-		  struct mem_cgroup *memcg, int zone_idx);
 struct list_head *lru_gen_get_list(struct lruvec *lruvec, int type,
 				   bool active, int zone_idx);
 unsigned long lru_gen_size(struct lruvec *lruvec, int type,
@@ -278,10 +276,6 @@ static inline void lru_gen_init_lruvec(struct lruvec *lruvec)
 {
 }
 static inline void lru_gen_age(struct lruvec *lruvec)
-{
-}
-static inline void lru_gen_scan(struct lruvec *lruvec, int type,
-				struct mem_cgroup *memcg, int zone_idx)
 {
 }
 static inline struct list_head *lru_gen_get_list(struct lruvec *lruvec,

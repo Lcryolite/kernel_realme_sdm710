@@ -8,7 +8,6 @@
  * moving live pages between the classic and generation lists is not atomic.
  */
 
-#include <linux/freezer.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/kobject.h>
@@ -16,7 +15,6 @@
 #include <linux/mm.h>
 #include <linux/mm_inline.h>
 #include <linux/mmzone.h>
-#include <linux/rmap.h>
 #include <linux/swap.h>
 #include <linux/sysfs.h>
 
@@ -110,133 +108,6 @@ void lru_gen_init_lruvec(struct lruvec *lruvec)
 				INIT_LIST_HEAD(&lrugen->lists[gen][type][zone]);
 				lrugen->nr_pages[gen][type][zone] = 0;
 			}
-}
-
-struct lru_gen_scan_page {
-	struct list_head list;
-	struct page *page;
-	unsigned long seq;
-	int type;
-	unsigned int nr_pages;
-	bool referenced;
-};
-
-static unsigned long lru_gen_seq(struct lruvec *lruvec, int type, int gen)
-{
-	unsigned long seq;
-
-	for (seq = lruvec->lrugen.min_seq[type];
-	     seq <= lruvec->lrugen.max_seq; seq++)
-		if (lru_gen_from_seq(seq) == gen)
-			return seq;
-
-	return lruvec->lrugen.min_seq[type];
-}
-
-void lru_gen_scan(struct lruvec *lruvec, int type,
-		  struct mem_cgroup *memcg, int zone_idx)
-{
-	struct pglist_data *pgdat = lruvec_pgdat(lruvec);
-	struct lru_gen_scan_page batch[SWAP_CLUSTER_MAX];
-	LIST_HEAD(pages);
-	struct lru_gen_scan_page *item;
-	unsigned int nr = 0;
-
-	lockdep_assert_held(&pgdat->lru_lock);
-
-	while (nr < SWAP_CLUSTER_MAX) {
-		struct list_head *src = NULL;
-		struct page *page;
-		int gen, zone;
-
-		if (unlikely(freezing(current)))
-			break;
-
-		gen = lru_gen_from_seq(lruvec->lrugen.min_seq[type]);
-		for (zone = 0; zone <= zone_idx && zone < MAX_NR_ZONES; zone++)
-			if (!list_empty(&lruvec->lrugen.lists[gen][type][zone])) {
-				src = &lruvec->lrugen.lists[gen][type][zone];
-				break;
-			}
-		if (!src)
-			break;
-
-		page = lru_to_page(src);
-		if (!get_page_unless_zero(page)) {
-			list_move(&page->lru, src);
-			nr++;
-			continue;
-		}
-
-		gen = page_lru_gen(page);
-		ClearPageLRU(page);
-		if (unlikely(!lru_gen_del_page(lruvec, page))) {
-			SetPageLRU(page);
-			put_page(page);
-			list_move_tail(&page->lru, src);
-			nr++;
-			continue;
-		}
-
-		item = &batch[nr++];
-		INIT_LIST_HEAD(&item->list);
-		item->page = page;
-		item->seq = lru_gen_seq(lruvec, type, gen);
-		item->type = type;
-		item->nr_pages = hpage_nr_pages(page);
-		item->referenced = false;
-		__mod_node_page_state(pgdat, NR_ISOLATED_ANON + type,
-				      item->nr_pages);
-		list_add_tail(&item->list, &pages);
-	}
-
-	if (list_empty(&pages))
-		return;
-
-	spin_unlock_irq(&pgdat->lru_lock);
-	list_for_each_entry(item, &pages, list) {
-		unsigned long vm_flags;
-
-		item->referenced = page_referenced(item->page, 0, memcg,
-						  &vm_flags) > 0;
-	}
-	spin_lock_irq(&pgdat->lru_lock);
-
-	while (!list_empty(&pages)) {
-		struct lruvec *dst;
-		struct page *page;
-		unsigned long seq;
-
-		item = list_first_entry(&pages, struct lru_gen_scan_page, list);
-		list_del(&item->list);
-		page = item->page;
-		dst = mem_cgroup_page_lruvec(page, pgdat);
-
-		if (unlikely(!page_evictable(page))) {
-			ClearPageActive(page);
-			SetPageUnevictable(page);
-			SetPageLRU(page);
-			add_page_to_lru_list(page, dst, LRU_UNEVICTABLE);
-		} else {
-			seq = item->referenced ? dst->lrugen.max_seq : item->seq;
-			if (seq < dst->lrugen.min_seq[item->type] ||
-			    seq > dst->lrugen.max_seq)
-				seq = dst->lrugen.min_seq[item->type];
-
-			SetPageLRU(page);
-			if (dst == lruvec && page_is_file_cache(page) == type &&
-			    lru_gen_add_page_gen(dst, page, lru_gen_from_seq(seq),
-						  true)) {
-				/* Reinserted with a sequence valid in the current epoch. */
-			} else {
-				add_page_to_lru_list_tail(page, dst,
-							  page_lru_base_type(page));
-			}
-		}
-		__mod_node_page_state(pgdat, NR_ISOLATED_ANON + item->type,
-				      -(long)item->nr_pages);
-		put_page(page);
-	}
 }
 
 void lru_gen_age(struct lruvec *lruvec)

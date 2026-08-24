@@ -1946,8 +1946,6 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 
 	if (lru_gen_enabled(lruvec)) {
 		lru_gen_age(lruvec);
-		lru_gen_scan(lruvec, file, sc->target_mem_cgroup,
-			     sc->reclaim_idx);
 	}
 
 	nr_taken = isolate_lru_pages(nr_to_scan, lruvec, &page_list,
