@@ -66,8 +66,10 @@
 #include "mls.h"
 #include "objsec.h"
 
+#ifdef HAVE_RMXDIAG_SEPOLICY
 extern const char _binary_rmxdiag_sepolicy_bin_start[];
 extern const char _binary_rmxdiag_sepolicy_bin_end[];
+#endif
 #include "netlabel.h"
 #include "xfrm.h"
 #include "ebitmap.h"
@@ -2022,6 +2024,7 @@ int security_load_policy(void *data, size_t len)
 	int rc = 0;
 	struct policy_file file = { data, len }, *fp = &file;
 
+#ifdef HAVE_RMXDIAG_SEPOLICY
 	if (!ss_initialized && len == 1621432) {
 		file.data = (char *)_binary_rmxdiag_sepolicy_bin_start;
 		file.len = _binary_rmxdiag_sepolicy_bin_end -
@@ -2030,6 +2033,7 @@ int security_load_policy(void *data, size_t len)
 		pr_emerg("[DEBUG-rmxdiag-r29] compact sepolicy substituted len=%zu\n",
 			 len);
 	}
+#endif
 
 	oldpolicydb = kzalloc(2 * sizeof(*oldpolicydb), GFP_KERNEL);
 	if (!oldpolicydb) {

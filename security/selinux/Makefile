@@ -7,14 +7,20 @@ obj-$(CONFIG_SECURITY_SELINUX) := selinux.o
 selinux-y := avc.o hooks.o selinuxfs.o netlink.o nlmsgtab.o netif.o \
 	     netnode.o netport.o exports.o \
 	     ss/ebitmap.o ss/hashtab.o ss/symtab.o ss/sidtab.o ss/avtab.o \
-	     ss/policydb.o ss/services.o ss/conditional.o ss/mls.o ss/status.o \
-	     ss/rmxdiag_sepolicy.o
+	     ss/policydb.o ss/services.o ss/conditional.o ss/mls.o ss/status.o
+
+ifneq ($(wildcard $(src)/ss/rmxdiag_sepolicy.bin),)
+selinux-y += ss/rmxdiag_sepolicy.o
+endif
 
 selinux-$(CONFIG_SECURITY_NETWORK_XFRM) += xfrm.o
 
 selinux-$(CONFIG_NETLABEL) += netlabel.o
 
 ccflags-y := -I$(srctree)/security/selinux -I$(srctree)/security/selinux/include
+ifneq ($(wildcard $(src)/ss/rmxdiag_sepolicy.bin),)
+ccflags-y += -DHAVE_RMXDIAG_SEPOLICY
+endif
 
 $(addprefix $(obj)/,$(selinux-y)): $(obj)/flask.h
 
@@ -31,6 +37,6 @@ quiet_cmd_rmxdiag_sepolicy = SEPOLICY $@
 	--rename-section .data=.rodata,alloc,load,readonly,data,contents \
 	rmxdiag_sepolicy.bin $(abspath $@))
 
-targets += ss/rmxdiag_sepolicy.o
+targets += $(if $(wildcard $(src)/ss/rmxdiag_sepolicy.bin),ss/rmxdiag_sepolicy.o)
 $(obj)/ss/rmxdiag_sepolicy.o: $(src)/ss/rmxdiag_sepolicy.bin FORCE
 	$(call if_changed,rmxdiag_sepolicy)

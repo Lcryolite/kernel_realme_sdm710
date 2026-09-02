@@ -680,7 +680,7 @@ export CFLAGS_GCOV CFLAGS_KCOV
 
 # Make toolchain changes before including arch/$(SRCARCH)/Makefile to ensure
 # ar/cc/ld-* macros return correct values.
-ld-is-lld := $(shell $(LD) --version 2>/dev/null | grep -q '^LLD ' && echo y)
+ld-is-lld := $(shell $(LD) --version 2>/dev/null | grep -Eq '(^|[[:space:]])LLD[[:space:]]' && echo y)
 ifdef CONFIG_LTO_CLANG
 # Use LLD directly when selected; otherwise retain the LLVMgold path.
 LDFINAL_vmlinux := $(LD)
@@ -701,6 +701,10 @@ ARCH_CPPFLAGS :=
 ARCH_AFLAGS :=
 ARCH_CFLAGS :=
 include arch/$(SRCARCH)/Makefile
+
+# Keep target-wide linker flags separate from the architecture's mandatory
+# LDFLAGS. This old Kbuild predates KBUILD_LDFLAGS for the final vmlinux link.
+LDFLAGS_vmlinux += $(KBUILD_LDFLAGS)
 
 KBUILD_CFLAGS	+= $(call cc-option,-fno-delete-null-pointer-checks,)
 KBUILD_CFLAGS	+= $(call cc-disable-warning,frame-address,)
