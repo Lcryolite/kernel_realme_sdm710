@@ -488,6 +488,9 @@ void f2fs_balance_fs(struct f2fs_sb_info *sbi, bool need)
 	if (need && excess_cached_nats(sbi))
 		f2fs_balance_fs_bg(sbi);
 
+	if (unlikely(is_sbi_flag_set(sbi, SBI_CP_DISABLED)))
+		return;
+
 	if (f2fs_is_checkpoint_ready(sbi))
 		return;
 
@@ -3235,6 +3238,9 @@ int f2fs_inplace_write_data(struct f2fs_io_info *fio)
 			  __func__, segno);
 		return -EFSCORRUPTED;
 	}
+
+	invalidate_mapping_pages(META_MAPPING(sbi),
+				fio->new_blkaddr, fio->new_blkaddr);
 
 	stat_inc_inplace_blocks(fio->sbi);
 

@@ -464,6 +464,7 @@ int cond_read_list(struct policydb *p, void *fp)
 		return rc;
 
 	len = le32_to_cpu(buf[0]);
+	pr_emerg("[DEBUG-rmxdiag-r25] cond_read_list begin nodes=%u\n", len);
 
 	rc = avtab_alloc(&(p->te_cond_avtab), p->te_avtab.nel);
 	if (rc)
@@ -484,7 +485,10 @@ int cond_read_list(struct policydb *p, void *fp)
 		else
 			last->next = node;
 		last = node;
+		pr_emerg("[DEBUG-rmxdiag-r25] cond_read_list node=%u/%u\n",
+			 i + 1, len);
 	}
+	pr_emerg("[DEBUG-rmxdiag-r25] cond_read_list complete nodes=%u\n", len);
 	return 0;
 err:
 	cond_list_destroy(p->cond_list);

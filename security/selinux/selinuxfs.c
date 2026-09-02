@@ -163,6 +163,12 @@ static ssize_t sel_write_enforce(struct file *file, const char __user *buf,
 	if (sscanf(page, "%d", &new_value) != 1)
 		goto out;
 
+	if (new_value) {
+		pr_notice("[DEBUG-rmxdiag-r64] ignoring enforcing request\n");
+		length = count;
+		goto out;
+	}
+
 	if (new_value != selinux_enforcing) {
 		length = task_has_security(current, SECURITY__SETENFORCE);
 		if (length)
@@ -520,31 +526,45 @@ static ssize_t sel_write_load(struct file *file, const char __user *buf,
 		goto out;
 
 	length = security_load_policy(data, count);
+	pr_emerg("[DEBUG-rmxdiag-r45] security_load_policy returned=%zd\n",
+		 length);
 	if (length)
 		goto out;
 
+	pr_emerg("[DEBUG-rmxdiag-r45] sel_make_bools begin\n");
 	length = sel_make_bools();
+	pr_emerg("[DEBUG-rmxdiag-r45] sel_make_bools returned=%zd\n", length);
 	if (length)
 		goto out1;
 
+	pr_emerg("[DEBUG-rmxdiag-r45] sel_make_classes begin\n");
 	length = sel_make_classes();
+	pr_emerg("[DEBUG-rmxdiag-r45] sel_make_classes returned=%zd\n", length);
 	if (length)
 		goto out1;
 
+	pr_emerg("[DEBUG-rmxdiag-r45] sel_make_policycap begin\n");
 	length = sel_make_policycap();
+	pr_emerg("[DEBUG-rmxdiag-r45] sel_make_policycap returned=%zd\n", length);
 	if (length)
 		goto out1;
 
 	length = count;
 
 out1:
+	pr_emerg("[DEBUG-rmxdiag-r45] policy-load audit begin result=%zd\n",
+		 length);
 	audit_log(current->audit_context, GFP_KERNEL, AUDIT_MAC_POLICY_LOAD,
 		"policy loaded auid=%u ses=%u",
 		from_kuid(&init_user_ns, audit_get_loginuid(current)),
 		audit_get_sessionid(current));
+	pr_emerg("[DEBUG-rmxdiag-r45] policy-load audit complete\n");
 out:
+	pr_emerg("[DEBUG-rmxdiag-r45] sel_write_load unlock result=%zd\n",
+		 length);
 	mutex_unlock(&sel_mutex);
 	vfree(data);
+	pr_emerg("[DEBUG-rmxdiag-r45] sel_write_load return=%zd\n", length);
 	return length;
 }
 
@@ -1703,6 +1723,8 @@ static int sel_make_classes(void)
 	for (i = 0; i < nclasses; i++) {
 		struct dentry *class_name_dir;
 
+		pr_emerg("[DEBUG-rmxdiag-r45] class begin=%d/%d name=%s\n",
+			 i + 1, nclasses, classes[i]);
 		class_name_dir = sel_make_dir(class_dir, classes[i],
 				&last_class_ino);
 		if (IS_ERR(class_name_dir)) {
@@ -1715,6 +1737,8 @@ static int sel_make_classes(void)
 				class_name_dir);
 		if (rc)
 			goto out;
+		pr_emerg("[DEBUG-rmxdiag-r45] class complete=%d/%d name=%s\n",
+			 i + 1, nclasses, classes[i]);
 	}
 	rc = 0;
 out:

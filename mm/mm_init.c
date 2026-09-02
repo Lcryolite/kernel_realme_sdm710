@@ -71,26 +71,30 @@ void __init mminit_verify_pageflags_layout(void)
 	unsigned long or_mask, add_mask;
 
 	shift = 8 * sizeof(unsigned long);
-	width = shift - SECTIONS_WIDTH - NODES_WIDTH - ZONES_WIDTH - LAST_CPUPID_SHIFT;
+	width = shift - SECTIONS_WIDTH - NODES_WIDTH - ZONES_WIDTH -
+		LAST_CPUPID_WIDTH - LRU_GEN_WIDTH;
 	mminit_dprintk(MMINIT_TRACE, "pageflags_layout_widths",
-		"Section %d Node %d Zone %d Lastcpupid %d Flags %d\n",
+		"Section %d Node %d Zone %d Lastcpupid %d LruGen %d Flags %d\n",
 		SECTIONS_WIDTH,
 		NODES_WIDTH,
 		ZONES_WIDTH,
 		LAST_CPUPID_WIDTH,
+		LRU_GEN_WIDTH,
 		NR_PAGEFLAGS);
 	mminit_dprintk(MMINIT_TRACE, "pageflags_layout_shifts",
-		"Section %d Node %d Zone %d Lastcpupid %d\n",
+		"Section %d Node %d Zone %d Lastcpupid %d LruGen %d\n",
 		SECTIONS_SHIFT,
 		NODES_SHIFT,
 		ZONES_SHIFT,
-		LAST_CPUPID_SHIFT);
+		LAST_CPUPID_SHIFT,
+		LRU_GEN_WIDTH);
 	mminit_dprintk(MMINIT_TRACE, "pageflags_layout_pgshifts",
-		"Section %lu Node %lu Zone %lu Lastcpupid %lu\n",
+		"Section %lu Node %lu Zone %lu Lastcpupid %lu LruGen %lu\n",
 		(unsigned long)SECTIONS_PGSHIFT,
 		(unsigned long)NODES_PGSHIFT,
 		(unsigned long)ZONES_PGSHIFT,
-		(unsigned long)LAST_CPUPID_PGSHIFT);
+		(unsigned long)LAST_CPUPID_PGSHIFT,
+		(unsigned long)LRU_GEN_PGSHIFT);
 	mminit_dprintk(MMINIT_TRACE, "pageflags_layout_nodezoneid",
 		"Node/Zone ID: %lu -> %lu\n",
 		(unsigned long)(ZONEID_PGOFF + ZONEID_SHIFT),
@@ -119,14 +123,26 @@ void __init mminit_verify_pageflags_layout(void)
 		shift -= ZONES_WIDTH;
 		BUG_ON(shift != ZONES_PGSHIFT);
 	}
+	if (LAST_CPUPID_WIDTH) {
+		shift -= LAST_CPUPID_WIDTH;
+		BUG_ON(shift != LAST_CPUPID_PGSHIFT);
+	}
+	if (LRU_GEN_WIDTH) {
+		shift -= LRU_GEN_WIDTH;
+		BUG_ON(shift != LRU_GEN_PGSHIFT);
+	}
 
 	/* Check for bitmask overlaps */
 	or_mask = (ZONES_MASK << ZONES_PGSHIFT) |
 			(NODES_MASK << NODES_PGSHIFT) |
-			(SECTIONS_MASK << SECTIONS_PGSHIFT);
+			(SECTIONS_MASK << SECTIONS_PGSHIFT) |
+			((LAST_CPUPID_WIDTH ? LAST_CPUPID_MASK : 0UL) <<
+			 LAST_CPUPID_PGSHIFT) | LRU_GEN_MASK;
 	add_mask = (ZONES_MASK << ZONES_PGSHIFT) +
 			(NODES_MASK << NODES_PGSHIFT) +
-			(SECTIONS_MASK << SECTIONS_PGSHIFT);
+			(SECTIONS_MASK << SECTIONS_PGSHIFT) +
+			((LAST_CPUPID_WIDTH ? LAST_CPUPID_MASK : 0UL) <<
+			 LAST_CPUPID_PGSHIFT) + LRU_GEN_MASK;
 	BUG_ON(or_mask != add_mask);
 }
 

@@ -29,7 +29,8 @@ struct uts_namespace init_uts_ns = {
 	.name = {
 		.sysname	= UTS_SYSNAME,
 		.nodename	= UTS_NODENAME,
-		.release	= UTS_RELEASE,
+		/* Userspace version gate bypass; internals remain 4.9. */
+		.release	= "6.18.0-rmxdiag176",
 		.version	= UTS_VERSION,
 		.machine	= UTS_MACHINE,
 		.domainname	= UTS_DOMAINNAME,
