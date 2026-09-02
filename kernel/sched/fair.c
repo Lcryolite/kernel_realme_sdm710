@@ -18,6 +18,9 @@
  *
  *  Adaptive scheduling granularity, math enhancements by Peter Zijlstra
  *  Copyright (C) 2007 Red Hat, Inc., Peter Zijlstra
+ *
+ *  Burst-Oriented Response Enhancer (BORE) CPU Scheduler
+ *  Copyright (C) 2021-2024 Masahito Suzuki <firelzrd@gmail.com>
  */
 
 #include <linux/sched.h>
@@ -526,6 +529,82 @@ find_matching_se(struct sched_entity **se, struct sched_entity **pse)
 
 #endif	/* CONFIG_FAIR_GROUP_SCHED */
 
+#ifdef CONFIG_SCHED_BORE
+unsigned int __read_mostly sched_bore = 1;
+unsigned int __read_mostly sched_burst_smoothness_long = 1;
+unsigned int __read_mostly sched_burst_smoothness_short;
+unsigned int __read_mostly sched_burst_fork_atavistic = 2;
+unsigned int __read_mostly sched_burst_penalty_offset = 22;
+unsigned int __read_mostly sched_burst_penalty_scale = 1280;
+unsigned int __read_mostly sched_burst_cache_lifetime = 60000000;
+
+#define MAX_BURST_PENALTY	(39U << 2)
+
+static inline u32 log2plus1_u64_u32f8(u64 value)
+{
+	u32 msb = fls64(value);
+	s32 excess_bits = msb - 9;
+	u8 fractional;
+
+	if (excess_bits >= 0)
+		fractional = value >> excess_bits;
+	else
+		fractional = value << -excess_bits;
+
+	return (msb << 8) | fractional;
+}
+
+static inline u32 calc_burst_penalty(u64 burst_time)
+{
+	u32 greed = log2plus1_u64_u32f8(burst_time);
+	u32 tolerance = sched_burst_penalty_offset << 8;
+	u32 penalty = greed > tolerance ? greed - tolerance : 0;
+	u32 scaled_penalty = penalty * sched_burst_penalty_scale >> 16;
+
+	return min(MAX_BURST_PENALTY, scaled_penalty);
+}
+
+static void update_burst_score(struct sched_entity *se)
+{
+	struct task_struct *p;
+
+	if (!entity_is_task(se))
+		return;
+
+	p = task_of(se);
+	se->burst_score = (p->flags & PF_KTHREAD) ? 0 :
+						se->burst_penalty >> 2;
+}
+
+static void update_burst_penalty(struct sched_entity *se)
+{
+	se->curr_burst_penalty = calc_burst_penalty(se->burst_time);
+	se->burst_penalty = max(se->prev_burst_penalty,
+				se->curr_burst_penalty);
+	update_burst_score(se);
+}
+
+static inline u32 binary_smooth(u32 new, u32 old)
+{
+	s32 increment = (s32)new - (s32)old;
+
+	if (increment >= 0)
+		return old + (increment >> sched_burst_smoothness_long);
+
+	return old - (-increment >> sched_burst_smoothness_short);
+}
+
+static void restart_burst(struct sched_entity *se)
+{
+	se->prev_burst_penalty = binary_smooth(se->curr_burst_penalty,
+					       se->prev_burst_penalty);
+	se->burst_penalty = se->prev_burst_penalty;
+	se->curr_burst_penalty = 0;
+	se->burst_time = 0;
+	update_burst_score(se);
+}
+#endif
+
 static __always_inline
 void account_cfs_rq_runtime(struct cfs_rq *cfs_rq, u64 delta_exec);
 
@@ -704,6 +783,21 @@ int sched_proc_update_handler(struct ctl_table *table, int write,
  */
 static inline u64 calc_delta_fair(u64 delta, struct sched_entity *se)
 {
+#ifdef CONFIG_SCHED_BORE
+	if (likely(sched_bore) && entity_is_task(se)) {
+		struct task_struct *p = task_of(se);
+		int prio;
+
+		if (idle_policy(p->policy))
+			goto normal_weight;
+
+		prio = min(p->static_prio - MAX_RT_PRIO + se->burst_score,
+			   39);
+		return mul_u64_u32_shr(delta, sched_prio_to_wmult[prio], 22);
+	}
+
+normal_weight:
+#endif
 	if (unlikely(se->load.weight != NICE_0_LOAD))
 		delta = __calc_delta(delta, NICE_0_LOAD, &se->load);
 
@@ -914,7 +1008,15 @@ static void update_curr(struct cfs_rq *cfs_rq)
 	curr->sum_exec_runtime += delta_exec;
 	schedstat_add(cfs_rq->exec_clock, delta_exec);
 
+#ifdef CONFIG_SCHED_BORE
+	curr->burst_time += delta_exec;
+	update_burst_penalty(curr);
+#endif
+#ifdef CONFIG_SCHED_BORE
+	curr->vruntime += max(1ULL, calc_delta_fair(delta_exec, curr));
+#else
 	curr->vruntime += calc_delta_fair(delta_exec, curr);
+#endif
 	update_min_vruntime(cfs_rq);
 
 	if (entity_is_task(curr)) {
@@ -5146,6 +5248,15 @@ static void dequeue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 	struct sched_entity *se = &p->se;
 	int task_sleep = flags & DEQUEUE_SLEEP;
 
+#ifdef CONFIG_SCHED_BORE
+	if (task_sleep) {
+		cfs_rq = cfs_rq_of(se);
+		if (cfs_rq->curr == se)
+			update_curr(cfs_rq);
+		restart_burst(se);
+	}
+#endif
+
 	for_each_sched_entity(se) {
 		cfs_rq = cfs_rq_of(se);
 		dequeue_entity(cfs_rq, se, flags);
@@ -6451,7 +6562,8 @@ boosted_cpu_util(int cpu, struct sched_walt_cpu_load *walt_load)
 
 	trace_sched_boost_cpu(cpu, util, margin);
 
-	return util + margin;
+	/* SchedTune shapes the signal; uclamp defines its final bounds. */
+	return uclamp_rq_util_with(cpu_rq(cpu), util + margin, NULL);
 }
 
 static inline unsigned long
@@ -6462,7 +6574,7 @@ boosted_task_util(struct task_struct *p)
 
 	trace_sched_boost_task(p, util, margin);
 
-	return util + margin;
+	return uclamp_task_util(p, util + margin);
 }
 
 static unsigned long capacity_spare_wake(int cpu, struct task_struct *p)
@@ -8237,27 +8349,25 @@ static void yield_task_fair(struct rq *rq)
 	struct cfs_rq *cfs_rq = task_cfs_rq(curr);
 	struct sched_entity *se = &curr->se;
 
-	/*
-	 * Are we the only task in the tree?
-	 */
+	/* Are we the only task in the tree? */
+#ifndef CONFIG_SCHED_BORE
 	if (unlikely(rq->nr_running == 1))
 		return;
 
 	clear_buddies(cfs_rq, se);
+#endif
 
-	if (curr->policy != SCHED_BATCH) {
-		update_rq_clock(rq);
-		/*
-		 * Update run-time statistics of the 'current'.
-		 */
-		update_curr(cfs_rq);
-		/*
-		 * Tell update_rq_clock() that we've just updated,
-		 * so we don't do microscopic update in schedule()
-		 * and double the fastpath cost.
-		 */
-		rq_clock_skip_update(rq, true);
-	}
+	update_rq_clock(rq);
+	update_curr(cfs_rq);
+#ifdef CONFIG_SCHED_BORE
+	restart_burst(se);
+	if (unlikely(rq->nr_running == 1))
+		return;
+
+	clear_buddies(cfs_rq, se);
+#endif
+	/* Avoid a microscopic second clock update in schedule(). */
+	rq_clock_skip_update(rq, true);
 
 	set_skip_buddy(se);
 }
@@ -11401,6 +11511,9 @@ static void task_fork_fair(struct task_struct *p)
 		update_curr(cfs_rq);
 		se->vruntime = curr->vruntime;
 	}
+#ifdef CONFIG_SCHED_BORE
+	update_burst_score(se);
+#endif
 	place_entity(cfs_rq, se, 1);
 
 	if (sysctl_sched_child_runs_first && curr && entity_before(curr, se)) {

@@ -62,6 +62,7 @@ struct sched_param {
 #include <asm/processor.h>
 
 #define SCHED_ATTR_SIZE_VER0	48	/* sizeof first published struct */
+#define SCHED_ATTR_SIZE_VER1	56	/* add: util_{min,max} */
 
 /*
  * Extended scheduling parameters data structure.
@@ -123,6 +124,10 @@ struct sched_attr {
 	u64 sched_runtime;
 	u64 sched_deadline;
 	u64 sched_period;
+
+	/* Utilization hints */
+	u32 sched_util_min;
+	u32 sched_util_max;
 };
 
 struct futex_pi_state;
@@ -1595,6 +1600,17 @@ struct sched_entity {
 	u64			vruntime;
 	u64			prev_sum_exec_runtime;
 
+#ifdef CONFIG_SCHED_BORE
+	u64			burst_time;
+	u64			child_burst_last_cached;
+	u32			child_burst_cnt;
+	u8			prev_burst_penalty;
+	u8			curr_burst_penalty;
+	u8			burst_penalty;
+	u8			burst_score;
+	u8			child_burst;
+#endif
+
 	u64			nr_migrations;
 
 #ifdef CONFIG_SCHEDSTATS
@@ -1620,6 +1636,23 @@ struct sched_entity {
 	struct sched_avg	avg ____cacheline_aligned_in_smp;
 #endif
 };
+
+#ifdef CONFIG_UCLAMP_TASK
+enum uclamp_id {
+	UCLAMP_MIN = 0,
+	UCLAMP_MAX,
+	UCLAMP_CNT,
+};
+
+#define UCLAMP_BUCKETS 5
+
+struct uclamp_se {
+	unsigned int value;
+	unsigned int bucket_id;
+	bool active;
+	bool user_defined;
+};
+#endif
 
 struct sched_rt_entity {
 	struct list_head run_list;
@@ -1784,6 +1817,11 @@ struct task_struct {
 	struct task_group *sched_task_group;
 #endif
 	struct sched_dl_entity dl;
+
+#ifdef CONFIG_UCLAMP_TASK
+	struct uclamp_se uclamp_req[UCLAMP_CNT];
+	struct uclamp_se uclamp[UCLAMP_CNT];
+#endif
 
 #ifdef CONFIG_PREEMPT_NOTIFIERS
 	/* list of struct preempt_notifier: */
@@ -3129,6 +3167,7 @@ extern void wake_up_new_task(struct task_struct *tsk);
  static inline void kick_process(struct task_struct *tsk) { }
 #endif
 extern int sched_fork(unsigned long clone_flags, struct task_struct *p);
+extern void sched_post_fork(struct task_struct *p);
 extern void sched_dead(struct task_struct *p);
 #ifdef CONFIG_SCHED_WALT
 extern void sched_exit(struct task_struct *p);
