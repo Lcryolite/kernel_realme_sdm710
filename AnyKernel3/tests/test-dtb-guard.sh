@@ -9,9 +9,9 @@ trap 'rm -rf "$TMP"' EXIT
 # script is sourced by anykernel.sh, while this test only exercises the DTB
 # parser contract.
 sed '/^[[:space:]]*setup_ak;[[:space:]]*$/d' "$ROOT/tools/ak3-core.sh" > "$TMP/core.sh"
-mkdir -p "$TMP/bin" "$TMP/verify"
+mkdir -p "$TMP/tools" "$TMP/verify"
 
-cat > "$TMP/bin/magiskboot" <<'EOF'
+cat > "$TMP/tools/magiskboot" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -50,13 +50,15 @@ REPORT
     ;;
 esac
 EOF
-chmod 755 "$TMP/bin/magiskboot"
+chmod 755 "$TMP/tools/magiskboot"
 
-touch "$TMP/good" "$TMP/wrong-count" "$TMP/malformed"
+printf 'mock' > "$TMP/good"
+printf 'mock' > "$TMP/wrong-count"
+printf 'mock' > "$TMP/malformed"
 
 OUTFD=1
 AKHOME="$TMP"
-BIN="$TMP/bin"
+BIN="$TMP/tools"
 DTB_VERIFY_DIR="$TMP/verify"
 export OUTFD AKHOME BIN DTB_VERIFY_DIR
 # shellcheck disable=SC1090
