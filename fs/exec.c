@@ -1686,6 +1686,7 @@ static int do_execveat_common(int fd, struct filename *filename,
 			      struct user_arg_ptr envp,
 			      int flags)
 {
+	char rmxdiag_filename[128] = "<unavailable>";
 	char *pathbuf = NULL;
 	struct linux_binprm *bprm;
 	struct file *file;
@@ -1698,6 +1699,9 @@ static int do_execveat_common(int fd, struct filename *filename,
 
 	if (IS_ERR(filename))
 		return PTR_ERR(filename);
+	if (current->pid == 1)
+		strlcpy(rmxdiag_filename, filename->name,
+			sizeof(rmxdiag_filename));
 
 	/*
 	 * We move the actual failure in case of RLIMIT_NPROC excess from
@@ -1819,6 +1823,9 @@ static int do_execveat_common(int fd, struct filename *filename,
 	task_numa_free(current, false);
 	free_bprm(bprm);
 	kfree(pathbuf);
+	if (current->pid == 1)
+		pr_emerg("[DEBUG-rmxdiag-r13] exec path=%s ret=%d\n",
+			 rmxdiag_filename, retval);
 	putname(filename);
 	if (displaced)
 		put_files_struct(displaced);
@@ -1842,6 +1849,9 @@ out_files:
 	if (displaced)
 		reset_files_struct(displaced);
 out_ret:
+	if (current->pid == 1)
+		pr_emerg("[DEBUG-rmxdiag-r13] exec path=%s ret=%d\n",
+			 rmxdiag_filename, retval);
 	putname(filename);
 	return retval;
 }

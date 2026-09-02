@@ -585,6 +585,11 @@ extern int oppo_dimlayer_bl_enable;
 extern int oppo_dimlayer_bl_enabled;
 extern int oppo_dimlayer_bl_delay;
 extern int oppo_dimlayer_bl_delay_after;
+extern int oppo_dimlayer_hbm;
+extern int oppo_dimlayer_bl_alpha;
+extern u32 oppo_last_backlight;
+extern u32 oppo_backlight_delta;
+extern ktime_t oppo_backlight_time;
 int sde_connector_update_backlight(struct drm_connector *connector)
 {
 	if (oppo_dimlayer_bl != oppo_dimlayer_bl_enabled) {
@@ -641,20 +646,50 @@ static int _sde_connector_update_hbm(struct sde_connector *c_conn)
 
 	if (fingerprint_mode != dsi_display->panel->is_hbm_enabled) {
 		struct drm_encoder *drm_enc = c_conn->encoder;
+		ktime_t transition_start = ktime_get();
+		s64 backlight_age_us = ktime_us_delta(transition_start,
+				oppo_backlight_time);
 
 		pr_err("OnscreenFingerprint mode: %s",
 		       fingerprint_mode ? "Enter" : "Exit");
+		pr_err("[RMXFP-R181] transition=begin target=%d pressed=%d scene=%d power=%d panel_hbm=%d bl=%u last_bl=%u bl_delta=%u bl_age_us=%lld dimlayer_hbm=%d dimlayer_bl=%d dimlayer_real=%d dim_alpha=%d vblank=%u\n",
+			fingerprint_mode,
+			sde_crtc_get_fingerprint_pressed(
+				c_conn->encoder->crtc->state),
+			get_oppo_display_scene(), get_oppo_display_power_status(),
+			dsi_display->panel->is_hbm_enabled,
+			dsi_display->panel->bl_config.bl_level,
+			oppo_last_backlight, oppo_backlight_delta,
+			(long long)backlight_age_us, oppo_dimlayer_hbm,
+			oppo_dimlayer_bl_enabled, oppo_dimlayer_bl_enable_real,
+			oppo_dimlayer_bl_alpha,
+			drm_crtc_vblank_count(c_conn->encoder->crtc));
 
 		dsi_display->panel->is_hbm_enabled = fingerprint_mode;
 		if (fingerprint_mode) {
+			ktime_t poll_start;
+			ktime_t tx_start;
+
 			mutex_lock(&dsi_display->panel->panel_lock);
 
 			if (OPPO_DISPLAY_AOD_SCENE != get_oppo_display_scene() &&
 			    dsi_display->panel->bl_config.bl_level) {
+				poll_start = ktime_get();
 				sde_encoder_poll_line_counts(drm_enc);
+				pr_err("[RMXFP-R181] stage=line-poll elapsed_us=%lld vblank=%u\n",
+					(long long)ktime_us_delta(ktime_get(),
+						poll_start),
+					drm_crtc_vblank_count(c_conn->encoder->crtc));
 			}
 
-                        rc = dsi_panel_tx_cmd_set(dsi_display->panel, DSI_CMD_HBM_ON);
+			tx_start = ktime_get();
+			rc = dsi_panel_tx_cmd_set(dsi_display->panel,
+					DSI_CMD_HBM_ON);
+			pr_err("[RMXFP-R181] stage=hbm-on-tx rc=%d elapsed_us=%lld panel_hbm=%d bl=%u last_bl=%u\n",
+				rc, (long long)ktime_us_delta(ktime_get(), tx_start),
+				dsi_display->panel->is_hbm_enabled,
+				dsi_display->panel->bl_config.bl_level,
+				oppo_last_backlight);
 
 			mutex_unlock(&dsi_display->panel->panel_lock);
 
@@ -663,6 +698,8 @@ static int _sde_connector_update_hbm(struct sde_connector *c_conn)
 				return rc;
 			}
 		} else {
+			ktime_t tx_start;
+
 			_sde_connector_update_bl_scale(c_conn);
 
 			mutex_lock(&dsi_display->panel->panel_lock);
@@ -681,7 +718,13 @@ static int _sde_connector_update_hbm(struct sde_connector *c_conn)
 			} else if(OPPO_DISPLAY_AOD_SCENE == get_oppo_display_scene()) {
                                 /* Do nothing */
 			} else {
+				tx_start = ktime_get();
 				rc = dsi_panel_tx_cmd_set(dsi_display->panel, DSI_CMD_HBM_OFF);
+				pr_err("[RMXFP-R181] stage=hbm-off-tx rc=%d elapsed_us=%lld bl=%u last_bl=%u\n",
+					rc,
+					(long long)ktime_us_delta(ktime_get(), tx_start),
+					dsi_display->panel->bl_config.bl_level,
+					oppo_last_backlight);
 			}
 
 			mutex_unlock(&dsi_display->panel->panel_lock);
@@ -690,6 +733,10 @@ static int _sde_connector_update_hbm(struct sde_connector *c_conn)
 				return rc;
 			}
 		}
+		pr_err("[RMXFP-R181] transition=end target=%d rc=%d panel_hbm=%d elapsed_us=%lld vblank=%u\n",
+			fingerprint_mode, rc, dsi_display->panel->is_hbm_enabled,
+			(long long)ktime_us_delta(ktime_get(), transition_start),
+			drm_crtc_vblank_count(c_conn->encoder->crtc));
 	}
 
 	return 0;

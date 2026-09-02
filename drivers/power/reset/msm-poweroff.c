@@ -15,6 +15,8 @@
 #include <linux/err.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
+#include <linux/kmsg_dump.h>
+#include <linux/kthread.h>
 
 #include <linux/io.h>
 #include <linux/of.h>
@@ -62,6 +64,41 @@ static void __iomem *msm_ps_hold;
 static phys_addr_t tcsr_boot_misc_detect;
 static void scm_disable_sdi(void);
 static bool force_warm_reboot;
+static bool rmx1901_diag_recovery;
+static unsigned int rmx1901_diag_watchdog_seconds;
+static bool rmx1901_diag_watchdog_disarm;
+
+module_param_named(rmxdiag_watchdog_disarm,
+		   rmx1901_diag_watchdog_disarm, bool, 0644);
+MODULE_PARM_DESC(rmxdiag_watchdog_disarm,
+		 "Disarm the RMX1901 diagnostic recovery watchdog");
+
+static int __init rmx1901_diag_recovery_setup(char *value)
+{
+	if (!value || strcmp(value, "1"))
+		return -EINVAL;
+
+	rmx1901_diag_recovery = true;
+	pr_notice("[DEBUG-rmxdiag] orderly restarts will target recovery\n");
+	return 0;
+}
+early_param("rmx1901.diag_recovery", rmx1901_diag_recovery_setup);
+
+static int __init rmx1901_diag_watchdog_setup(char *value)
+{
+	unsigned int seconds;
+
+	if (!value || kstrtouint(value, 0, &seconds) ||
+	    seconds < 60 || seconds > 1800)
+		return -EINVAL;
+
+	rmx1901_diag_watchdog_seconds = seconds;
+	rmx1901_diag_recovery = true;
+	pr_notice("[DEBUG-rmxdiag-r58] kernel recovery watchdog=%us\n",
+		  seconds);
+	return 0;
+}
+early_param("rmxdiag.watchdog", rmx1901_diag_watchdog_setup);
 
 #ifdef CONFIG_QCOM_DLOAD_MODE
 /* Runtime could be only changed value once.
@@ -286,13 +323,19 @@ static void halt_spmi_pmic_arbiter(void)
 static void msm_restart_prepare(const char *cmd)
 {
 	bool need_warm_reset = false;
+
+	if (rmx1901_diag_recovery) {
+		pr_emerg("[DEBUG-rmxdiag] redirecting restart command '%s' to recovery\n",
+			 cmd ? cmd : "<null>");
+		cmd = "recovery";
+	}
 #ifdef CONFIG_QCOM_DLOAD_MODE
 	/* Write download mode flags if we're panic'ing
 	 * Write download mode flags if restart_mode says so
 	 * Kill download mode if master-kill switch is set
 	 */
 
-	set_dload_mode(download_mode &&
+	set_dload_mode(download_mode && !rmx1901_diag_recovery &&
 			(in_panic || restart_mode == RESTART_DLOAD));
 #endif
 
@@ -307,7 +350,7 @@ static void msm_restart_prepare(const char *cmd)
 				(cmd != NULL && cmd[0] != '\0'));
 	}
 #ifdef CONFIG_PRODUCT_REALME_SDM710
-	if (in_panic){
+	if (in_panic && !rmx1901_diag_recovery) {
 		//warm reset
 		qpnp_pon_system_pwr_off(PON_POWER_OFF_WARM_RESET);
 		qpnp_pon_set_restart_reason(
@@ -507,6 +550,10 @@ static void deassert_ps_hold(void)
 static void do_msm_restart(enum reboot_mode reboot_mode, const char *cmd)
 {
 	pr_notice("Going down for restart now\n");
+	if (rmx1901_diag_recovery && !in_panic) {
+		pr_emerg("[DEBUG-rmxdiag-r69] persisting restart kmsg\n");
+		kmsg_dump(KMSG_DUMP_PANIC);
+	}
 
 	msm_restart_prepare(cmd);
 
@@ -525,6 +572,26 @@ static void do_msm_restart(enum reboot_mode reboot_mode, const char *cmd)
 	deassert_ps_hold();
 
 	msleep(10000);
+}
+
+static int rmx1901_diag_watchdog_thread(void *unused)
+{
+	unsigned int elapsed;
+
+	pr_notice("[DEBUG-rmxdiag-r58] kernel recovery watchdog armed=%us\n",
+		  rmx1901_diag_watchdog_seconds);
+	for (elapsed = 0; elapsed < rmx1901_diag_watchdog_seconds; elapsed++) {
+		if (READ_ONCE(rmx1901_diag_watchdog_disarm)) {
+			pr_notice("[DEBUG-rmxdiag] kernel recovery watchdog disarmed at %us\n",
+				  elapsed);
+			return 0;
+		}
+		msleep(1000);
+	}
+	if (READ_ONCE(rmx1901_diag_watchdog_disarm))
+		return 0;
+	pr_emerg("[DEBUG-rmxdiag-r58] kernel recovery watchdog expired\n");
+	panic("RMX1901 diagnostic recovery watchdog expired");
 }
 
 static void do_msm_poweroff(void)
@@ -792,6 +859,16 @@ skip_sysfs_create:
 
 	force_warm_reboot = of_property_read_bool(dev->of_node,
 						"qcom,force-warm-reboot");
+
+	if (rmx1901_diag_watchdog_seconds) {
+		struct task_struct *watchdog;
+
+		watchdog = kthread_run(rmx1901_diag_watchdog_thread, NULL,
+				       "rmxdiag-recovery");
+		if (IS_ERR(watchdog))
+			pr_err("[DEBUG-rmxdiag-r58] watchdog start failed: %ld\n",
+			       PTR_ERR(watchdog));
+	}
 
 	return 0;
 

@@ -2219,6 +2219,7 @@ static ssize_t oppo_display_notify_fp_press(struct device *dev,
 	struct drm_device *drm_dev = display->drm_dev;
 	struct drm_connector *dsi_connector = display->drm_conn;
 	struct drm_mode_config *mode_config = &drm_dev->mode_config;
+	struct msm_drm_private *priv = drm_dev->dev_private;
 	struct drm_atomic_state *state;
 	struct drm_crtc_state *crtc_state;
 	struct drm_crtc *crtc;
@@ -2226,6 +2227,7 @@ static ssize_t oppo_display_notify_fp_press(struct device *dev,
 	int onscreenfp_status = 0;
 	int vblank_get = -EINVAL;
 	int err = 0;
+	int i;
 
 	sscanf(buf, "%du", &onscreenfp_status);
 	onscreenfp_status = !!onscreenfp_status;
@@ -2267,6 +2269,13 @@ static ssize_t oppo_display_notify_fp_press(struct device *dev,
 	state->acquire_ctx = mode_config->acquire_ctx;
 	crtc = dsi_connector->state->crtc;
 	crtc_state = drm_atomic_get_crtc_state(state, crtc);
+	for (i = 0; i < priv->num_crtcs; i++) {
+		if (priv->disp_thread[i].crtc_id == crtc->base.id) {
+			if (priv->disp_thread[i].thread)
+				kthread_flush_worker(&priv->disp_thread[i].worker);
+		}
+	}
+
 	err = drm_atomic_commit(state);
 	if (err < 0)
 		drm_atomic_state_free(state);

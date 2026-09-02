@@ -91,6 +91,41 @@
 
 static int kernel_init(void *);
 
+#define RMXDIAG_RAMOOPS_CONSOLE_PHYS 0xb7f40000ULL
+#define RMXDIAG_RAMOOPS_CONSOLE_SIZE 0x40000U
+#define RMXDIAG_PERSISTENT_RAM_SIG 0x43474244U
+
+struct rmxdiag_persistent_ram_buffer {
+	u32 sig;
+	u32 start;
+	u32 size;
+	u8 data[0];
+};
+
+static void __init rmxdiag_ramoops_checkpoint(const char *text)
+{
+	struct rmxdiag_persistent_ram_buffer *buffer;
+	size_t capacity = RMXDIAG_RAMOOPS_CONSOLE_SIZE - sizeof(*buffer);
+	size_t length = strlen(text);
+	u32 size;
+
+	buffer = phys_to_virt(RMXDIAG_RAMOOPS_CONSOLE_PHYS);
+	size = READ_ONCE(buffer->size);
+	if (READ_ONCE(buffer->sig) != RMXDIAG_PERSISTENT_RAM_SIG ||
+	    size > capacity || READ_ONCE(buffer->start) > size) {
+		WRITE_ONCE(buffer->sig, RMXDIAG_PERSISTENT_RAM_SIG);
+		size = 0;
+	}
+
+	if (length > capacity - size)
+		length = capacity - size;
+	memcpy(buffer->data + size, text, length);
+	size += length;
+	WRITE_ONCE(buffer->start, size);
+	WRITE_ONCE(buffer->size, size);
+	__flush_dcache_area(buffer, sizeof(*buffer) + size);
+}
+
 extern void init_IRQ(void);
 extern void fork_init(void);
 extern void radix_tree_init(void);
@@ -514,6 +549,7 @@ asmlinkage __visible void __init start_kernel(void)
 	page_address_init();
 	pr_notice("%s", linux_banner);
 	setup_arch(&command_line);
+	rmxdiag_ramoops_checkpoint("RMXDIAG: setup_arch completed\n");
 	mm_init_cpumask(&init_mm);
 	setup_command_line(command_line);
 	setup_nr_cpu_ids();
@@ -546,6 +582,7 @@ asmlinkage __visible void __init start_kernel(void)
 	sort_main_extable();
 	trap_init();
 	mm_init();
+	rmxdiag_ramoops_checkpoint("RMXDIAG: mm_init completed\n");
 
 	/*
 	 * Set up the scheduler prior starting any interrupts (such as the
@@ -615,6 +652,7 @@ asmlinkage __visible void __init start_kernel(void)
 	 * this. But we do want output early, in case something goes wrong.
 	 */
 	console_init();
+	rmxdiag_ramoops_checkpoint("RMXDIAG: console_init completed\n");
 	if (panic_later)
 		panic("Too many boot %s vars at `%s'", panic_later,
 		      panic_param);
@@ -686,6 +724,7 @@ asmlinkage __visible void __init start_kernel(void)
 	}
 
 	ftrace_init();
+	rmxdiag_ramoops_checkpoint("RMXDIAG: start_kernel reached rest_init\n");
 
 	/* Do the rest non-__init'ed, we're now alive */
 	rest_init();

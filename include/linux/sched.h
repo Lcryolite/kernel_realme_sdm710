@@ -1990,6 +1990,10 @@ struct task_struct {
 	struct callback_head *task_works;
 
 	struct audit_context *audit_context;
+#ifdef CONFIG_BPF_SYSCALL
+	/* Active task-local BPF run context, valid only during program execution. */
+	void *bpf_ctx;
+#endif
 #ifdef CONFIG_AUDITSYSCALL
 	kuid_t loginuid;
 	unsigned int sessionid;

@@ -66,6 +66,18 @@ struct exception_table_entry
 
 extern int fixup_exception(struct pt_regs *regs);
 
+#ifdef CONFIG_BPF_JIT
+int arm64_bpf_fixup_exception(const struct exception_table_entry *ex,
+			      struct pt_regs *regs);
+#else
+static inline int
+arm64_bpf_fixup_exception(const struct exception_table_entry *ex,
+			  struct pt_regs *regs)
+{
+	return 0;
+}
+#endif
+
 #define get_ds()	(KERNEL_DS)
 #define get_fs()	(current_thread_info()->addr_limit)
 

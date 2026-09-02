@@ -171,6 +171,15 @@
 #define TRACE_SYSCALLS()
 #endif
 
+#ifdef CONFIG_BPF_EVENTS
+#define BPF_RAW_TP() STRUCT_ALIGN();					\
+			VMLINUX_SYMBOL(__start__bpf_raw_tp) = .;	\
+			KEEP(*(__bpf_raw_tp_map))			\
+			VMLINUX_SYMBOL(__stop__bpf_raw_tp) = .;
+#else
+#define BPF_RAW_TP()
+#endif
+
 #ifdef CONFIG_SERIAL_EARLYCON
 #define EARLYCON_TABLE() . = ALIGN(8);				\
 			 VMLINUX_SYMBOL(__earlycon_table) = .;	\
@@ -238,6 +247,7 @@
 	LIKELY_PROFILE()		       				\
 	BRANCH_PROFILE()						\
 	TRACE_PRINTKS()							\
+	BPF_RAW_TP()							\
 	TRACEPOINT_STR()
 
 /*
@@ -702,6 +712,17 @@
 		*(.note.*)						\
 		VMLINUX_SYMBOL(__stop_notes) = .;			\
 	}
+
+#ifdef CONFIG_DEBUG_INFO_BTF
+#define BTF								\
+	.BTF : AT(ADDR(.BTF) - LOAD_OFFSET) {				\
+		VMLINUX_SYMBOL(__start_BTF) = .;			\
+		KEEP(*(.BTF))						\
+		VMLINUX_SYMBOL(__stop_BTF) = .;			\
+	}
+#else
+#define BTF
+#endif
 
 #define INIT_SETUP(initsetup_align)					\
 		. = ALIGN(initsetup_align);				\

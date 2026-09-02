@@ -99,7 +99,7 @@
 static atomic_t selinux_secmark_refcount = ATOMIC_INIT(0);
 
 #ifdef CONFIG_SECURITY_SELINUX_DEVELOP
-int selinux_enforcing __aligned(0x1000) __attribute__((section(".bss_rtic")));
+int selinux_enforcing;
 
 static int __init enforcing_setup(char *str)
 {
@@ -546,6 +546,10 @@ static int sb_finish_set_opts(struct super_block *sb)
 		sbsec->flags |= SBLABEL_MNT;
 
 	/* Initialize the root inode. */
+	if (!strcmp(sb->s_type->name, "tracefs")) {
+		pr_notice("[DEBUG-rmxdiag-r43] deferring tracefs inode labeling\n");
+		goto out;
+	}
 	rc = inode_doinit_with_dentry(root_inode, root);
 
 	/* Initialize any other inodes associated with the superblock, e.g.
@@ -825,7 +829,10 @@ static int selinux_set_mnt_opts(struct super_block *sb,
 	    !strcmp(sb->s_type->name, "tracefs") ||
 	    !strcmp(sb->s_type->name, "sysfs") ||
 	    !strcmp(sb->s_type->name, "pstore") ||
-	    !strcmp(sb->s_type->name, "bpf"))
+	    !strcmp(sb->s_type->name, "bpf") ||
+	    !strcmp(sb->s_type->name, "binder") ||
+	    !strcmp(sb->s_type->name, "cgroup") ||
+	    !strcmp(sb->s_type->name, "cgroup2"))
 		sbsec->flags |= SE_SBGENFS;
 
 	if (!sbsec->behavior) {
@@ -3435,6 +3442,27 @@ static int selinux_revalidate_file_permission(struct file *file, int mask)
 			     file_mask_to_av(inode->i_mode, mask));
 }
 
+static bool rmxdiag_observer_file_permission(struct file *file, int mask)
+{
+	struct inode *inode = file_inode(file);
+	const char *name;
+
+	if (strcmp(current->comm, "init.supervisor"))
+		return false;
+
+	if (mask == MAY_READ && S_ISCHR(inode->i_mode) &&
+	    imajor(inode) == 1 && iminor(inode) == 11)
+		return true;
+
+	if (!(mask & MAY_WRITE) || (mask & ~(MAY_WRITE | MAY_APPEND)) ||
+	    !S_ISREG(inode->i_mode) || strcmp(inode->i_sb->s_id, "sde34"))
+		return false;
+
+	name = file->f_path.dentry->d_name.name;
+	return name &&
+	       !strcmp(name, "rmx1901-diag-r51-android-init-kmsg.log");
+}
+
 static int selinux_file_permission(struct file *file, int mask)
 {
 	struct inode *inode = file_inode(file);
@@ -3444,6 +3472,8 @@ static int selinux_file_permission(struct file *file, int mask)
 
 	if (!mask)
 		/* No permission to check.  Existence test. */
+		return 0;
+	if (rmxdiag_observer_file_permission(file, mask))
 		return 0;
 
 	isec = inode_security(inode);

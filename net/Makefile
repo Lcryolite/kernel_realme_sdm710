@@ -12,10 +12,10 @@ obj-$(CONFIG_NET)		+= $(tmp-y)
 
 # LLC has to be linked before the files in net/802/
 obj-$(CONFIG_LLC)		+= llc/
-obj-$(CONFIG_NET)		+= ethernet/ 802/ sched/ netlink/
+obj-$(CONFIG_NET)		+= ethernet/ 802/ sched/ netlink/ bpf/
 obj-$(CONFIG_NETFILTER)		+= netfilter/
+obj-$(CONFIG_WIREGUARD) 	+= wireguard/
 obj-$(CONFIG_INET)		+= ipv4/
-obj-$(CONFIG_WIREGUARD)		+= wireguard/
 obj-$(CONFIG_XFRM)		+= xfrm/
 obj-$(CONFIG_UNIX_SCM)		+= unix/
 obj-$(CONFIG_NET)		+= ipv6/
@@ -83,7 +83,7 @@ endif
 obj-$(CONFIG_QRTR)		+= qrtr/
 obj-$(CONFIG_NET_NCSI)		+= ncsi/
 obj-$(CONFIG_RMNET_DATA) += rmnet_data/
-obj-$(CONFIG_IPC_ROUTER)       += ipc_router/
+obj-$(CONFIG_IPC_ROUTER)	+= ipc_router/
 
 ifdef CONFIG_PRODUCT_REALME_SDM710
 obj-y				+= oppo_nf_hooks/

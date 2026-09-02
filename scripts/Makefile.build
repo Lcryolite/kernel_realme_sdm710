@@ -617,8 +617,12 @@ cmd_link_multi-link = $(LD) $(ld_flags) -r -o $@ $(link_multi_deps) $(cmd_secana
 
 ifdef CONFIG_THIN_ARCHIVES
   quiet_cmd_link_multi-y = AR      $@
-  cmd_link_multi-y = $(update_lto_symversions) \
-	rm -f $@; $(AR) rcSTP$(KBUILD_ARFLAGS) $@ $(link_multi_deps) \
+  # Large composite objects such as qcacld exceed Linux's per-argument
+  # /bin/sh -c limit when Kbuild repeats the dependency list in make-cmd.
+  # llvm-ar supports response files, preserving the exact object order.
+  cmd_link_multi-y = $(file >$@.rsp,$(link_multi_deps)) \
+	$(update_lto_symversions) \
+	rm -f $@; $(AR) rcSTP$(KBUILD_ARFLAGS) $@ @$@.rsp; rm -f $@.rsp \
 	$(update_lto_symtable)
 else
   quiet_cmd_link_multi-y = LD      $@

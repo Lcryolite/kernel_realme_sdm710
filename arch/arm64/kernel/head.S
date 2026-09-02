@@ -220,6 +220,7 @@ efi_header_end:
 	 */
 ENTRY(stext)
 	bl	preserve_boot_args
+	bl	rmxdiag_early_ramoops_mark
 	bl	el2_setup			// Drop to EL1, w0=cpu_boot_mode
 	adrp	x23, __PHYS_OFFSET
 	and	x23, x23, MIN_KIMG_ALIGN - 1	// KASLR offset, defaults to 0
@@ -251,6 +252,34 @@ preserve_boot_args:
 	add	x1, x0, #0x20			// 4 x 8 bytes
 	b	__inval_cache_range		// tail call
 ENDPROC(preserve_boot_args)
+
+/*
+ * Leave a valid ramoops console record before the MMU and normal printk
+ * infrastructure exist. Recovery uses the same reserved-memory layout.
+ * Only caller-scratch registers are used; x21 keeps the FDT pointer.
+ */
+rmxdiag_early_ramoops_mark:
+	movz	x9, #0x0000
+	movk	x9, #0xb7f4, lsl #16		// console zone at 0xb7f40000
+	movz	w10, #0x4244
+	movk	w10, #0x4347, lsl #16		// persistent RAM signature
+	str	w10, [x9]
+	mov	w10, #36
+	str	w10, [x9, #4]			// ring start
+	str	w10, [x9, #8]			// ring size
+	adr	x11, rmxdiag_early_ramoops_text
+	add	x12, x9, #12
+1:
+	ldrb	w13, [x11], #1
+	strb	w13, [x12], #1
+	subs	w10, w10, #1
+	b.ne	1b
+	dsb	sy
+	ret
+
+rmxdiag_early_ramoops_text:
+	.ascii	"RMXDIAG: arm64 kernel entry reached\n"
+rmxdiag_early_ramoops_text_end:
 
 /*
  * Macro to create a table entry to the next page.
