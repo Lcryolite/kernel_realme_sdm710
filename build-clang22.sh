@@ -17,6 +17,9 @@ required_clang_major="${REQUIRE_CLANG_MAJOR:-22}"
 enable_thinlto="${ENABLE_THINLTO:-0}"
 enable_polly="${ENABLE_POLLY:-0}"
 enable_llvm_tuning="${ENABLE_LLVM_TUNING:-0}"
+enable_o3="${ENABLE_O3:-0}"
+thinlto_cache_dir="${THINLTO_CACHE_DIR:-${build_output}/.thinlto-cache}"
+thinlto_jobs="${THINLTO_JOBS:-${jobs}}"
 
 if [[ ! -d "${llvm_bin}" ]]; then
 	echo "LLVM_BIN is not a directory: ${llvm_bin}" >&2
@@ -87,12 +90,15 @@ llvm_backend_flags=(
 )
 lld_backend_flags=(
 	--lto-O3
-	"--thinlto-jobs=${jobs}"
+	"--thinlto-jobs=${thinlto_jobs}"
 	--mllvm=-inline-threshold=500
 	--mllvm=-import-instr-limit=200
 	--mllvm=-enable-gvn-hoist=true
 )
 
+if [[ "${enable_o3}" == "1" ]]; then
+	kcflags_parts+=(-O3)
+fi
 if [[ "${enable_llvm_tuning}" == "1" ]]; then
 	# SDM710 combines Cortex-A55- and Cortex-A75-derived cores. Keep one
 	# ARMv8.2-A ISA baseline and tune scheduling for the efficiency cores.
@@ -106,6 +112,14 @@ if [[ "${enable_polly}" == "1" ]]; then
 	kcflags_parts+=(
 		-mllvm -polly
 		-mllvm -polly-vectorizer=stripmine
+	)
+	lld_backend_flags+=(--mllvm=-polly --mllvm=-polly-vectorizer=stripmine)
+fi
+if [[ "${enable_thinlto}" == "1" ]]; then
+	mkdir -p "${thinlto_cache_dir}"
+	lld_backend_flags+=(
+		"--thinlto-cache-dir=${thinlto_cache_dir}"
+		--thinlto-cache-policy=cache_size=0%:cache_size_bytes=2g:prune_interval=1m
 	)
 fi
 
@@ -121,15 +135,19 @@ if [[ "${enable_thinlto}" == "1" ]]; then
 fi
 kbuild_ldflags="${kbuild_ldflags_parts[*]}"
 ldflags="${LDFLAGS:--EL -maarch64elf}"
+if [[ "${enable_thinlto}" == "1" ]]; then
+	# modpost's first LTO link consumes LDFLAGS; final links use KBUILD_LDFLAGS.
+	ldflags+=" ${lld_backend_flags[*]}"
+fi
 
 probe_dir="$(mktemp -d "${TMPDIR:-/tmp}/kernel-llvm-probe.XXXXXX")"
 trap 'rm -rf "${probe_dir}"' EXIT
-printf 'int kernel_llvm_probe(int value) { return value + 1; }\n' >"${probe_dir}/probe.c"
-clang --target=aarch64-linux-gnu -O2 -c "${probe_dir}/probe.c" \
+printf 'int kernel_llvm_probe(const int *a) { int s = 0; for (int i = 0; i < 64; ++i) s += a[i]; return s; }\n' >"${probe_dir}/probe.c"
+clang --target=aarch64-linux-gnu -O2 -mgeneral-regs-only -c "${probe_dir}/probe.c" \
 	-o "${probe_dir}/probe.o" "${kcflags_parts[@]}"
 if [[ "${enable_thinlto}" == "1" ]]; then
-	clang --target=aarch64-linux-gnu -O2 -flto=thin \
-		-c "${probe_dir}/probe.c" -o "${probe_dir}/probe.lto.o"
+	clang --target=aarch64-linux-gnu -O2 -mgeneral-regs-only -flto=thin \
+		-c "${probe_dir}/probe.c" -o "${probe_dir}/probe.lto.o" "${kcflags_parts[@]}"
 	ld.lld -r "${probe_dir}/probe.lto.o" -o "${probe_dir}/probe.linked.o" \
 		"${lld_backend_flags[@]}"
 fi
@@ -165,6 +183,11 @@ echo "Output: ${build_output}"
 echo "ThinLTO: ${enable_thinlto}"
 echo "Polly: ${enable_polly}"
 echo "LLVM tuning: ${enable_llvm_tuning}"
+echo "O3: ${enable_o3}"
+if [[ "${enable_thinlto}" == "1" ]]; then
+	echo "ThinLTO cache: ${thinlto_cache_dir}"
+	echo "ThinLTO jobs: ${thinlto_jobs}"
+fi
 echo "KCFLAGS: ${kcflags}"
 echo "KBUILD_LDFLAGS: ${kbuild_ldflags}"
 echo "LDFLAGS: ${ldflags}"

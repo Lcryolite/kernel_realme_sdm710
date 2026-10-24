@@ -1,4 +1,4 @@
-name: Build RMX1901 stock-next BakaSU Kernel
+name: Build RMX1901 stock-next BakaSU Kernel with Neutron Clang
 
 on:
   workflow_dispatch:
@@ -13,17 +13,28 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 180
     env:
       CROSS_COMPILE: aarch64-linux-gnu-
-      CROSS_COMPILE_ARM32: arm-linux-gnueabi-
+      CROSS_COMPILE_ARM32: arm-linux-gnueabihf-
       ARCH: arm64
       SUBARCH: arm64
       KBUILD_BUILD_USER: Lcryolite
       KBUILD_BUILD_HOST: github-actions
       KERNEL_DEFCONFIG: RMX1901_defconfig
-      LLVM_VERSION: 22.1.8
-      LLVM_ARCHIVE_SHA256: 8d5d1e52a06e1c10e457fd36489047053ac451ddad9c88017b0d0fc6b8e5d4c0
+      ANTMAN_COMMIT: 0b32c45e3ad83a953b4bc3fd2feb4ad3cc87c1e8
+      ANTMAN_SHA256: deef2dcf11568403c712432ecb7678ef62c3244054ccfee8510ef94a8a8fb04d
+      NEUTRON_TAG: 30072026
+      NEUTRON_SHA256: aa1567215d2be42d0d054ae72627e6d18ef6ac80205847f1e7ce0db5736476f3
+      REQUIRE_CLANG_MAJOR: 24
+      ENABLE_THINLTO: 1
+      ENABLE_POLLY: 1
+      ENABLE_LLVM_TUNING: 1
+      ENABLE_O3: 1
+      THINLTO_JOBS: 2
+      CCACHE_COMPILERCHECK: content
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: 'true'
 
     steps:
       - name: Checkout stock-next
@@ -38,30 +49,54 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            bc bison flex build-essential libelf-dev libssl-dev \
-            binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi \
-            ccache curl xz-utils zip
+            bc bison flex build-essential file libelf-dev libssl-dev \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf \
+            ccache curl wget xz-utils zstd zip
+
+      - name: Add 8 GiB build swap
+        run: |
+          SWAP_FILE="${RUNNER_TEMP}/kernel-build.swap"
+          sudo fallocate -l 8G "${SWAP_FILE}"
+          sudo chmod 600 "${SWAP_FILE}"
+          sudo mkswap "${SWAP_FILE}"
+          sudo swapon "${SWAP_FILE}"
+          free -h
+          echo "LLVM_BIN=${RUNNER_TEMP}/neutron-clang/bin" >> "$GITHUB_ENV"
+          echo "OUT_DIR=${RUNNER_TEMP}/kernel-out" >> "$GITHUB_ENV"
+          echo "THINLTO_CACHE_DIR=${RUNNER_TEMP}/thinlto-cache" >> "$GITHUB_ENV"
 
       - name: Setup ccache
         uses: hendrikmuhs/ccache-action@v1.2.23
         with:
-          max-size: 2G
-          key: ${{ runner.os }}-stock-next-bakasu-clang22
+          max-size: 3G
+          key: ${{ runner.os }}-stock-next-bakasu-neutron-${{ env.NEUTRON_TAG }}-${{ hashFiles('build-clang22.sh', 'arch/arm64/configs/RMX1901_defconfig') }}
 
-      - name: Install pinned LLVM 22 toolchain
+      - name: Restore ThinLTO cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/thinlto-cache
+          key: ${{ runner.os }}-stock-next-neutron-${{ env.NEUTRON_TAG }}-thinlto-${{ hashFiles('build-clang22.sh', 'arch/arm64/configs/RMX1901_defconfig') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-stock-next-neutron-${{ env.NEUTRON_TAG }}-thinlto-${{ hashFiles('build-clang22.sh', 'arch/arm64/configs/RMX1901_defconfig') }}-
+
+      - name: Sync pinned Neutron toolchain with AntMan
+        env:
+          TOOLCHAIN_DIR: ${{ runner.temp }}/neutron-clang
         run: |
-          LLVM_ARCHIVE="llvm-${LLVM_VERSION}-x86_64.tar.xz"
-          LLVM_BIN="${RUNNER_TEMP}/llvm-${LLVM_VERSION}/bin"
-          curl -fL --retry 3 -o "${RUNNER_TEMP}/${LLVM_ARCHIVE}" \
-            "https://www.kernel.org/pub/tools/llvm/files/${LLVM_ARCHIVE}"
-          echo "${LLVM_ARCHIVE_SHA256}  ${RUNNER_TEMP}/${LLVM_ARCHIVE}" | sha256sum -c -
-          mkdir -p "${RUNNER_TEMP}/llvm-${LLVM_VERSION}"
-          tar -xJf "${RUNNER_TEMP}/${LLVM_ARCHIVE}" \
-            -C "${RUNNER_TEMP}/llvm-${LLVM_VERSION}" --strip-components=1
-          "${LLVM_BIN}/clang" --version | head -n 1 | grep -F "clang version ${LLVM_VERSION}"
-          "${LLVM_BIN}/ld.lld" --version | head -n 1 | grep -F "LLD ${LLVM_VERSION}"
-          echo "LLVM_BIN=${LLVM_BIN}" >> "$GITHUB_ENV"
-          echo "OUT_DIR=${RUNNER_TEMP}/kernel-out" >> "$GITHUB_ENV"
+          mkdir -p "${TOOLCHAIN_DIR}"
+          wget --quiet \
+            "https://raw.githubusercontent.com/Neutron-Toolchains/antman/${ANTMAN_COMMIT}/antman" \
+            -O "${TOOLCHAIN_DIR}/antman"
+          echo "${ANTMAN_SHA256}  ${TOOLCHAIN_DIR}/antman" | sha256sum --check --strict
+          chmod +x "${TOOLCHAIN_DIR}/antman"
+          cd "${TOOLCHAIN_DIR}"
+          ./antman --sync="${NEUTRON_TAG}" --noconfirm --noprogress --noaxel
+          grep -Fqx "${NEUTRON_SHA256}" build.info
+          ./antman --patch=glibc --noconfirm --noprogress --noaxel
+          # Neutron's official binaries are built with LTO, Polly, PGO, BOLT and O3.
+          "${TOOLCHAIN_DIR}/bin/clang" --version | grep -F 'Neutron clang version'
+          test "$("${TOOLCHAIN_DIR}/bin/clang" -dumpversion | cut -d. -f1)" = "${REQUIRE_CLANG_MAJOR}"
+          "${TOOLCHAIN_DIR}/bin/ld.lld" --version
 
       - name: Verify pinned BakaSU
         run: |
@@ -76,7 +111,7 @@ jobs:
           echo "BAKASU_SHORT=$(git -C BakaSU rev-parse --short=8 HEAD)" >> "$GITHUB_ENV"
           echo "KERNEL_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
-      - name: Compile kernel with Clang 22
+      - name: Compile kernel with Neutron ThinLTO, Polly and O3
         env:
           HOST_BIN: /usr/bin
           GNU_BIN: /usr/bin
@@ -84,18 +119,36 @@ jobs:
           ./build-clang22.sh
           test -s "${OUT_DIR}/arch/arm64/boot/Image.gz"
           grep -q '^CONFIG_KSU=y$' "${OUT_DIR}/.config"
-          grep -aFq "clang version ${LLVM_VERSION}" "${OUT_DIR}/vmlinux"
+          grep -q '^CONFIG_LTO_CLANG=y$' "${OUT_DIR}/.config"
+          grep -Fxq -- '-O3' "${OUT_DIR}/.neutron-kcflags.rsp"
+          grep -Fxq -- '-polly' "${OUT_DIR}/.neutron-kcflags.rsp"
+          grep -aFq 'Neutron clang version' "${OUT_DIR}/vmlinux"
           grep -aFq -- "${BAKASU_SHORT}@BakaSU" "${OUT_DIR}/vmlinux"
+          "${LLVM_BIN}/llvm-readelf" --sections "${OUT_DIR}/vmlinux" >/dev/null
+
+      - name: Write optimization and cache summary
+        if: always()
+        run: |
+          ccache --show-stats
+          {
+            echo '### Neutron Clang kernel build'
+            echo "- Toolchain: Neutron ${NEUTRON_TAG} (upstream LTO, Polly, PGO, BOLT, O3 build)"
+            echo '- Kernel: ThinLTO, Polly, O3, ARMv8.2-A and Cortex-A55 scheduling'
+            echo '- Cache limits: ccache 3 GiB, ThinLTO 2 GiB; added swap: 8 GiB'
+            if test -d "${THINLTO_CACHE_DIR}"; then
+              du -sh "${THINLTO_CACHE_DIR}"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Package with AnyKernel3
         run: |
           TIME=$(TZ=Asia/Shanghai date +%Y%m%d-%H%M%S)
           rm -f AnyKernel3/Image.gz AnyKernel3/Image.gz-dtb
           cp "${OUT_DIR}/arch/arm64/boot/Image.gz" AnyKernel3/
-          ZIP_NAME="RMX1901-stock-next-BakaSU-${BAKASU_SHORT}-${TIME}.zip"
+          ZIP_NAME="RMX1901-stock-next-BakaSU-Neutron-${BAKASU_SHORT}-${TIME}.zip"
           (cd AnyKernel3 && zip -r9 "../${ZIP_NAME}" . -x '.git' '.git/*' 'README.md' '*placeholder')
           echo "ZIP_NAME=${ZIP_NAME}" >> "$GITHUB_ENV"
-          echo "RELEASE_TAG=stock-next-bakasu-${TIME}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=stock-next-bakasu-neutron-${TIME}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -110,6 +163,9 @@ jobs:
           tag_name: ${{ env.RELEASE_TAG }}
           target_commitish: ${{ env.KERNEL_COMMIT }}
           name: Kernel Release ${{ env.RELEASE_TAG }}
-          body: "BakaSU commit: ${{ env.BAKASU_COMMIT }}"
+          body: |
+            BakaSU commit: ${{ env.BAKASU_COMMIT }}
+            Toolchain: Neutron Clang ${{ env.NEUTRON_TAG }} (upstream LTO, Polly, PGO, BOLT, O3 build)
+            Kernel optimizations: ThinLTO, Polly, O3, ARMv8.2-A, Cortex-A55 scheduling
           files: ${{ env.ZIP_NAME }}
           fail_on_unmatched_files: true
