@@ -4,7 +4,7 @@
 ### AnyKernel setup
 # global properties
 properties() { '
-kernel.string=RMX1901 stock-next ReSukiSU
+kernel.string=RMX1901 stock-next BakaSU
 do.devicecheck=1
 do.modules=0
 do.systemless=1

@@ -1,0 +1,115 @@
+name: Build RMX1901 stock-next BakaSU Kernel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: stock-next-bakasu-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CROSS_COMPILE: aarch64-linux-gnu-
+      CROSS_COMPILE_ARM32: arm-linux-gnueabi-
+      ARCH: arm64
+      SUBARCH: arm64
+      KBUILD_BUILD_USER: Lcryolite
+      KBUILD_BUILD_HOST: github-actions
+      KERNEL_DEFCONFIG: RMX1901_defconfig
+      LLVM_VERSION: 22.1.8
+      LLVM_ARCHIVE_SHA256: 8d5d1e52a06e1c10e457fd36489047053ac451ddad9c88017b0d0fc6b8e5d4c0
+
+    steps:
+      - name: Checkout stock-next
+        uses: actions/checkout@v7
+        with:
+          ref: stock-next
+          fetch-depth: 1
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex build-essential libelf-dev libssl-dev \
+            binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi \
+            ccache curl xz-utils zip
+
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2.23
+        with:
+          max-size: 2G
+          key: ${{ runner.os }}-stock-next-bakasu-clang22
+
+      - name: Install pinned LLVM 22 toolchain
+        run: |
+          LLVM_ARCHIVE="llvm-${LLVM_VERSION}-x86_64.tar.xz"
+          LLVM_BIN="${RUNNER_TEMP}/llvm-${LLVM_VERSION}/bin"
+          curl -fL --retry 3 -o "${RUNNER_TEMP}/${LLVM_ARCHIVE}" \
+            "https://www.kernel.org/pub/tools/llvm/files/${LLVM_ARCHIVE}"
+          echo "${LLVM_ARCHIVE_SHA256}  ${RUNNER_TEMP}/${LLVM_ARCHIVE}" | sha256sum -c -
+          mkdir -p "${RUNNER_TEMP}/llvm-${LLVM_VERSION}"
+          tar -xJf "${RUNNER_TEMP}/${LLVM_ARCHIVE}" \
+            -C "${RUNNER_TEMP}/llvm-${LLVM_VERSION}" --strip-components=1
+          "${LLVM_BIN}/clang" --version | head -n 1 | grep -F "clang version ${LLVM_VERSION}"
+          "${LLVM_BIN}/ld.lld" --version | head -n 1 | grep -F "LLD ${LLVM_VERSION}"
+          echo "LLVM_BIN=${LLVM_BIN}" >> "$GITHUB_ENV"
+          echo "OUT_DIR=${RUNNER_TEMP}/kernel-out" >> "$GITHUB_ENV"
+
+      - name: Verify pinned BakaSU
+        run: |
+          test "$(git config -f .gitmodules submodule.BakaSU.url)" = \
+            "https://github.com/Baka-SU/BakaSU.git"
+          test "$(readlink drivers/kernelsu)" = "../BakaSU/kernel"
+          test "$(git -C BakaSU rev-parse HEAD)" = "$(git rev-parse HEAD:BakaSU)"
+          if test "$(git -C BakaSU rev-parse --is-shallow-repository)" = true; then
+            git -C BakaSU fetch --unshallow --tags origin
+          fi
+          echo "BAKASU_COMMIT=$(git -C BakaSU rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "BAKASU_SHORT=$(git -C BakaSU rev-parse --short=8 HEAD)" >> "$GITHUB_ENV"
+          echo "KERNEL_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Compile kernel with Clang 22
+        env:
+          HOST_BIN: /usr/bin
+          GNU_BIN: /usr/bin
+        run: |
+          ./build-clang22.sh
+          test -s "${OUT_DIR}/arch/arm64/boot/Image.gz"
+          grep -q '^CONFIG_KSU=y$' "${OUT_DIR}/.config"
+          grep -aFq "clang version ${LLVM_VERSION}" "${OUT_DIR}/vmlinux"
+          grep -aFq -- "${BAKASU_SHORT}@BakaSU" "${OUT_DIR}/vmlinux"
+
+      - name: Package with AnyKernel3
+        run: |
+          TIME=$(TZ=Asia/Shanghai date +%Y%m%d-%H%M%S)
+          rm -f AnyKernel3/Image.gz AnyKernel3/Image.gz-dtb
+          cp "${OUT_DIR}/arch/arm64/boot/Image.gz" AnyKernel3/
+          ZIP_NAME="RMX1901-stock-next-BakaSU-${BAKASU_SHORT}-${TIME}.zip"
+          (cd AnyKernel3 && zip -r9 "../${ZIP_NAME}" . -x '.git' '.git/*' 'README.md' '*placeholder')
+          echo "ZIP_NAME=${ZIP_NAME}" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=stock-next-bakasu-${TIME}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.ZIP_NAME }}
+          path: ${{ env.ZIP_NAME }}
+          if-no-files-found: error
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ env.KERNEL_COMMIT }}
+          name: Kernel Release ${{ env.RELEASE_TAG }}
+          body: "BakaSU commit: ${{ env.BAKASU_COMMIT }}"
+          files: ${{ env.ZIP_NAME }}
+          fail_on_unmatched_files: true

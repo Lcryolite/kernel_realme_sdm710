@@ -11,7 +11,7 @@ host_bin="${HOST_BIN:-${android_root}/toolchains/host-tools/usr/bin}"
 gnu_bin="${GNU_BIN:-${android_root}/toolchains/proton-clang-13-9fb011b/bin}"
 cross_compile="${CROSS_COMPILE:-${gnu_bin}/aarch64-linux-gnu-}"
 cross_compile_arm32="${CROSS_COMPILE_ARM32:-${gnu_bin}/arm-linux-gnueabi-}"
-resukisu_dir="${RESUKISU_DIR:-${kernel_root}/KernelSU}"
+bakasu_dir="${BAKASU_DIR:-${kernel_root}/BakaSU}"
 jobs="${JOBS:-$(nproc)}"
 required_clang_major="${REQUIRE_CLANG_MAJOR:-22}"
 enable_thinlto="${ENABLE_THINLTO:-0}"
@@ -22,8 +22,8 @@ if [[ ! -d "${llvm_bin}" ]]; then
 	echo "LLVM_BIN is not a directory: ${llvm_bin}" >&2
 	exit 1
 fi
-if [[ ! -d "${resukisu_dir}" ]]; then
-	echo "ReSukiSU submodule is missing: ${resukisu_dir}" >&2
+if [[ ! -d "${bakasu_dir}" ]]; then
+	echo "BakaSU submodule is missing: ${bakasu_dir}" >&2
 	exit 1
 fi
 
@@ -160,7 +160,7 @@ make_args=(
 echo "Building RMX1901 stock-next"
 echo "Compiler: $(clang --version | head -n 1)"
 echo "Linker: $(ld.lld --version | head -n 1)"
-echo "ReSukiSU: $(git -C "${resukisu_dir}" rev-parse HEAD)"
+echo "BakaSU: $(git -C "${bakasu_dir}" rev-parse HEAD)"
 echo "Output: ${build_output}"
 echo "ThinLTO: ${enable_thinlto}"
 echo "Polly: ${enable_polly}"
@@ -213,7 +213,7 @@ grep -aFq "clang version ${clang_version}" "${build_output}/vmlinux"
 
 if grep -q '^CONFIG_KSU=y$' "${build_output}/.config"; then
 	grep -q '^CONFIG_KSU_MANUAL_HOOK=y$' "${build_output}/.config"
-	grep -aFq '@ReSukiSU' "${build_output}/vmlinux"
+	grep -aFq '@BakaSU' "${build_output}/vmlinux"
 fi
 
 kernel_release="$(make -s -C "${kernel_root}" "${make_args[@]}" kernelrelease)"
