@@ -44,6 +44,13 @@
 
 static struct kmem_cache *fsync_entry_slab;
 
+/* Compressed files use checkpoints, never this per-block recovery format. */
+static bool is_compressed_inode_page(struct page *page)
+{
+	return IS_INODE(page) &&
+		(le32_to_cpu(F2FS_INODE(page)->i_flags) & F2FS_COMPR_FL);
+}
+
 bool f2fs_space_for_roll_forward(struct f2fs_sb_info *sbi)
 {
 	s64 nalloc = percpu_counter_sum_positive(&sbi->alloc_valid_block_count);
@@ -239,6 +246,9 @@ static int recover_inode(struct inode *inode, struct page *page)
 	char *name;
 	int err;
 
+	if (is_compressed_inode_page(page))
+		return -EOPNOTSUPP;
+
 	inode->i_mode = le16_to_cpu(raw->i_mode);
 
 	err = recover_quota_data(inode, page);
@@ -323,6 +333,12 @@ static int find_fsync_dnodes(struct f2fs_sb_info *sbi, struct list_head *head,
 		if (!is_fsync_dnode(page))
 			goto next;
 
+		if (is_compressed_inode_page(page)) {
+			err = -EOPNOTSUPP;
+			f2fs_put_page(page, 1);
+			break;
+		}
+
 		entry = get_fsync_inode(head, ino_of_node(page));
 		if (!entry) {
 			bool quota_inode = false;
@@ -353,6 +369,11 @@ static int find_fsync_dnodes(struct f2fs_sb_info *sbi, struct list_head *head,
 				break;
 			}
 		}
+		if (F2FS_I(entry->inode)->i_flags & F2FS_COMPR_FL) {
+			err = -EOPNOTSUPP;
+			f2fs_put_page(page, 1);
+			break;
+		}
 		entry->blkaddr = blkaddr;
 
 		if (IS_INODE(page) && is_dent_dnode(page))
@@ -375,6 +396,8 @@ next:
 
 		f2fs_ra_meta_pages_cond(sbi, blkaddr);
 	}
+	if (err == -EOPNOTSUPP)
+		f2fs_err(sbi, "compressed roll-forward recovery is unsupported");
 	return err;
 }
 
