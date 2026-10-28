@@ -109,6 +109,9 @@ static void __init rmxdiag_ramoops_checkpoint(const char *text)
 	size_t length = strlen(text);
 	u32 size;
 
+	if (!IS_ENABLED(CONFIG_PRODUCT_REALME_SDM710))
+		return;
+
 	buffer = phys_to_virt(RMXDIAG_RAMOOPS_CONSOLE_PHYS);
 	size = READ_ONCE(buffer->size);
 	if (READ_ONCE(buffer->sig) != RMXDIAG_PERSISTENT_RAM_SIG ||

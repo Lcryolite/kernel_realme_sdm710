@@ -769,3 +769,81 @@ zero or random data, which is useful to the below scenario where:
  4. address = fibmap(fd, offset)
  5. open(blkdev)
  6. write(blkdev, address)
+
+Compression backport on the 4.9 RMX1901 tree
+------------------------------------------
+
+CONFIG_F2FS_FS_COMPRESSION adds explicit, per-file compression. The LZ4 and
+Zstd backends are selected by CONFIG_F2FS_FS_LZ4 and CONFIG_F2FS_FS_ZSTD.
+RMX1901_defconfig builds these and their codec libraries into the kernel.
+Installing this kernel does not change filesystem feature flags or convert
+existing files. A filesystem must already have the extra_attr and compression
+features. The isolated selftests create disposable images with those features;
+they do not format existing device partitions.
+
+The mount option compress_algorithm=lz4 or compress_algorithm=zstd chooses the
+algorithm for newly selected files. The default is LZ4. Mounting with this option
+does not select files automatically. On a test filesystem mounted at /mnt/test:
+
+  touch /mnt/test/selected
+  chattr +c /mnt/test/selected
+  cat input-file > /mnt/test/selected
+
+For directory inheritance:
+
+  mkdir /mnt/test/archive
+  chattr +c /mnt/test/archive
+  cat input-file > /mnt/test/archive/new-file
+
+New regular files and subdirectories inherit the selected directory's policy;
+existing children are not converted. The compression flag can only be changed
+on an empty regular file. Directories can change their policy without rewriting
+existing children. Unselected files retain their ordinary behavior.
+
+The on-disk format follows the upstream compression feature bit, algorithm IDs
+(LZ4=1, Zstd=2), COMPRESS_ADDR cluster marker, 24-byte compressed header, and
+36-byte inode extra attributes. New files use four-page clusters. Readers accept
+log cluster sizes 2 through 8. Zstd uses compression level 1. This adapter does
+not provide compression-level, compress_log_size, or extension-selection mount
+options. It rejects unsupported algorithms, nonzero compression flags (including
+later checksum extensions), and inodes with released compressed-block reserves.
+
+Buffered reads, writes, overwrite, append, truncate, links, unlink, checkpoint
+recovery, and GC handle compressed data. Incompressible clusters use ordinary
+blocks. Direct I/O on selected files uses buffered fallback. Read-only mappings
+are supported; shared writable mmap, fallocate, SEEK_DATA/SEEK_HOLE, fiemap,
+swap activation, atomic/volatile-write start, pinning, defragmentation, and
+move_range are explicitly rejected on selected regular files. The general
+fallocate policy above applies to uncompressed files.
+
+Compressed fsync uses a full checkpoint. checkpoint=disable and CP_DISABLED
+volumes are unsupported, and foreign compressed roll-forward logs are rejected.
+The upstream logical block reservations are retained. Physical compressed data
+uses fewer blocks, but df/quota accounting need not immediately expose that
+saving. RELEASE_COMPRESS_BLOCKS and RESERVE_COMPRESS_BLOCKS are not implemented.
+
+Encryption is applied after compression using the compressed storage slot's
+logical index; reads decrypt before decompressing. Both software fscrypt and
+the vendor Qualcomm ICE path are included in the integration. Software and
+generic QEMU results cannot establish ICE hardware compatibility. Hardware
+runtime and actual-phone userspace compatibility remain unverified until device
+tests are authorized and performed. See the isolated validation record below
+for the precise tested paths and remaining gaps.
+
+The reader currently performs synchronous storage reads and decodes a whole
+cluster for each requested page-cache miss. The integration tests establish
+content/persistence behavior, not throughput, low-memory robustness, exhaustive
+malformed-input safety, or concurrent-workload stress coverage.
+
+Sources and validation:
+
+  Initial upstream compression: 4c8ff7095bef64fc47e996a938f7d57f9e077da3
+  Initial upstream Zstd:       50cfa66f0de02eff30fb81bdc878bb986cf3aff3
+  Zstd callback prerequisite:   23b1faaade19a2aa2d4c3e387b875d105675343e
+  Maintained f2fs-stable 4.14:   b13285aeee5d3e6ea997afef42b19e2d31f70925
+
+This is a targeted adaptation to the vendor 4.9 interfaces, not a full F2FS
+directory replacement or a promise to accept all later F2FS features. The
+maintained donor informed locking, truncation, writeback, and GC handling.
+Build instructions and the executable isolated suite are under
+tools/testing/selftests/kernel_backport/; validation.md records actual results.
