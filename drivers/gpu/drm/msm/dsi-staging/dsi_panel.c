@@ -864,6 +864,90 @@ static int dsi_panel_power_off(struct dsi_panel *panel)
 
 	return rc;
 }
+
+#ifdef CONFIG_PRODUCT_REALME_SDM710
+int oppo_seed_backlight = 0;
+static struct dsi_panel_cmd_set oppo_priv_seed_cmd_set;
+extern int oppo_dc2_alpha;
+extern int oppo_seed_bright_to_alpha(int brightness);
+
+static struct dsi_panel_cmd_set *oppo_dsi_update_seed_backlight(
+		struct dsi_panel *panel, int brightness,
+		enum dsi_cmd_set_type type)
+{
+	enum dsi_cmd_set_state state;
+	struct dsi_cmd_desc *cmds;
+	struct dsi_cmd_desc *oppo_cmd;
+	u8 *tx_buf;
+	int count;
+	int rc = 0;
+	int i;
+	int k;
+	int alpha = oppo_seed_bright_to_alpha(brightness);
+
+	if (type != DSI_CMD_SEED_MODE0 && type != DSI_CMD_SEED_MODE1 &&
+	    type != DSI_CMD_SEED_MODE2 && type != DSI_CMD_SEED_MODE3 &&
+	    type != DSI_CMD_SEED_MODE4 && type != DSI_CMD_SEED_OFF)
+		return NULL;
+
+	if (type == DSI_CMD_SEED_OFF)
+		type = DSI_CMD_SEED_MODE0;
+
+	cmds = panel->cur_mode->priv_info->cmd_sets[type].cmds;
+	count = panel->cur_mode->priv_info->cmd_sets[type].count;
+	state = panel->cur_mode->priv_info->cmd_sets[type].state;
+
+	oppo_cmd = kmemdup(cmds, sizeof(*cmds) * count, GFP_KERNEL);
+	if (!oppo_cmd) {
+		rc = -ENOMEM;
+		goto error;
+	}
+
+	for (i = 0; i < count; i++)
+		oppo_cmd[i].msg.tx_buf = NULL;
+
+	for (i = 0; i < count; i++) {
+		u32 size = oppo_cmd[i].msg.tx_len * sizeof(u8);
+
+		oppo_cmd[i].msg.tx_buf = kmemdup(cmds[i].msg.tx_buf, size,
+				GFP_KERNEL);
+		if (!oppo_cmd[i].msg.tx_buf) {
+			rc = -ENOMEM;
+			goto error;
+		}
+	}
+
+	for (i = 0; i < count; i++) {
+		if (oppo_cmd[i].msg.tx_len != 0x16)
+			continue;
+		tx_buf = (u8 *)oppo_cmd[i].msg.tx_buf;
+		for (k = 1; k < oppo_cmd[i].msg.tx_len; k++)
+			tx_buf[k] = tx_buf[k] * (255 - alpha) / 255;
+	}
+
+	if (oppo_priv_seed_cmd_set.cmds) {
+		for (i = 0; i < oppo_priv_seed_cmd_set.count; i++)
+			kfree(oppo_priv_seed_cmd_set.cmds[i].msg.tx_buf);
+		kfree(oppo_priv_seed_cmd_set.cmds);
+	}
+
+	oppo_priv_seed_cmd_set.cmds = oppo_cmd;
+	oppo_priv_seed_cmd_set.count = count;
+	oppo_priv_seed_cmd_set.state = state;
+	oppo_dc2_alpha = alpha;
+
+	return &oppo_priv_seed_cmd_set;
+
+error:
+	if (oppo_cmd) {
+		for (i = 0; i < count; i++)
+			kfree(oppo_cmd[i].msg.tx_buf);
+		kfree(oppo_cmd);
+	}
+	return ERR_PTR(rc);
+}
+#endif /* CONFIG_PRODUCT_REALME_SDM710 */
+
 #ifndef CONFIG_PRODUCT_REALME_SDM710
 static int dsi_panel_tx_cmd_set(struct dsi_panel *panel,
 				enum dsi_cmd_set_type type)
@@ -880,6 +964,9 @@ int dsi_panel_tx_cmd_set(struct dsi_panel *panel,
 	enum dsi_cmd_set_state state;
 	struct dsi_display_mode *mode;
 	const struct mipi_dsi_host_ops *ops = panel->host->ops;
+#ifdef CONFIG_PRODUCT_REALME_SDM710
+	struct dsi_panel_cmd_set *oppo_cmd_set = NULL;
+#endif
 
 	if (!panel || !panel->cur_mode)
 		return -EINVAL;
@@ -894,6 +981,15 @@ int dsi_panel_tx_cmd_set(struct dsi_panel *panel,
 	state = mode->priv_info->cmd_sets[type].state;
 	#ifdef CONFIG_PRODUCT_REALME_SDM710
 	pr_err("dsi_cmd %s\n", cmd_set_prop_map[type]);
+	if (oppo_seed_backlight) {
+		oppo_cmd_set = oppo_dsi_update_seed_backlight(panel,
+				oppo_seed_backlight, type);
+		if (!IS_ERR_OR_NULL(oppo_cmd_set)) {
+			cmds = oppo_cmd_set->cmds;
+			count = oppo_cmd_set->count;
+			state = oppo_cmd_set->state;
+		}
+	}
 	#endif /*CONFIG_PRODUCT_REALME_SDM710*/
 
 	if (count == 0) {
@@ -1008,12 +1104,18 @@ static int dsi_panel_led_bl_register(struct dsi_panel *panel,
 #endif
 
 #ifdef CONFIG_PRODUCT_REALME_SDM710
+extern int oppo_dimlayer_bl_enable_v2;
+extern int oppo_dimlayer_bl_enable_v2_real;
 extern int oppo_dimlayer_bl_alpha;
 extern int oppo_dimlayer_bl_enabled;
 extern int oppo_dimlayer_bl_enable_real;
 ktime_t oppo_backlight_time;
 u32 oppo_last_backlight = 0;
 u32 oppo_backlight_delta = 0;
+extern int oppo_panel_process_dimming_v2(struct dsi_panel *panel,
+		int bl_lvl, bool force_disable);
+extern void oppo_panel_process_dimming_v2_post(struct dsi_panel *panel,
+		bool force_disable);
 #endif /* CONFIG_PRODUCT_REALME_SDM710 */
 
 static int dsi_panel_update_backlight(struct dsi_panel *panel,
@@ -1030,17 +1132,24 @@ static int dsi_panel_update_backlight(struct dsi_panel *panel,
 	dsi = &panel->mipi_device;
 
 	#ifdef CONFIG_PRODUCT_REALME_SDM710
+	if (get_oppo_display_scene() == OPPO_DISPLAY_AOD_SCENE && bl_lvl == 1) {
+		pr_err("dsi_cmd AOD mode return bl_lvl:%d\n", bl_lvl);
+		return 0;
+	}
+
 	if (panel->is_hbm_enabled && bl_lvl != 0){
 		pr_err("panel hbm is enabled\n");
 		return 0;
 	}
 
-	if (bl_lvl > oppo_last_backlight)
-		oppo_backlight_delta = bl_lvl - oppo_last_backlight;
-	else
-		oppo_backlight_delta = oppo_last_backlight - bl_lvl;
-	oppo_last_backlight = bl_lvl;
-	oppo_backlight_time = ktime_get();
+	if (bl_lvl > 1) {
+		if (bl_lvl > oppo_last_backlight)
+			oppo_backlight_delta = bl_lvl - oppo_last_backlight;
+		else
+			oppo_backlight_delta = oppo_last_backlight - bl_lvl;
+		oppo_last_backlight = bl_lvl;
+		oppo_backlight_time = ktime_get();
+	}
 
 	/* Cong.Dai@BSP.TP.Function, 2019/07/03, modified for replace daily build macro */
 	if (oppo_daily_build())
@@ -1054,6 +1163,7 @@ static int dsi_panel_update_backlight(struct dsi_panel *panel,
 			pr_err("Exit DC backlight\n");
 		}
 	}
+	bl_lvl = oppo_panel_process_dimming_v2(panel, bl_lvl, false);
 	if (oppo_dimlayer_bl_enable_real) {
 		/*
 		 * avoid effect power and aod mode
@@ -1065,6 +1175,11 @@ static int dsi_panel_update_backlight(struct dsi_panel *panel,
 	rc = mipi_dsi_dcs_set_display_brightness(dsi, bl_lvl);
 	if (rc < 0)
 		pr_err("failed to update dcs backlight:%d\n", bl_lvl);
+
+#ifdef CONFIG_PRODUCT_REALME_SDM710
+	oppo_panel_process_dimming_v2_post(panel, false);
+	oppo_last_backlight = bl_lvl;
+#endif
 
 	return rc;
 }

@@ -140,6 +140,7 @@ enum {
 	Opt_checkpoint_disable_cap,
 	Opt_checkpoint_disable_cap_perc,
 	Opt_checkpoint_enable,
+	Opt_compress_algorithm,
 	Opt_err,
 };
 
@@ -202,6 +203,7 @@ static match_table_t f2fs_tokens = {
 	{Opt_checkpoint_disable_cap, "checkpoint=disable:%u"},
 	{Opt_checkpoint_disable_cap_perc, "checkpoint=disable:%u%%"},
 	{Opt_checkpoint_enable, "checkpoint=enable"},
+	{Opt_compress_algorithm, "compress_algorithm=%s"},
 	{Opt_err, NULL},
 };
 
@@ -779,6 +781,24 @@ static int parse_options(struct super_block *sb, char *options)
 		case Opt_checkpoint_enable:
 			clear_opt(sbi, DISABLE_CHECKPOINT);
 			break;
+		case Opt_compress_algorithm:
+			if (!f2fs_sb_has_compression(sbi) ||
+					!IS_ENABLED(CONFIG_F2FS_FS_COMPRESSION))
+				return -EOPNOTSUPP;
+			name = match_strdup(&args[0]);
+			if (!name)
+				return -ENOMEM;
+			if (!strcmp(name, "lz4") && IS_ENABLED(CONFIG_F2FS_FS_LZ4))
+				F2FS_OPTION(sbi).compress_algorithm = COMPRESS_LZ4;
+			else if (!strcmp(name, "zstd") &&
+					IS_ENABLED(CONFIG_F2FS_FS_ZSTD))
+				F2FS_OPTION(sbi).compress_algorithm = COMPRESS_ZSTD;
+			else {
+				kvfree(name);
+				return -EINVAL;
+			}
+			kvfree(name);
+			break;
 		default:
 			f2fs_err(sbi, "Unrecognized mount option \"%s\" or missing value",
 				 p);
@@ -798,6 +818,11 @@ static int parse_options(struct super_block *sb, char *options)
 		return -EINVAL;
 	}
 #endif
+
+	if (f2fs_sb_has_compression(sbi) && test_opt(sbi, DISABLE_CHECKPOINT)) {
+		f2fs_err(sbi, "compression requires checkpointing");
+		return -EINVAL;
+	}
 
 	if (F2FS_IO_SIZE_BITS(sbi) && !test_opt(sbi, LFS)) {
 		f2fs_err(sbi, "Should set mode=lfs with %uKB-sized IO",
@@ -1438,6 +1463,10 @@ static int f2fs_show_options(struct seq_file *seq, struct dentry *root)
 		seq_printf(seq, ",fsync_mode=%s", "strict");
 	else if (F2FS_OPTION(sbi).fsync_mode == FSYNC_MODE_NOBARRIER)
 		seq_printf(seq, ",fsync_mode=%s", "nobarrier");
+	if (f2fs_sb_has_compression(sbi))
+		seq_printf(seq, ",compress_algorithm=%s",
+			F2FS_OPTION(sbi).compress_algorithm == COMPRESS_ZSTD ?
+			"zstd" : "lz4");
 	return 0;
 }
 
@@ -1450,6 +1479,8 @@ static void default_options(struct f2fs_sb_info *sbi)
 	F2FS_OPTION(sbi).alloc_mode = ALLOC_MODE_DEFAULT;
 	F2FS_OPTION(sbi).fsync_mode = FSYNC_MODE_POSIX;
 	F2FS_OPTION(sbi).test_dummy_encryption = false;
+	F2FS_OPTION(sbi).compress_algorithm = IS_ENABLED(CONFIG_F2FS_FS_LZ4) ?
+		COMPRESS_LZ4 : COMPRESS_ZSTD;
 	F2FS_OPTION(sbi).s_resuid = make_kuid(&init_user_ns, F2FS_DEF_RESUID);
 	F2FS_OPTION(sbi).s_resgid = make_kgid(&init_user_ns, F2FS_DEF_RESGID);
 
@@ -3140,6 +3171,14 @@ try_onemore:
 	sb->s_fs_info = sbi;
 	sbi->raw_super = raw_super;
 
+	if (f2fs_sb_has_compression(sbi)) {
+		if (!IS_ENABLED(CONFIG_F2FS_FS_COMPRESSION) ||
+				!f2fs_sb_has_extra_attr(sbi)) {
+			err = -EOPNOTSUPP;
+			goto free_sb_buf;
+		}
+	}
+
 	/* precompute checksum seed for metadata */
 	if (f2fs_sb_has_inode_chksum(sbi))
 		sbi->s_chksum_seed = f2fs_chksum(sbi, ~0, raw_super->uuid,
@@ -3270,6 +3309,13 @@ try_onemore:
 	if (err) {
 		f2fs_err(sbi, "Failed to get valid F2FS checkpoint");
 		goto free_meta_inode;
+	}
+
+	if (f2fs_sb_has_compression(sbi) &&
+			is_set_ckpt_flags(sbi, CP_DISABLED_FLAG)) {
+		f2fs_err(sbi, "compressed filesystem requires checkpointing");
+		err = -EROFS;
+		goto free_devices;
 	}
 
 	if (__is_set_ckpt_flags(F2FS_CKPT(sbi), CP_QUOTA_NEED_FSCK_FLAG))
@@ -3416,6 +3462,9 @@ try_onemore:
 
 		err = f2fs_recover_fsync_data(sbi, false);
 		if (err < 0) {
+			/* Never retry by discarding an unsupported recovery log. */
+			if (err == -EOPNOTSUPP)
+				retry_cnt = 0;
 			if (err != -ENOMEM)
 				skip_recovery = true;
 			need_fsck = true;
@@ -3425,6 +3474,8 @@ try_onemore:
 		}
 	} else {
 		err = f2fs_recover_fsync_data(sbi, true);
+		if (err < 0)
+			goto free_meta;
 
 		if (!f2fs_readonly(sb) && err > 0) {
 			err = -EINVAL;

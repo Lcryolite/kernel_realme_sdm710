@@ -110,6 +110,7 @@ obj-$(CONFIG_ADFS_FS)		+= adfs/
 obj-$(CONFIG_FUSE_FS)		+= fuse/
 obj-$(CONFIG_OVERLAY_FS)	+= overlayfs/
 obj-$(CONFIG_ORANGEFS_FS)       += orangefs/
+obj-$(CONFIG_INCREMENTAL_FS)	+= incfs/
 obj-$(CONFIG_UDF_FS)		+= udf/
 obj-$(CONFIG_SUN_OPENPROMFS)	+= openpromfs/
 obj-$(CONFIG_OMFS_FS)		+= omfs/
@@ -133,3 +134,4 @@ obj-$(CONFIG_PSTORE)		+= pstore/
 obj-$(CONFIG_EFIVAR_FS)		+= efivarfs/
 
 obj-$(CONFIG_EXFAT_FS)		+= exfat/
+obj-$(CONFIG_EROFS_FS)		+= erofs/

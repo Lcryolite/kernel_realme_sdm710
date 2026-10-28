@@ -1,0 +1,11 @@
+#!/bin/sh
+
+set -eu
+
+if [ "${1:-}" = "-o=-" ]; then
+	shift
+	set -- -o - "$@"
+fi
+
+exec "${CLANG_FOR_LLVM_DIS:-clang}" --target=aarch64-linux-gnu \
+	-S -emit-llvm -x ir -Xclang -disable-llvm-passes "$@"

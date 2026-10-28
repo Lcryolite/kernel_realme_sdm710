@@ -1,0 +1,50 @@
+name: Sync BakaSU to stock-next
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Every Sunday at 03:17 UTC (11:17 Asia/Shanghai).
+    # GitHub schedules require this file on the repository's default branch.
+    - cron: '17 3 * * 0'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-bakasu-stock-next
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout stock-next and BakaSU only
+        uses: actions/checkout@v7
+        with:
+          ref: stock-next
+          fetch-depth: 1
+          submodules: true
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.gitmodules
+            /BakaSU
+
+      - name: Update BakaSU from upstream main
+        run: |
+          test "$(git config -f .gitmodules submodule.BakaSU.url)" = \
+            "https://github.com/Baka-SU/BakaSU.git"
+          test "$(git config -f .gitmodules submodule.BakaSU.branch)" = main
+          git submodule sync -- BakaSU
+          git submodule update --init --remote --checkout -- BakaSU
+          git add -- BakaSU
+          if git diff --cached --quiet -- BakaSU; then
+            echo 'BakaSU is already up to date.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          BAKASU_COMMIT=$(git -C BakaSU rev-parse HEAD)
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -c core.hooksPath=/dev/null commit -m "Update BakaSU to ${BAKASU_COMMIT}"
+          git push origin HEAD:refs/heads/stock-next
+          echo "Updated stock-next BakaSU to ${BAKASU_COMMIT}." >> "$GITHUB_STEP_SUMMARY"

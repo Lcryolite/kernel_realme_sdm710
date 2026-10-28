@@ -13,6 +13,8 @@
 #define KSYM_SYMBOL_LEN (sizeof("%s+%#lx/%#lx [%s]") + (KSYM_NAME_LEN - 1) + \
 			 2*(BITS_PER_LONG*3/10) + (MODULE_NAME_LEN - 1) + 1)
 
+extern int kallsyms_show_value(void);
+
 struct module;
 
 #ifdef CONFIG_KALLSYMS

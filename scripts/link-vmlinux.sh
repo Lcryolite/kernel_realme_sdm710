@@ -173,6 +173,44 @@ vmlinux_link()
 	fi
 }
 
+# Generate .BTF from the temporary vmlinux DWARF and turn it into a
+# relocatable input for every kallsyms and final link pass.
+gen_btf()
+{
+	local pahole_ver
+	local btf_raw=.btf.vmlinux.raw
+	local btf_compat=.btf.vmlinux.compat.raw
+
+	if ! [ -x "$(command -v ${PAHOLE})" ]; then
+		echo >&2 "BTF: ${1}: pahole (${PAHOLE}) is not available"
+		return 1
+	fi
+
+	pahole_ver=$(${PAHOLE} --version | sed -E 's/v([0-9]+)\.([0-9]+)/\1\2/')
+	if [ "${pahole_ver}" -lt "116" ]; then
+		echo >&2 "BTF: ${1}: pahole version $(${PAHOLE} --version) is too old, need at least v1.16"
+		return 1
+	fi
+
+	vmlinux_link "" ${1}
+
+	info BTF ${2}
+	LLVM_OBJCOPY=${OBJCOPY} ${PAHOLE} -J ${1}
+	${OBJCOPY} --dump-section .BTF=${btf_raw} ${1}
+	if [ ! -x "${RMX_BTF_COMPAT_SCRIPT:-}" ]; then
+		echo >&2 "BTF: RMX_BTF_COMPAT_SCRIPT is missing or not executable"
+		return 1
+	fi
+	${PYTHON3:-python3} "${RMX_BTF_COMPAT_SCRIPT}" \
+		--expect-enum64 4 --expect-enum-kflag 113 \
+		${btf_raw} ${btf_compat}
+	${OBJCOPY} --update-section .BTF=${btf_compat} ${1}
+	${OBJCOPY} --only-section=.BTF --set-section-flags .BTF=alloc,readonly \
+		--strip-all ${1} ${2} 2>/dev/null
+	printf '\1' | dd of=${2} conv=notrunc bs=1 seek=16 status=none
+	rm -f ${btf_raw} ${btf_compat}
+}
+
 # Create ${2} .o file with all symbols from the ${1} object file
 kallsyms()
 {
@@ -250,10 +288,12 @@ cleanup()
 	rm -f .tmp_version
 	rm -f .tmp_symversions
 	rm -f .tmp_vmlinux*
+	rm -f .btf.vmlinux.bin.o.new
+	rm -f .btf.vmlinux.raw .btf.vmlinux.compat.raw
 	rm -f built-in.o
 	rm -f System.map
 	rm -f vmlinux
-	rm -f vmlinux.o
+	rm -f .tmp_vmlinux.o
 	rm -f .tmp_rtic_mp_sz*
 	rm -f rtic_mp.*
 }
@@ -308,8 +348,9 @@ fi;
 
 archive_builtin
 
-#link vmlinux.o
-modpost_link vmlinux.o
+# Link vmlinux.o atomically so a later failure retains the last valid LTO output.
+modpost_link .tmp_vmlinux.o
+mv -f .tmp_vmlinux.o vmlinux.o
 
 # modpost vmlinux.o to check for section mismatches
 ${MAKE} -f "${srctree}/scripts/Makefile.modpost" vmlinux.o
@@ -334,6 +375,31 @@ if [ ! -z ${RTIC_MPGEN+x} ]; then
 	rtic_mp vmlinux.o rtic_mp.o .tmp_rtic_mp_sz1 .tmp_rtic_mp1.c
 	KBUILD_VMLINUX_MAIN+=" "
 	KBUILD_VMLINUX_MAIN+=$RTIC_MP_O
+fi
+
+btf_vmlinux_bin_o=""
+if [ -n "${CONFIG_DEBUG_INFO_BTF}" ]; then
+	btf_vmlinux_bin_o=.btf.vmlinux.bin.o
+	if [ -n "${RMX_BTF_PREBUILT_OBJECT:-}" ]; then
+		if [ ! -s "${RMX_BTF_PREBUILT_OBJECT}" ]; then
+			echo >&2 "BTF: prebuilt object is missing: ${RMX_BTF_PREBUILT_OBJECT}"
+			exit 1
+		fi
+		info BTF-COMPAT ${btf_vmlinux_bin_o}
+		cp --reflink=auto "${RMX_BTF_PREBUILT_OBJECT}" \
+			${btf_vmlinux_bin_o}.new
+		mv -f ${btf_vmlinux_bin_o}.new ${btf_vmlinux_bin_o}
+	elif [ ! -s ${btf_vmlinux_bin_o} ] || \
+	   [ vmlinux.o -nt ${btf_vmlinux_bin_o} ]; then
+		gen_btf .tmp_vmlinux.btf ${btf_vmlinux_bin_o}.new || {
+		echo >&2 "Failed to generate BTF for vmlinux"
+		echo >&2 "Try to disable CONFIG_DEBUG_INFO_BTF"
+		exit 1
+		}
+		mv -f ${btf_vmlinux_bin_o}.new ${btf_vmlinux_bin_o}
+	else
+		info BTF ${btf_vmlinux_bin_o}
+	fi
 fi
 
 kallsymso=""
@@ -363,11 +429,11 @@ if [ -n "${CONFIG_KALLSYMS}" ]; then
 	kallsyms_vmlinux=.tmp_vmlinux2
 
 	# step 1
-	vmlinux_link "" .tmp_vmlinux1
+	vmlinux_link "${btf_vmlinux_bin_o}" .tmp_vmlinux1
 	kallsyms .tmp_vmlinux1 .tmp_kallsyms1.o
 
 	# step 2
-	vmlinux_link .tmp_kallsyms1.o .tmp_vmlinux2
+	vmlinux_link ".tmp_kallsyms1.o ${btf_vmlinux_bin_o}" .tmp_vmlinux2
 	kallsyms .tmp_vmlinux2 .tmp_kallsyms2.o
 
 	# step 2a
@@ -375,7 +441,7 @@ if [ -n "${CONFIG_KALLSYMS}" ]; then
 		kallsymso=.tmp_kallsyms3.o
 		kallsyms_vmlinux=.tmp_vmlinux3
 
-		vmlinux_link .tmp_kallsyms2.o .tmp_vmlinux3
+		vmlinux_link ".tmp_kallsyms2.o ${btf_vmlinux_bin_o}" .tmp_vmlinux3
 
 		kallsyms .tmp_vmlinux3 .tmp_kallsyms3.o
 	fi
@@ -398,7 +464,7 @@ if [ ! -z ${RTIC_MP_O} ]; then
 fi
 
 info LD vmlinux
-vmlinux_link "${kallsymso}" vmlinux
+vmlinux_link "${kallsymso} ${btf_vmlinux_bin_o}" vmlinux
 
 if [ -n "${CONFIG_BUILDTIME_EXTABLE_SORT}" ]; then
 	info SORTEX vmlinux

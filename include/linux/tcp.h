@@ -240,6 +240,7 @@ struct tcp_sock {
 	u32	tlp_high_seq;	/* snd_nxt at the time of TLP */
 
 /* RTT measurement */
+	u64	tcp_mstamp;	/* most recent packet received/sent */
 	u32	srtt_us;	/* smoothed round trip time << 3 in usecs */
 	u32	mdev_us;	/* medium deviation			*/
 	u32	mdev_max_us;	/* maximal mdev for the last rtt period	*/
@@ -330,6 +331,10 @@ struct tcp_sock {
 	unsigned int		keepalive_intvl;  /* time interval between keep alive probes */
 
 	int			linger2;
+
+#ifdef CONFIG_BPF
+	u8	bpf_sock_ops_cb_flags;
+#endif
 
 /* Receiver side RTT estimation */
 	struct {

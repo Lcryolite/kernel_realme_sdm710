@@ -35,6 +35,7 @@ int oppo_panel_id = 0;
 int aod_light_mode = 0;
 
 extern int oppo_underbrightness_alpha;
+extern int oppo_dc2_alpha;
 #define PANEL_TX_MAX_BUF 256
 #define PANEL_CMD_MIN_TX_COUNT 2
 #define FFL_FP_LEVEL 150
@@ -251,19 +252,11 @@ error:
 	return rc;
 }
 
-int dsi_panel_seed_mode(struct dsi_panel *panel, int mode) {
+int dsi_panel_seed_mode_unlock(struct dsi_panel *panel, int mode) {
 	int rc = 0;
 
-	if (!panel) {
-		pr_err("Invalid params\n");
-		return -EINVAL;
-	}
-
-	mutex_lock(&panel->panel_lock);
-
 	if (!dsi_panel_initialized(panel)) {
-		rc = -EINVAL;
-		goto error;
+		return -EINVAL;
 	}
 
 	switch (mode) {
@@ -311,9 +304,21 @@ int dsi_panel_seed_mode(struct dsi_panel *panel, int mode) {
 		pr_err("[%s] seed mode Invalid %d\n",
 			panel->name, mode);
 	}
+	return rc;
+}
 
-error:
+int dsi_panel_seed_mode(struct dsi_panel *panel, int mode) {
+	int rc = 0;
+
+	if (!panel) {
+		pr_err("Invalid params\n");
+		return -EINVAL;
+	}
+
+	mutex_lock(&panel->panel_lock);
+	rc = dsi_panel_seed_mode_unlock(panel, mode);
 	mutex_unlock(&panel->panel_lock);
+
 	return rc;
 }
 
@@ -1725,6 +1730,32 @@ struct ba brightness_alpha_lut[] = {
 	{1023, 0x18},
 };
 
+struct ba brightness_seed_alpha_lut_dc[] = {
+	{0, 0xff},
+	{1, 0xfc},
+	{2, 0xfb},
+	{3, 0xfa},
+	{4, 0xf9},
+	{5, 0xf8},
+	{6, 0xf7},
+	{8, 0xf6},
+	{10, 0xf4},
+	{15, 0xf0},
+	{20, 0xea},
+	{30, 0xe0},
+	{45, 0xd0},
+	{70, 0xbc},
+	{100, 0x98},
+	{120, 0x80},
+	{140, 0x70},
+	{160, 0x58},
+	{180, 0x48},
+	{200, 0x30},
+	{220, 0x20},
+	{240, 0x10},
+	{260, 0x00},
+};
+
 struct ba brightness_alpha_lut_dc[] = {
 	{0, 0xff},
 	{1, 0xE0},
@@ -1762,6 +1793,33 @@ static int interpolate(int x, int xa, int xb, int ya, int yb)
 		sub = 2 * (x - xa) * (x - xb) / (yb - ya) / (xa - xb);
 
 	return ya + factor + plus + sub;
+}
+
+int oppo_seed_bright_to_alpha(int brightness)
+{
+	int level = ARRAY_SIZE(brightness_seed_alpha_lut_dc);
+	int i = 0;
+	int alpha;
+
+	if (oppo_panel_alpha)
+		return oppo_panel_alpha;
+	for (i = 0; i < ARRAY_SIZE(brightness_seed_alpha_lut_dc); i++) {
+		if (brightness_seed_alpha_lut_dc[i].brightness >= brightness)
+			break;
+	}
+
+	if (i == 0)
+		alpha = brightness_seed_alpha_lut_dc[0].alpha;
+	else if (i == level)
+		alpha = brightness_seed_alpha_lut_dc[level - 1].alpha;
+	else
+		alpha = interpolate(brightness,
+			brightness_seed_alpha_lut_dc[i - 1].brightness,
+			brightness_seed_alpha_lut_dc[i].brightness,
+			brightness_seed_alpha_lut_dc[i - 1].alpha,
+			brightness_seed_alpha_lut_dc[i].alpha);
+
+	return alpha;
 }
 
 int bl_to_alpha(int brightness)
@@ -1881,15 +1939,22 @@ static ssize_t oppo_display_set_dim_alpha(struct device *dev,
 static ssize_t oppo_display_get_dc_dim_alpha(struct device *dev,
                                 struct device_attribute *attr, char *buf)
 {
+	int ret = 0;
 	struct dsi_display *display = get_main_display();
 
 	if (display->panel->is_hbm_enabled ||
 	    get_oppo_display_power_status() != OPPO_DISPLAY_POWER_ON)
-		return sprintf(buf, "%d\n", 0);
+		ret = 0;
 
-	return sprintf(buf, "%d\n", oppo_underbrightness_alpha);
+	if (oppo_dc2_alpha != 0)
+		ret = oppo_dc2_alpha;
+	else if (oppo_underbrightness_alpha != 0)
+		ret = oppo_underbrightness_alpha;
+
+	return sprintf(buf, "%d\n", ret);
 }
 
+int oppo_dimlayer_bl_enable_v2 = 0;
 int oppo_dimlayer_bl_enable = 0;
 int oppo_dimlayer_bl_enabled = 0;
 int oppo_dimlayer_bl_alpha = 260;
@@ -1921,14 +1986,130 @@ static ssize_t oppo_display_set_dimlayer_backlight(struct device *dev,
 static ssize_t oppo_display_get_dimlayer_enable(struct device *dev,
                                 struct device_attribute *attr, char *buf)
 {
-	return sprintf(buf, "%d\n", oppo_dimlayer_bl_enable);
+	return sprintf(buf, "%d\n", oppo_dimlayer_bl_enable_v2);
+}
+
+int oppo_datadimming_vblank_count = 0;
+atomic_t oppo_datadimming_vblank_ref = ATOMIC_INIT(0);
+
+extern int oppo_seed_backlight;
+extern int oppo_dimlayer_bl_enable_v2_real;
+extern bool oppo_skip_datadimming_sync;
+extern u32 oppo_last_backlight;
+static bool oppo_datadimming_v2_need_flush;
+static bool oppo_datadimming_v2_need_sync;
+
+void oppo_panel_process_dimming_v2_post(struct dsi_panel *panel,
+		bool force_disable)
+{
+	struct dsi_display *display = get_main_display();
+	struct drm_connector *dsi_connector = display->drm_conn;
+
+	if (oppo_datadimming_v2_need_flush) {
+		if (oppo_datadimming_v2_need_sync && dsi_connector &&
+		    dsi_connector->state && dsi_connector->state->crtc) {
+			struct drm_crtc *crtc = dsi_connector->state->crtc;
+			int frame_time_us;
+			int ret;
+			u32 current_vblank;
+
+			frame_time_us = mult_frac(1000, 1000,
+					panel->cur_mode->timing.refresh_rate);
+			current_vblank = drm_crtc_vblank_count(crtc);
+			ret = wait_event_timeout(*drm_crtc_vblank_waitqueue(crtc),
+					current_vblank != drm_crtc_vblank_count(crtc),
+					usecs_to_jiffies(frame_time_us + 1000));
+			if (!ret)
+				pr_err("%s: crtc wait_event_timeout\n", __func__);
+		}
+
+		dsi_panel_seed_mode_unlock(panel, seed_mode);
+		oppo_datadimming_v2_need_flush = false;
+	}
+}
+
+int oppo_panel_process_dimming_v2(struct dsi_panel *panel, int bl_lvl,
+		bool force_disable)
+{
+	struct dsi_display *display = get_main_display();
+	struct drm_connector *dsi_connector = display->drm_conn;
+
+	oppo_datadimming_v2_need_flush = false;
+	oppo_datadimming_v2_need_sync = false;
+	if (!force_disable && oppo_dimlayer_bl_enable_v2_real &&
+	    bl_lvl > 1 && bl_lvl < 260) {
+		if (!oppo_seed_backlight) {
+			pr_err("Enter DC backlight v2\n");
+			if (!oppo_skip_datadimming_sync &&
+			    oppo_last_backlight != 0 && oppo_last_backlight != 1)
+				oppo_datadimming_v2_need_sync = true;
+		}
+		oppo_seed_backlight = bl_lvl;
+		bl_lvl = oppo_dimlayer_bl_alpha;
+		oppo_datadimming_v2_need_flush = true;
+	} else if (oppo_seed_backlight) {
+		pr_err("Exit DC backlight v2\n");
+		oppo_seed_backlight = 0;
+		oppo_dc2_alpha = 0;
+		oppo_datadimming_v2_need_flush = true;
+		oppo_datadimming_v2_need_sync = true;
+	}
+
+	if (oppo_datadimming_v2_need_flush &&
+	    oppo_datadimming_v2_need_sync && dsi_connector &&
+	    dsi_connector->state && dsi_connector->state->crtc) {
+		struct drm_crtc *crtc = dsi_connector->state->crtc;
+		int frame_time_us;
+		int ret;
+		u32 current_vblank;
+
+		frame_time_us = mult_frac(1000, 1000,
+				panel->cur_mode->timing.refresh_rate);
+		current_vblank = drm_crtc_vblank_count(crtc);
+		ret = wait_event_timeout(*drm_crtc_vblank_waitqueue(crtc),
+				current_vblank != drm_crtc_vblank_count(crtc),
+				usecs_to_jiffies(frame_time_us + 1000));
+		if (!ret)
+			pr_err("%s: crtc wait_event_timeout\n", __func__);
+	}
+	if (oppo_datadimming_v2_need_flush)
+		oppo_panel_process_dimming_v2_post(panel, force_disable);
+
+	return bl_lvl;
+}
+
+int oppo_panel_update_backlight_unlock(struct dsi_panel *panel)
+{
+	return dsi_panel_set_backlight(panel, panel->bl_config.bl_level);
 }
 
 static ssize_t oppo_display_set_dimlayer_enable(struct device *dev,
                                struct device_attribute *attr,
                                const char *buf, size_t count)
 {
-	sscanf(buf, "%d", &oppo_dimlayer_bl_enable);
+	struct dsi_display *display = get_main_display();
+	struct drm_connector *dsi_connector = display->drm_conn;
+	int enable = 0;
+	int err;
+
+	sscanf(buf, "%d", &enable);
+	mutex_lock(&display->display_lock);
+	if (!dsi_connector || !dsi_connector->state ||
+	    !dsi_connector->state->crtc) {
+		pr_err("[%s]: display not ready\n", __func__);
+	} else {
+		err = drm_crtc_vblank_get(dsi_connector->state->crtc);
+		if (err) {
+			pr_err("failed to get crtc vblank, error=%d\n", err);
+		} else {
+			oppo_datadimming_vblank_count = 7;
+			atomic_inc(&oppo_datadimming_vblank_ref);
+		}
+	}
+
+	usleep_range(17000, 17100);
+	oppo_dimlayer_bl_enable_v2 = enable;
+	mutex_unlock(&display->display_lock);
 
 	return count;
 }
@@ -2219,6 +2400,7 @@ static ssize_t oppo_display_notify_fp_press(struct device *dev,
 	struct drm_device *drm_dev = display->drm_dev;
 	struct drm_connector *dsi_connector = display->drm_conn;
 	struct drm_mode_config *mode_config = &drm_dev->mode_config;
+	struct msm_drm_private *priv = drm_dev->dev_private;
 	struct drm_atomic_state *state;
 	struct drm_crtc_state *crtc_state;
 	struct drm_crtc *crtc;
@@ -2226,6 +2408,7 @@ static ssize_t oppo_display_notify_fp_press(struct device *dev,
 	int onscreenfp_status = 0;
 	int vblank_get = -EINVAL;
 	int err = 0;
+	int i;
 
 	sscanf(buf, "%du", &onscreenfp_status);
 	onscreenfp_status = !!onscreenfp_status;
@@ -2267,6 +2450,13 @@ static ssize_t oppo_display_notify_fp_press(struct device *dev,
 	state->acquire_ctx = mode_config->acquire_ctx;
 	crtc = dsi_connector->state->crtc;
 	crtc_state = drm_atomic_get_crtc_state(state, crtc);
+	for (i = 0; i < priv->num_crtcs; i++) {
+		if (priv->disp_thread[i].crtc_id == crtc->base.id) {
+			if (priv->disp_thread[i].thread)
+				kthread_flush_worker(&priv->disp_thread[i].worker);
+		}
+	}
+
 	err = drm_atomic_commit(state);
 	if (err < 0)
 		drm_atomic_state_free(state);

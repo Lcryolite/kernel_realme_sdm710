@@ -9,6 +9,10 @@ int fixup_exception(struct pt_regs *regs)
 {
 	const struct exception_table_entry *fixup;
 
+	fixup = search_bpf_extables(instruction_pointer(regs));
+	if (fixup)
+		return arm64_bpf_fixup_exception(fixup, regs);
+
 	fixup = search_exception_tables(instruction_pointer(regs));
 	if (fixup)
 		regs->pc = (unsigned long)&fixup->fixup + fixup->fixup;

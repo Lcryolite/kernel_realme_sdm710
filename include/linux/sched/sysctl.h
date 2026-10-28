@@ -31,6 +31,16 @@ extern unsigned int sysctl_sched_cstate_aware;
 extern unsigned int sysctl_sched_capacity_margin;
 extern unsigned int sysctl_sched_capacity_margin_down;
 
+#ifdef CONFIG_SCHED_BORE
+extern unsigned int sched_bore;
+extern unsigned int sched_burst_smoothness_long;
+extern unsigned int sched_burst_smoothness_short;
+extern unsigned int sched_burst_fork_atavistic;
+extern unsigned int sched_burst_penalty_offset;
+extern unsigned int sched_burst_penalty_scale;
+extern unsigned int sched_burst_cache_lifetime;
+#endif
+
 #ifdef CONFIG_SCHED_WALT
 extern unsigned int sysctl_sched_init_task_load_pct;
 extern unsigned int sysctl_sched_cpu_high_irqload;

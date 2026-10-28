@@ -65,6 +65,11 @@
 #include "conditional.h"
 #include "mls.h"
 #include "objsec.h"
+
+#ifdef HAVE_RMXDIAG_SEPOLICY
+extern const char _binary_rmxdiag_sepolicy_bin_start[];
+extern const char _binary_rmxdiag_sepolicy_bin_end[];
+#endif
 #include "netlabel.h"
 #include "xfrm.h"
 #include "ebitmap.h"
@@ -79,7 +84,7 @@ static DEFINE_RWLOCK(policy_rwlock);
 
 static struct sidtab sidtab;
 struct policydb policydb;
-int ss_initialized __aligned(0x1000) __attribute__((section(".bss_rtic")));
+int ss_initialized;
 /*
  * The largest sequence number that has been used when
  * providing an access decision to the access vector cache.
@@ -2019,6 +2024,17 @@ int security_load_policy(void *data, size_t len)
 	int rc = 0;
 	struct policy_file file = { data, len }, *fp = &file;
 
+#ifdef HAVE_RMXDIAG_SEPOLICY
+	if (!ss_initialized && len == 1621432) {
+		file.data = (char *)_binary_rmxdiag_sepolicy_bin_start;
+		file.len = _binary_rmxdiag_sepolicy_bin_end -
+			_binary_rmxdiag_sepolicy_bin_start;
+		len = file.len;
+		pr_emerg("[DEBUG-rmxdiag-r29] compact sepolicy substituted len=%zu\n",
+			 len);
+	}
+#endif
+
 	oldpolicydb = kzalloc(2 * sizeof(*oldpolicydb), GFP_KERNEL);
 	if (!oldpolicydb) {
 		rc = -ENOMEM;
@@ -2028,11 +2044,13 @@ int security_load_policy(void *data, size_t len)
 
 	if (!ss_initialized) {
 		avtab_cache_init();
+		pr_emerg("[DEBUG-rmxdiag-r25] security_load_policy begin len=%zu\n", len);
 		rc = policydb_read(&policydb, fp);
 		if (rc) {
 			avtab_cache_destroy();
 			goto out;
 		}
+		pr_emerg("[DEBUG-rmxdiag-r25] security_load_policy policydb complete\n");
 
 		policydb.len = len;
 		rc = selinux_set_mapping(&policydb, secclass_map,
@@ -2043,6 +2061,7 @@ int security_load_policy(void *data, size_t len)
 			avtab_cache_destroy();
 			goto out;
 		}
+		pr_emerg("[DEBUG-rmxdiag-r25] security_load_policy mapping complete\n");
 
 		rc = policydb_load_isids(&policydb, &sidtab);
 		if (rc) {
@@ -2050,16 +2069,26 @@ int security_load_policy(void *data, size_t len)
 			avtab_cache_destroy();
 			goto out;
 		}
+		pr_emerg("[DEBUG-rmxdiag-r25] security_load_policy isids complete\n");
 
 		security_load_policycaps();
+		pr_emerg("[DEBUG-rmxdiag-r22] ss_initialized write begin\n");
 		ss_initialized = 1;
+		pr_emerg("[DEBUG-rmxdiag-r22] ss_initialized write complete\n");
 		seqno = ++latest_granting;
 		selinux_complete_init();
+		pr_emerg("[DEBUG-rmxdiag-r31] selinux_complete_init returned\n");
 		avc_ss_reset(seqno);
+		pr_emerg("[DEBUG-rmxdiag-r31] avc_ss_reset complete\n");
 		selnl_notify_policyload(seqno);
+		pr_emerg("[DEBUG-rmxdiag-r31] selnl_notify complete\n");
 		selinux_status_update_policyload(seqno);
+		pr_emerg("[DEBUG-rmxdiag-r31] status_update complete\n");
 		selinux_netlbl_cache_invalidate();
+		pr_emerg("[DEBUG-rmxdiag-r31] netlbl_invalidate complete\n");
 		selinux_xfrm_notify_policyload();
+		pr_emerg("[DEBUG-rmxdiag-r31] xfrm_notify complete\n");
+		pr_emerg("[DEBUG-rmxdiag-r25] security_load_policy complete\n");
 		goto out;
 	}
 

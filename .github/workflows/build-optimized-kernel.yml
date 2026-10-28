@@ -1,0 +1,120 @@
+name: Build optimized kernel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: optimized-kernel-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      ANTMAN_COMMIT: 0b32c45e3ad83a953b4bc3fd2feb4ad3cc87c1e8
+      ANTMAN_SHA256: deef2dcf11568403c712432ecb7678ef62c3244054ccfee8510ef94a8a8fb04d
+      NEUTRON_TAG: 30072026
+      NEUTRON_SHA256: aa1567215d2be42d0d054ae72627e6d18ef6ac80205847f1e7ce0db5736476f3
+      REQUIRE_CLANG_MAJOR: 24
+      ENABLE_THINLTO: 1
+      ENABLE_POLLY: 1
+      ENABLE_LLVM_TUNING: 1
+      KBUILD_BUILD_USER: builder
+      KBUILD_BUILD_HOST: github-actions
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            bc bison ccache file flex gcc-aarch64-linux-gnu \
+            gcc-arm-linux-gnueabihf libelf-dev libssl-dev wget zstd
+
+      - name: Sync Neutron toolchain with AntMan
+        env:
+          TOOLCHAIN_DIR: ${{ runner.temp }}/neutron-clang
+        run: |
+          mkdir -p "${TOOLCHAIN_DIR}"
+          wget --quiet \
+            "https://raw.githubusercontent.com/Neutron-Toolchains/antman/${ANTMAN_COMMIT}/antman" \
+            -O "${TOOLCHAIN_DIR}/antman"
+          echo "${ANTMAN_SHA256}  ${TOOLCHAIN_DIR}/antman" | sha256sum --check --strict
+          chmod +x "${TOOLCHAIN_DIR}/antman"
+          cd "${TOOLCHAIN_DIR}"
+          ./antman --sync="${NEUTRON_TAG}" --noconfirm --noprogress --noaxel
+          grep -Fqx "${NEUTRON_SHA256}" build.info
+          ./antman --patch=glibc --noconfirm --noprogress --noaxel
+
+      - name: Verify optimization support
+        env:
+          LLVM_BIN: ${{ runner.temp }}/neutron-clang/bin
+        run: |
+          export PATH="${LLVM_BIN}:${PATH}"
+          test "$(clang -dumpversion | cut -d. -f1)" = "${REQUIRE_CLANG_MAJOR}"
+          printf 'int f(int *a) { int s = 0; for (int i = 0; i < 64; ++i) s += a[i]; return s; }\n' \
+            > "${RUNNER_TEMP}/probe.c"
+          clang --target=aarch64-linux-gnu -O2 -flto=thin -mgeneral-regs-only \
+            -march=armv8.2-a -mtune=cortex-a55 \
+            -mllvm -polly -mllvm -polly-vectorizer=stripmine \
+            -mllvm -inline-threshold=500 \
+            -mllvm -import-instr-limit=200 \
+            -mllvm -enable-gvn-hoist=true \
+            -c "${RUNNER_TEMP}/probe.c" -o "${RUNNER_TEMP}/probe.o"
+          ld.lld -r "${RUNNER_TEMP}/probe.o" -o "${RUNNER_TEMP}/probe.linked.o" \
+            --lto-O3 --thinlto-jobs="$(nproc)" \
+            --mllvm=-inline-threshold=500 \
+            --mllvm=-import-instr-limit=200 \
+            --mllvm=-enable-gvn-hoist=true
+          clang --version
+          ld.lld --version
+
+      - name: Build kernel
+        env:
+          LLVM_BIN: ${{ runner.temp }}/neutron-clang/bin
+          HOST_BIN: /usr/bin
+          GNU_BIN: /usr/bin
+          CROSS_COMPILE: /usr/bin/aarch64-linux-gnu-
+          CROSS_COMPILE_ARM32: /usr/bin/arm-linux-gnueabihf-
+          OUT_DIR: ${{ runner.temp }}/kernel-out
+        run: ./build-clang22.sh
+
+      - name: Verify build result
+        env:
+          OUT_DIR: ${{ runner.temp }}/kernel-out
+        run: |
+          grep -q '^CONFIG_LTO_CLANG=y$' "${OUT_DIR}/.config"
+          test -s "${OUT_DIR}/arch/arm64/boot/Image.gz"
+          test -s "${OUT_DIR}/vmlinux"
+          "${RUNNER_TEMP}/neutron-clang/bin/llvm-readelf" \
+            --sections "${OUT_DIR}/vmlinux" >/dev/null
+          sha256sum "${OUT_DIR}/arch/arm64/boot/Image.gz" "${OUT_DIR}/vmlinux"
+
+      - name: Write build summary
+        if: always()
+        env:
+          OUT_DIR: ${{ runner.temp }}/kernel-out
+        run: |
+          {
+            echo '### Optimized kernel build'
+            echo
+            echo "- Neutron tag: \`${NEUTRON_TAG}\`"
+            echo '- Host compiler/linker: AntMan-managed Neutron binaries'
+            echo '- Kernel optimization: ThinLTO, Polly, ARMv8.2-A, Cortex-A55 scheduling tune'
+            echo '- LLVM tuning: inline threshold 500, import limit 200, GVN hoisting'
+            if test -s "${OUT_DIR}/arch/arm64/boot/Image.gz"; then
+              image_hash="$(sha256sum "${OUT_DIR}/arch/arm64/boot/Image.gz" | cut -d' ' -f1)"
+              echo "- Image.gz SHA-256: \`${image_hash}\`"
+            fi
+            echo
+            echo 'No build artifact or ROM image is uploaded.'
+          } >> "${GITHUB_STEP_SUMMARY}"

@@ -29,6 +29,7 @@
 #include <linux/seqlock.h>
 #include <linux/swait.h>
 #include <linux/stop_machine.h>
+#include <linux/timer.h>
 
 /*
  * Define shape of hierarchy based on NR_CPUS, CONFIG_RCU_FANOUT, and
@@ -416,6 +417,10 @@ struct rcu_data {
 	struct swait_queue_head nocb_wq; /* For nocb kthreads to sleep on. */
 	struct task_struct *nocb_kthread;
 	int nocb_defer_wakeup;		/* Defer wakeup of nocb_kthread. */
+#ifdef CONFIG_RCU_LAZY
+	struct timer_list nocb_lazy_timer;
+	atomic_t nocb_lazy_timer_pending;
+#endif
 
 	/* The following fields are used by the leader, hence own cacheline. */
 	struct rcu_head *nocb_gp_head ____cacheline_internodealigned_in_smp;

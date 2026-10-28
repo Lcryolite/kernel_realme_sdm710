@@ -585,6 +585,10 @@ extern int oppo_dimlayer_bl_enable;
 extern int oppo_dimlayer_bl_enabled;
 extern int oppo_dimlayer_bl_delay;
 extern int oppo_dimlayer_bl_delay_after;
+extern int oppo_dimlayer_bl_enable_v2;
+int oppo_dimlayer_bl_enable_v2_real = 0;
+extern int oppo_datadimming_vblank_count;
+extern atomic_t oppo_datadimming_vblank_ref;
 int sde_connector_update_backlight(struct drm_connector *connector)
 {
 	if (oppo_dimlayer_bl != oppo_dimlayer_bl_enabled) {
@@ -594,8 +598,34 @@ int sde_connector_update_backlight(struct drm_connector *connector)
 		_sde_connector_update_bl_scale(c_conn);
 		//usleep_range(oppo_dimlayer_bl_delay_after, oppo_dimlayer_bl_delay_after + 100);
 	}
+
+	if (oppo_dimlayer_bl_enable_v2 != oppo_dimlayer_bl_enable_v2_real) {
+		struct sde_connector *c_conn = to_sde_connector(connector);
+
+		oppo_dimlayer_bl_enable_v2_real = oppo_dimlayer_bl_enable_v2;
+		_sde_connector_update_bl_scale(c_conn);
+	}
+
+	if (oppo_datadimming_vblank_count > 0) {
+		oppo_datadimming_vblank_count--;
+	} else {
+		while (atomic_read(&oppo_datadimming_vblank_ref) > 0) {
+			drm_crtc_vblank_put(connector->state->crtc);
+			atomic_dec(&oppo_datadimming_vblank_ref);
+		}
+	}
+
 	return 0;
 }
+
+extern int oppo_seed_backlight;
+extern int oppo_panel_update_backlight_unlock(struct dsi_panel *panel);
+extern int oppo_panel_process_dimming_v2(struct dsi_panel *panel,
+		int bl_lvl, bool force_disable);
+extern void oppo_panel_process_dimming_v2_post(struct dsi_panel *panel,
+		bool force_disable);
+bool oppo_skip_datadimming_sync;
+
 static int _sde_connector_update_hbm(struct sde_connector *c_conn)
 {
 	struct drm_connector *connector = &c_conn->base;
@@ -641,55 +671,92 @@ static int _sde_connector_update_hbm(struct sde_connector *c_conn)
 
 	if (fingerprint_mode != dsi_display->panel->is_hbm_enabled) {
 		struct drm_encoder *drm_enc = c_conn->encoder;
+		struct dsi_panel *panel = dsi_display->panel;
 
 		pr_err("OnscreenFingerprint mode: %s",
 		       fingerprint_mode ? "Enter" : "Exit");
+		pr_err("[RMXFP-R183] hbm target=%d scene=%d power=%d panel_hbm=%d seed_bl=%d real_bl=%u\n",
+			fingerprint_mode, get_oppo_display_scene(),
+			get_oppo_display_power_status(), panel->is_hbm_enabled,
+			oppo_seed_backlight, panel->bl_config.bl_level);
 
-		dsi_display->panel->is_hbm_enabled = fingerprint_mode;
+		panel->is_hbm_enabled = fingerprint_mode;
 		if (fingerprint_mode) {
-			mutex_lock(&dsi_display->panel->panel_lock);
+			mutex_lock(&panel->panel_lock);
 
-			if (OPPO_DISPLAY_AOD_SCENE != get_oppo_display_scene() &&
-			    dsi_display->panel->bl_config.bl_level) {
-				sde_encoder_poll_line_counts(drm_enc);
+			if (oppo_seed_backlight) {
+				int frame_time_us;
+
+				frame_time_us = mult_frac(1000, 1000,
+						panel->cur_mode->timing.refresh_rate);
+				oppo_panel_process_dimming_v2(panel,
+						panel->bl_config.bl_level, true);
+				mipi_dsi_dcs_set_display_brightness(
+						&panel->mipi_device,
+						panel->bl_config.bl_level);
+				oppo_panel_process_dimming_v2_post(panel, true);
+				usleep_range(frame_time_us, frame_time_us + 100);
+				pr_err("[RMXFP-R183] dc-v2 exited before HBM\n");
 			}
 
-                        rc = dsi_panel_tx_cmd_set(dsi_display->panel, DSI_CMD_HBM_ON);
+			if (OPPO_DISPLAY_AOD_SCENE != get_oppo_display_scene() &&
+			    panel->bl_config.bl_level) {
+				sde_encoder_poll_line_counts(drm_enc);
+				rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_HBM_ON);
+			} else {
+				rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_AOD_HBM_ON);
+			}
 
-			mutex_unlock(&dsi_display->panel->panel_lock);
+			mutex_unlock(&panel->panel_lock);
 
 			if (rc) {
 				pr_err("failed to send DSI_CMD_HBM_ON cmds, rc=%d\n", rc);
 				return rc;
 			}
 		} else {
-			_sde_connector_update_bl_scale(c_conn);
+			mutex_lock(&panel->panel_lock);
 
-			mutex_lock(&dsi_display->panel->panel_lock);
+			if (!panel->panel_initialized) {
+				panel->is_hbm_enabled = true;
+				pr_err("panel not initialized, failed to Exit OnscreenFingerprint\n");
+				mutex_unlock(&panel->panel_lock);
+				return 0;
+			}
 
 			sde_encoder_poll_line_counts(drm_enc);
+			oppo_skip_datadimming_sync = true;
+			oppo_panel_update_backlight_unlock(panel);
+			oppo_skip_datadimming_sync = false;
+
 			if(OPPO_DISPLAY_AOD_HBM_SCENE == get_oppo_display_scene()) {
 				if (OPPO_DISPLAY_POWER_DOZE_SUSPEND == get_oppo_display_power_status() ||
 				    OPPO_DISPLAY_POWER_DOZE == get_oppo_display_power_status()) {
+					rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_AOD_HBM_OFF);
 					set_oppo_display_scene(OPPO_DISPLAY_AOD_SCENE);
 				} else {
-					rc = dsi_panel_tx_cmd_set(dsi_display->panel, DSI_CMD_SET_NOLP);
+					rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_NOLP);
+					if (oppo_display_get_hbm_mode())
+						rc = dsi_panel_tx_cmd_set(panel,
+								DSI_CMD_AOD_HBM_ON);
 					set_oppo_display_scene(OPPO_DISPLAY_NORMAL_SCENE);
 				}
 			} else if (oppo_display_get_hbm_mode()) {
 				/* Do nothing to skip hbm off */
 			} else if(OPPO_DISPLAY_AOD_SCENE == get_oppo_display_scene()) {
-                                /* Do nothing */
+				rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_AOD_HBM_OFF);
 			} else {
-				rc = dsi_panel_tx_cmd_set(dsi_display->panel, DSI_CMD_HBM_OFF);
+				rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_HBM_OFF);
 			}
 
-			mutex_unlock(&dsi_display->panel->panel_lock);
+			mutex_unlock(&panel->panel_lock);
 			if (rc) {
 				pr_err("failed to send DSI_CMD_HBM_OFF cmds, rc=%d\n", rc);
 				return rc;
 			}
+			_sde_connector_update_bl_scale(c_conn);
 		}
+		pr_err("[RMXFP-R183] hbm complete target=%d rc=%d panel_hbm=%d\n",
+			fingerprint_mode, rc, panel->is_hbm_enabled);
 	}
 
 	return 0;

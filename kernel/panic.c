@@ -144,6 +144,13 @@ void panic(const char *fmt, ...)
 	int old_cpu, this_cpu;
 	bool _crash_kexec_post_notifiers = crash_kexec_post_notifiers;
 
+	va_start(args, fmt);
+	vsnprintf(buf, sizeof(buf), fmt, args);
+	va_end(args);
+	pr_emerg("[DEBUG-rmxdiag-r12] panic-entry pid=%d comm=%s reason=%s",
+		 current->pid, current->comm, buf);
+	mdelay(3000);
+
 	trace_kernel_panic(0);
 
 	/*
@@ -178,9 +185,6 @@ void panic(const char *fmt, ...)
 
 	console_verbose();
 	bust_spinlocks(1);
-	va_start(args, fmt);
-	vsnprintf(buf, sizeof(buf), fmt, args);
-	va_end(args);
 	dump_stack_minidump(0);
 	pr_emerg("Kernel panic - not syncing: %s\n", buf);
 #ifdef CONFIG_DEBUG_BUGVERBOSE

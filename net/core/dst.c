@@ -425,6 +425,21 @@ struct metadata_dst __percpu *metadata_dst_alloc_percpu(u8 optslen, gfp_t flags)
 }
 EXPORT_SYMBOL_GPL(metadata_dst_alloc_percpu);
 
+void metadata_dst_free_percpu(struct metadata_dst __percpu *md_dst)
+{
+#ifdef CONFIG_DST_CACHE
+	int cpu;
+
+	for_each_possible_cpu(cpu) {
+		struct metadata_dst *one_md_dst = per_cpu_ptr(md_dst, cpu);
+
+		dst_cache_destroy(&one_md_dst->u.tun_info.dst_cache);
+	}
+#endif
+	free_percpu(md_dst);
+}
+EXPORT_SYMBOL_GPL(metadata_dst_free_percpu);
+
 /* Dirty hack. We did it in 2.2 (in __dst_free),
  * we have _very_ good reasons not to repeat
  * this mistake in 2.3, but we have no choice
