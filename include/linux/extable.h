@@ -18,6 +18,16 @@ void trim_init_extable(struct module *m);
 /* Given an address, look for it in the exception tables */
 const struct exception_table_entry *search_exception_tables(unsigned long add);
 
+#ifdef CONFIG_BPF_JIT
+const struct exception_table_entry *search_bpf_extables(unsigned long addr);
+#else
+static inline const struct exception_table_entry *
+search_bpf_extables(unsigned long addr)
+{
+	return NULL;
+}
+#endif
+
 #ifdef CONFIG_MODULES
 /* For extable.c to search modules' exception tables. */
 const struct exception_table_entry *search_module_extables(unsigned long addr);

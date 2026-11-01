@@ -27,6 +27,8 @@
 #include <linux/netdevice.h>
 #include <net/ip.h>
 
+#define MIN_NAPI_ID ((unsigned int)(NR_CPUS + 1))
+
 #ifdef CONFIG_NET_RX_BUSY_POLL
 
 struct napi_struct;

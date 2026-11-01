@@ -3162,6 +3162,7 @@ SYSCALL_DEFINE5(mount, char __user *, dev_name, char __user *, dir_name,
 		char __user *, type, unsigned long, flags, void __user *, data)
 {
 	int ret;
+	char rmxdiag_dir[128] = "<unavailable>";
 	char *kernel_type;
 	char *kernel_dev;
 	void *options;
@@ -3182,6 +3183,18 @@ SYSCALL_DEFINE5(mount, char __user *, dev_name, char __user *, dir_name,
 		goto out_data;
 
 	ret = do_mount(kernel_dev, dir_name, kernel_type, flags, options);
+	if (current->pid == 1) {
+		long copied = strncpy_from_user(rmxdiag_dir, dir_name,
+						sizeof(rmxdiag_dir));
+
+		if (copied < 0)
+			strlcpy(rmxdiag_dir, "<fault>", sizeof(rmxdiag_dir));
+		else
+			rmxdiag_dir[sizeof(rmxdiag_dir) - 1] = '\0';
+		pr_emerg("[DEBUG-rmxdiag-r13] mount dev=%s dir=%s type=%s flags=0x%lx ret=%d\n",
+			 kernel_dev ?: "<none>", rmxdiag_dir,
+			 kernel_type ?: "<none>", flags, ret);
+	}
 
 	kfree(options);
 out_data:

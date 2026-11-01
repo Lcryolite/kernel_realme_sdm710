@@ -1530,10 +1530,17 @@ static void rcu_oom_notify_cpu(void *unused)
 {
 	struct rcu_state *rsp;
 	struct rcu_data *rdp;
+	bool has_lazy;
 
 	for_each_rcu_flavor(rsp) {
 		rdp = raw_cpu_ptr(rsp->rda);
-		if (rdp->qlen_lazy != 0) {
+		has_lazy = rdp->qlen_lazy != 0;
+#ifdef CONFIG_RCU_LAZY
+		if (rcu_is_nocb_cpu(rdp->cpu))
+			has_lazy =
+				atomic_long_read(&rdp->nocb_q_count_lazy) != 0;
+#endif
+		if (has_lazy) {
 			atomic_inc(&oom_callback_count);
 			rsp->call(&rdp->oom_head, rcu_oom_callback);
 		}
@@ -1784,6 +1791,36 @@ static void wake_nocb_leader(struct rcu_data *rdp, bool force)
 	}
 }
 
+#ifdef CONFIG_RCU_LAZY
+/* Flush a lazy-only no-CBs queue after its batching window expires. */
+static void rcu_nocb_lazy_flush(unsigned long data)
+{
+	struct rcu_data *rdp = (struct rcu_data *)data;
+
+	atomic_set(&rdp->nocb_lazy_timer_pending, 0);
+	wake_nocb_leader(rdp, true);
+}
+
+static void rcu_nocb_arm_lazy_timer(struct rcu_data *rdp)
+{
+	struct rcu_data *rdp_leader = rdp->nocb_leader;
+	unsigned long delay = max_t(unsigned long, 1,
+				    READ_ONCE(rcu_lazy_flush_jiffies));
+	unsigned long expires = jiffies + delay;
+
+	if (atomic_cmpxchg(&rdp_leader->nocb_lazy_timer_pending, 0, 1) == 0)
+		mod_timer(&rdp_leader->nocb_lazy_timer, expires);
+}
+
+static void rcu_nocb_cancel_lazy_timer(struct rcu_data *rdp)
+{
+	struct rcu_data *rdp_leader = rdp->nocb_leader;
+
+	if (atomic_xchg(&rdp_leader->nocb_lazy_timer_pending, 0))
+		del_timer(&rdp_leader->nocb_lazy_timer);
+}
+#endif /* #ifdef CONFIG_RCU_LAZY */
+
 /*
  * Does the specified CPU need an RCU callback for the specified flavor
  * of rcu_barrier()?
@@ -1845,6 +1882,9 @@ static void __call_rcu_nocb_enqueue(struct rcu_data *rdp,
 				    unsigned long flags)
 {
 	int len;
+#ifdef CONFIG_RCU_LAZY
+	int len_lazy;
+#endif
 	struct rcu_head **old_rhpp;
 	struct task_struct *t;
 
@@ -1864,6 +1904,29 @@ static void __call_rcu_nocb_enqueue(struct rcu_data *rdp,
 		return;
 	}
 	len = atomic_long_read(&rdp->nocb_q_count);
+#ifdef CONFIG_RCU_LAZY
+	len_lazy = atomic_long_read(&rdp->nocb_q_count_lazy);
+	if (enable_rcu_lazy && len == len_lazy && len <= qhimark) {
+		rcu_nocb_arm_lazy_timer(rdp);
+		trace_rcu_nocb_wake(rdp->rsp->name, rdp->cpu,
+				    TPS("WakeLazy"));
+		return;
+	}
+	if (enable_rcu_lazy && !rhcount_lazy &&
+	    atomic_read(&rdp->nocb_leader->nocb_lazy_timer_pending)) {
+		rcu_nocb_cancel_lazy_timer(rdp);
+		if (!irqs_disabled_flags(flags)) {
+			wake_nocb_leader(rdp, true);
+			trace_rcu_nocb_wake(rdp->rsp->name, rdp->cpu,
+					    TPS("WakeNonLazy"));
+		} else {
+			rdp->nocb_defer_wakeup = RCU_NOGP_WAKE_FORCE;
+			trace_rcu_nocb_wake(rdp->rsp->name, rdp->cpu,
+					    TPS("WakeNonLazyIsDeferred"));
+		}
+		return;
+	}
+#endif /* #ifdef CONFIG_RCU_LAZY */
 	if (old_rhpp == &rdp->nocb_head) {
 		if (!irqs_disabled_flags(flags)) {
 			/* ... if queue was empty ... */
@@ -2279,6 +2342,11 @@ static void __init rcu_boot_init_nocb_percpu_data(struct rcu_data *rdp)
 	rdp->nocb_tail = &rdp->nocb_head;
 	init_swait_queue_head(&rdp->nocb_wq);
 	rdp->nocb_follower_tail = &rdp->nocb_follower_head;
+#ifdef CONFIG_RCU_LAZY
+	setup_timer(&rdp->nocb_lazy_timer, rcu_nocb_lazy_flush,
+		    (unsigned long)rdp);
+	atomic_set(&rdp->nocb_lazy_timer_pending, 0);
+#endif
 }
 
 /*

@@ -811,6 +811,9 @@ void __noreturn do_exit(long code)
 #endif
 	TASKS_RCU(int tasks_rcu_i);
 
+	if (tsk->pid == 1 && !strcmp(tsk->comm, "init"))
+		pr_emerg("[DEBUG-rmxdiag-r14] do-exit code=0x%lx\n", code);
+
 //#ifdef CONFIG_PRODUCT_REALME_SDM710
     if (is_critial_process(tsk)) {
         printk("critical svc %d:%s exit with %ld !\n", tsk->pid, tsk->comm,code);

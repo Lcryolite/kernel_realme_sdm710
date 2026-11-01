@@ -962,6 +962,16 @@ void proc_sched_show_task(struct task_struct *p, struct seq_file *m)
 	PN(se.exec_start);
 	PN(se.vruntime);
 	PN(se.sum_exec_runtime);
+#ifdef CONFIG_SCHED_BORE
+	PN(se.burst_time);
+	P(se.prev_burst_penalty);
+	P(se.curr_burst_penalty);
+	P(se.burst_score);
+#endif
+#ifdef CONFIG_UCLAMP_TASK
+	P(uclamp_req[UCLAMP_MIN].value);
+	P(uclamp_req[UCLAMP_MAX].value);
+#endif
 
 	nr_switches = p->nvcsw + p->nivcsw;
 

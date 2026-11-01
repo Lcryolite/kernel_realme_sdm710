@@ -23,6 +23,7 @@
 #include <linux/mm.h>
 #include <linux/ctype.h>
 #include <linux/slab.h>
+#include <linux/capability.h>
 #include <linux/compiler.h>
 
 #include <asm/sections.h>
@@ -619,6 +620,33 @@ static const struct seq_operations kallsyms_op = {
 	.stop = s_stop,
 	.show = s_show
 };
+
+static inline int kallsyms_for_perf(void)
+{
+#ifdef CONFIG_PERF_EVENTS
+	extern int sysctl_perf_event_paranoid;
+
+	if (sysctl_perf_event_paranoid <= 1)
+		return 1;
+#endif
+	return 0;
+}
+
+int kallsyms_show_value(void)
+{
+	switch (kptr_restrict) {
+	case 0:
+		if (kallsyms_for_perf())
+			return 1;
+		/* fall through */
+	case 1:
+		if (has_capability_noaudit(current, CAP_SYSLOG))
+			return 1;
+		/* fall through */
+	default:
+		return 0;
+	}
+}
 
 static int kallsyms_open(struct inode *inode, struct file *file)
 {

@@ -22,6 +22,8 @@
 
 #include <linux/tracepoint.h>
 
+/* Raw BPF contexts support at most 12 arguments; these legacy events have 18. */
+#ifndef BPF_RAW_TRACEPOINT_GENERATION
 DECLARE_EVENT_CLASS(rot_entry_template,
 	TP_PROTO(u32 ss_id, u32 sq_id, u32 pr_id, u32 flags,
 			u32 src_fmt, u32 src_bw, u32 src_bh,
@@ -115,6 +117,7 @@ DEFINE_EVENT(rot_entry_template, rot_entry_done,
 			src_fmt, src_bw, src_bh, src_x, src_y, src_w, src_h,
 			dst_fmt, dst_bw, dst_bh, dst_x, dst_y, dst_w, dst_h)
 );
+#endif
 
 TRACE_EVENT(rot_perf_set_qos_luts,
 	TP_PROTO(u32 pnum, u32 fmt, u32 lut, bool linear),

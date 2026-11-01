@@ -656,6 +656,38 @@ out_unlock:
 	return -EBADF;
 }
 
+/*
+ * Variant of __close_fd() that keeps a reference on the file for a
+ * deferred fput().
+ */
+int __close_fd_get_file(struct files_struct *files, unsigned int fd,
+			struct file **res)
+{
+	struct file *file;
+	struct fdtable *fdt;
+
+	spin_lock(&files->file_lock);
+	fdt = files_fdtable(files);
+	if (fd >= fdt->max_fds)
+		goto out_unlock;
+	fd = array_index_nospec(fd, fdt->max_fds);
+	file = fdt->fd[fd];
+	if (!file)
+		goto out_unlock;
+	rcu_assign_pointer(fdt->fd[fd], NULL);
+	__clear_close_on_exec(fd, fdt);
+	__put_unused_fd(files, fd);
+	spin_unlock(&files->file_lock);
+	get_file(file);
+	*res = file;
+	return filp_close(file, files);
+
+out_unlock:
+	spin_unlock(&files->file_lock);
+	*res = NULL;
+	return -EBADF;
+}
+
 void do_close_on_exec(struct files_struct *files)
 {
 	unsigned i;

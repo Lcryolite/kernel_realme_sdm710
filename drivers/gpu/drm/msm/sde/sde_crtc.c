@@ -44,6 +44,7 @@
 #include <linux/dsi_oppo_support.h>
 extern int msm_drm_notifier_call_chain(unsigned long val, void *v);
 int oppo_underbrightness_alpha = 0;
+int oppo_dc2_alpha = 0;
 #endif
 
 
@@ -2673,6 +2674,11 @@ static void sde_crtc_frame_event_work(struct kthread_work *work)
 	SDE_ATRACE_END("crtc_frame_event");
 }
 
+#ifdef CONFIG_PRODUCT_REALME_SDM710
+extern u32 oppo_onscreenfp_vblank_count;
+extern ktime_t oppo_onscreenfp_pressed_time;
+#endif
+
 void sde_crtc_complete_commit(struct drm_crtc *crtc,
 		struct drm_crtc_state *old_state)
 {
@@ -2702,8 +2708,37 @@ void sde_crtc_complete_commit(struct drm_crtc *crtc,
 		if (old_cstate->fingerprint_pressed != cstate->fingerprint_pressed) {
 			blank = cstate->fingerprint_pressed;
 			notifier_data.data = &blank;
-			if (cstate->fingerprint_defer_sync)
-				usleep_range(67 * 1000, 67 * 1000);
+			if (cstate->fingerprint_defer_sync) {
+				u32 target_vblank = oppo_onscreenfp_vblank_count + 1;
+				struct timeval vblanktime;
+				ktime_t exp_ktime;
+				u32 current_vblank;
+				int ret;
+
+				current_vblank = drm_crtc_vblank_count_and_time(crtc,
+						&vblanktime);
+				if (current_vblank == oppo_onscreenfp_vblank_count + 1) {
+					exp_ktime = ktime_add_ms(
+							oppo_onscreenfp_pressed_time, 4);
+					if (ktime_compare_safe(exp_ktime,
+							timeval_to_ktime(vblanktime)) > 0) {
+						target_vblank++;
+						pr_err("[RMXFP-R183] HBM intersects frame update; wait one more vblank\n");
+					}
+				}
+				ret = wait_event_timeout(*drm_crtc_vblank_waitqueue(crtc),
+						target_vblank <= drm_crtc_vblank_count(crtc),
+						msecs_to_jiffies(50));
+				if (!ret)
+					pr_err("[RMXFP-R183] CRTC %d vblank wait timed out\n",
+							crtc->base.id);
+				if (current_vblank == drm_crtc_vblank_count(crtc))
+					wait_event_timeout(
+							*drm_crtc_vblank_waitqueue(crtc),
+							current_vblank !=
+								drm_crtc_vblank_count(crtc),
+							msecs_to_jiffies(17));
+			}
 			pr_err("fingerprint status: %s",
 			       blank ? "pressed" : "up");
 			msm_drm_notifier_call_chain(MSM_DRM_ONSCREENFINGERPRINT_EVENT,

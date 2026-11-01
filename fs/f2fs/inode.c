@@ -71,6 +71,9 @@ static int __written_first_block(struct f2fs_sb_info *sbi,
 {
 	block_t addr = le32_to_cpu(ri->i_addr[offset_in_addr(ri)]);
 
+	if (addr == COMPRESS_ADDR)
+		return (le32_to_cpu(ri->i_flags) & F2FS_COMPR_FL) ?
+			0 : -EFSCORRUPTED;
 	if (!__is_valid_data_blkaddr(addr))
 		return 1;
 	if (!f2fs_is_valid_blkaddr(sbi, addr, DATA_GENERIC_ENHANCE))
@@ -196,6 +199,7 @@ static bool sanity_check_inode(struct inode *inode, struct page *node_page)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	struct f2fs_inode_info *fi = F2FS_I(inode);
+	struct f2fs_inode *ri = F2FS_INODE(node_page);
 	unsigned long long iblocks;
 
 	iblocks = le64_to_cpu(F2FS_INODE(node_page)->i_blocks);
@@ -282,6 +286,24 @@ static bool sanity_check_inode(struct inode *inode, struct page *node_page)
 		return false;
 	}
 
+	if (fi->i_flags & F2FS_COMPR_FL) {
+		if ((!S_ISREG(inode->i_mode) && !S_ISDIR(inode->i_mode)) ||
+				!f2fs_has_extra_attr(inode) ||
+				!f2fs_sb_has_compression(sbi) ||
+				!F2FS_FITS_IN_INODE(ri, fi->i_extra_isize,
+						   i_compress_flag) ||
+				f2fs_has_inline_data(inode) ||
+				ri->i_compress_algorithm >= COMPRESS_MAX ||
+				ri->i_log_cluster_size < MIN_COMPRESS_LOG_SIZE ||
+				ri->i_log_cluster_size > MAX_COMPRESS_LOG_SIZE ||
+				le64_to_cpu(ri->i_compr_blocks) >= iblocks) {
+			set_sbi_flag(sbi, SBI_NEED_FSCK);
+			f2fs_warn(sbi, "invalid compression metadata, ino=%lu",
+					inode->i_ino);
+			return false;
+		}
+	}
+
 	return true;
 }
 
@@ -359,6 +381,19 @@ static int do_read_inode(struct inode *inode)
 	if (!sanity_check_inode(inode, node_page)) {
 		f2fs_put_page(node_page, 1);
 		return -EFSCORRUPTED;
+	}
+
+	if (fi->i_flags & F2FS_COMPR_FL) {
+		/* Checksum/level flags and released-block files need later APIs. */
+		if (ri->i_compress_flag ||
+				(ri->i_inline & F2FS_COMPRESS_RELEASED)) {
+			f2fs_put_page(node_page, 1);
+			return -EOPNOTSUPP;
+		}
+		atomic64_set(&fi->i_compr_blocks, le64_to_cpu(ri->i_compr_blocks));
+		fi->i_compress_algorithm = ri->i_compress_algorithm;
+		fi->i_log_cluster_size = ri->i_log_cluster_size;
+		fi->i_cluster_size = 1U << fi->i_log_cluster_size;
 	}
 
 	/* check data exist */
@@ -565,6 +600,16 @@ void f2fs_update_inode(struct inode *inode, struct page *node_page)
 			ri->i_crtime_nsec =
 				cpu_to_le32(F2FS_I(inode)->i_crtime.tv_nsec);
 		}
+	}
+
+	if ((F2FS_I(inode)->i_flags & F2FS_COMPR_FL) &&
+			F2FS_FITS_IN_INODE(ri, F2FS_I(inode)->i_extra_isize,
+					   i_compress_flag)) {
+		ri->i_compr_blocks = cpu_to_le64(
+				atomic64_read(&F2FS_I(inode)->i_compr_blocks));
+		ri->i_compress_algorithm = F2FS_I(inode)->i_compress_algorithm;
+		ri->i_log_cluster_size = F2FS_I(inode)->i_log_cluster_size;
+		ri->i_compress_flag = 0;
 	}
 
 	__set_inode_rdev(inode, ri);

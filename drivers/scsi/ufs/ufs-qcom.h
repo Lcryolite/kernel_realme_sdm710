@@ -374,6 +374,7 @@ struct ufs_qcom_host {
 	spinlock_t ice_work_lock;
 	struct work_struct ice_cfg_work;
 	struct request *req_pending;
+	bool ice_work_initialized;
 	struct ufs_vreg *vddp_ref_clk;
 	bool work_pending;
 };

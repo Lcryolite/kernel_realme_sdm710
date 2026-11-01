@@ -720,6 +720,19 @@ extern void rto_push_irq_work_func(struct irq_work *work);
  * (such as the load balancing or the thread migration code), lock
  * acquire operations must be ordered by ascending &runqueue.
  */
+#ifdef CONFIG_UCLAMP_TASK
+struct uclamp_bucket {
+	unsigned long value;
+	unsigned int tasks;
+};
+
+struct uclamp_rq {
+	unsigned long value;
+	unsigned int tasks;
+	struct uclamp_bucket bucket[UCLAMP_BUCKETS];
+};
+#endif
+
 struct rq {
 	/* runqueue lock: */
 	raw_spinlock_t lock;
@@ -761,6 +774,10 @@ struct rq {
 	struct cfs_rq cfs;
 	struct rt_rq rt;
 	struct dl_rq dl;
+
+#ifdef CONFIG_UCLAMP_TASK
+	struct uclamp_rq uclamp[UCLAMP_CNT];
+#endif
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	/* list of leaf cfs_rq on this cpu: */
@@ -1616,6 +1633,10 @@ extern const struct sched_class rt_sched_class;
 extern const struct sched_class fair_sched_class;
 extern const struct sched_class idle_sched_class;
 
+#ifdef CONFIG_SCHED_BORE
+extern unsigned int sched_burst_fork_atavistic;
+extern unsigned int sched_burst_cache_lifetime;
+#endif
 
 #ifdef CONFIG_SMP
 
@@ -1912,6 +1933,47 @@ static inline unsigned long task_util(struct task_struct *p)
 #endif
 	return p->se.avg.util_avg;
 }
+
+#ifdef CONFIG_UCLAMP_TASK
+unsigned long uclamp_eff_value(struct task_struct *p,
+			       enum uclamp_id clamp_id);
+
+static inline unsigned long
+uclamp_rq_util_with(struct rq *rq, unsigned long util, struct task_struct *p)
+{
+	unsigned long min_util = READ_ONCE(rq->uclamp[UCLAMP_MIN].value);
+	unsigned long max_util = READ_ONCE(rq->uclamp[UCLAMP_MAX].value);
+
+	if (p) {
+		min_util = max(min_util, uclamp_eff_value(p, UCLAMP_MIN));
+		max_util = max(max_util, uclamp_eff_value(p, UCLAMP_MAX));
+	}
+
+	if (unlikely(min_util >= max_util))
+		return min_util;
+
+	return clamp(util, min_util, max_util);
+}
+
+static inline unsigned long
+uclamp_task_util(struct task_struct *p, unsigned long util)
+{
+	return clamp(util, uclamp_eff_value(p, UCLAMP_MIN),
+		     uclamp_eff_value(p, UCLAMP_MAX));
+}
+#else
+static inline unsigned long
+uclamp_rq_util_with(struct rq *rq, unsigned long util, struct task_struct *p)
+{
+	return util;
+}
+
+static inline unsigned long
+uclamp_task_util(struct task_struct *p, unsigned long util)
+{
+	return util;
+}
+#endif
 
 /*
  * cpu_util returns the amount of capacity of a CPU that is used by CFS

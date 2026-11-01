@@ -7,6 +7,7 @@
 #define pr_fmt(fmt)	"reboot: " fmt
 
 #include <linux/ctype.h>
+#include <linux/delay.h>
 #include <linux/export.h>
 #include <linux/kexec.h>
 #include <linux/kmod.h>
@@ -304,6 +305,10 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 			magic2 != LINUX_REBOOT_MAGIC2B &&
 			magic2 != LINUX_REBOOT_MAGIC2C))
 		return -EINVAL;
+
+	pr_emerg("[DEBUG-rmxdiag-r10] syscall pid=%d comm=%s cmd=0x%x\n",
+		 current->pid, current->comm, cmd);
+	msleep(3000);
 
 	/*
 	 * If pid namespaces are enabled and the current task is in a child

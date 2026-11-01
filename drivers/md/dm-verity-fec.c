@@ -720,7 +720,7 @@ int verity_fec_ctr(struct dm_verity *v)
 	struct dm_verity_fec *f = v->fec;
 	struct dm_target *ti = v->ti;
 	struct mapped_device *md = dm_table_get_md(ti->table);
-	u64 hash_blocks;
+	u64 hash_blocks, fec_blocks, device_size;
 
 	if (!verity_fec_is_enabled(v)) {
 		verity_fec_dtr(v);
@@ -752,6 +752,10 @@ int verity_fec_ctr(struct dm_verity *v)
 	 * hash device after the hash blocks.
 	 */
 
+	if (v->hash_start > v->hash_blocks) {
+		ti->error = "Invalid hash start";
+		return -EINVAL;
+	}
 	hash_blocks = v->hash_blocks - v->hash_start;
 
 	/*
@@ -782,7 +786,8 @@ int verity_fec_ctr(struct dm_verity *v)
 	 * Due to optional metadata, f->blocks can be larger than
 	 * data_blocks and hash_blocks combined.
 	 */
-	if (f->blocks < v->data_blocks + hash_blocks || !f->rounds) {
+	if (v->data_blocks > f->blocks ||
+	    hash_blocks > f->blocks - v->data_blocks || !f->rounds) {
 		ti->error = "Invalid " DM_VERITY_OPT_FEC_BLOCKS;
 		return -EINVAL;
 	}
@@ -792,7 +797,9 @@ int verity_fec_ctr(struct dm_verity *v)
 	 * it to be large enough.
 	 */
 	f->hash_blocks = f->blocks - v->data_blocks;
-	if (dm_bufio_get_device_size(v->bufio) < f->hash_blocks) {
+	device_size = dm_bufio_get_device_size(v->bufio);
+	if (v->hash_start > device_size ||
+	    f->hash_blocks > device_size - v->hash_start) {
 		ti->error = "Hash device is too small for "
 			DM_VERITY_OPT_FEC_BLOCKS;
 		return -E2BIG;
@@ -806,8 +813,10 @@ int verity_fec_ctr(struct dm_verity *v)
 		return PTR_ERR(f->bufio);
 	}
 
-	if (dm_bufio_get_device_size(f->bufio) <
-	    ((f->start + f->rounds * f->roots) >> v->data_dev_block_bits)) {
+	fec_blocks = DIV_ROUND_UP_ULL((u64)f->rounds * f->roots,
+					1ULL << v->data_dev_block_bits);
+	device_size = dm_bufio_get_device_size(f->bufio);
+	if (f->start > device_size || fec_blocks > device_size - f->start) {
 		ti->error = "FEC device is too small";
 		return -E2BIG;
 	}

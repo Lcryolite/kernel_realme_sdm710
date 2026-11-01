@@ -833,6 +833,22 @@ config RCU_NOCB_CPU_ALL
 
 endchoice
 
+config RCU_LAZY
+	bool "Defer lazy RCU callbacks on no-CBs CPUs"
+	depends on RCU_NOCB_CPU && RCU_FAST_NO_HZ
+	default n
+	help
+	  Defer callbacks that are already marked lazy, primarily kfree_rcu()
+	  callbacks, when they are queued on no-CBs CPUs.  Lazy-only queues
+	  are flushed after a bounded delay, under memory pressure, when the
+	  callback queue grows too large, or when a non-lazy callback arrives.
+
+	  Unlike newer kernels, this implementation keeps ordinary call_rcu()
+	  callbacks non-lazy so that old callers retain their latency behavior.
+
+	  Say Y on battery-powered systems using RCU callback offloading.
+	  Say N if you are unsure.
+
 endmenu # "RCU Subsystem"
 
 config BUILD_BIN2C
@@ -1349,6 +1365,25 @@ config NET_NS
 	  of the network stack.
 
 endif # NAMESPACES
+
+config SCHED_BORE
+	bool "Burst-Oriented Response Enhancer"
+	default y
+	help
+	  Track CPU burst duration for CFS tasks and reduce the effective
+	  scheduling weight of persistently bursty tasks. Short, interactive
+	  tasks retain their normal priority while long-running background
+	  work yields response time under contention.
+
+config UCLAMP_TASK
+	bool "Enable utilization clamping for tasks"
+	depends on SMP
+	default y
+	help
+	  Allow userspace to set per-task minimum and maximum utilization
+	  through sched_setattr(). Effective clamps are aggregated per runqueue
+	  and applied to EAS placement and schedutil frequency selection.
+	  This keeps placement and frequency decisions within the same bounds.
 
 config SCHED_AUTOGROUP
 	bool "Automatic process group scheduling"
@@ -2319,4 +2354,3 @@ config ASN1
 	  functions to call on what tags.
 
 source "kernel/Kconfig.locks"
-

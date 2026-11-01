@@ -537,6 +537,7 @@ static int policydb_index(struct policydb *p)
 
 	printk(KERN_DEBUG "SELinux:  %d classes, %d rules\n",
 	       p->p_classes.nprim, p->te_avtab.nel);
+	pr_emerg("[DEBUG-rmxdiag-r25] policydb_index alloc begin\n");
 
 #ifdef DEBUG_HASHES
 	avtab_hash_eval(&p->te_avtab, "rules");
@@ -549,6 +550,7 @@ static int policydb_index(struct policydb *p)
 			GFP_KERNEL);
 	if (!p->class_val_to_struct)
 		goto out;
+	pr_emerg("[DEBUG-rmxdiag-r25] policydb_index class array complete\n");
 
 	rc = -ENOMEM;
 	p->role_val_to_struct =
@@ -556,6 +558,7 @@ static int policydb_index(struct policydb *p)
 			GFP_KERNEL);
 	if (!p->role_val_to_struct)
 		goto out;
+	pr_emerg("[DEBUG-rmxdiag-r25] policydb_index role array complete\n");
 
 	rc = -ENOMEM;
 	p->user_val_to_struct =
@@ -563,6 +566,7 @@ static int policydb_index(struct policydb *p)
 			GFP_KERNEL);
 	if (!p->user_val_to_struct)
 		goto out;
+	pr_emerg("[DEBUG-rmxdiag-r25] policydb_index user array complete\n");
 
 	/* Yes, I want the sizeof the pointer, not the structure */
 	rc = -ENOMEM;
@@ -571,15 +575,18 @@ static int policydb_index(struct policydb *p)
 						       GFP_KERNEL | __GFP_ZERO);
 	if (!p->type_val_to_struct_array)
 		goto out;
+	pr_emerg("[DEBUG-rmxdiag-r25] policydb_index type array allocated\n");
 
 	rc = flex_array_prealloc(p->type_val_to_struct_array, 0,
 				 p->p_types.nprim, GFP_KERNEL | __GFP_ZERO);
 	if (rc)
 		goto out;
+	pr_emerg("[DEBUG-rmxdiag-r25] policydb_index type array preallocated\n");
 
 	rc = cond_init_bool_indexes(p);
 	if (rc)
 		goto out;
+	pr_emerg("[DEBUG-rmxdiag-r25] policydb_index bool indexes complete\n");
 
 	for (i = 0; i < SYM_NUM; i++) {
 		rc = -ENOMEM;
@@ -598,7 +605,9 @@ static int policydb_index(struct policydb *p)
 		rc = hashtab_map(p->symtab[i].table, index_f[i], p);
 		if (rc)
 			goto out;
+		pr_emerg("[DEBUG-rmxdiag-r25] policydb_index symbol=%d complete\n", i);
 	}
+	pr_emerg("[DEBUG-rmxdiag-r25] policydb_index complete\n");
 	rc = 0;
 out:
 	return rc;
@@ -2389,12 +2398,14 @@ int policydb_read(struct policydb *p, void *fp)
 	rc = avtab_read(&p->te_avtab, fp, p);
 	if (rc)
 		goto bad;
+	pr_emerg("[DEBUG-rmxdiag-r25] policydb_read te_avtab complete\n");
 
 	if (p->policyvers >= POLICYDB_VERSION_BOOL) {
 		rc = cond_read_list(p, fp);
 		if (rc)
 			goto bad;
 	}
+	pr_emerg("[DEBUG-rmxdiag-r25] policydb_read conditional complete\n");
 
 	rc = next_entry(buf, fp, sizeof(u32));
 	if (rc)
@@ -2465,10 +2476,12 @@ int policydb_read(struct policydb *p, void *fp)
 	rc = filename_trans_read(p, fp);
 	if (rc)
 		goto bad;
+	pr_emerg("[DEBUG-rmxdiag-r25] policydb_read filename transitions complete\n");
 
 	rc = policydb_index(p);
 	if (rc)
 		goto bad;
+	pr_emerg("[DEBUG-rmxdiag-r25] policydb_read index complete\n");
 
 	rc = -EINVAL;
 	p->process_trans_perms = string_to_av_perm(p, p->process_class, "transition");
@@ -2479,14 +2492,17 @@ int policydb_read(struct policydb *p, void *fp)
 	rc = ocontext_read(p, info, fp);
 	if (rc)
 		goto bad;
+	pr_emerg("[DEBUG-rmxdiag-r25] policydb_read ocontexts complete\n");
 
 	rc = genfs_read(p, fp);
 	if (rc)
 		goto bad;
+	pr_emerg("[DEBUG-rmxdiag-r25] policydb_read genfs complete\n");
 
 	rc = range_read(p, fp);
 	if (rc)
 		goto bad;
+	pr_emerg("[DEBUG-rmxdiag-r25] policydb_read ranges complete\n");
 
 	rc = -ENOMEM;
 	p->type_attr_map_array = flex_array_alloc(sizeof(struct ebitmap),
@@ -2494,12 +2510,14 @@ int policydb_read(struct policydb *p, void *fp)
 						  GFP_KERNEL | __GFP_ZERO);
 	if (!p->type_attr_map_array)
 		goto bad;
+	pr_emerg("[DEBUG-rmxdiag-r25] policydb_read type_attr allocated\n");
 
 	/* preallocate so we don't have to worry about the put ever failing */
 	rc = flex_array_prealloc(p->type_attr_map_array, 0, p->p_types.nprim,
 				 GFP_KERNEL | __GFP_ZERO);
 	if (rc)
 		goto bad;
+	pr_emerg("[DEBUG-rmxdiag-r25] policydb_read type_attr preallocated\n");
 
 	for (i = 0; i < p->p_types.nprim; i++) {
 		struct ebitmap *e = flex_array_get(p->type_attr_map_array, i);
@@ -2515,11 +2533,16 @@ int policydb_read(struct policydb *p, void *fp)
 		rc = ebitmap_set_bit(e, i, 1);
 		if (rc)
 			goto bad;
+		if (!((i + 1) & 0x1ff))
+			pr_emerg("[DEBUG-rmxdiag-r25] policydb_read type_attr=%u/%u\n",
+				 i + 1, p->p_types.nprim);
 	}
+	pr_emerg("[DEBUG-rmxdiag-r25] policydb_read type_attr complete\n");
 
 	rc = policydb_bounds_sanity_check(p);
 	if (rc)
 		goto bad;
+	pr_emerg("[DEBUG-rmxdiag-r25] policydb_read complete\n");
 
 	rc = 0;
 out:

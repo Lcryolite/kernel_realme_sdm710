@@ -14,6 +14,7 @@
 #include <linux/io.h>
 #include <linux/of.h>
 #include <linux/blkdev.h>
+#include <linux/mutex.h>
 #include <linux/spinlock.h>
 #include <crypto/ice.h>
 
@@ -28,6 +29,9 @@
 #define UFS_QCOM_ICE_DEFAULT_DBG_PRINT_EN	0
 
 static struct workqueue_struct *ice_workqueue;
+static DEFINE_MUTEX(ice_workqueue_lock);
+
+static void ufs_qcom_ice_cfg_work(struct work_struct *work);
 
 static void ufs_qcom_ice_dump_regs(struct ufs_qcom_host *qcom_host, int offset,
 					int len, char *prefix)
@@ -87,6 +91,7 @@ static struct platform_device *ufs_qcom_ice_get_pdevice(struct device *ufs_dev)
 	}
 
 	ice_pdev = qcom_ice_get_pdevice(node);
+	of_node_put(node);
 out:
 	return ice_pdev;
 }
@@ -163,6 +168,10 @@ int ufs_qcom_ice_get_dev(struct ufs_qcom_host *qcom_host)
 		goto out;
 	}
 
+	if (!qcom_host->ice_work_initialized) {
+		INIT_WORK(&qcom_host->ice_cfg_work, ufs_qcom_ice_cfg_work);
+		qcom_host->ice_work_initialized = true;
+	}
 	qcom_host->ice.state = UFS_QCOM_ICE_STATE_DISABLED;
 
 out:
@@ -172,14 +181,15 @@ out:
 static void ufs_qcom_ice_cfg_work(struct work_struct *work)
 {
 	unsigned long flags;
+	struct request *req;
 	struct ufs_qcom_host *qcom_host =
 		container_of(work, struct ufs_qcom_host, ice_cfg_work);
 
-	if (!qcom_host->ice.vops->config_start)
-		return;
-
 	spin_lock_irqsave(&qcom_host->ice_work_lock, flags);
-	if (!qcom_host->req_pending) {
+	req = qcom_host->req_pending;
+	if (!req || !qcom_host->ice.vops ||
+			!qcom_host->ice.vops->config_start) {
+		qcom_host->req_pending = NULL;
 		qcom_host->work_pending = false;
 		spin_unlock_irqrestore(&qcom_host->ice_work_lock, flags);
 		return;
@@ -191,7 +201,7 @@ static void ufs_qcom_ice_cfg_work(struct work_struct *work)
 	 * this call shall now take care of the necessary key setup.
 	 */
 	qcom_host->ice.vops->config_start(qcom_host->ice.pdev,
-		qcom_host->req_pending, NULL, false);
+			req, NULL, false);
 
 	spin_lock_irqsave(&qcom_host->ice_work_lock, flags);
 	qcom_host->req_pending = NULL;
@@ -226,16 +236,16 @@ int ufs_qcom_ice_init(struct ufs_qcom_host *qcom_host)
 	}
 
 	qcom_host->dbg_print_en |= UFS_QCOM_ICE_DEFAULT_DBG_PRINT_EN;
-	if (!ice_workqueue) {
+	mutex_lock(&ice_workqueue_lock);
+	if (!ice_workqueue)
 		ice_workqueue = alloc_workqueue("ice-set-key",
 			WQ_MEM_RECLAIM | WQ_HIGHPRI, 0);
-		if (!ice_workqueue) {
-			dev_err(ufs_dev, "%s: workqueue allocation failed.\n",
+	mutex_unlock(&ice_workqueue_lock);
+	if (!ice_workqueue) {
+		dev_err(ufs_dev, "%s: workqueue allocation failed.\n",
 			__func__);
-			err = -ENOMEM;
-			goto out;
-		}
-		INIT_WORK(&qcom_host->ice_cfg_work, ufs_qcom_ice_cfg_work);
+		err = -ENOMEM;
+		goto out;
 	}
 
 out:
@@ -394,7 +404,7 @@ int ufs_qcom_ice_cfg_start(struct ufs_qcom_host *qcom_host,
 			UFS_QCOM_ICE_TR_DATA_UNIT_4_KB;
 
 	slot = req->tag;
-	if (slot < 0 || slot > qcom_host->hba->nutrs) {
+	if (slot >= qcom_host->hba->nutrs) {
 		dev_err(dev, "%s: slot (%d) is out of boundaries (0...%d)\n",
 			__func__, slot, qcom_host->hba->nutrs);
 		return -EINVAL;
@@ -586,6 +596,9 @@ int ufs_qcom_ice_reset(struct ufs_qcom_host *qcom_host)
 	if (qcom_host->ice.state != UFS_QCOM_ICE_STATE_ACTIVE)
 		goto out;
 
+	if (qcom_host->ice_work_initialized)
+		flush_work(&qcom_host->ice_cfg_work);
+
 	if (qcom_host->ice.vops->reset) {
 		err = qcom_host->ice.vops->reset(qcom_host->ice.pdev);
 		if (err) {
@@ -667,6 +680,9 @@ int ufs_qcom_ice_suspend(struct ufs_qcom_host *qcom_host)
 		dev_dbg(dev, "%s: ice device is not enabled\n", __func__);
 		goto out;
 	}
+
+	if (qcom_host->ice_work_initialized)
+		flush_work(&qcom_host->ice_cfg_work);
 
 	if (qcom_host->ice.vops->suspend) {
 		err = qcom_host->ice.vops->suspend(qcom_host->ice.pdev);

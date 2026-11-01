@@ -138,6 +138,7 @@ struct f2fs_mount_info {
 	int alloc_mode;			/* segment allocation policy */
 	int fsync_mode;			/* fsync policy */
 	bool test_dummy_encryption;	/* test dummy encryption */
+	u8 compress_algorithm;		/* codec for an explicit new policy */
 	block_t unusable_cap;		/* Amount of space allowed to be
 					 * unusable when disabling checkpoint
 					 */
@@ -155,6 +156,47 @@ struct f2fs_mount_info {
 #define F2FS_FEATURE_LOST_FOUND		0x0200
 #define F2FS_FEATURE_VERITY		0x0400	/* reserved */
 #define F2FS_FEATURE_SB_CHKSUM		0x0800
+#define F2FS_FEATURE_COMPRESSION		0x2000
+
+/* Upstream on-disk algorithm numbers; unsupported codecs are rejected. */
+enum compress_algorithm_type {
+	COMPRESS_LZO,
+	COMPRESS_LZ4,
+	COMPRESS_ZSTD,
+	COMPRESS_MAX,
+};
+
+#define MIN_COMPRESS_LOG_SIZE	2
+#define MAX_COMPRESS_LOG_SIZE	8
+
+struct compress_data {
+	__le32 clen;
+	__le32 chksum;
+	__le32 reserved[4];
+	u8 cdata[];
+};
+
+#define F2FS_COMPRESSED_PAGE_MAGIC	0xF5F2C000
+#define NULL_CLUSTER			((pgoff_t)-1)
+
+struct compress_ctx {
+	struct inode *inode;
+	pgoff_t cluster_idx;
+	unsigned int cluster_size;
+	unsigned int log_cluster_size;
+	struct page **rpages;
+	unsigned int nr_rpages;
+	struct page **cpages;
+	unsigned int nr_cpages;
+};
+
+struct compress_io_ctx {
+	u32 magic;
+	struct inode *inode;
+	struct page **rpages;
+	unsigned int nr_rpages;
+	atomic_t pending_pages;
+};
 
 #define __F2FS_HAS_FEATURE(raw_super, mask)				\
 	((raw_super->feature & cpu_to_le32(mask)) != 0)
@@ -704,6 +746,10 @@ struct f2fs_inode_info {
 	int i_inline_xattr_size;	/* inline xattr size */
 	struct timespec i_crtime;	/* inode creation time */
 	struct timespec i_disk_time[4];	/* inode disk times */
+	atomic64_t i_compr_blocks;
+	u8 i_compress_algorithm;
+	u8 i_log_cluster_size;
+	unsigned int i_cluster_size;
 };
 
 static inline void get_extent_info(struct extent_info *ext,
@@ -1017,6 +1063,7 @@ enum cp_reason_type {
 	CP_FASTBOOT_MODE,
 	CP_SPEC_LOG_NUM,
 	CP_RECOVER_DIR,
+	CP_COMPRESSED,
 };
 
 enum iostat_type {
@@ -1047,6 +1094,8 @@ struct f2fs_io_info {
 	block_t old_blkaddr;	/* old block address before Cow */
 	struct page *page;	/* page to be written */
 	struct page *encrypted_page;	/* encrypted page */
+	struct page *compressed_page;	/* compressed storage page */
+	int compr_blocks;		/* old compressed cluster block count */
 	struct list_head list;		/* serialize IOs */
 	bool submitted;		/* indicate IO submission */
 	int need_lock;		/* indicate we need to lock cp_rwsem */
@@ -2351,6 +2400,8 @@ static inline void f2fs_change_bit(unsigned int nr, char *addr)
 /*
  * On-disk inode flags (f2fs_inode::i_flags)
  */
+#define F2FS_COMPR_FL			0x00000004 /* Compress file */
+#define F2FS_NOCOMP_FL			0x00000400 /* Don't compress */
 #define F2FS_SYNC_FL			0x00000008 /* Synchronous updates */
 #define F2FS_IMMUTABLE_FL		0x00000010 /* Immutable file */
 #define F2FS_APPEND_FL			0x00000020 /* writes to file may only append */
@@ -2361,7 +2412,8 @@ static inline void f2fs_change_bit(unsigned int nr, char *addr)
 #define F2FS_PROJINHERIT_FL		0x20000000 /* Create with parents projid */
 
 /* Flags that should be inherited by new inodes from their parent. */
-#define F2FS_FL_INHERITED (F2FS_SYNC_FL | F2FS_NODUMP_FL | F2FS_NOATIME_FL | \
+#define F2FS_FL_INHERITED (F2FS_COMPR_FL | F2FS_NOCOMP_FL | \
+			   F2FS_SYNC_FL | F2FS_NODUMP_FL | F2FS_NOATIME_FL | \
 			   F2FS_DIRSYNC_FL | F2FS_PROJINHERIT_FL)
 
 /* Flags that are appropriate for regular files (all but dir-specific ones). */
@@ -2579,16 +2631,25 @@ static inline int f2fs_has_inline_xattr(struct inode *inode)
 
 #define ALIGN_DOWN(x, a)        __ALIGN_KERNEL((x) - ((a) - 1), (a))
 
+static inline bool f2fs_compressed_file(struct inode *inode)
+{
+	return S_ISREG(inode->i_mode) &&
+		(F2FS_I(inode)->i_flags & F2FS_COMPR_FL);
+}
+
 static inline unsigned int addrs_per_inode(struct inode *inode)
 {
 	unsigned int addrs = CUR_ADDRS_PER_INODE(inode) -
 				get_inline_xattr_addrs(inode);
-	return ALIGN_DOWN(addrs, 1);
+	return f2fs_compressed_file(inode) ?
+		ALIGN_DOWN(addrs, F2FS_I(inode)->i_cluster_size) : addrs;
 }
 
 static inline unsigned int addrs_per_block(struct inode *inode)
 {
-	return ALIGN_DOWN(DEF_ADDRS_PER_BLOCK, 1);
+	return f2fs_compressed_file(inode) ?
+		ALIGN_DOWN(DEF_ADDRS_PER_BLOCK, F2FS_I(inode)->i_cluster_size) :
+		DEF_ADDRS_PER_BLOCK;
 }
 
 static inline void *inline_xattr_addr(struct inode *inode, struct page *page)
@@ -2751,7 +2812,7 @@ static inline bool f2fs_may_extent_tree(struct inode *inode)
 	if (list_empty(&sbi->s_list))
 		return false;
 
-	return S_ISREG(inode->i_mode);
+	return S_ISREG(inode->i_mode) && !f2fs_compressed_file(inode);
 }
 
 static inline void *kvmalloc(size_t size, gfp_t flags)
@@ -2843,6 +2904,9 @@ static inline int get_inline_xattr_addrs(struct inode *inode)
 	offsetof(struct f2fs_inode, i_extra_isize))	\
 
 #define F2FS_OLD_ATTRIBUTE_SIZE	(offsetof(struct f2fs_inode, i_addr))
+#define F2FS_PRE_COMPRESSION_ATTR_SIZE			\
+	(offsetof(struct f2fs_inode, i_compr_blocks) -	\
+	 offsetof(struct f2fs_inode, i_extra_isize))
 #define F2FS_FITS_IN_INODE(f2fs_inode, extra_isize, field)		\
 		((offsetof(typeof(*(f2fs_inode)), field) +	\
 		sizeof((f2fs_inode)->field))			\
@@ -2891,7 +2955,7 @@ static inline void verify_blkaddr(struct f2fs_sb_info *sbi,
 
 static inline bool __is_valid_data_blkaddr(block_t blkaddr)
 {
-	if (blkaddr == NEW_ADDR || blkaddr == NULL_ADDR)
+	if (blkaddr == NEW_ADDR || blkaddr == NULL_ADDR || blkaddr == COMPRESS_ADDR)
 		return false;
 	return true;
 }
@@ -3209,6 +3273,9 @@ int f2fs_preallocate_blocks(struct kiocb *iocb, struct iov_iter *from);
 int f2fs_reserve_block(struct dnode_of_data *dn, pgoff_t index);
 struct page *f2fs_get_read_data_page(struct inode *inode, pgoff_t index,
 			int op_flags, bool for_write);
+int f2fs_submit_page_read(struct inode *inode, struct page *page,
+				block_t blkaddr);
+int f2fs_encrypt_one_page(struct f2fs_io_info *fio);
 struct page *f2fs_find_data_page(struct inode *inode, pgoff_t index);
 struct page *f2fs_get_lock_data_page(struct inode *inode, pgoff_t index,
 			bool for_write);
@@ -3573,7 +3640,64 @@ static inline void f2fs_set_encrypted_inode(struct inode *inode)
  */
 static inline bool f2fs_post_read_required(struct inode *inode)
 {
-	return f2fs_encrypted_file(inode);
+	return f2fs_encrypted_file(inode) || f2fs_compressed_file(inode);
+}
+
+#ifdef CONFIG_F2FS_FS_COMPRESSION
+int f2fs_read_compressed_page(struct inode *inode, struct page *page);
+bool f2fs_is_compress_backend_ready(struct inode *inode);
+bool f2fs_is_compressed_page(struct page *page);
+struct page *f2fs_compress_control_page(struct page *page);
+void f2fs_compress_write_end_io(struct bio *bio, struct page *page);
+int f2fs_init_compress_ctx(struct compress_ctx *cc);
+void f2fs_destroy_compress_ctx(struct compress_ctx *cc);
+bool f2fs_cluster_is_empty(struct compress_ctx *cc);
+bool f2fs_cluster_can_merge_page(struct compress_ctx *cc, pgoff_t index);
+void f2fs_compress_ctx_add_page(struct compress_ctx *cc, struct page *page);
+int f2fs_is_compressed_cluster(struct inode *inode, pgoff_t index);
+int f2fs_prepare_compress_overwrite(struct inode *inode, struct page **pagep,
+				 pgoff_t index, void **fsdata);
+bool f2fs_compress_write_end(struct inode *inode, void *fsdata,
+			   pgoff_t index, unsigned int copied);
+int f2fs_truncate_partial_cluster(struct inode *inode, u64 from);
+int f2fs_write_multi_pages(struct compress_ctx *cc, int *submitted,
+			 struct writeback_control *wbc, enum iostat_type io_type);
+#else
+static inline bool f2fs_is_compressed_page(struct page *page) { return false; }
+static inline struct page *f2fs_compress_control_page(struct page *page)
+{
+	return page;
+}
+static inline void f2fs_compress_write_end_io(struct bio *bio, struct page *page)
+{
+}
+static inline int f2fs_read_compressed_page(struct inode *inode,
+					struct page *page)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline bool f2fs_is_compress_backend_ready(struct inode *inode)
+{
+	return !f2fs_compressed_file(inode);
+}
+#endif
+
+int f2fs_write_single_data_page(struct page *page, int *submitted,
+		struct bio **bio, sector_t *last_block,
+		struct writeback_control *wbc, enum iostat_type io_type,
+		int compr_blocks);
+
+static inline void f2fs_i_compr_blocks_update(struct inode *inode,
+					    unsigned int blocks, bool add)
+{
+	int saved = F2FS_I(inode)->i_cluster_size - blocks;
+
+	if (add)
+		atomic64_add(saved, &F2FS_I(inode)->i_compr_blocks);
+	else
+		atomic64_sub(saved, &F2FS_I(inode)->i_compr_blocks);
+	f2fs_mark_inode_dirty_sync(inode, true);
 }
 
 #define F2FS_FEATURE_FUNCS(name, flagname) \
@@ -3592,6 +3716,17 @@ F2FS_FEATURE_FUNCS(quota_ino, QUOTA_INO);
 F2FS_FEATURE_FUNCS(inode_crtime, INODE_CRTIME);
 F2FS_FEATURE_FUNCS(lost_found, LOST_FOUND);
 F2FS_FEATURE_FUNCS(sb_chksum, SB_CHKSUM);
+F2FS_FEATURE_FUNCS(compression, COMPRESSION);
+
+static inline void f2fs_set_compress_context(struct inode *inode)
+{
+	struct f2fs_inode_info *fi = F2FS_I(inode);
+
+	fi->i_compress_algorithm = F2FS_OPTION(F2FS_I_SB(inode)).compress_algorithm;
+	fi->i_log_cluster_size = MIN_COMPRESS_LOG_SIZE;
+	fi->i_cluster_size = 1U << fi->i_log_cluster_size;
+	atomic64_set(&fi->i_compr_blocks, 0);
+}
 
 #ifdef CONFIG_BLK_DEV_ZONED
 static inline bool f2fs_blkz_is_seq(struct f2fs_sb_info *sbi, int devi,
@@ -3704,6 +3839,8 @@ static inline bool f2fs_force_buffered_io(struct inode *inode,
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	int rw = iov_iter_rw(iter);
 
+	if (f2fs_compressed_file(inode))
+		return true;
 	if (f2fs_post_read_required(inode) &&
 		!fscrypt_using_hardware_encryption(inode))
 		return true;

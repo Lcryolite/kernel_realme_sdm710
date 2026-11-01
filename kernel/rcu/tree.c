@@ -399,10 +399,18 @@ EXPORT_SYMBOL_GPL(rcu_all_qs);
 static long blimit = 10;	/* Maximum callbacks per rcu_do_batch. */
 static long qhimark = 10000;	/* If this many pending, ignore blimit. */
 static long qlowmark = 100;	/* Once only this many pending, use blimit. */
+#ifdef CONFIG_RCU_LAZY
+static bool enable_rcu_lazy __read_mostly = true;
+static unsigned long rcu_lazy_flush_jiffies = 10 * HZ;
+#endif
 
 module_param(blimit, long, 0444);
 module_param(qhimark, long, 0444);
 module_param(qlowmark, long, 0444);
+#ifdef CONFIG_RCU_LAZY
+module_param(enable_rcu_lazy, bool, 0444);
+module_param(rcu_lazy_flush_jiffies, ulong, 0644);
+#endif
 
 static ulong jiffies_till_first_fqs = ULONG_MAX;
 static ulong jiffies_till_next_fqs = ULONG_MAX;

@@ -82,7 +82,8 @@ static struct inode *f2fs_new_inode(struct inode *dir, umode_t mode)
 
 	if (f2fs_sb_has_extra_attr(sbi)) {
 		set_inode_flag(inode, FI_EXTRA_ATTR);
-		F2FS_I(inode)->i_extra_isize = F2FS_TOTAL_EXTRA_ATTR_SIZE;
+		F2FS_I(inode)->i_extra_isize = f2fs_sb_has_compression(sbi) ?
+			F2FS_TOTAL_EXTRA_ATTR_SIZE : F2FS_PRE_COMPRESSION_ATTR_SIZE;
 	}
 
 	if (test_opt(sbi, INLINE_XATTR))
@@ -104,14 +105,28 @@ static struct inode *f2fs_new_inode(struct inode *dir, umode_t mode)
 	}
 	F2FS_I(inode)->i_inline_xattr_size = xattr_size;
 
-	f2fs_init_extent_tree(inode, NULL);
+	F2FS_I(inode)->i_flags =
+		f2fs_mask_flags(mode, F2FS_I(dir)->i_flags & F2FS_FL_INHERITED);
 
+	if (F2FS_I(inode)->i_flags & F2FS_COMPR_FL) {
+		if (!IS_ENABLED(CONFIG_F2FS_FS_COMPRESSION)) {
+			err = -EOPNOTSUPP;
+			goto fail_drop;
+		}
+		f2fs_set_compress_context(inode);
+		F2FS_I(inode)->i_compress_algorithm =
+			F2FS_I(dir)->i_compress_algorithm;
+		F2FS_I(inode)->i_log_cluster_size =
+			F2FS_I(dir)->i_log_cluster_size;
+		F2FS_I(inode)->i_cluster_size = F2FS_I(dir)->i_cluster_size;
+		if (f2fs_has_inline_data(inode))
+			clear_inode_flag(inode, FI_INLINE_DATA);
+	}
+
+	f2fs_init_extent_tree(inode, NULL);
 	stat_inc_inline_xattr(inode);
 	stat_inc_inline_inode(inode);
 	stat_inc_inline_dir(inode);
-
-	F2FS_I(inode)->i_flags =
-		f2fs_mask_flags(mode, F2FS_I(dir)->i_flags & F2FS_FL_INHERITED);
 
 	if (S_ISDIR(inode->i_mode))
 		F2FS_I(inode)->i_flags |= F2FS_INDEX_FL;
